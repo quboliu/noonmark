@@ -85,6 +85,40 @@ final class SQLiteLocalFirstSyncDiagnosticsTests: XCTestCase {
         XCTAssertNotNil(terminal.incidentID)
     }
 
+    func testAppCanOwnSuccessUntilMergedStateIsInstalled() async throws {
+        let databaseURL = makeDatabaseURL("caller-owned-success")
+        try SQLiteEngineRepository(databaseURL: databaseURL)
+            .save(NoonmarkEngine().snapshot())
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive
+        )
+
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: InMemorySyncTransport(),
+            diagnosticOperation: operation,
+            completesDiagnosticOperationOnSuccess: false
+        ).sync(now: Date(timeIntervalSince1970: 1_800_000_000))
+
+        XCTAssertFalse(
+            recorder.snapshot().contains { $0.event.code.isTerminal }
+        )
+        XCTAssertEqual(
+            recorder.snapshot().last?.event.stage,
+            .successMetadata
+        )
+
+        operation.stage(.installMergedState)
+        operation.succeed()
+
+        XCTAssertEqual(
+            recorder.snapshot().suffix(2).map(\.event.code),
+            [.operationStage, .operationSucceeded]
+        )
+    }
+
     private func makeDatabaseURL(_ name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(

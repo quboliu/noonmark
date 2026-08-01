@@ -156,12 +156,14 @@ public final class SQLiteLocalFirstSyncCoordinator {
     private let transport: SyncRecordTransport
     private let taskChangeAnalyzer: SQLiteSyncTaskChangeAnalyzer
     private let diagnosticOperation: DiagnosticOperation?
+    private let completesDiagnosticOperationOnSuccess: Bool
     private let maximumFinalizationAttempts = 8
 
     public init(
         databaseURL: URL,
         transport: SyncRecordTransport,
-        diagnosticOperation: DiagnosticOperation? = nil
+        diagnosticOperation: DiagnosticOperation? = nil,
+        completesDiagnosticOperationOnSuccess: Bool = true
     ) {
         uploadCoordinator = SQLiteSyncUploadCoordinator(databaseURL: databaseURL, transport: transport)
         downloadCoordinator = SQLiteSyncDownloadCoordinator(databaseURL: databaseURL, transport: transport)
@@ -169,6 +171,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
         syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
         self.transport = transport
         self.diagnosticOperation = diagnosticOperation
+        self.completesDiagnosticOperationOnSuccess =
+            completesDiagnosticOperationOnSuccess
         taskChangeAnalyzer = SQLiteSyncTaskChangeAnalyzer()
     }
 
@@ -358,14 +362,16 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         at: now
                     )
                 ) {
-                    diagnosticOperation?.succeed(
-                        progress: DiagnosticProgress(
-                            recordCount: remoteAfter.count,
-                            pendingCount: upload.pendingCount,
-                            appliedCount: download.appliedCount,
-                            conflictCount: download.conflictCount
+                    if completesDiagnosticOperationOnSuccess {
+                        diagnosticOperation?.succeed(
+                            progress: DiagnosticProgress(
+                                recordCount: remoteAfter.count,
+                                pendingCount: upload.pendingCount,
+                                appliedCount: download.appliedCount,
+                                conflictCount: download.conflictCount
+                            )
                         )
-                    )
+                    }
                     return result
                 }
                 guard finalizationAttempt < maximumFinalizationAttempts else {
@@ -393,7 +399,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
         guard let syncError = error as? SQLiteLocalFirstSyncError else {
             return DiagnosticFailureClassifier.classify(error)
         }
-        let code: Int = switch syncError {
+        let code = switch syncError {
         case .baselineDeviceIdentityUnavailable:
             1
         case .baselinePreparationFailed:

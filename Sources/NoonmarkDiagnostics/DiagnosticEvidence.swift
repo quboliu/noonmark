@@ -98,6 +98,7 @@ public enum DiagnosticOperationStage: String, Codable, CaseIterable, Sendable {
     case finalFetch
     case coverageAndStability
     case successMetadata
+    case installMergedState
     case persistenceCommit
     case exportSnapshot
     case exportWrite
@@ -249,7 +250,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
                 0,
                 Int64(
                     operation.updatedAt
-                        .timeIntervalSince(operation.startedAt) * 1_000
+                        .timeIntervalSince(operation.startedAt) * 1000
                 )
             )
         )
@@ -350,7 +351,8 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         context: DiagnosticMutationContext,
         reason: DiagnosticMutationRejectionReason,
         operationID: DiagnosticOperationID?,
-        incidentID: DiagnosticIncidentID
+        incidentID: DiagnosticIncidentID,
+        failure: DiagnosticFailure? = nil
     ) -> Self {
         Self(
             code: .mutationRejected,
@@ -358,6 +360,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             severity: .error,
             operationID: operationID,
             incidentID: incidentID,
+            failure: failure,
             mutationContext: context,
             mutationRejectionReason: reason
         )

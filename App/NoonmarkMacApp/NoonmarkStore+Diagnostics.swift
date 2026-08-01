@@ -183,14 +183,17 @@ extension NoonmarkStore {
                         context: context
                     ),
                     operationID: operationID ?? activeDiagnosticOperationID,
-                    incidentID: incidentID
+                    incidentID: incidentID,
+                    failure: error is EnginePersistenceCommitError
+                        ? diagnosticFailure(for: error)
+                        : nil
                 )
             )
         }
         return incidentID
     }
 
-    private func diagnosticFailure(for error: Error) -> DiagnosticFailure {
+    func diagnosticFailure(for error: Error) -> DiagnosticFailure {
         if let persistenceError = error as? EnginePersistenceCommitError {
             return DiagnosticFailureClassifier.classify(
                 persistenceError.underlying

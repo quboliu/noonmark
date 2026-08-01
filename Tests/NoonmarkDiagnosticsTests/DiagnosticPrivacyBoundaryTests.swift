@@ -3,6 +3,26 @@ import Foundation
 import XCTest
 
 final class DiagnosticPrivacyBoundaryTests: XCTestCase {
+    func testMutationRejectionCarriesTypedPersistenceFailureWithoutText() {
+        let recorder = InMemoryDiagnosticRecorder()
+        let incidentID = DiagnosticIncidentID()
+
+        recorder.record(
+            .mutationRejected(
+                context: .task,
+                reason: .persistenceFailure,
+                operationID: nil,
+                incidentID: incidentID,
+                failure: DiagnosticFailure(domain: .sqlite, code: 13)
+            )
+        )
+
+        let event = recorder.snapshot().first?.event
+        XCTAssertEqual(event?.incidentID, incidentID)
+        XCTAssertEqual(event?.mutationRejectionReason, .persistenceFailure)
+        XCTAssertEqual(event?.failure, DiagnosticFailure(domain: .sqlite, code: 13))
+    }
+
     private var temporaryURLs: [URL] = []
 
     override func tearDownWithError() throws {
@@ -54,8 +74,8 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         let packageData = try Data(contentsOf: exportURL)
         let packageText = String(decoding: packageData, as: UTF8.self)
         let diskText = try diagnosticFileText(in: rootURL)
-        let rendered = DiagnosticEvidenceTextRenderer.render(
-            try await recorder.snapshotPackage().records.map(\.event)
+        let rendered = await DiagnosticEvidenceTextRenderer.render(
+            try recorder.snapshotPackage().records.map(\.event)
         )
         for canary in canaries {
             XCTAssertFalse(packageText.contains(canary), canary)
@@ -70,7 +90,7 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         let failure = DiagnosticFailureClassifier.classify(
             NSError(
                 domain: "com.vendor.PRIVATE-TASK-TITLE-7Q9X",
-                code: 98_765,
+                code: 98765,
                 userInfo: [NSLocalizedDescriptionKey: "sk-live-secret"]
             )
         )
@@ -86,7 +106,7 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         )
         let wrapper = NSError(
             domain: "app.noonmark.persistence",
-            code: 99_001,
+            code: 99001,
             userInfo: [
                 NSUnderlyingErrorKey: underlying,
                 NSLocalizedDescriptionKey: "Bearer secret-access-token"

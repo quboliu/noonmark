@@ -352,6 +352,52 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: canaryURL), canary)
     }
 
+    func testInitializerRejectsDiagnosticRootThroughAncestorSymlinkWithoutTouchingExternalDirectory() throws {
+        let parentURL = temporaryDirectory(named: "root-ancestor-symlink-parent")
+        let externalURL = temporaryDirectory(named: "root-ancestor-symlink-external")
+        try FileManager.default.createDirectory(
+            at: parentURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL,
+            withIntermediateDirectories: true
+        )
+        let canaryURL = externalURL.appendingPathComponent("canary.txt")
+        let canary = Data("EXTERNAL-ANCESTOR-CANARY".utf8)
+        try canary.write(to: canaryURL)
+        let redirectedAncestorURL = parentURL.appendingPathComponent(
+            "redirected",
+            isDirectory: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: redirectedAncestorURL,
+            withDestinationURL: externalURL
+        )
+        let unexpectedExternalDirectoryURL = externalURL
+            .appendingPathComponent("nested", isDirectory: true)
+        let diagnosticRootURL = redirectedAncestorURL
+            .appendingPathComponent("nested", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+
+        XCTAssertThrowsError(
+            try LocalDiagnosticRecorder(
+                rootURL: diagnosticRootURL,
+                appIdentity: .testFixture,
+                configuration: .production,
+                unifiedLoggingEnabled: false
+            )
+        ) { error in
+            XCTAssertEqual(error as? DiagnosticStorageError, .invalidRoot)
+        }
+        XCTAssertEqual(try Data(contentsOf: canaryURL), canary)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: unexpectedExternalDirectoryURL.path
+            )
+        )
+    }
+
     func testRuntimeRootReplacementNeverRedirectsManagedIOToExternalDirectory() async throws {
         let parentURL = temporaryDirectory(named: "root-runtime-parent")
         let externalURL = temporaryDirectory(named: "root-runtime-external")

@@ -39,42 +39,183 @@ final class DiagnosticOwnedDirectory {
     static func openRoot(
         at url: URL,
         permissions: mode_t,
-        fileManager: FileManager
+        fileManager _: FileManager
     ) throws -> DiagnosticOwnedDirectory {
         let standardizedURL = url.standardizedFileURL
-        let parentURL = standardizedURL.deletingLastPathComponent()
-        let name = standardizedURL.lastPathComponent
-        try validateEntryName(name)
-        try fileManager.createDirectory(
-            at: parentURL,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: Int(permissions)]
+        guard standardizedURL.isFileURL,
+              standardizedURL.path.hasPrefix("/")
+        else { throw DiagnosticStorageError.invalidRoot }
+        let components = try normalizedPathComponents(
+            standardizedURL.path,
+            relativeTo: []
         )
-        let parentDescriptor = Darwin.open(
-            parentURL.path,
-            O_RDONLY | O_DIRECTORY | O_CLOEXEC
-        )
-        guard parentDescriptor >= 0 else { throw currentPOSIXError() }
-        defer { Darwin.close(parentDescriptor) }
-        if mkdirat(parentDescriptor, name, permissions) != 0,
-           errno != EEXIST
-        {
-            throw currentPOSIXError()
-        }
-        let descriptor = openat(
-            parentDescriptor,
-            name,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard descriptor >= 0 else {
+        guard components.isEmpty == false else {
             throw DiagnosticStorageError.invalidRoot
         }
+        let descriptor = try openAbsoluteDirectory(
+            components: components,
+            permissions: permissions
+        )
         guard fchmod(descriptor, permissions) == 0 else {
             let error = currentPOSIXError()
             Darwin.close(descriptor)
             throw error
         }
         return try DiagnosticOwnedDirectory(descriptor: descriptor)
+    }
+
+    private static func openAbsoluteDirectory(
+        components initialComponents: [String],
+        permissions: mode_t
+    ) throws -> Int32 {
+        var components = initialComponents
+        var followedTrustedSymlinkCount = 0
+
+        traversal: while true {
+            let rootDescriptor = Darwin.open(
+                "/",
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard rootDescriptor >= 0 else { throw currentPOSIXError() }
+            var currentDescriptor = rootDescriptor
+
+            for (index, component) in components.enumerated() {
+                let childDescriptor = openat(
+                    currentDescriptor,
+                    component,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+                if childDescriptor >= 0 {
+                    Darwin.close(currentDescriptor)
+                    currentDescriptor = childDescriptor
+                    continue
+                }
+
+                let openError = errno
+                if openError == ENOENT {
+                    let creationResult = mkdirat(
+                        currentDescriptor,
+                        component,
+                        permissions
+                    )
+                    let creationError = errno
+                    if creationResult != 0 && creationError != EEXIST {
+                        let error = POSIXError(
+                            POSIXErrorCode(rawValue: creationError) ?? .EIO
+                        )
+                        Darwin.close(currentDescriptor)
+                        throw error
+                    }
+                    let createdDescriptor = openat(
+                        currentDescriptor,
+                        component,
+                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                    )
+                    guard createdDescriptor >= 0 else {
+                        Darwin.close(currentDescriptor)
+                        throw DiagnosticStorageError.invalidRoot
+                    }
+                    Darwin.close(currentDescriptor)
+                    currentDescriptor = createdDescriptor
+                    continue
+                }
+
+                // macOS exposes trusted root aliases such as /var. Resolve only
+                // those immutable root-level links, then restart nofollow traversal.
+                guard index == 0,
+                      followedTrustedSymlinkCount < 16,
+                      let target = trustedSystemSymlinkTarget(
+                          named: component,
+                          in: currentDescriptor
+                      )
+                else {
+                    Darwin.close(currentDescriptor)
+                    throw DiagnosticStorageError.invalidRoot
+                }
+                followedTrustedSymlinkCount += 1
+                let parentComponents = Array(components[..<index])
+                let targetComponents: [String]
+                do {
+                    targetComponents = try normalizedPathComponents(
+                        target,
+                        relativeTo: parentComponents
+                    )
+                } catch {
+                    Darwin.close(currentDescriptor)
+                    throw error
+                }
+                components = targetComponents
+                    + Array(components[(index + 1)...])
+                guard components.isEmpty == false else {
+                    Darwin.close(currentDescriptor)
+                    throw DiagnosticStorageError.invalidRoot
+                }
+                Darwin.close(currentDescriptor)
+                continue traversal
+            }
+            return currentDescriptor
+        }
+    }
+
+    private static func trustedSystemSymlinkTarget(
+        named name: String,
+        in parentDescriptor: Int32
+    ) -> String? {
+        var parentInformation = stat()
+        guard fstat(parentDescriptor, &parentInformation) == 0,
+              parentInformation.st_uid == 0,
+              parentInformation.st_mode & mode_t(S_IWGRP | S_IWOTH) == 0
+        else { return nil }
+
+        var linkInformation = stat()
+        guard fstatat(
+            parentDescriptor,
+            name,
+            &linkInformation,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0,
+            linkInformation.st_mode & S_IFMT == S_IFLNK,
+            linkInformation.st_uid == 0
+        else { return nil }
+
+        var buffer = [UInt8](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = buffer.withUnsafeMutableBytes { bytes in
+            readlinkat(
+                parentDescriptor,
+                name,
+                bytes.baseAddress,
+                bytes.count - 1
+            )
+        }
+        guard count > 0,
+              count < buffer.count - 1,
+              let target = String(
+                  bytes: buffer.prefix(count),
+                  encoding: .utf8
+              )
+        else { return nil }
+        return target
+    }
+
+    private static func normalizedPathComponents(
+        _ path: String,
+        relativeTo baseComponents: [String]
+    ) throws -> [String] {
+        var components = path.hasPrefix("/") ? [] : baseComponents
+        for substring in path.split(separator: "/") {
+            let component = String(substring)
+            if component == "." { continue }
+            if component == ".." {
+                guard components.isEmpty == false else {
+                    throw DiagnosticStorageError.invalidRoot
+                }
+                components.removeLast()
+                continue
+            }
+            try validateEntryName(component)
+            components.append(component)
+        }
+        return components
     }
 
     func openChildDirectory(

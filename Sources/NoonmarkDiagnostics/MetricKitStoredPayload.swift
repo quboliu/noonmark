@@ -66,12 +66,11 @@ struct MetricKitExportEnvelopeReadResult {
 }
 
 struct MetricKitExportEnvelopeExclusion {
-    let url: URL
+    let entryName: String
     let isCurrentCorruption: Bool
 }
 
 struct MetricKitExportEnvelopeReadPolicy {
-    let metricsDirectoryURL: URL
     let cutoff: Date
     let now: Date
     let maximumStoredEnvelopeBytes: Int64
@@ -80,15 +79,16 @@ struct MetricKitExportEnvelopeReadPolicy {
 
 enum MetricKitExportEnvelopeReader {
     static func read(
-        from urls: [URL],
+        from entryNames: [String],
+        in directory: DiagnosticOwnedDirectory,
         policy: MetricKitExportEnvelopeReadPolicy
     ) -> MetricKitExportEnvelopeReadResult {
         var attachments: [DiagnosticMetricAttachment] = []
         var exclusions: [MetricKitExportEnvelopeExclusion] = []
-        for url in urls {
+        for entryName in entryNames {
             let read = readRegularFileWithoutFollowingLinks(
-                at: url,
-                metricsDirectoryURL: policy.metricsDirectoryURL,
+                named: entryName,
+                in: directory,
                 maximumByteCount: policy.maximumStoredEnvelopeBytes,
                 now: policy.now
             )
@@ -100,7 +100,7 @@ enum MetricKitExportEnvelopeReader {
             else {
                 exclusions.append(
                     MetricKitExportEnvelopeExclusion(
-                        url: url,
+                        entryName: entryName,
                         isCurrentCorruption:
                         read.evidenceTimestamp >= policy.cutoff
                     )
@@ -117,7 +117,7 @@ enum MetricKitExportEnvelopeReader {
             else {
                 exclusions.append(
                     MetricKitExportEnvelopeExclusion(
-                        url: url,
+                        entryName: entryName,
                         isCurrentCorruption:
                         read.evidenceTimestamp >= policy.cutoff
                     )
@@ -127,7 +127,7 @@ enum MetricKitExportEnvelopeReader {
             guard stored.receivedAt >= policy.cutoff else {
                 exclusions.append(
                     MetricKitExportEnvelopeExclusion(
-                        url: url,
+                        entryName: entryName,
                         isCurrentCorruption: false
                     )
                 )
@@ -142,74 +142,42 @@ enum MetricKitExportEnvelopeReader {
     }
 
     private static func readRegularFileWithoutFollowingLinks(
-        at url: URL,
-        metricsDirectoryURL: URL,
+        named entryName: String,
+        in directory: DiagnosticOwnedDirectory,
         maximumByteCount: Int64,
         now: Date
     ) -> (data: Data?, evidenceTimestamp: Date) {
-        let expectedDirectory = metricsDirectoryURL.standardizedFileURL
-        let candidate = url.standardizedFileURL
-        guard candidate.deletingLastPathComponent() == expectedDirectory else {
-            return (nil, now)
-        }
-
-        let descriptor = Darwin.open(
-            candidate.path,
-            O_RDONLY | O_CLOEXEC | O_NOFOLLOW
-        )
-        guard descriptor >= 0 else {
-            return (nil, fallbackTimestamp(at: candidate, now: now))
-        }
-        let handle = FileHandle(
-            fileDescriptor: descriptor,
-            closeOnDealloc: true
-        )
-        var information = stat()
-        let readLimit = Int(
-            min(maximumByteCount, Int64(Int.max - 1))
-        )
-        guard fstat(descriptor, &information) == 0,
-              (information.st_mode & S_IFMT) == S_IFREG,
-              information.st_size >= 0,
-              information.st_size <= maximumByteCount,
-              let data = try? handle.read(upToCount: readLimit + 1),
-              data.count <= readLimit
+        let information = try? directory.entryInformation(named: entryName)
+        let evidenceTimestamp = information?.modificationDate ?? now
+        guard isValidMetricEntryName(entryName),
+              information?.isRegularFile == true,
+              let data = try? directory.readFile(
+                  named: entryName,
+                  maximumByteCount: maximumByteCount
+              )
         else {
-            return (
-                nil,
-                timestamp(from: information.st_mtimespec, fallback: now)
-            )
+            return (nil, evidenceTimestamp)
         }
-        return (
-            data,
-            timestamp(from: information.st_mtimespec, fallback: now)
-        )
+        return (data, evidenceTimestamp)
     }
 
-    private static func fallbackTimestamp(at url: URL, now: Date) -> Date {
-        var information = stat()
-        guard lstat(url.path, &information) == 0 else { return now }
-        let modification = timestamp(
-            from: information.st_mtimespec,
-            fallback: .distantPast
+    private static func isValidMetricEntryName(_ name: String) -> Bool {
+        let prefix = "metric-"
+        let suffix = ".json"
+        guard name.hasPrefix(prefix),
+              name.hasSuffix(suffix),
+              name.contains("/") == false,
+              name.contains("\0") == false
+        else { return false }
+        let uuidStart = name.index(
+            name.startIndex,
+            offsetBy: prefix.count
         )
-        if modification != .distantPast {
-            return modification
-        }
-        return timestamp(
-            from: information.st_birthtimespec,
-            fallback: now
+        let uuidEnd = name.index(
+            name.endIndex,
+            offsetBy: -suffix.count
         )
-    }
-
-    private static func timestamp(
-        from value: timespec,
-        fallback: Date
-    ) -> Date {
-        let seconds = TimeInterval(value.tv_sec)
-            + (TimeInterval(value.tv_nsec) / 1_000_000_000)
-        guard seconds.isFinite, seconds > 0 else { return fallback }
-        return Date(timeIntervalSince1970: seconds)
+        return UUID(uuidString: String(name[uuidStart ..< uuidEnd])) != nil
     }
 
     private static let decoder = JSONDecoder()

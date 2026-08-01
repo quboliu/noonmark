@@ -9,7 +9,7 @@
 - 新建独立深模块 `NoonmarkDiagnostics`。业务模块只能提交强类型事件、枚举、计数、字节数、耗时和随机诊断身份；模块不提供 `log(String)`、任意 dictionary、原始 `Error`、`localizedDescription` 或 `userInfo` 入口。Apple `Logger` 只输出固定事件码和安全标量，应用自有证据环负责确定性的跨重启保存与用户导出。
 - **本机诊断记录**与 Todo SQLite、烛龙 sidecar、同步仓库和数据包完全分离，不参与 iCloud 同步或自动上传。用户可以先预览 manifest，再主动导出或清除；清除操作只拥有诊断根目录，不能触碰任何业务事实。
 - 应用自动管理的全部诊断文件以实际 allocated bytes 计量并始终不超过 4 MiB，且最长保留 7 天。结构化事件环使用四个不超过 512 KiB 的 segment，单条事件不超过 4 KiB；active-operation marker、最近事故胶囊、索引与摘要各自受固定配额约束。MetricKit JSON 必须在写盘前按带版本的固定 schema 白名单脱敏，只保留系统 binary 身份和安全数值；脱敏后缓存总计不超过 768 KiB、单份原始输入不超过 256 KiB。超限 payload 整份舍弃并只留下 typed summary，不得截断成无效 JSON，也不得把原始字符串、未知 key 或任意 UUID 写入磁盘。
-- 写入必须在 append 前先轮换，并把 `.tmp` 与原子替换过程纳入 4 MiB 配额；受控文件的 allocated size 无法证明时 fail-closed 停止文件写入，只保留系统日志。诊断根与 Metric cache 目录的最终路径组件必须是不跟随符号链接、由进程持有的真实目录；遇到符号链接或非目录 entry 时不得读取、删除或改写其外部目标。用户主动导出的 staging 位于持久诊断根之外，输出包不超过 8 MiB，并在成功或失败后清理 staging。
+- 写入必须在 append 前先轮换，并把 `.tmp` 与原子替换过程纳入 4 MiB 配额；受控文件的 allocated size 无法证明时 fail-closed 停止文件写入，只保留系统日志。诊断根与 Metric cache 目录的最终路径组件必须是不跟随符号链接、由进程在整个 recorder 生命周期持有 descriptor 的真实目录；受控项目的枚举、读取、建立、替换和清除只允许相对该 descriptor 使用 `openat`、`fstatat`、`renameat` 和 `unlinkat`，目录路径在运行中被换成 symlink 或另一真实目录时仍只操作原先持有的 inode。受控 regular file 打开后必须同时对账当前 euid、单一 hard link、device 与 inode，读取一律使用 nonblocking descriptor；symlink、FIFO、hardlink 或其他非预期 entry 只能移除诊断目录内的名字，不得读取、删除或改写其外部目标。用户主动导出的 staging 位于持久诊断根之外，输出包不超过 8 MiB，并在成功或失败后清理 staging。
 - 每个长操作具有随机 operation ID、开始时间、当前 stage、最后进度和终态。active-operation marker 原子更新；下次启动若发现未完成 marker，只记录 `previousSessionInterrupted`，不得猜测崩溃、强退或断电。开始、错误和终态不得被高频事件合并或优先淘汰；有界队列以终态、开始、其他 critical、best-effort 的固定次序保留，终态自带 endpoint 与 duration，使开始事件已丢失时仍能重建固定配额的事故胶囊。heartbeat 只在持续时间越过阈值且安全进度发生变化时记录。
 - 同步 evidence 覆盖本机载入、transport lock 等待／获得／释放、远端抓取与 decode、同步基线、上传、下载合并、追赶上传、最终抓取、coverage／stability 检查、最多八次 finalization、成功 metadata 提交和 typed failure。任务修改拒绝、持久化失败和重启读取旧同步失败必须关联当前 operation／incident，但不得记录任务身份或正文。
 - 诊断写入由专用有界队列处理，不在 MainActor 执行文件 I/O，也不取得 Todo、同步或导入锁。队列最多容纳 256 条或 256 KiB；溢出、segment 轮换、active marker／事故胶囊压缩和 Metric cache 淘汰都必须留下 typed loss counter。loss counter 与 allocated-size 峰值使用最多八个 UTC 日桶，按当前七日覆盖窗口聚合，不得在旧窗口到期时整体清零而抹掉较新的 partial 证据；若 cutoff 落在某 UTC 日中间，则该边界日整桶丢弃，未来或畸形日桶也必须丢弃，确保绝不导出超过七日的证据。诊断系统任何权限、磁盘、编码或损坏错误都 fail-open，不得改变用户操作或同步的成功／失败语义。
@@ -40,7 +40,7 @@
 
 ## Verification
 
-- 公共 seam 测试覆盖一百万事件风暴、并发 producer、单条和 MetricKit 超限、append 前轮换、`.tmp` 配额、allocated-size 上限、队列过载、损坏／半写 segment 恢复、权限／磁盘失败 fail-open、schema 兼容与导出 digest。
+- 公共 seam 测试覆盖一百万事件风暴、并发 producer、单条和 MetricKit 超限、append 前轮换、`.tmp` 配额、allocated-size 上限、队列过载、损坏／半写 segment 恢复、权限／磁盘失败 fail-open、schema 兼容与导出 digest；目录边界测试在 recorder 运行中替换 root 与 Metric cache，逐阶段对账外部 canary 的内容、device、inode、mtime 和 size，并覆盖 symlink、hardlink 与 FIFO，证明 snapshot、export 和 clear 都不越界。
 - 隐私哨兵把任务标题、API key、路径、URL、邮箱、IP 和长 Base64 内容送过每一种错误路径，随后扫描 evidence ring、导出包与格式化 Unified Logger message，任何命中都失败。
 - 真实 `.app` E2E 必须走“同步停滞 → 尝试修改 → 非正常终止 → 重启 → 导出”路径，并证明一个 operation／incident 串起最后 stage、mutation rejection、previous-session interruption 与持久化同步失败；证据包保持在容量内且不含哨兵。
 - 真实 DMG 安装验收必须证明导出不依赖 Todo／sync lock，随后产生受控 `.ips`，使用 package manifest 绑定的 dSYM 成功符号化并对账 UUID／binary SHA。

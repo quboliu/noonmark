@@ -436,6 +436,10 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
         await recorder.flush()
         _ = try await recorder.snapshotPackage()
 
+        let templateMetricURL = try XCTUnwrap(
+            try metricURLs(in: rootURL).first
+        )
+
         let metricsURL = rootURL.appendingPathComponent(
             "metrics",
             isDirectory: true
@@ -454,18 +458,30 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
             at: replacementURL,
             withIntermediateDirectories: true
         )
-        let canary = Data("EXTERNAL-RUNTIME-METRICS-CANARY".utf8)
+        let canary = "EXTERNAL-RUNTIME-METRIC-\(UUID().uuidString)"
         let replacementCanaryURL = replacementURL.appendingPathComponent(
-            "metric-runtime-canary.json"
+            "metric-\(UUID().uuidString).json"
         )
-        try canary.write(to: replacementCanaryURL)
+        try FileManager.default.copyItem(
+            at: templateMetricURL,
+            to: replacementCanaryURL
+        )
+        try mutateEnvelope(at: replacementCanaryURL) { envelope in
+            envelope["sanitizedJSON"] = try JSONSerialization.data(
+                withJSONObject: ["binaryName": canary],
+                options: [.sortedKeys]
+            ).base64EncodedString()
+        }
         try FileManager.default.moveItem(
             at: metricsURL,
             to: displacedMetricsURL
         )
         try FileManager.default.moveItem(at: replacementURL, to: metricsURL)
         let installedCanaryURL = metricsURL.appendingPathComponent(
-            "metric-runtime-canary.json"
+            replacementCanaryURL.lastPathComponent
+        )
+        let canaryFingerprint = try DiagnosticFileFingerprint(
+            at: installedCanaryURL
         )
 
         recorder.cacheMetricKitPayload(
@@ -474,16 +490,131 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
             receivedAt: summary.intervalEnd
         )
         await recorder.flush()
-        _ = try await recorder.snapshotPackage()
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: canaryFingerprint,
+            "external metric changed after flush"
+        )
+
+        let snapshot = try await recorder.snapshotPackage()
+        XCTAssertFalse(package(snapshot, containsSanitizedMetricToken: canary))
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: canaryFingerprint,
+            "external metric changed after snapshot"
+        )
+
         let exportURL = rootURL.deletingLastPathComponent()
             .appendingPathComponent(
                 "metrics-runtime-replacement.noonmarkdiagnostics"
             )
         temporaryURLs.append(exportURL)
         _ = try await recorder.export(to: exportURL)
-        try await recorder.clear()
+        let exported = try JSONDecoder().decode(
+            DiagnosticExportPackage.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertFalse(package(exported, containsSanitizedMetricToken: canary))
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: canaryFingerprint,
+            "external metric changed after export"
+        )
 
-        XCTAssertEqual(try Data(contentsOf: installedCanaryURL), canary)
+        try await recorder.clear()
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: canaryFingerprint,
+            "external metric changed after clear"
+        )
+    }
+
+    func testSnapshotRejectsMetricHardLinkWithoutReadingOrMutatingExternalTarget() async throws {
+        let (recorder, rootURL) = try makeRecorder(named: "metric-hard-link")
+        let summary = makeSummary(kind: .metric)
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data(#"{"metricCount":1}"#.utf8),
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+
+        let templateMetricURL = try XCTUnwrap(
+            try metricURLs(in: rootURL).first
+        )
+        let externalURL = rootURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                "external-hard-link-target-\(UUID().uuidString).json"
+            )
+        temporaryURLs.append(externalURL)
+        try FileManager.default.copyItem(at: templateMetricURL, to: externalURL)
+        let canary = "EXTERNAL-HARD-LINK-\(UUID().uuidString)"
+        try mutateEnvelope(at: externalURL) { envelope in
+            envelope["sanitizedJSON"] = try JSONSerialization.data(
+                withJSONObject: ["binaryName": canary],
+                options: [.sortedKeys]
+            ).base64EncodedString()
+        }
+        try FileManager.default.setAttributes(
+            [.modificationDate: metricExportFixtureNow],
+            ofItemAtPath: externalURL.path
+        )
+        let hardLinkURL = rootURL
+            .appendingPathComponent("metrics", isDirectory: true)
+            .appendingPathComponent("metric-\(UUID().uuidString).json")
+        try FileManager.default.linkItem(at: externalURL, to: hardLinkURL)
+        let externalFingerprint = try DiagnosticFileFingerprint(at: externalURL)
+
+        let snapshot = try await recorder.snapshotPackage()
+
+        XCTAssertEqual(snapshot.metricAttachments.count, 1)
+        XCTAssertEqual(snapshot.manifest.corruptRecordCount, 1)
+        XCTAssertTrue(snapshot.manifest.collectionWasPartial)
+        XCTAssertFalse(package(snapshot, containsSanitizedMetricToken: canary))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: hardLinkURL.path))
+        try XCTAssertDiagnosticFileUnchanged(
+            at: externalURL,
+            from: externalFingerprint
+        )
+    }
+
+    func testSnapshotRejectsMetricFIFOWithoutBlocking() async throws {
+        let (recorder, rootURL) = try makeRecorder(named: "metric-fifo")
+        let summary = makeSummary(kind: .metric)
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data(#"{"metricCount":1}"#.utf8),
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+
+        let fifoURL = rootURL
+            .appendingPathComponent("metrics", isDirectory: true)
+            .appendingPathComponent("metric-\(UUID().uuidString).json")
+        try createDiagnosticFIFO(at: fifoURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: metricExportFixtureNow],
+            ofItemAtPath: fifoURL.path
+        )
+
+        let snapshot = try await recorder.snapshotPackage()
+
+        XCTAssertEqual(snapshot.metricAttachments.count, 1)
+        XCTAssertEqual(snapshot.manifest.corruptRecordCount, 1)
+        XCTAssertTrue(snapshot.manifest.collectionWasPartial)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fifoURL.path))
+    }
+
+    private func package(
+        _ package: DiagnosticExportPackage,
+        containsSanitizedMetricToken token: String
+    ) -> Bool {
+        package.metricAttachments.contains { attachment in
+            guard let data = attachment.sanitizedJSON,
+                  let text = String(data: data, encoding: .utf8)
+            else { return false }
+            return text.contains(token)
+        }
     }
 
     private func assertDefensivelySanitized(

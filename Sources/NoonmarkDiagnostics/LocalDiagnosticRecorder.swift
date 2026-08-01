@@ -1,5 +1,4 @@
 import CryptoKit
-import Darwin
 import Foundation
 
 public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
@@ -502,14 +501,14 @@ private final class DiagnosticDiskStore {
         }
     }
 
-    private let rootURL: URL
+    private let rootDirectory: DiagnosticOwnedDirectory
     private let appIdentity: DiagnosticAppIdentity
     private let configuration: DiagnosticStorageConfiguration
-    private let fileManager: FileManager
     private let now: @Sendable () -> Date
     private var state: PersistentState
     private var activeOperations: [DiagnosticActiveOperation]
     private var operationCapsules: [DiagnosticOperationCapsule]
+    private var metricsDirectory: DiagnosticOwnedDirectory?
     private var currentMetricCorruptRecordCount = 0
 
     init(
@@ -524,20 +523,19 @@ private final class DiagnosticDiskStore {
         else {
             throw DiagnosticStorageError.invalidRoot
         }
-        self.rootURL = rootURL.standardizedFileURL
+        let standardizedRootURL = rootURL.standardizedFileURL
         self.appIdentity = appIdentity
         self.configuration = configuration
-        self.fileManager = fileManager
         self.now = now
-        try Self.prepareOwnedDirectory(
-            at: self.rootURL,
+        rootDirectory = try DiagnosticOwnedDirectory.openRoot(
+            at: standardizedRootURL,
             permissions: 0o700,
             fileManager: fileManager
         )
         state = Self.loadJSON(
             PersistentState.self,
-            from: self.rootURL.appendingPathComponent("index.json"),
-            fileManager: fileManager
+            named: "index.json",
+            in: rootDirectory
         ) ?? PersistentState(segmentCount: configuration.eventSegmentCount)
         state = Self.normalized(
             state,
@@ -545,22 +543,20 @@ private final class DiagnosticDiskStore {
         )
         activeOperations = Self.loadJSON(
             [DiagnosticActiveOperation].self,
-            from: self.rootURL.appendingPathComponent(
-                "active-operations.json"
-            ),
-            fileManager: fileManager
+            named: "active-operations.json",
+            in: rootDirectory
         ) ?? []
         operationCapsules = Self.loadJSON(
             [DiagnosticOperationCapsule].self,
-            from: self.rootURL.appendingPathComponent(
-                "operation-capsules.json"
-            ),
-            fileManager: fileManager
+            named: "operation-capsules.json",
+            in: rootDirectory
         ) ?? []
+        metricsDirectory = nil
         try removeAtomicTemporaryFiles()
         let initializationTime = now()
         let legacyEvidenceTime = min(
-            (try? modificationDate(of: indexURL)) ?? initializationTime,
+            (try? rootDirectory.entryInformation(named: indexName))?
+                .modificationDate ?? initializationTime,
             initializationTime
         )
         migrateLegacyLossCounters(at: legacyEvidenceTime)
@@ -672,12 +668,7 @@ private final class DiagnosticDiskStore {
                     sessionID: sessionID
                 )
             }
-            let metricsURL = metricsDirectoryURL
-            try Self.prepareOwnedDirectory(
-                at: metricsURL,
-                permissions: 0o700,
-                fileManager: fileManager
-            )
+            let metricsDirectory = try prepareMetricsDirectory()
             let sanitizedJSON: Data?
             if rawJSONWasDropped {
                 sanitizedJSON = nil
@@ -715,10 +706,8 @@ private final class DiagnosticDiskStore {
             let data = try Self.encoder.encode(stored)
             try pruneMetricPayloads(reserving: Int64(data.count))
             try reserveCapacity(forAdditionalBytes: Int64(data.count))
-            let url = metricsURL.appendingPathComponent(
-                "metric-\(UUID().uuidString).json"
-            )
-            try writeData(data, to: url)
+            let entryName = "metric-\(UUID().uuidString).json"
+            try writeData(data, named: entryName, in: metricsDirectory)
             try saveMetadata()
             try enforcePersistentCap()
         } catch {
@@ -735,7 +724,7 @@ private final class DiagnosticDiskStore {
             state.fileSinkDisabled = true
         }
         let snapshot = readRecords()
-        let metricCount = (try? metricURLs().count) ?? 0
+        let metricCount = (try? metricEntryNames().count) ?? 0
         let allocated = (try? allocatedBytes())
             ?? configuration.maximumPersistentBytes + 1
         let logical = (try? logicalBytes()) ?? 0
@@ -855,21 +844,21 @@ private final class DiagnosticDiskStore {
     }
 
     func clear() throws {
-        for url in managedFileURLs() where fileManager.fileExists(
-            atPath: url.path
-        ) {
-            try fileManager.removeItem(at: url)
+        for entryName in try managedRootEntryNames() {
+            try rootDirectory.removeEntryIfPresent(named: entryName)
         }
         switch metricDirectoryStatus() {
         case .absent:
             break
         case .ownedDirectory:
-            for url in try metricURLs() {
-                try fileManager.removeItem(at: url)
+            guard let metricsDirectory else {
+                throw DiagnosticStorageError.invalidRoot
             }
-            try fileManager.removeItem(at: metricsDirectoryURL)
+            for entryName in try metricEntryNames() {
+                try metricsDirectory.removeEntryIfPresent(named: entryName)
+            }
         case .invalidEntry:
-            try unlinkInvalidManagedEntry(at: metricsDirectoryURL)
+            try rootDirectory.removeEntryIfPresent(named: metricsDirectoryName)
         }
         state = PersistentState(
             segmentCount: configuration.eventSegmentCount
@@ -906,19 +895,10 @@ private final class DiagnosticDiskStore {
         }
         try reserveCapacity(forAdditionalBytes: Int64(data.count))
         let segment = state.currentSegment
-        let url = segmentURL(segment)
-        if fileManager.fileExists(atPath: url.path) == false {
-            fileManager.createFile(
-                atPath: url.path,
-                contents: nil,
-                attributes: [.posixPermissions: 0o600]
-            )
-        }
-        let handle = try FileHandle(forWritingTo: url)
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
+        try rootDirectory.appendFile(
+            named: segmentName(segment),
+            data: data
+        )
         try observeAllocatedBytes()
         if state.segmentRecordCounts[segment] == 0 {
             state.segmentFirstSequences[segment] = state.nextSequence
@@ -1088,10 +1068,13 @@ private final class DiagnosticDiskStore {
         _ index: Int,
         countAsCapacityEviction: Bool
     ) throws {
-        let url = segmentURL(index)
-        if fileManager.fileExists(atPath: url.path) {
+        let entryName = segmentName(index)
+        if try rootDirectory.entryInformation(named: entryName) != nil {
             if countAsCapacityEviction {
-                let lines = try Data(contentsOf: url).split(separator: 0x0A)
+                let lines = try rootDirectory.readFile(
+                    named: entryName,
+                    maximumByteCount: configuration.maximumPersistentBytes
+                ).split(separator: 0x0A)
                 var discardedCount = 0
                 var discardedCriticalCount = 0
                 var corruptCount = 0
@@ -1117,7 +1100,7 @@ private final class DiagnosticDiskStore {
                 )
                 incrementLoss(.corruptRecord, by: corruptCount)
             }
-            try fileManager.removeItem(at: url)
+            try rootDirectory.removeEntryIfPresent(named: entryName)
         }
         state.segmentPayloadBytes[index] = 0
         state.segmentRecordCounts[index] = 0
@@ -1125,13 +1108,17 @@ private final class DiagnosticDiskStore {
     }
 
     private func removeOldestMetricPayload() throws -> Bool {
-        let urls = try metricURLs()
-        guard let oldest = try urls.min(by: {
-            try modificationDate(of: $0) < modificationDate(of: $1)
+        let entryNames = try metricEntryNames()
+        guard let oldest = try entryNames.min(by: {
+            try metricModificationDate(of: $0)
+                < metricModificationDate(of: $1)
         }) else {
             return false
         }
-        try fileManager.removeItem(at: oldest)
+        guard let metricsDirectory else {
+            throw DiagnosticStorageError.invalidRoot
+        }
+        try metricsDirectory.removeEntryIfPresent(named: oldest)
         incrementLoss(.evictedMetricPayload, by: 1)
         return true
     }
@@ -1157,7 +1144,9 @@ private final class DiagnosticDiskStore {
             return MetricReconciliation(attachments: [])
         case .invalidEntry:
             do {
-                try unlinkInvalidManagedEntry(at: metricsDirectoryURL)
+                try rootDirectory.removeEntryIfPresent(
+                    named: metricsDirectoryName
+                )
                 incrementLoss(.corruptRecord, by: 1)
                 currentMetricCorruptRecordCount = 0
                 try? saveMetadata()
@@ -1170,10 +1159,13 @@ private final class DiagnosticDiskStore {
         case .ownedDirectory:
             break
         }
+        guard let metricsDirectory else {
+            throw DiagnosticStorageError.invalidRoot
+        }
         let metricSnapshot = MetricKitExportEnvelopeReader.read(
-            from: try metricURLs(),
+            from: try metricEntryNames(),
+            in: metricsDirectory,
             policy: MetricKitExportEnvelopeReadPolicy(
-                metricsDirectoryURL: metricsDirectoryURL,
                 cutoff: now.addingTimeInterval(
                     -configuration.retentionInterval
                 ),
@@ -1189,7 +1181,9 @@ private final class DiagnosticDiskStore {
         var currentCorruptRecordCount = 0
         for exclusion in metricSnapshot.exclusions {
             do {
-                try fileManager.removeItem(at: exclusion.url)
+                try metricsDirectory.removeEntryIfPresent(
+                    named: exclusion.entryName
+                )
                 if exclusion.isCurrentCorruption {
                     incrementLoss(.corruptRecord, by: 1)
                 }
@@ -1214,9 +1208,13 @@ private final class DiagnosticDiskStore {
     private func pruneExpiredRecords(now: Date) throws {
         let cutoff = now.addingTimeInterval(-configuration.retentionInterval)
         for index in 0 ..< configuration.eventSegmentCount {
-            let url = segmentURL(index)
-            guard fileManager.fileExists(atPath: url.path) else { continue }
-            let allLines = try Data(contentsOf: url).split(separator: 0x0A)
+            let entryName = segmentName(index)
+            guard try rootDirectory.entryInformation(named: entryName) != nil
+            else { continue }
+            let allLines = try rootDirectory.readFile(
+                named: entryName,
+                maximumByteCount: configuration.maximumPersistentBytes
+            ).split(separator: 0x0A)
             var corruptCount = 0
             let retained = allLines.compactMap { line -> Data? in
                 guard let record = try? Self.decoder.decode(
@@ -1235,13 +1233,13 @@ private final class DiagnosticDiskStore {
             incrementLoss(.corruptRecord, by: corruptCount)
             guard retained.count != allLines.count else { continue }
             if retained.isEmpty {
-                try fileManager.removeItem(at: url)
+                try rootDirectory.removeEntryIfPresent(named: entryName)
                 state.segmentPayloadBytes[index] = 0
                 state.segmentRecordCounts[index] = 0
                 state.segmentFirstSequences[index] = 0
             } else {
                 let data = retained.reduce(into: Data()) { $0.append($1) }
-                try writeDataAtomically(data, to: url)
+                try writeDataAtomically(data, named: entryName)
                 let records = retained.compactMap {
                     try? Self.decoder.decode(
                         RecordedEvidence.self,
@@ -1377,6 +1375,14 @@ private final class DiagnosticDiskStore {
         let newestRetainedDay = Self.utcCalendar.startOfDay(for: now)
         let normalizedBuckets = (state.lossBuckets ?? []).compactMap {
             bucket -> LossBucket? in
+            guard bucket.utcDayStart.timeIntervalSinceReferenceDate.isFinite,
+                  bucket.firstOccurredAt?
+                  .timeIntervalSinceReferenceDate.isFinite ?? true,
+                  bucket.lastOccurredAt?
+                  .timeIntervalSinceReferenceDate.isFinite ?? true
+            else {
+                return nil
+            }
             var counts = bucket.counts
             counts.normalize()
             let dayStart = Self.utcCalendar.startOfDay(
@@ -1389,7 +1395,8 @@ private final class DiagnosticDiskStore {
             ) ?? dayStart.addingTimeInterval(24 * 60 * 60)
             let firstOccurredAt = bucket.firstOccurredAt ?? dayStart
             let lastOccurredAt = bucket.lastOccurredAt ?? firstOccurredAt
-            guard firstOccurredAt >= dayStart,
+            guard bucket.utcDayStart == dayStart,
+                  firstOccurredAt >= dayStart,
                   lastOccurredAt >= firstOccurredAt,
                   lastOccurredAt < nextDay,
                   lastOccurredAt <= now
@@ -1442,14 +1449,18 @@ private final class DiagnosticDiskStore {
     private func rebuildStateFromSegments() throws {
         var maximumSequence: UInt64 = 0
         for index in 0 ..< configuration.eventSegmentCount {
-            let url = segmentURL(index)
-            guard fileManager.fileExists(atPath: url.path) else {
+            let entryName = segmentName(index)
+            guard try rootDirectory.entryInformation(named: entryName) != nil
+            else {
                 state.segmentPayloadBytes[index] = 0
                 state.segmentRecordCounts[index] = 0
                 state.segmentFirstSequences[index] = 0
                 continue
             }
-            let data = try Data(contentsOf: url)
+            let data = try rootDirectory.readFile(
+                named: entryName,
+                maximumByteCount: configuration.maximumPersistentBytes
+            )
             let records = data.split(separator: 0x0A).compactMap {
                 try? Self.decoder.decode(
                     RecordedEvidence.self,
@@ -1478,8 +1489,10 @@ private final class DiagnosticDiskStore {
         var byEventID: [UUID: RecordedEvidence] = [:]
         var corruptCount = 0
         for index in 0 ..< configuration.eventSegmentCount {
-            let url = segmentURL(index)
-            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let data = try? rootDirectory.readFile(
+                named: segmentName(index),
+                maximumByteCount: configuration.maximumPersistentBytes
+            ) else { continue }
             for line in data.split(separator: 0x0A) {
                 guard let record = try? Self.decoder.decode(
                     RecordedEvidence.self,
@@ -1522,17 +1535,17 @@ private final class DiagnosticDiskStore {
         }
         try writeDataAtomicallyPrepared(
             activeData,
-            to: activeOperationsURL
+            named: activeOperationsName
         )
         try writeDataAtomicallyPrepared(
             capsuleData,
-            to: operationCapsulesURL
+            named: operationCapsulesName
         )
         indexData = try encodedMetadata(state)
         guard roundedAllocation(Int64(indexData.count)) <= reservedBytes else {
             throw DiagnosticStorageError.allocatedSizeUnavailable
         }
-        try writeDataAtomicallyPrepared(indexData, to: indexURL)
+        try writeDataAtomicallyPrepared(indexData, named: indexName)
     }
 
     private func atomicMetadataBudget(
@@ -1541,16 +1554,16 @@ private final class DiagnosticDiskStore {
         indexData: Data
     ) throws -> Int64 {
         let replacements = [
-            (activeOperationsURL, activeData),
-            (operationCapsulesURL, capsuleData),
-            (indexURL, indexData)
+            (activeOperationsName, activeData),
+            (operationCapsulesName, capsuleData),
+            (indexName, indexData)
         ]
         let allocations = replacements.map {
             roundedAllocation(Int64($0.1.count))
         }
         let replacementGrowth = try zip(replacements, allocations)
             .reduce(into: Int64(0)) { total, pair in
-                let existing = try allocatedBytes(of: pair.0.0)
+                let existing = try allocatedRootBytes(of: pair.0.0)
                 let growth = max(0, pair.1 - existing)
                 let (sum, overflow) = total.addingReportingOverflow(growth)
                 guard overflow == false else {
@@ -1576,53 +1589,47 @@ private final class DiagnosticDiskStore {
         return data
     }
 
-    private func writeDataAtomically(_ data: Data, to url: URL) throws {
-        let temporaryURL = rootURL.appendingPathComponent(
-            ".\(url.lastPathComponent).tmp"
-        )
-        if fileManager.fileExists(atPath: temporaryURL.path) {
-            try fileManager.removeItem(at: temporaryURL)
-        }
+    private func writeDataAtomically(_ data: Data, named entryName: String) throws {
         try reserveCapacity(forAdditionalBytes: Int64(data.count))
-        try writeDataAtomicallyPrepared(data, to: url)
+        try writeDataAtomicallyPrepared(data, named: entryName)
     }
 
     private func writeDataAtomicallyPrepared(
         _ data: Data,
-        to url: URL
+        named entryName: String
     ) throws {
-        let temporaryURL = rootURL.appendingPathComponent(
-            ".\(url.lastPathComponent).tmp"
-        )
-        try writeData(data, to: temporaryURL)
-        guard Darwin.rename(temporaryURL.path, url.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        let temporaryName = ".\(entryName).\(UUID().uuidString).tmp"
+        do {
+            try writeData(data, named: temporaryName, in: rootDirectory)
+            try rootDirectory.renameEntry(
+                named: temporaryName,
+                to: entryName
+            )
+            try rootDirectory.synchronize()
+        } catch {
+            try? rootDirectory.removeEntryIfPresent(named: temporaryName)
+            throw error
         }
         try observeAllocatedBytes()
     }
 
-    private func writeData(_ data: Data, to url: URL) throws {
-        try data.write(to: url)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
-        let handle = try FileHandle(forWritingTo: url)
-        try handle.synchronize()
-        try handle.close()
+    private func writeData(
+        _ data: Data,
+        named entryName: String,
+        in directory: DiagnosticOwnedDirectory
+    ) throws {
+        try directory.writeNewFile(named: entryName, data: data)
         do {
             try observeAllocatedBytes()
         } catch {
-            try? fileManager.removeItem(at: url)
+            try? directory.removeEntryIfPresent(named: entryName)
             throw error
         }
     }
 
     private func removeAtomicTemporaryFiles() throws {
-        for url in atomicTemporaryURLs where fileManager.fileExists(
-            atPath: url.path
-        ) {
-            try fileManager.removeItem(at: url)
+        for entryName in try atomicTemporaryEntryNames() {
+            try rootDirectory.removeEntryIfPresent(named: entryName)
         }
     }
 
@@ -1636,200 +1643,224 @@ private final class DiagnosticDiskStore {
     }
 
     private func allocatedBytes() throws -> Int64 {
-        try managedExistingFileURLs().reduce(0) { total, url in
-            let values = try url.resourceValues(forKeys: [
-                .totalFileAllocatedSizeKey,
-                .fileAllocatedSizeKey
-            ])
-            guard let size = values.totalFileAllocatedSize
-                ?? values.fileAllocatedSize
-            else {
-                throw DiagnosticStorageError.allocatedSizeUnavailable
+        var total: Int64 = 0
+        for entryName in try managedRootEntryNames() {
+            if let information = try rootDirectory.entryInformation(
+                named: entryName
+            ) {
+                total = try addingAllocatedBytes(
+                    information.allocatedByteCount,
+                    to: total
+                )
             }
-            return total + Int64(size)
         }
+        if metricDirectoryStatus() == .ownedDirectory,
+           let metricsDirectory
+        {
+            for entryName in try metricEntryNames() {
+                guard let information = try metricsDirectory
+                    .entryInformation(named: entryName)
+                else { continue }
+                total = try addingAllocatedBytes(
+                    information.allocatedByteCount,
+                    to: total
+                )
+            }
+        }
+        return total
     }
 
-    private func allocatedBytes(of url: URL) throws -> Int64 {
-        guard fileManager.fileExists(atPath: url.path) else { return 0 }
-        let values = try url.resourceValues(forKeys: [
-            .totalFileAllocatedSizeKey,
-            .fileAllocatedSizeKey
-        ])
-        guard let size = values.totalFileAllocatedSize
-            ?? values.fileAllocatedSize
-        else {
-            throw DiagnosticStorageError.allocatedSizeUnavailable
-        }
-        return Int64(size)
+    private func allocatedRootBytes(of entryName: String) throws -> Int64 {
+        try rootDirectory.entryInformation(named: entryName)?
+            .allocatedByteCount ?? 0
     }
 
     private func logicalBytes() throws -> Int64 {
-        try managedExistingFileURLs().reduce(0) { total, url in
-            let values = try url.resourceValues(forKeys: [.fileSizeKey])
-            return total + Int64(values.fileSize ?? 0)
+        var total: Int64 = 0
+        for entryName in try managedRootEntryNames() {
+            guard let information = try rootDirectory.entryInformation(
+                named: entryName
+            ) else { continue }
+            total = try addingAllocatedBytes(
+                information.logicalByteCount,
+                to: total
+            )
         }
+        if metricDirectoryStatus() == .ownedDirectory,
+           let metricsDirectory
+        {
+            for entryName in try metricEntryNames() {
+                guard let information = try metricsDirectory
+                    .entryInformation(named: entryName)
+                else { continue }
+                total = try addingAllocatedBytes(
+                    information.logicalByteCount,
+                    to: total
+                )
+            }
+        }
+        return total
     }
 
     private func metricLogicalBytes() throws -> Int64 {
-        try metricURLs().reduce(0) { total, url in
-            let values = try url.resourceValues(forKeys: [.fileSizeKey])
-            return total + Int64(values.fileSize ?? 0)
+        guard metricDirectoryStatus() == .ownedDirectory,
+              let metricsDirectory
+        else { return 0 }
+        return try metricEntryNames().reduce(into: Int64(0)) {
+            guard let information = try metricsDirectory.entryInformation(
+                named: $1
+            ) else { return }
+            $0 = try addingAllocatedBytes(
+                information.logicalByteCount,
+                to: $0
+            )
         }
     }
 
     private func roundedAllocation(_ byteCount: Int64) -> Int64 {
-        var information = statfs()
-        let blockSize: Int64 = if statfs(rootURL.path, &information) == 0 {
-            max(4096, Int64(information.f_bsize))
-        } else {
-            4096
-        }
+        let blockSize = rootDirectory.fileSystemBlockSize() ?? 4096
         return ((max(1, byteCount) + blockSize - 1) / blockSize)
             * blockSize
     }
 
-    private func managedExistingFileURLs() throws -> [URL] {
-        let direct = managedFileURLs().filter {
-            fileManager.fileExists(atPath: $0.path)
+    private func addingAllocatedBytes(
+        _ byteCount: Int64,
+        to total: Int64
+    ) throws -> Int64 {
+        let (sum, overflow) = total.addingReportingOverflow(byteCount)
+        guard overflow == false, sum >= 0 else {
+            throw DiagnosticStorageError.allocatedSizeUnavailable
         }
-        return direct + (try metricURLs())
+        return sum
     }
 
-    private func managedFileURLs() -> [URL] {
-        [indexURL, activeOperationsURL, operationCapsulesURL]
-            + (0 ..< configuration.eventSegmentCount).map(segmentURL)
-            + atomicTemporaryURLs
+    private func managedRootEntryNames() throws -> [String] {
+        managedRootFixedEntryNames + (try atomicTemporaryEntryNames())
     }
 
-    private var atomicTemporaryURLs: [URL] {
-        let targets = [indexURL, activeOperationsURL, operationCapsulesURL]
-            + (0 ..< configuration.eventSegmentCount).map(segmentURL)
-        return targets.map {
-            rootURL.appendingPathComponent(".\($0.lastPathComponent).tmp")
+    private var managedRootFixedEntryNames: [String] {
+        [indexName, activeOperationsName, operationCapsulesName]
+            + (0 ..< configuration.eventSegmentCount).map(segmentName)
+    }
+
+    private func atomicTemporaryEntryNames() throws -> [String] {
+        let targets = managedRootFixedEntryNames
+        return try rootDirectory.entryNames().filter { entryName in
+            targets.contains { target in
+                if entryName == ".\(target).tmp" { return true }
+                let prefix = ".\(target)."
+                guard entryName.hasPrefix(prefix),
+                      entryName.hasSuffix(".tmp")
+                else { return false }
+                let uuidStart = entryName.index(
+                    entryName.startIndex,
+                    offsetBy: prefix.count
+                )
+                let uuidEnd = entryName.index(
+                    entryName.endIndex,
+                    offsetBy: -".tmp".count
+                )
+                return UUID(uuidString: String(entryName[uuidStart ..< uuidEnd]))
+                    != nil
+            }
         }
     }
 
-    private func metricURLs() throws -> [URL] {
-        let metricsURL = metricsDirectoryURL
+    private func metricEntryNames() throws -> [String] {
         guard metricDirectoryStatus() == .ownedDirectory else {
             return []
         }
-        return try fileManager.contentsOfDirectory(
-            at: metricsURL,
-            includingPropertiesForKeys: [.contentModificationDateKey]
-        ).filter {
-            $0.lastPathComponent.hasPrefix("metric-")
-                && $0.pathExtension == "json"
+        guard let metricsDirectory else {
+            throw DiagnosticStorageError.invalidRoot
         }
+        return try metricsDirectory.entryNames()
+            .filter(isMetricCandidateName)
+            .sorted()
     }
 
     private func metricDirectoryStatus() -> ManagedDirectoryStatus {
-        var linkInformation = stat()
-        guard lstat(metricsDirectoryURL.path, &linkInformation) == 0 else {
-            return errno == ENOENT ? .absent : .invalidEntry
-        }
-        guard (linkInformation.st_mode & S_IFMT) == S_IFDIR else {
+        if metricsDirectory != nil { return .ownedDirectory }
+        do {
+            metricsDirectory = try rootDirectory.openChildDirectory(
+                named: metricsDirectoryName,
+                createIfMissing: false,
+                permissions: 0o700
+            )
+            return metricsDirectory == nil ? .absent : .ownedDirectory
+        } catch {
             return .invalidEntry
         }
-        let descriptor = Darwin.open(
-            metricsDirectoryURL.path,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard descriptor >= 0 else { return .invalidEntry }
-        defer { Darwin.close(descriptor) }
-        var openedInformation = stat()
-        guard fstat(descriptor, &openedInformation) == 0,
-              (openedInformation.st_mode & S_IFMT) == S_IFDIR
-        else {
-            return .invalidEntry
+    }
+
+    private func prepareMetricsDirectory() throws -> DiagnosticOwnedDirectory {
+        switch metricDirectoryStatus() {
+        case .ownedDirectory:
+            guard let metricsDirectory else {
+                throw DiagnosticStorageError.invalidRoot
+            }
+            return metricsDirectory
+        case .absent:
+            guard let directory = try rootDirectory.openChildDirectory(
+                named: metricsDirectoryName,
+                createIfMissing: true,
+                permissions: 0o700
+            ) else {
+                throw DiagnosticStorageError.invalidRoot
+            }
+            metricsDirectory = directory
+            return directory
+        case .invalidEntry:
+            throw DiagnosticStorageError.invalidRoot
         }
-        return .ownedDirectory
     }
 
-    private func unlinkInvalidManagedEntry(at url: URL) throws {
-        guard Darwin.unlink(url.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+    private func metricModificationDate(of entryName: String) throws -> Date {
+        guard let metricsDirectory,
+              let information = try metricsDirectory.entryInformation(
+                  named: entryName
+              )
+        else { return .distantPast }
+        return information.modificationDate
     }
 
-    private var metricsDirectoryURL: URL {
-        rootURL.appendingPathComponent("metrics", isDirectory: true)
+    private func isMetricCandidateName(_ entryName: String) -> Bool {
+        entryName.hasPrefix("metric-")
+            && entryName.hasSuffix(".json")
     }
 
-    private func modificationDate(of url: URL) throws -> Date {
-        try url.resourceValues(forKeys: [.contentModificationDateKey])
-            .contentModificationDate ?? .distantPast
+    private func segmentName(_ index: Int) -> String {
+        String(format: "events-%02d.ndjson", index)
     }
 
-    private func segmentURL(_ index: Int) -> URL {
-        rootURL.appendingPathComponent(
-            String(format: "events-%02d.ndjson", index)
-        )
+    private var indexName: String {
+        "index.json"
     }
 
-    private var indexURL: URL {
-        rootURL.appendingPathComponent("index.json")
+    private var activeOperationsName: String {
+        "active-operations.json"
     }
 
-    private var activeOperationsURL: URL {
-        rootURL.appendingPathComponent("active-operations.json")
+    private var operationCapsulesName: String {
+        "operation-capsules.json"
     }
 
-    private var operationCapsulesURL: URL {
-        rootURL.appendingPathComponent("operation-capsules.json")
+    private var metricsDirectoryName: String {
+        "metrics"
     }
 
     private static func loadJSON<T: Decodable>(
         _ type: T.Type,
-        from url: URL,
-        fileManager: FileManager
+        named entryName: String,
+        in directory: DiagnosticOwnedDirectory
     ) -> T? {
-        guard fileManager.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url)
+        guard let data = try? directory.readFile(
+            named: entryName,
+            maximumByteCount: 128 * 1024
+        )
         else {
             return nil
         }
         return try? decoder.decode(type, from: data)
-    }
-
-    private static func prepareOwnedDirectory(
-        at url: URL,
-        permissions: mode_t,
-        fileManager: FileManager
-    ) throws {
-        var linkInformation = stat()
-        if lstat(url.path, &linkInformation) != 0 {
-            guard errno == ENOENT else {
-                throw DiagnosticStorageError.invalidRoot
-            }
-            try fileManager.createDirectory(
-                at: url,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: Int(permissions)]
-            )
-            guard lstat(url.path, &linkInformation) == 0 else {
-                throw DiagnosticStorageError.invalidRoot
-            }
-        }
-        guard (linkInformation.st_mode & S_IFMT) == S_IFDIR else {
-            throw DiagnosticStorageError.invalidRoot
-        }
-        let descriptor = Darwin.open(
-            url.path,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard descriptor >= 0 else {
-            throw DiagnosticStorageError.invalidRoot
-        }
-        defer { Darwin.close(descriptor) }
-        var openedInformation = stat()
-        guard fstat(descriptor, &openedInformation) == 0,
-              (openedInformation.st_mode & S_IFMT) == S_IFDIR,
-              fchmod(descriptor, permissions) == 0
-        else {
-            throw DiagnosticStorageError.invalidRoot
-        }
     }
 
     private static func normalized(

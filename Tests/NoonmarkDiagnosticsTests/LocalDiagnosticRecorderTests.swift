@@ -320,19 +320,42 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         await recorder.flush()
 
         let indexCanaryURL = externalURL.appendingPathComponent("index.json")
-        let eventCanaryURL = externalURL.appendingPathComponent(
-            "events-00.ndjson"
-        )
+        let eventCanaryURL = externalURL.appendingPathComponent("events-00.ndjson")
         let metricCanaryURL = externalURL
             .appendingPathComponent("metrics")
             .appendingPathComponent("metric-external-canary.json")
+        let externalEventID = UUID()
+        var externalEventData = try JSONEncoder().encode(
+            RecordedEvidence(
+                sequence: 9999,
+                eventID: externalEventID,
+                timestamp: Date(),
+                sessionID: DiagnosticSessionID(),
+                event: .cleanShutdown()
+            )
+        )
+        externalEventData.append(0x0A)
         let canaries = [
             indexCanaryURL: Data("EXTERNAL-INDEX-CANARY".utf8),
-            eventCanaryURL: Data("EXTERNAL-EVENT-CANARY".utf8),
+            eventCanaryURL: externalEventData,
             metricCanaryURL: Data("EXTERNAL-METRIC-CANARY".utf8)
         ]
         for (url, data) in canaries {
             try data.write(to: url)
+        }
+        let canaryFingerprints = try Dictionary(
+            uniqueKeysWithValues: canaries.keys.map {
+                ($0, try DiagnosticFileFingerprint(at: $0))
+            }
+        )
+        func assertCanariesUnchanged(after stage: String) throws {
+            for (url, fingerprint) in canaryFingerprints {
+                try XCTAssertDiagnosticFileUnchanged(
+                    at: url,
+                    from: fingerprint,
+                    "external canary changed after \(stage)"
+                )
+            }
         }
         let displacedRootURL = parentURL.appendingPathComponent(
             "DisplacedDiagnostics",
@@ -361,14 +384,32 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             receivedAt: Date()
         )
         await recorder.flush()
-        _ = try await recorder.snapshotPackage()
+        try assertCanariesUnchanged(after: "flush")
+
+        let snapshot = try await recorder.snapshotPackage()
+        XCTAssertFalse(snapshot.records.contains { $0.eventID == externalEventID })
+        let snapshotText = try XCTUnwrap(
+            String(
+                data: JSONEncoder().encode(snapshot),
+                encoding: .utf8
+            )
+        )
+        XCTAssertFalse(snapshotText.contains(externalEventID.uuidString))
+        try assertCanariesUnchanged(after: "snapshot")
+
         let exportURL = temporaryFile(named: "runtime-root.noonmarkdiagnostics")
         _ = try await recorder.export(to: exportURL)
-        try await recorder.clear()
+        let exportText = try XCTUnwrap(
+            String(
+                data: Data(contentsOf: exportURL),
+                encoding: .utf8
+            )
+        )
+        XCTAssertFalse(exportText.contains(externalEventID.uuidString))
+        try assertCanariesUnchanged(after: "export")
 
-        for (url, data) in canaries {
-            XCTAssertEqual(try Data(contentsOf: url), data)
-        }
+        try await recorder.clear()
+        try assertCanariesUnchanged(after: "clear")
     }
 
     func testRelaunchExcludesCorruptSegmentLineAndReportsPartialCollection() async throws {

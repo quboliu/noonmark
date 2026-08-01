@@ -10,7 +10,7 @@ if [[ ! -f "$NOONMARK_LIVE_ICLOUD_PACKAGE_PATH" ]]; then
   exit 1
 fi
 
-scripts/reset-dev-data
+scripts/reset-dev-data e2e
 export NOONMARK_LIVE_ICLOUD_SYNC=1
 
 swift test --filter ICloudDriveLocalFirstSyncLiveTests/testTwoSQLiteStoresSyncThroughRealICloudDriveEndpoint
@@ -30,7 +30,7 @@ rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
 trap 'rm -f "$upload_log"' EXIT
 
-open -W -n "$PWD/dist/NoonmarkMacAppE2E.app" --args \
+open -W -n "$PWD/dist/NoonmarkE2E.app" --args \
   --data-url "$PWD/$database_path" \
   --page settings \
   --e2e-icloud-sync-live \
@@ -48,7 +48,7 @@ if [[ "$sync_metadata_count" -ne 1 ]]; then
   exit 1
 fi
 
-icloud_repository="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
+icloud_repository="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Noonmark-E2E/SyncRepository"
 if [[ ! -s "$icloud_repository/refs/latest" ]]; then
   echo "real App iCloud repository latest ref is missing" >&2
   exit 1

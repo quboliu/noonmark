@@ -35,7 +35,7 @@ fi
 caffeinate -d -i -u -w "$$" >/dev/null 2>&1 &
 display_assertion_pid=$!
 
-app_bundle_name="NoonmarkMacAppE2E"
+app_bundle_name="NoonmarkE2E"
 app_executable_name="NoonmarkMacAppE2E"
 app_display_name="晷迹 E2E"
 expected_window_width="1200"
@@ -54,7 +54,7 @@ evidence_source_start="${runtime_evidence_dir}/source-start.fragment"
 evidence_source_end="${runtime_evidence_dir}/source-end.fragment"
 evidence_app_start="${runtime_evidence_dir}/app-start.fragment"
 evidence_app_end="${runtime_evidence_dir}/app-end.fragment"
-evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"
+evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkE2E.app"
 english_scenario_ledger="${runtime_evidence_dir}/english-scenario-ledger.tsv"
 helper_process_name="NoonmarkDMGInstallHarness"
 helper_bundle="artifacts/dmg-install-harness/${helper_process_name}.app"
@@ -406,6 +406,7 @@ evidence_append \
 printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' \
   >"$english_scenario_ledger"
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e
 evidence_capture_bundle "$app_path" 1 "app" "$evidence_app_start"
 evidence_append_snapshot "$evidence_manifest" "$evidence_app_start"

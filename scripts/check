@@ -44,7 +44,7 @@ run_check_suite() {
   scripts/test-app-icon
 
   echo "==> Swift build"
-  scripts/reset-dev-data
+  scripts/reset-dev-data audit
   swift build
 
   echo "==> Unit tests"
@@ -67,6 +67,9 @@ run_check_suite() {
 
   echo "==> Runtime evidence guard"
   scripts/test-runtime-evidence
+
+  echo "==> Runtime profile isolation"
+  scripts/test-runtime-profile-isolation
 
   echo "==> Validation evidence provenance"
   scripts/test-evidence-common

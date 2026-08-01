@@ -8,7 +8,7 @@ cd "$repo_root"
 
 configuration="${1:-debug}"
 artifact_root="$repo_root/artifacts/e2e-tencent-ime-termination"
-app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+app_path="$repo_root/dist/NoonmarkE2E.app"
 summary_path="$artifact_root/results.tsv"
 console_log="$artifact_root/runtime-console.log"
 surface_catalog="$repo_root/Tests/Fixtures/tencent-ime-input-surfaces.tsv"
@@ -53,6 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e >/dev/null
 rm -rf "$artifact_root"
 mkdir -p "$artifact_root"

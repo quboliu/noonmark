@@ -8,7 +8,7 @@ cd "$repo_root"
 
 configuration="${1:-debug}"
 matrix_dir="$repo_root/artifacts/e2e-tencent-ime-input-matrix"
-app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+app_path="$repo_root/dist/NoonmarkE2E.app"
 summary_path="$matrix_dir/results.tsv"
 console_log="$matrix_dir/runtime-console.log"
 workload_mode="${NOONMARK_TENCENT_IME_WORKLOAD:-realistic}"
@@ -66,6 +66,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e >/dev/null
 rm -rf "$matrix_dir"
 mkdir -p "$matrix_dir"

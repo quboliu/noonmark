@@ -29,7 +29,6 @@ noonmark_resolve_codesign_identity \
 codesign_identity="$NOONMARK_RESOLVED_CODESIGN_IDENTITY"
 stable_codesigning_enabled="$NOONMARK_STABLE_CODESIGNING_ENABLED"
 
-scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"

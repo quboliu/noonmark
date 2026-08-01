@@ -5,8 +5,8 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-app_path="$repo_root/dist/Noonmark.app"
-app_executable="$app_path/Contents/MacOS/NoonmarkMacApp"
+app_path="$repo_root/dist/NoonmarkDevelopment.app"
+app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDevelopment"
 launched_pid=""
 minimum_lifetime_ticks="${NOONMARK_INTERACTIVE_LAUNCH_MINIMUM_TICKS:-20}"
 
@@ -46,16 +46,16 @@ for _ in {1..50}; do
 done
 
 if [[ -z "$launched_pid" ]]; then
-  echo "interactive launch did not create the requested Noonmark.app process" >&2
+  echo "interactive launch did not create the requested development App process" >&2
   exit 1
 fi
 
 for ((tick = 0; tick < minimum_lifetime_ticks; tick += 1)); do
   if ! kill -0 "$launched_pid" >/dev/null 2>&1; then
-    echo "interactive Noonmark.app process exited before it became usable" >&2
+    echo "interactive development App process exited before it became usable" >&2
     exit 1
   fi
   sleep 0.1
 done
 
-echo "Interactive Noonmark.app launch passed: pid=$launched_pid ticks=$minimum_lifetime_ticks"
+echo "Interactive development App launch passed: pid=$launched_pid ticks=$minimum_lifetime_ticks"

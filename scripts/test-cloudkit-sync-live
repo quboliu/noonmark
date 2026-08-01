@@ -27,7 +27,7 @@ upload_result="$PWD/$artifact_dir/upload-result.txt"
 download_result="$PWD/$artifact_dir/download-result.txt"
 cleanup_result="$PWD/$artifact_dir/cleanup-result.txt"
 task_title="CloudKit live validation $zone_name"
-app_path="$PWD/dist/NoonmarkMacAppE2E.app"
+app_path="$PWD/dist/NoonmarkE2E.app"
 app_built=0
 
 rm -rf "$artifact_dir"
@@ -68,6 +68,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app debug e2e >/dev/null
 app_built=1
 

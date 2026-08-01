@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scripts/reset-dev-data
+scripts/reset-dev-data audit
 swift test

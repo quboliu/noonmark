@@ -23,6 +23,7 @@ esac
 
 source scripts/load-ai-provider-config
 noonmark_load_ai_provider_config
+scripts/reset-dev-data demo
 scripts/build-mac-app "$configuration" demo >/dev/null
 
 if [[ ! -x "$app_executable" ]]; then

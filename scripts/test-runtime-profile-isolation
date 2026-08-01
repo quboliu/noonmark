@@ -1,0 +1,499 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# shellcheck source=scripts/runtime-profile-common
+source "$repo_root/scripts/runtime-profile-common"
+
+assert_equal() {
+  local label="$1"
+  local expected="$2"
+  local actual="$3"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$label: expected '$expected', got '$actual'" >&2
+    exit 1
+  fi
+}
+
+while IFS='|' read -r \
+  profile \
+  bundle_identifier \
+  process_name \
+  app_bundle_name \
+  data_directory_name \
+  icloud_repository_name \
+  provider_keychain_service \
+  sidecar_keychain_service \
+  resettable; do
+  [[ -n "$profile" ]] || continue
+  noonmark_runtime_profile_load "$profile"
+  assert_equal "$profile bundle" \
+    "$bundle_identifier" "$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER"
+  assert_equal "$profile process" \
+    "$process_name" "$NOONMARK_RUNTIME_PROCESS_NAME"
+  assert_equal "$profile App bundle" \
+    "$app_bundle_name" "$NOONMARK_RUNTIME_APP_BUNDLE_NAME"
+  assert_equal "$profile data directory" \
+    "$data_directory_name" "$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME"
+  assert_equal "$profile iCloud repository" \
+    "$icloud_repository_name" "$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME"
+  assert_equal "$profile Provider Keychain service" \
+    "$provider_keychain_service" \
+    "$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE"
+  assert_equal "$profile sidecar Keychain service" \
+    "$sidecar_keychain_service" \
+    "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE"
+  assert_equal "$profile resettable flag" \
+    "$resettable" "$NOONMARK_RUNTIME_RESETTABLE"
+done <<'PROFILES'
+production|app.noonmark.mac|NoonmarkMacApp|Noonmark|noonmark|Noonmark/SyncRepository|app.noonmark.zhulong.provider|app.noonmark.zhulong.sidecar-key|0
+development|app.noonmark.mac.development|NoonmarkMacAppDevelopment|NoonmarkDevelopment|noonmark-development|Noonmark-Development/SyncRepository|app.noonmark.zhulong.provider.development|app.noonmark.zhulong.sidecar-key.development|1
+e2e|app.noonmark.mac.e2e|NoonmarkMacAppE2E|NoonmarkE2E|noonmark-e2e|Noonmark-E2E/SyncRepository|app.noonmark.zhulong.provider.e2e|app.noonmark.zhulong.sidecar-key.e2e|1
+demo|app.noonmark.mac.demo|NoonmarkMacAppDemo|NoonmarkDemo|noonmark-demo|Noonmark-Demo/SyncRepository|app.noonmark.zhulong.provider.demo|app.noonmark.zhulong.sidecar-key.demo|1
+audit|app.noonmark.mac.audit|NoonmarkMacAppAudit|NoonmarkAudit|noonmark-audit|Noonmark-Audit/SyncRepository|app.noonmark.zhulong.provider.audit|app.noonmark.zhulong.sidecar-key.audit|1
+dmg-validation|app.noonmark.mac.dmg-validation|NoonmarkMacAppDMGValidation|NoonmarkDMGValidation|noonmark-dmg-validation|Noonmark-DMGValidation/SyncRepository|app.noonmark.zhulong.provider.dmg-validation|app.noonmark.zhulong.sidecar-key.dmg-validation|1
+PROFILES
+
+if noonmark_runtime_profile_load unknown-profile 2>/dev/null; then
+  echo "unknown runtime profile was accepted" >&2
+  exit 1
+fi
+noonmark_runtime_validate_all_profiles
+if ! noonmark_runtime_paths_overlap \
+  "/fixture/Library/Application Support/noonmark" \
+  "/fixture/Library/Application Support/noonmark/sync-repository"; then
+  echo "ancestor runtime paths were not identified as overlapping" >&2
+  exit 1
+fi
+if ! noonmark_runtime_paths_overlap \
+  "/fixture/Library/Application Support/noonmark" \
+  "/fixture/Library/Application Support/noonmark"; then
+  echo "identical runtime paths were not identified as overlapping" >&2
+  exit 1
+fi
+if noonmark_runtime_paths_overlap \
+  "/fixture/Library/Application Support/noonmark" \
+  "/fixture/Library/Application Support/noonmark-development"; then
+  echo "sibling runtime paths were incorrectly identified as overlapping" >&2
+  exit 1
+fi
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-runtime-profile.XXXXXX")"
+fixture_home="$fixture_root/home"
+stub_bin="$fixture_root/stubs"
+trace_path="$fixture_root/trace.log"
+reset_output="$fixture_root/reset-output.log"
+defaults_state="$fixture_root/defaults-state"
+mkdir -p "$fixture_home" "$stub_bin" "$defaults_state"
+trap '/bin/rm -rf -- "$fixture_root"' EXIT
+
+cat >"$stub_bin/id" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "-un" || "$#" -ne 1 ]]; then
+  exit 2
+fi
+printf '%s\n' fixture-user
+SCRIPT
+
+cat >"$stub_bin/dscl" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'NFSHomeDirectory: %s\n' "$NOONMARK_FIXTURE_HOME"
+SCRIPT
+
+cat >"$stub_bin/realpath" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${NOONMARK_STUB_REALPATH_RESULT:-$NOONMARK_FIXTURE_HOME}"
+SCRIPT
+
+cat >"$stub_bin/pgrep" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'pgrep' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+exit "${NOONMARK_STUB_PGREP_STATUS:-1}"
+SCRIPT
+
+cat >"$stub_bin/pkill" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'pkill' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+exit "${NOONMARK_STUB_PKILL_STATUS:-1}"
+SCRIPT
+
+cat >"$stub_bin/sleep" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sleep' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+SCRIPT
+
+cat >"$stub_bin/rm" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'rm' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+for argument in "$@"; do
+  case "$argument" in
+    -*) ;;
+    "$NOONMARK_FIXTURE_HOME"/*) ;;
+    *)
+      echo "fixture rm rejected unsafe target: $argument" >&2
+      exit 70
+      ;;
+  esac
+done
+/bin/rm "$@"
+SCRIPT
+
+cat >"$stub_bin/security" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'security' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+exit "${NOONMARK_STUB_SECURITY_STATUS:-44}"
+SCRIPT
+
+cat >"$stub_bin/defaults" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'defaults' >>"$NOONMARK_FIXTURE_TRACE"
+printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
+printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+if [[ "${1:-}" == "read" ]]; then
+  if [[ -f "$NOONMARK_FIXTURE_DEFAULTS_STATE/${2:-missing}" ]]; then
+    printf '{ fixture = true; }\n'
+    exit 0
+  fi
+  echo "Domain ${2:-missing} does not exist" >&2
+  exit 1
+fi
+if [[ "${1:-}" == "delete" && "$#" -eq 2 ]]; then
+  /bin/rm -f -- "$NOONMARK_FIXTURE_DEFAULTS_STATE/$2"
+  exit 0
+fi
+exit 0
+SCRIPT
+
+chmod +x "$stub_bin"/*
+
+run_reset() {
+  : >"$trace_path"
+  set +e
+  HOME="$fixture_home" \
+  PATH="$stub_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  NOONMARK_FIXTURE_HOME="$fixture_home" \
+  NOONMARK_FIXTURE_TRACE="$trace_path" \
+  NOONMARK_FIXTURE_DEFAULTS_STATE="$defaults_state" \
+  NOONMARK_STUB_PGREP_STATUS="${NOONMARK_TEST_PGREP_STATUS:-1}" \
+  NOONMARK_STUB_PKILL_STATUS="${NOONMARK_TEST_PKILL_STATUS:-1}" \
+  NOONMARK_STUB_REALPATH_RESULT="${NOONMARK_TEST_REALPATH_RESULT:-$fixture_home}" \
+    "$repo_root/scripts/reset-dev-data" "$@" \
+      >"$reset_output" 2>&1
+  reset_status=$?
+  set -e
+}
+
+assert_reset_rejected_without_effects() {
+  local label="$1"
+  shift
+  run_reset "$@"
+  if [[ "$reset_status" -eq 0 ]]; then
+    echo "$label reset unexpectedly succeeded" >&2
+    exit 1
+  fi
+  if [[ -s "$trace_path" ]]; then
+    echo "$label reset reached a system side effect" >&2
+    sed -n '1,80p' "$trace_path" >&2
+    exit 1
+  fi
+}
+
+assert_reset_rejected_without_effects "missing-profile"
+assert_reset_rejected_without_effects "production" production
+assert_reset_rejected_without_effects "unknown-profile" unknown-profile
+
+production_data="$fixture_home/Library/Application Support/noonmark"
+development_data="$fixture_home/Library/Application Support/noonmark-development"
+production_icloud="$fixture_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
+development_icloud="$fixture_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark-Development/SyncRepository"
+production_cache="$fixture_home/Library/Caches/app.noonmark.mac"
+development_cache="$fixture_home/Library/Caches/app.noonmark.mac.development"
+production_state="$fixture_home/Library/Saved Application State/app.noonmark.mac.savedState"
+development_state="$fixture_home/Library/Saved Application State/app.noonmark.mac.development.savedState"
+
+mkdir -p \
+  "$production_data" \
+  "$development_data" \
+  "$production_icloud" \
+  "$development_icloud" \
+  "$production_cache" \
+  "$development_cache" \
+  "$production_state" \
+  "$development_state"
+touch \
+  "$production_data/formal-user-data" \
+  "$development_data/development-data" \
+  "$production_icloud/formal-sync-record" \
+  "$development_icloud/development-sync-record" \
+  "$production_cache/formal-cache" \
+  "$development_cache/development-cache" \
+  "$production_state/formal-state" \
+  "$development_state/development-state" \
+  "$defaults_state/app.noonmark.mac" \
+  "$defaults_state/app.noonmark.mac.development"
+
+run_reset development
+if [[ "$reset_status" -ne 0 ]]; then
+  echo "development reset failed" >&2
+  sed -n '1,120p' "$reset_output" >&2
+  exit 1
+fi
+for selected_path in \
+  "$development_data" \
+  "$development_icloud" \
+  "$development_cache" \
+  "$development_state" \
+  "$defaults_state/app.noonmark.mac.development"; do
+  if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+    echo "development reset left selected state: $selected_path" >&2
+    exit 1
+  fi
+done
+for production_path in \
+  "$production_data/formal-user-data" \
+  "$production_icloud/formal-sync-record" \
+  "$production_cache/formal-cache" \
+  "$production_state/formal-state" \
+  "$defaults_state/app.noonmark.mac"; do
+  if [[ ! -e "$production_path" ]]; then
+    echo "development reset changed formal state: $production_path" >&2
+    exit 1
+  fi
+done
+for forbidden_trace in \
+  'pkill -TERM -x NoonmarkMacApp' \
+  'pkill -KILL -x NoonmarkMacApp' \
+  'pgrep -x NoonmarkMacApp' \
+  'defaults read app.noonmark.mac' \
+  'defaults delete app.noonmark.mac' \
+  'security delete-generic-password -s app.noonmark.zhulong.sidecar-key -a sidecar-encryption-key-v1'; do
+  if grep -Fxq "$forbidden_trace" "$trace_path"; then
+    echo "development reset touched formal or Provider state: $forbidden_trace" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+done
+if grep -Fq 'zhulong.provider' "$trace_path"; then
+  echo "development reset deleted Provider credentials" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+for required_trace in \
+  'pgrep -x NoonmarkMacAppDevelopment' \
+  'defaults read app.noonmark.mac.development' \
+  'defaults delete app.noonmark.mac.development' \
+  'security delete-generic-password -s app.noonmark.zhulong.sidecar-key.development -a sidecar-encryption-key-v1'; do
+  if ! grep -Fq "$required_trace" "$trace_path"; then
+    echo "development reset missed selected state: $required_trace" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+done
+
+while IFS='|' read -r selected_profile selected_process selected_bundle selected_sidecar; do
+  run_reset "$selected_profile"
+  if [[ "$reset_status" -ne 0 ]]; then
+    echo "$selected_profile reset failed" >&2
+    sed -n '1,120p' "$reset_output" >&2
+    exit 1
+  fi
+  for required_trace in \
+    "pgrep -x $selected_process" \
+    "defaults read $selected_bundle" \
+    "security delete-generic-password -s $selected_sidecar -a sidecar-encryption-key-v1"; do
+    if ! grep -Fq "$required_trace" "$trace_path"; then
+      echo "$selected_profile reset missed selected state: $required_trace" >&2
+      sed -n '1,120p' "$trace_path" >&2
+      exit 1
+    fi
+  done
+  if grep -Fq 'zhulong.provider' "$trace_path" \
+    || grep -Fxq 'pgrep -x NoonmarkMacApp' "$trace_path" \
+    || grep -Fxq 'defaults read app.noonmark.mac' "$trace_path"; then
+    echo "$selected_profile reset touched formal or Provider state" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+done <<'RESETTABLE_PROFILES'
+e2e|NoonmarkMacAppE2E|app.noonmark.mac.e2e|app.noonmark.zhulong.sidecar-key.e2e
+demo|NoonmarkMacAppDemo|app.noonmark.mac.demo|app.noonmark.zhulong.sidecar-key.demo
+audit|NoonmarkMacAppAudit|app.noonmark.mac.audit|app.noonmark.zhulong.sidecar-key.audit
+dmg-validation|NoonmarkMacAppDMGValidation|app.noonmark.mac.dmg-validation|app.noonmark.zhulong.sidecar-key.dmg-validation
+RESETTABLE_PROFILES
+
+NOONMARK_TEST_PGREP_STATUS=2
+run_reset development
+unset NOONMARK_TEST_PGREP_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset treated a process-probe failure as no process" >&2
+  exit 1
+fi
+if grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+  echo "development reset deleted state after a process-probe failure" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+
+NOONMARK_TEST_REALPATH_RESULT="$fixture_home/noncanonical"
+run_reset development
+unset NOONMARK_TEST_REALPATH_RESULT
+if [[ "$reset_status" -eq 0 || -s "$trace_path" ]]; then
+  echo "development reset accepted a noncanonical HOME" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+
+ln -s "$production_data" "$development_data"
+run_reset development
+if [[ "$reset_status" -eq 0 || -s "$trace_path" ]]; then
+  echo "development reset accepted a symlinked selected path" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+/bin/rm -f -- "$development_data"
+
+NOONMARK_TEST_PGREP_STATUS=0
+NOONMARK_TEST_PKILL_STATUS=2
+run_reset development
+unset NOONMARK_TEST_PGREP_STATUS NOONMARK_TEST_PKILL_STATUS
+if [[ "$reset_status" -eq 0 ]] \
+  || grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+  echo "development reset deleted state after a process-signal failure" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+
+NOONMARK_TEST_PGREP_STATUS=0
+NOONMARK_TEST_PKILL_STATUS=0
+run_reset development
+unset NOONMARK_TEST_PGREP_STATUS NOONMARK_TEST_PKILL_STATUS
+if [[ "$reset_status" -eq 0 ]] \
+  || grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+  echo "development reset deleted state while its process survived" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+
+require_literal() {
+  local path="$1"
+  local literal="$2"
+  if ! grep -Fq "$literal" "$path"; then
+    echo "$path is missing runtime isolation contract: $literal" >&2
+    exit 1
+  fi
+}
+
+forbid_literal() {
+  local path="$1"
+  local literal="$2"
+  if grep -Fq "$literal" "$path"; then
+    echo "$path violates runtime isolation contract: $literal" >&2
+    exit 1
+  fi
+}
+
+require_literal "$repo_root/scripts/build-mac-app" \
+  'source scripts/runtime-profile-common'
+require_literal "$repo_root/scripts/build-mac-app" 'profile="${2:-}"'
+require_literal "$repo_root/scripts/build-mac-app" \
+  'NOONMARK_PRODUCTION_BUILD_CONTEXT'
+forbid_literal "$repo_root/scripts/build-mac-app" 'profile="${2:-app}"'
+for build_only_script in \
+  "$repo_root/scripts/build-mac-app" \
+  "$repo_root/scripts/build-dmg-install-harness" \
+  "$repo_root/scripts/package-dmg"; do
+  forbid_literal "$build_only_script" 'scripts/reset-dev-data'
+done
+require_literal "$repo_root/scripts/package-dmg" \
+  'NOONMARK_PRODUCTION_BUILD_CONTEXT=package-dmg'
+require_literal "$repo_root/scripts/package-dmg" \
+  'scripts/build-mac-app "$configuration" app'
+require_literal "$repo_root/Makefile" \
+  $'build-app:\n\tscripts/build-mac-app debug development'
+require_literal "$repo_root/scripts/run-mac-app" \
+  'scripts/reset-dev-data development'
+require_literal "$repo_root/scripts/run-mac-app" \
+  'scripts/build-mac-app "$configuration" development'
+
+set +e
+(
+  cd "$repo_root"
+  scripts/build-mac-app debug
+) >"$fixture_root/build-missing-profile.log" 2>&1
+missing_build_profile_status=$?
+(
+  cd "$repo_root"
+  scripts/build-mac-app debug app
+) >"$fixture_root/build-debug-production.log" 2>&1
+debug_production_status=$?
+(
+  cd "$repo_root"
+  scripts/build-mac-app release app
+) >"$fixture_root/build-direct-production.log" 2>&1
+direct_production_status=$?
+set -e
+if [[ "$missing_build_profile_status" -eq 0 \
+  || "$debug_production_status" -eq 0 \
+  || "$direct_production_status" -eq 0 ]]; then
+  echo "build-mac-app exposed an implicit or direct production build" >&2
+  exit 1
+fi
+
+while IFS='|' read -r relative_path literal; do
+  [[ -n "$relative_path" ]] || continue
+  require_literal "$repo_root/$relative_path" "$literal"
+done <<'CALLERS'
+Makefile|RESET_PROFILE ?= development
+Makefile|scripts/reset-dev-data "$(RESET_PROFILE)"
+Makefile|scripts/reset-dev-data development
+Makefile|scripts/reset-dev-data audit
+scripts/check|scripts/reset-dev-data audit
+scripts/check|scripts/test-runtime-profile-isolation
+scripts/test-unit|scripts/reset-dev-data audit
+scripts/test-integration|scripts/reset-dev-data audit
+scripts/test-system|scripts/reset-dev-data audit
+scripts/test-deterministic-sim|scripts/reset-dev-data audit
+scripts/run-demo-app|scripts/reset-dev-data demo
+scripts/test-interactive-demo-fixture|scripts/reset-dev-data demo
+scripts/test-e2e|scripts/reset-dev-data e2e
+scripts/test-e2e|app_bundle_name="NoonmarkE2E"
+scripts/test-e2e|app-snapshot/NoonmarkE2E.app
+scripts/test-ai-provider-live|scripts/reset-dev-data e2e
+scripts/test-ai-provider-live|app_path="dist/NoonmarkE2E.app"
+scripts/test-icloud-sync-live|scripts/reset-dev-data e2e
+scripts/test-icloud-sync-live|Noonmark-E2E/SyncRepository
+scripts/test-cloudkit-sync-live|scripts/reset-dev-data e2e
+scripts/test-cloudkit-sync-live|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-input-latency|scripts/reset-dev-data e2e
+scripts/test-tencent-ime-input-latency|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-input-matrix|scripts/reset-dev-data e2e
+scripts/test-tencent-ime-input-matrix|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-termination-persistence|scripts/reset-dev-data e2e
+scripts/test-tencent-ime-termination-persistence|dist/NoonmarkE2E.app
+scripts/test-data-root-process-lease-e2e|scripts/reset-dev-data e2e
+scripts/test-data-root-process-lease-e2e|dist/NoonmarkE2E.app
+scripts/test-data-root-process-lease-e2e|app-snapshot/NoonmarkE2E.app
+scripts/test-interactive-app-launch|dist/NoonmarkDevelopment.app
+CALLERS
+
+echo "Runtime profile, reset, pure build, and caller contract passed"

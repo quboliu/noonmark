@@ -30,7 +30,7 @@ database="$evidence_dir/Noonmark.sqlite"
 result="$evidence_dir/result.txt"
 app_log="$evidence_dir/app.log"
 stream_log="$evidence_dir/stream-transport.log"
-app_path="dist/NoonmarkMacAppE2E.app"
+app_path="dist/NoonmarkE2E.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppE2E"
 app_pid=""
 
@@ -126,7 +126,7 @@ if ! clear_e2e_provider_credentials; then
   echo "DeepSeek App E2E preflight cleanup failed" >&2
   exit 1
 fi
-scripts/reset-dev-data
+scripts/reset-dev-data e2e
 if ! swift run NoonmarkAIProviderLiveSmoke >"$stream_log" 2>&1; then
   echo "DeepSeek streaming transport smoke failed" >&2
   sed -n '1,160p' "$stream_log" >&2

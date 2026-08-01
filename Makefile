@@ -1,7 +1,9 @@
-.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
+.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-runtime-profile-isolation test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
+
+RESET_PROFILE ?= development
 
 reset-dev-data:
-	scripts/reset-dev-data
+	scripts/reset-dev-data "$(RESET_PROFILE)"
 
 generate-app-icon:
 	scripts/generate-app-icon
@@ -11,11 +13,11 @@ verify-app-icon:
 
 build:
 	scripts/test-app-icon
-	scripts/reset-dev-data
+	scripts/reset-dev-data development
 	swift build
 
 build-app:
-	scripts/build-mac-app
+	scripts/build-mac-app debug development
 
 run-app:
 	scripts/run-mac-app
@@ -36,7 +38,7 @@ test-dmg-install:
 	scripts/test-dmg-install
 
 test:
-	scripts/reset-dev-data
+	scripts/reset-dev-data audit
 	swift test
 
 test-unit:
@@ -53,6 +55,9 @@ test-deterministic-sim:
 
 test-e2e:
 	scripts/test-e2e
+
+test-runtime-profile-isolation:
+	scripts/test-runtime-profile-isolation
 
 test-tencent-ime-input-contract:
 	scripts/test-tencent-ime-input-contract

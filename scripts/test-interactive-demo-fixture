@@ -9,6 +9,7 @@ app_path="dist/NoonmarkDemo.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
 app_executable_name="NoonmarkMacAppDemo"
 
+scripts/reset-dev-data demo
 scripts/build-mac-app "$configuration" demo >/dev/null
 mkdir -p "$PWD/artifacts"
 test_root="$(mktemp -d "$PWD/artifacts/demo-fixture-test.XXXXXX")"

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 configuration="${1:-debug}"
-bundle_name="Noonmark"
-executable_name="NoonmarkMacApp"
+bundle_name="NoonmarkDevelopment"
+executable_name="NoonmarkMacAppDevelopment"
 app_path="dist/${bundle_name}.app"
 app_executable="$app_path/Contents/MacOS/$executable_name"
 bootstrap_log="artifacts/interactive-provider-bootstrap.log"
@@ -11,7 +11,8 @@ readiness_result="artifacts/interactive-provider-readiness.txt"
 source scripts/load-ai-provider-config
 noonmark_load_ai_provider_config
 
-scripts/build-mac-app "$configuration" >/dev/null
+scripts/reset-dev-data development
+scripts/build-mac-app "$configuration" development >/dev/null
 
 if [[ ! -x "$app_executable" ]]; then
   echo "missing built app executable: $app_path/Contents/MacOS/$executable_name" >&2

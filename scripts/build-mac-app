@@ -3,11 +3,12 @@ set -euo pipefail
 
 source scripts/app-icon-common
 source scripts/codesign-common
+source scripts/runtime-profile-common
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 
 configuration="${1:-debug}"
-profile="${2:-app}"
+profile="${2:-}"
 product="NoonmarkMacApp"
 marketing_version="${NOONMARK_MARKETING_VERSION:-0.1.1}"
 build_number="${NOONMARK_BUILD_NUMBER:-2}"
@@ -23,33 +24,35 @@ if [[ ! "$build_number" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
   exit 1
 fi
 
+if [[ -z "$profile" ]]; then
+  echo "usage: scripts/build-mac-app <debug|release> <app|development|e2e|demo|audit|dmg-validation>" >&2
+  exit 1
+fi
+
 case "$profile" in
   app)
-    executable_name="NoonmarkMacApp"
-    bundle_identifier="app.noonmark.mac"
-    bundle_display_name="晷迹"
-    bundle_short_name="Noonmark"
-    bundle_name="Noonmark"
+    if [[ "$configuration" != "release" \
+      || "${NOONMARK_PRODUCTION_BUILD_CONTEXT:-}" != "package-dmg" ]]; then
+      echo "production App builds are reserved for scripts/package-dmg" >&2
+      exit 1
+    fi
+    runtime_profile="production"
     ;;
-  e2e)
-    executable_name="NoonmarkMacAppE2E"
-    bundle_identifier="app.noonmark.mac.e2e"
-    bundle_display_name="晷迹 E2E"
-    bundle_short_name="Noonmark E2E"
-    bundle_name="NoonmarkMacAppE2E"
-    ;;
-  demo)
-    executable_name="NoonmarkMacAppDemo"
-    bundle_identifier="app.noonmark.mac.e2e"
-    bundle_display_name="晷迹 · 演示"
-    bundle_short_name="Noonmark Demo"
-    bundle_name="NoonmarkDemo"
+  development | e2e | demo | audit | dmg-validation)
+    runtime_profile="$profile"
     ;;
   *)
     echo "unknown fixed app profile: $profile" >&2
     exit 1
     ;;
 esac
+noonmark_runtime_validate_all_profiles
+noonmark_runtime_profile_load "$runtime_profile"
+executable_name="$NOONMARK_RUNTIME_PROCESS_NAME"
+bundle_identifier="$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER"
+bundle_display_name="$NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME"
+bundle_short_name="$NOONMARK_RUNTIME_BUNDLE_SHORT_NAME"
+bundle_name="$NOONMARK_RUNTIME_APP_BUNDLE_NAME"
 if [[ "$configuration" == "release" && "$profile" == "app" ]]; then
   evidence_require_clean_source "$(git rev-parse --show-toplevel)"
 fi
@@ -188,7 +191,6 @@ else {
 fi
 
 scripts/test-app-icon
-scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir" "$release_dsym_path"

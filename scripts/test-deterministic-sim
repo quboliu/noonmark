@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scripts/reset-dev-data
+scripts/reset-dev-data audit
 ST_SIM_RUNS="${ST_SIM_RUNS:-64}" swift test --filter NoonmarkSimulationTests

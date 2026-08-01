@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+
+noonmark_runtime_profile_load() {
+  local profile="${1:-}"
+
+  NOONMARK_RUNTIME_PROFILE=""
+  NOONMARK_RUNTIME_BUNDLE_IDENTIFIER=""
+  NOONMARK_RUNTIME_PROCESS_NAME=""
+  NOONMARK_RUNTIME_APP_BUNDLE_NAME=""
+  NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME=""
+  NOONMARK_RUNTIME_BUNDLE_SHORT_NAME=""
+  NOONMARK_RUNTIME_DATA_DIRECTORY_NAME=""
+  NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME=""
+  NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE=""
+  NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE=""
+  NOONMARK_RUNTIME_RESETTABLE=""
+
+  case "$profile" in
+    production)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacApp"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="Noonmark"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key"
+      NOONMARK_RUNTIME_RESETTABLE=0
+      ;;
+    development)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac.development"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacAppDevelopment"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="NoonmarkDevelopment"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹 · 开发"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark Development"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark-development"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Development/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.development"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.development"
+      NOONMARK_RUNTIME_RESETTABLE=1
+      ;;
+    e2e)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac.e2e"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacAppE2E"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="NoonmarkE2E"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹 E2E"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark E2E"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark-e2e"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-E2E/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.e2e"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.e2e"
+      NOONMARK_RUNTIME_RESETTABLE=1
+      ;;
+    demo)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac.demo"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacAppDemo"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="NoonmarkDemo"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹 · 演示"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark Demo"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark-demo"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Demo/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.demo"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.demo"
+      NOONMARK_RUNTIME_RESETTABLE=1
+      ;;
+    audit)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac.audit"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacAppAudit"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="NoonmarkAudit"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹 Audit"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark Audit"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark-audit"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Audit/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.audit"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.audit"
+      NOONMARK_RUNTIME_RESETTABLE=1
+      ;;
+    dmg-validation)
+      NOONMARK_RUNTIME_BUNDLE_IDENTIFIER="app.noonmark.mac.dmg-validation"
+      NOONMARK_RUNTIME_PROCESS_NAME="NoonmarkMacAppDMGValidation"
+      NOONMARK_RUNTIME_APP_BUNDLE_NAME="NoonmarkDMGValidation"
+      NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME="晷迹 DMG Validation"
+      NOONMARK_RUNTIME_BUNDLE_SHORT_NAME="Noonmark DMG Validation"
+      NOONMARK_RUNTIME_DATA_DIRECTORY_NAME="noonmark-dmg-validation"
+      NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-DMGValidation/SyncRepository"
+      NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.dmg-validation"
+      NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.dmg-validation"
+      NOONMARK_RUNTIME_RESETTABLE=1
+      ;;
+    *)
+      echo "unknown Noonmark runtime profile: ${profile:-<missing>}" >&2
+      return 1
+      ;;
+  esac
+
+  NOONMARK_RUNTIME_PROFILE="$profile"
+}
+
+noonmark_runtime_paths_overlap() {
+  local left="${1:-}"
+  local right="${2:-}"
+  if [[ -z "$left" || -z "$right" ]]; then
+    echo "cannot compare empty Noonmark runtime paths" >&2
+    return 2
+  fi
+  if [[ "$left" != "/" ]]; then
+    left="${left%/}"
+  fi
+  if [[ "$right" != "/" ]]; then
+    right="${right%/}"
+  fi
+
+  [[ "$left" == "$right" \
+    || "$left" == "$right"/* \
+    || "$right" == "$left"/* ]]
+}
+
+noonmark_runtime_validate_all_profiles() {
+  local profiles=(
+    production
+    development
+    e2e
+    demo
+    audit
+    dmg-validation
+  )
+  local bundle_identifiers=(__noonmark_profile_sentinel__)
+  local process_names=(__noonmark_profile_sentinel__)
+  local app_bundle_names=(__noonmark_profile_sentinel__)
+  local data_directory_names=(__noonmark_profile_sentinel__)
+  local icloud_repository_names=(__noonmark_profile_sentinel__)
+  local provider_keychain_services=(__noonmark_profile_sentinel__)
+  local sidecar_keychain_services=(__noonmark_profile_sentinel__)
+  local profile=""
+  local value=""
+  local existing=""
+
+  for profile in "${profiles[@]}"; do
+    noonmark_runtime_profile_load "$profile" || return 1
+    for value in \
+      "$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER" \
+      "$NOONMARK_RUNTIME_PROCESS_NAME" \
+      "$NOONMARK_RUNTIME_APP_BUNDLE_NAME" \
+      "$NOONMARK_RUNTIME_BUNDLE_DISPLAY_NAME" \
+      "$NOONMARK_RUNTIME_BUNDLE_SHORT_NAME" \
+      "$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME" \
+      "$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME" \
+      "$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE" \
+      "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE"; do
+      if [[ -z "$value" || "$value" == *$'\n'* ]]; then
+        echo "runtime profile $profile contains an unsafe empty or multiline identity" >&2
+        return 1
+      fi
+    done
+
+    for existing in "${bundle_identifiers[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER" ]] || {
+        echo "runtime profiles share bundle identifier $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${process_names[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_PROCESS_NAME" ]] || {
+        echo "runtime profiles share process name $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${app_bundle_names[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_APP_BUNDLE_NAME" ]] || {
+        echo "runtime profiles share App bundle name $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${data_directory_names[@]}"; do
+      ! noonmark_runtime_paths_overlap \
+        "$existing" "$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME" || {
+        echo "runtime profiles overlap data directory $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${icloud_repository_names[@]}"; do
+      ! noonmark_runtime_paths_overlap \
+        "$existing" "$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME" || {
+        echo "runtime profiles overlap iCloud repository $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${provider_keychain_services[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE" ]] || {
+        echo "runtime profiles share Provider Keychain service $existing" >&2
+        return 1
+      }
+    done
+    for existing in "${sidecar_keychain_services[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" ]] || {
+        echo "runtime profiles share sidecar Keychain service $existing" >&2
+        return 1
+      }
+    done
+
+    bundle_identifiers+=("$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER")
+    process_names+=("$NOONMARK_RUNTIME_PROCESS_NAME")
+    app_bundle_names+=("$NOONMARK_RUNTIME_APP_BUNDLE_NAME")
+    data_directory_names+=("$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME")
+    icloud_repository_names+=("$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME")
+    provider_keychain_services+=("$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE")
+    sidecar_keychain_services+=("$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE")
+  done
+}

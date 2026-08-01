@@ -11,7 +11,7 @@ probe_dir="$repo_root/artifacts/e2e-tencent-ime-input-latency"
 database_path="$probe_dir/Noonmark.sqlite"
 result_path="$probe_dir/result.txt"
 app_log="$probe_dir/app.log"
-app_path="$repo_root/dist/NoonmarkMacAppE2E.app"
+app_path="$repo_root/dist/NoonmarkE2E.app"
 
 case "$probe_dir" in
   "$repo_root"/artifacts/e2e-tencent-ime-input-latency) ;;
@@ -21,6 +21,7 @@ case "$probe_dir" in
     ;;
 esac
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e >/dev/null
 rm -rf "$probe_dir"
 mkdir -p "$probe_dir"

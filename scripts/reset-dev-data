@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=scripts/runtime-profile-common
+source "$script_dir/runtime-profile-common"
+
+if [[ "$#" -ne 1 ]]; then
+  echo "usage: scripts/reset-dev-data <development|e2e|demo|audit|dmg-validation>" >&2
+  exit 1
+fi
+profile="$1"
+noonmark_runtime_validate_all_profiles
+if ! noonmark_runtime_profile_load "$profile"; then
+  exit 1
+fi
+if [[ "$NOONMARK_RUNTIME_RESETTABLE" != "1" ]]; then
+  echo "refusing to reset non-development runtime profile: $profile" >&2
+  exit 1
+fi
+
 account_name="$(id -un)"
 home_record=""
 if ! home_record="$(dscl . -read "/Users/$account_name" NFSHomeDirectory 2>/dev/null)"; then
@@ -22,23 +40,13 @@ if [[ "$canonical_home" != /* || "$canonical_home" == "/" \
   exit 1
 fi
 
-process_names=(
-  NoonmarkMacApp
-  NoonmarkMacAppE2E
-  NoonmarkMacAppDemo
-  NoonmarkMacAppAudit
-)
-bundle_identifiers=(app.noonmark.mac app.noonmark.mac.e2e app.noonmark.mac.audit)
-data_root="$canonical_home/Library/Application Support/noonmark"
-icloud_sync_root="$canonical_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
-cache_paths=()
-saved_state_paths=()
-for bundle_identifier in "${bundle_identifiers[@]}"; do
-  cache_paths+=("$canonical_home/Library/Caches/$bundle_identifier")
-  saved_state_paths+=(
-    "$canonical_home/Library/Saved Application State/$bundle_identifier.savedState"
-  )
-done
+process_name="$NOONMARK_RUNTIME_PROCESS_NAME"
+bundle_identifier="$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER"
+data_root="$canonical_home/Library/Application Support/$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME"
+icloud_sync_root="$canonical_home/Library/Mobile Documents/com~apple~CloudDocs/$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME"
+cache_path="$canonical_home/Library/Caches/$bundle_identifier"
+saved_state_path="$canonical_home/Library/Saved Application State/$bundle_identifier.savedState"
+icloud_profile_root="${icloud_sync_root%/SyncRepository}"
 
 guarded_paths=(
   "$canonical_home"
@@ -47,12 +55,12 @@ guarded_paths=(
   "$data_root"
   "$canonical_home/Library/Mobile Documents"
   "$canonical_home/Library/Mobile Documents/com~apple~CloudDocs"
-  "$canonical_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark"
+  "$icloud_profile_root"
   "$icloud_sync_root"
   "$canonical_home/Library/Caches"
   "$canonical_home/Library/Saved Application State"
-  "${cache_paths[@]}"
-  "${saved_state_paths[@]}"
+  "$cache_path"
+  "$saved_state_path"
 )
 for guarded_path in "${guarded_paths[@]}"; do
   if [[ -L "$guarded_path" ]]; then
@@ -61,75 +69,113 @@ for guarded_path in "${guarded_paths[@]}"; do
   fi
 done
 
+probe_process() {
+  local target_process_name="$1"
+  local probe_status=0
+  pgrep -x "$target_process_name" >/dev/null 2>&1 || probe_status=$?
+  case "$probe_status" in
+    0 | 1)
+      return "$probe_status"
+      ;;
+    *)
+      echo "failed to inspect Noonmark process: $target_process_name" >&2
+      return 2
+      ;;
+  esac
+}
+
+signal_process() {
+  local signal_name="$1"
+  local target_process_name="$2"
+  local signal_status=0
+  pkill "-$signal_name" -x "$target_process_name" \
+    >/dev/null 2>&1 || signal_status=$?
+  case "$signal_status" in
+    0 | 1)
+      return 0
+      ;;
+    *)
+      echo "failed to signal Noonmark process: $target_process_name" >&2
+      return 1
+      ;;
+  esac
+}
+
 terminate_process() {
-  local process_name="$1"
-  pkill -TERM -x "$process_name" >/dev/null 2>&1 || true
+  local target_process_name="$1"
+  local process_status=0
+
+  probe_process "$target_process_name" || process_status=$?
+  case "$process_status" in
+    1) return 0 ;;
+    2) return 1 ;;
+  esac
+
+  signal_process TERM "$target_process_name" || return 1
   for _ in {1..50}; do
-    if ! pgrep -x "$process_name" >/dev/null 2>&1; then
-      return 0
-    fi
+    process_status=0
+    probe_process "$target_process_name" || process_status=$?
+    case "$process_status" in
+      1) return 0 ;;
+      2) return 1 ;;
+    esac
     sleep 0.1
   done
 
-  pkill -KILL -x "$process_name" >/dev/null 2>&1 || true
+  signal_process KILL "$target_process_name" || return 1
   for _ in {1..20}; do
-    if ! pgrep -x "$process_name" >/dev/null 2>&1; then
-      return 0
-    fi
+    process_status=0
+    probe_process "$target_process_name" || process_status=$?
+    case "$process_status" in
+      1) return 0 ;;
+      2) return 1 ;;
+    esac
     sleep 0.1
   done
 
-  echo "failed to terminate $process_name; development data was not deleted" >&2
+  echo "failed to terminate $target_process_name; development data was not deleted" >&2
   return 1
 }
 
-for process_name in "${process_names[@]}"; do
-  terminate_process "$process_name"
-done
+terminate_process "$process_name"
 
-rm -rf -- "$data_root" "$icloud_sync_root"
+rm -rf -- "$data_root" "$icloud_sync_root" "$cache_path" "$saved_state_path"
 
 keychain_status=0
 security delete-generic-password \
-  -s app.noonmark.zhulong.sidecar-key \
+  -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
   -a sidecar-encryption-key-v1 \
   >/dev/null 2>&1 || keychain_status=$?
 if [[ "$keychain_status" -ne 0 && "$keychain_status" -ne 44 ]]; then
-  echo "failed to remove the Noonmark sidecar key" >&2
+  echo "failed to remove the $profile Noonmark sidecar key" >&2
   exit 1
 fi
 
-for bundle_identifier in "${bundle_identifiers[@]}"; do
-  defaults_output=""
-  if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
-    if ! defaults delete "$bundle_identifier" >/dev/null 2>&1; then
-      echo "failed to clear defaults for $bundle_identifier" >&2
-      exit 1
-    fi
-  elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
-    echo "failed to inspect defaults for $bundle_identifier: $defaults_output" >&2
-    exit 1
-  fi
-
-  rm -rf -- \
-    "$canonical_home/Library/Caches/$bundle_identifier" \
-    "$canonical_home/Library/Saved Application State/$bundle_identifier.savedState"
-
-  defaults_output=""
-  if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
+defaults_output=""
+if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
+  if ! defaults delete "$bundle_identifier" >/dev/null 2>&1; then
     echo "failed to clear defaults for $bundle_identifier" >&2
     exit 1
-  elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
-    echo "failed to verify defaults for $bundle_identifier: $defaults_output" >&2
-    exit 1
   fi
-done
+elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
+  echo "failed to inspect defaults for $bundle_identifier: $defaults_output" >&2
+  exit 1
+fi
+
+defaults_output=""
+if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
+  echo "failed to clear defaults for $bundle_identifier" >&2
+  exit 1
+elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
+  echo "failed to verify defaults for $bundle_identifier: $defaults_output" >&2
+  exit 1
+fi
 
 removed_paths=(
   "$data_root"
   "$icloud_sync_root"
-  "${cache_paths[@]}"
-  "${saved_state_paths[@]}"
+  "$cache_path"
+  "$saved_state_path"
 )
 for removed_path in "${removed_paths[@]}"; do
   if [[ -e "$removed_path" || -L "$removed_path" ]]; then
@@ -138,11 +184,17 @@ for removed_path in "${removed_paths[@]}"; do
   fi
 done
 
-for process_name in "${process_names[@]}"; do
-  if pgrep -x "$process_name" >/dev/null 2>&1; then
+process_status=0
+probe_process "$process_name" || process_status=$?
+case "$process_status" in
+  0)
     echo "Noonmark process survived reset: $process_name" >&2
     exit 1
-  fi
-done
+    ;;
+  2)
+    echo "failed to verify stopped Noonmark process: $process_name" >&2
+    exit 1
+    ;;
+esac
 
-echo "Noonmark development data reset: local, iCloud sync, and sidecar key"
+echo "Noonmark $profile data reset: local, iCloud sync, defaults, and sidecar key"

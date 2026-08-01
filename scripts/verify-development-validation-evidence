@@ -920,7 +920,7 @@ e2e_required_inventory_paths=(
   "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.current"
   "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.new"
   "$e2e_evidence_absolute/helper-diagnostic-result.txt"
-  "$e2e_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+  "$e2e_evidence_absolute/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
   "$e2e_evidence_absolute/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
 )
 IFS=, read -r -a english_scenario_inventory_names <<< \
@@ -943,11 +943,11 @@ evidence_require_inventory_paths \
   "$lease_evidence_absolute/diagnostic-result.txt" \
   "$lease_evidence_absolute/intentional-termination-ledger.tsv" \
   "$lease_evidence_absolute/sigkill-report.txt" \
-  "$lease_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+  "$lease_evidence_absolute/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
 require_preserved_bundle \
   "$e2e_manifest" \
   app \
-  "$e2e_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app" \
+  "$e2e_evidence_absolute/app-snapshot/NoonmarkE2E.app" \
   "E2E App"
 require_preserved_bundle \
   "$e2e_manifest" \
@@ -957,7 +957,7 @@ require_preserved_bundle \
 require_preserved_bundle \
   "$lease_manifest" \
   app \
-  "$lease_evidence_absolute/app-snapshot/NoonmarkMacAppE2E.app" \
+  "$lease_evidence_absolute/app-snapshot/NoonmarkE2E.app" \
   "lease App"
 
 sigkill_report="${lease_evidence_dir}/sigkill-report.txt"

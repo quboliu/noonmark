@@ -100,7 +100,8 @@ if [[ "$(evidence_read "$source_fragment" source_tree_dirty)" != "0" ]]; then
   exit 1
 fi
 
-scripts/build-mac-app "$configuration" >/dev/null
+NOONMARK_PRODUCTION_BUILD_CONTEXT=package-dmg \
+  scripts/build-mac-app "$configuration" app >/dev/null
 mkdir -p "$dmg_root"
 
 evidence_capture_bundle "$app_path" 1 "app" "$app_fragment"

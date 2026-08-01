@@ -618,7 +618,7 @@ require_literal scripts/test-e2e 'external_ax="true"'
 require_literal scripts/test-e2e "english-settings"
 require_literal scripts/test-e2e "english-zhulong"
 require_literal scripts/test-e2e "helper_binary_unchanged"
-require_literal scripts/test-e2e 'evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"'
+require_literal scripts/test-e2e 'evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkE2E.app"'
 require_literal scripts/test-e2e 'ditto "$app_path" "$evidence_app_snapshot"'
 require_literal scripts/test-e2e 'evidence_helper_snapshot="${runtime_evidence_dir}/helper-snapshot/NoonmarkDMGInstallHarness.app"'
 require_literal scripts/test-e2e 'ditto "$helper_bundle" "$evidence_helper_snapshot"'
@@ -638,7 +638,7 @@ require_literal scripts/test-data-root-process-lease-e2e "phase=sigkill-holder"
 require_literal scripts/test-data-root-process-lease-e2e "signal=SIGKILL"
 require_literal scripts/test-data-root-process-lease-e2e "expected_status=137"
 require_literal scripts/test-data-root-process-lease-e2e "app_binary_sha256="
-require_literal scripts/test-data-root-process-lease-e2e 'app_snapshot="${evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"'
+require_literal scripts/test-data-root-process-lease-e2e 'app_snapshot="${evidence_dir}/app-snapshot/NoonmarkE2E.app"'
 require_literal scripts/test-data-root-process-lease-e2e 'ditto "$app_bundle" "$app_snapshot"'
 require_literal scripts/test-data-root-process-lease-e2e "summary.txt"
 require_literal scripts/test-data-root-process-lease-e2e "unified.log"

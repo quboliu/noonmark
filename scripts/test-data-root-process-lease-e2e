@@ -38,7 +38,7 @@ source_start_fragment="${evidence_dir}/source-start.fragment"
 source_end_fragment="${evidence_dir}/source-end.fragment"
 app_start_fragment="${evidence_dir}/app-start.fragment"
 app_end_fragment="${evidence_dir}/app-end.fragment"
-app_snapshot="${evidence_dir}/app-snapshot/NoonmarkMacAppE2E.app"
+app_snapshot="${evidence_dir}/app-snapshot/NoonmarkE2E.app"
 intentional_termination_ledger="${evidence_dir}/intentional-termination-ledger.tsv"
 sigkill_report="${evidence_dir}/sigkill-report.txt"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
@@ -297,8 +297,9 @@ evidence_append "$manifest" "intentional_sigkill_phase" "sigkill-holder"
 evidence_append "$manifest" "intentional_signal_expected_status" "137"
 trap 'cleanup "$?"' EXIT
 
+scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e
-app_bundle="$repo_root/dist/NoonmarkMacAppE2E.app"
+app_bundle="$repo_root/dist/NoonmarkE2E.app"
 app_executable="$app_bundle/Contents/MacOS/NoonmarkMacAppE2E"
 evidence_capture_bundle "$app_bundle" 1 "app" "$app_start_fragment"
 evidence_append_snapshot "$manifest" "$app_start_fragment"

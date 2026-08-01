@@ -127,7 +127,8 @@ public enum SQLiteLocalFirstSyncStatus: Codable, Equatable, Sendable {
     case failed(
         reason: SQLiteLocalFirstSyncFailureReason,
         message: String,
-        failedAt: Date
+        failedAt: Date,
+        diagnosticCorrelation: DiagnosticOperationCorrelation? = nil
     )
 
     public var updatedAt: Date {
@@ -136,7 +137,7 @@ public enum SQLiteLocalFirstSyncStatus: Codable, Equatable, Sendable {
             since
         case let .succeeded(result):
             result.syncedAt
-        case let .failed(_, _, failedAt):
+        case let .failed(_, _, failedAt, _):
             failedAt
         }
     }
@@ -436,10 +437,14 @@ public final class SQLiteLocalFirstSyncCoordinator {
             )
         } catch {
             let failedAt = Self.persistedFailureTimestamp(failureClock())
-            finishDiagnosticFailure(error, at: failedAt)
+            let diagnosticCorrelation = finishDiagnosticFailure(
+                error,
+                at: failedAt
+            )
             try? Self.persistFailure(
                 error,
                 at: failedAt,
+                diagnosticCorrelation: diagnosticCorrelation,
                 in: syncRepository
             )
             throw error
@@ -449,9 +454,11 @@ public final class SQLiteLocalFirstSyncCoordinator {
     private func finishDiagnosticFailure(
         _ error: Error,
         at failedAt: Date
-    ) {
-        guard completesDiagnosticOperationOnFailure else { return }
-        diagnosticOperation?.fail(
+    ) -> DiagnosticOperationCorrelation? {
+        guard completesDiagnosticOperationOnFailure,
+              let diagnosticOperation
+        else { return nil }
+        return diagnosticOperation.failWithCorrelation(
             Self.diagnosticFailure(for: error),
             detail: DiagnosticFailureClassifier.classify(error),
             at: failedAt
@@ -720,6 +727,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
     public static func persistFailure(
         _ error: Error,
         at failedAt: Date,
+        diagnosticCorrelation: DiagnosticOperationCorrelation? = nil,
         in repository: SQLiteSyncRepository
     ) throws {
         let failedAt = persistedFailureTimestamp(failedAt)
@@ -731,7 +739,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 .failed(
                     reason: reason,
                     message: error.localizedDescription,
-                    failedAt: failedAt
+                    failedAt: failedAt,
+                    diagnosticCorrelation: diagnosticCorrelation
                 )
             )
         )

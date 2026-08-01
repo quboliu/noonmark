@@ -373,14 +373,16 @@ extension NoonmarkStore {
         } catch {
             let failedAt = SQLiteLocalFirstSyncCoordinator
                 .persistedFailureTimestamp(Date())
-            presentLocalFirstSyncFailure(
-                error,
-                failedAt: failedAt,
-                diagnosticIncidentID: diagnosticOperation.fail(
+            let diagnosticCorrelation = diagnosticOperation
+                .failWithCorrelation(
                     persistedSyncDiagnosticFailure(for: error),
                     detail: diagnosticFailure(for: error),
                     at: failedAt
                 )
+            presentLocalFirstSyncFailure(
+                error,
+                failedAt: failedAt,
+                diagnosticCorrelation: diagnosticCorrelation
             )
             return
         }
@@ -399,15 +401,16 @@ extension NoonmarkStore {
             do {
                 result = try await coordinator.sync()
             } catch {
-                let incidentID = diagnosticOperation.fail(
-                    persistedSyncDiagnosticFailure(for: error),
-                    detail: diagnosticFailure(for: error)
-                )
+                let diagnosticCorrelation = diagnosticOperation
+                    .failWithCorrelation(
+                        persistedSyncDiagnosticFailure(for: error),
+                        detail: diagnosticFailure(for: error)
+                    )
                 await MainActor.run {
                     finishLocalFirstSyncOperation(syncOperationID)
                     presentLocalFirstSyncFailure(
                         error,
-                        diagnosticIncidentID: incidentID,
+                        diagnosticCorrelation: diagnosticCorrelation,
                         persistsFailure: false
                     )
                 }
@@ -474,17 +477,18 @@ extension NoonmarkStore {
             } catch {
                 let failedAt = SQLiteLocalFirstSyncCoordinator
                     .persistedFailureTimestamp(Date())
-                let incidentID = diagnosticOperation.fail(
-                    persistedSyncDiagnosticFailure(for: error),
-                    detail: diagnosticFailure(for: error),
-                    at: failedAt
-                )
+                let diagnosticCorrelation = diagnosticOperation
+                    .failWithCorrelation(
+                        persistedSyncDiagnosticFailure(for: error),
+                        detail: diagnosticFailure(for: error),
+                        at: failedAt
+                    )
                 await MainActor.run {
                     finishLocalFirstSyncOperation(syncOperationID)
                     presentLocalFirstSyncFailure(
                         error,
                         failedAt: failedAt,
-                        diagnosticIncidentID: incidentID,
+                        diagnosticCorrelation: diagnosticCorrelation,
                         persistsFailure: true
                     )
                 }
@@ -508,13 +512,14 @@ extension NoonmarkStore {
     private func presentLocalFirstSyncFailure(
         _ error: Error,
         failedAt: Date = Date(),
-        diagnosticIncidentID existingIncidentID: DiagnosticIncidentID? = nil,
+        diagnosticCorrelation existingCorrelation:
+            DiagnosticOperationCorrelation? = nil,
         persistsFailure: Bool = true
     ) {
         let failedAt = SQLiteLocalFirstSyncCoordinator
             .persistedFailureTimestamp(failedAt)
-        let incidentID: DiagnosticIncidentID = if let existingIncidentID {
-            existingIncidentID
+        let correlation: DiagnosticOperationCorrelation = if let existingCorrelation {
+            existingCorrelation
         } else {
             diagnostics.startOperation(
                 kind: .localFirstSync,
@@ -522,7 +527,8 @@ extension NoonmarkStore {
                     for: engine.preferences.localFirstSyncPolicy.endpoint
                 ),
                 at: failedAt
-            ).fail(
+            )
+            .failWithCorrelation(
                 persistedSyncDiagnosticFailure(for: error),
                 detail: diagnosticFailure(for: error),
                 at: failedAt
@@ -533,6 +539,7 @@ extension NoonmarkStore {
                 try SQLiteLocalFirstSyncCoordinator.persistFailure(
                     error,
                     at: failedAt,
+                    diagnosticCorrelation: correlation,
                     in: SQLiteSyncRepository(
                         databaseURL: databaseURL
                     )
@@ -541,7 +548,7 @@ extension NoonmarkStore {
                 diagnostics.record(
                     .persistenceFailed(
                         failure: DiagnosticFailureClassifier.classify(error),
-                        incidentID: incidentID
+                        incidentID: correlation.incidentID
                     )
                 )
             }
@@ -549,7 +556,7 @@ extension NoonmarkStore {
         showOperationFailure(
             .sync,
             error: error,
-            diagnosticIncidentID: incidentID
+            diagnosticIncidentID: correlation.incidentID
         )
         localFirstSyncMessage = operationFailure
     }
@@ -721,7 +728,7 @@ extension NoonmarkStore {
                     unresolvedConflictCount: try syncRepository.unresolvedConflicts().count
                 )
                 resolveOperationFailure(.sync)
-            case let .failed(reason, _, failedAt):
+            case let .failed(reason, _, failedAt, diagnosticCorrelation):
                 let presentation = AppPresentation(
                     language: engine.preferences.language
                 )
@@ -736,6 +743,7 @@ extension NoonmarkStore {
                 restorePersistedLocalFirstSyncFailure(
                     reason: reason,
                     failedAt: failedAt,
+                    diagnosticCorrelation: diagnosticCorrelation,
                     failureMessage,
                     repository: syncRepository
                 )
@@ -759,21 +767,26 @@ extension NoonmarkStore {
     private func restorePersistedLocalFirstSyncFailure(
         reason: SQLiteLocalFirstSyncFailureReason,
         failedAt: Date,
+        diagnosticCorrelation: DiagnosticOperationCorrelation?,
         _ failureMessage: String,
         repository: SQLiteSyncRepository
     ) {
         let failure = diagnosticFailure(for: reason)
         let diagnostics = diagnostics
         Task { [weak self] in
-            let correlation = await diagnostics
-                .persistedSyncFailureCorrelation(
+            let correlation = if let diagnosticCorrelation {
+                diagnosticCorrelation
+            } else {
+                await diagnostics.persistedSyncFailureCorrelation(
                     failure: failure,
                     failedAt: failedAt
                 )
+            }
             guard let self,
                   persistedSyncFailureStillMatches(
                       reason: reason,
                       failedAt: failedAt,
+                      diagnosticCorrelation: diagnosticCorrelation,
                       repository: repository
                   )
             else { return }
@@ -795,6 +808,7 @@ extension NoonmarkStore {
     private func persistedSyncFailureStillMatches(
         reason: SQLiteLocalFirstSyncFailureReason,
         failedAt: Date,
+        diagnosticCorrelation: DiagnosticOperationCorrelation?,
         repository: SQLiteSyncRepository
     ) -> Bool {
         guard let metadata = try? repository.metadata(
@@ -806,9 +820,16 @@ extension NoonmarkStore {
             SQLiteLocalFirstSyncStatus.self,
             from: metadata.value
         ),
-            case let .failed(currentReason, _, currentFailedAt) = status
+            case let .failed(
+                currentReason,
+                _,
+                currentFailedAt,
+                currentDiagnosticCorrelation
+            ) = status
         else { return false }
-        return currentReason == reason && currentFailedAt == failedAt
+        return currentReason == reason
+            && currentFailedAt == failedAt
+            && currentDiagnosticCorrelation == diagnosticCorrelation
     }
 
     static func configuredSyncFolderURL() -> URL {

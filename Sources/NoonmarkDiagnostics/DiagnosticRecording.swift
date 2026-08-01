@@ -209,6 +209,21 @@ public struct DiagnosticOperation: Sendable {
         }
     }
 
+    public func failWithCorrelation(
+        _ failure: DiagnosticFailure,
+        detail failureDetail: DiagnosticFailure? = nil,
+        at timestamp: Date = Date()
+    ) -> DiagnosticOperationCorrelation {
+        DiagnosticOperationCorrelation(
+            operationID: id,
+            incidentID: fail(
+                failure,
+                detail: failureDetail,
+                at: timestamp
+            )
+        )
+    }
+
     private func elapsedMilliseconds(at timestamp: Date) -> Int64 {
         let seconds = max(0, timestamp.timeIntervalSince(startedAt))
         let milliseconds = seconds * 1000

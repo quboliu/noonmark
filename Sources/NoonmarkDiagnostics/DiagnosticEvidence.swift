@@ -28,7 +28,7 @@ public struct DiagnosticIncidentID: RawRepresentable, Codable, Hashable, Sendabl
     }
 }
 
-public struct DiagnosticOperationCorrelation: Equatable, Sendable {
+public struct DiagnosticOperationCorrelation: Codable, Equatable, Sendable {
     public let operationID: DiagnosticOperationID
     public let incidentID: DiagnosticIncidentID
 

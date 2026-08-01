@@ -854,7 +854,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             SQLiteLocalFirstSyncStatus.self,
             from: statusMetadata.value
         )
-        guard case let .failed(reason, _, _) = status,
+        guard case let .failed(reason, _, _, _) = status,
               reason == .baselineInvalid
         else {
             throw Failure.failed(
@@ -929,7 +929,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 in: repository
             ).value
         )
-        guard case let .failed(reason, _, _) = failedStatus,
+        guard case let .failed(reason, _, _, _) = failedStatus,
               reason == .transportOrStorage
         else {
             throw Failure.failed(
@@ -999,27 +999,25 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 in: repository
             ).value
         )
-        guard case let .failed(reason, _, failedAt) = failedStatus,
-              reason == .transportOrStorage
+        guard case let .failed(
+            reason,
+            _,
+            _,
+            diagnosticCorrelation
+        ) = failedStatus,
+            reason == .transportOrStorage,
+            let diagnosticCorrelation
         else {
             throw Failure.failed(
                 "post-sync install failure did not persist its typed status"
             )
         }
-        let correlation = await store.diagnostics
-            .persistedSyncFailureCorrelation(
-                failure: DiagnosticFailure(
-                    domain: .syncProtocol,
-                    code: 7
-                ),
-                failedAt: failedAt
-            )
         guard let notice = store.operationFailureNotice,
               notice.context == .sync,
               notice.message == expected,
-              notice.diagnosticIncidentID == correlation?.incidentID,
-              store.localFirstSyncMessage == expected,
-              correlation != nil
+              notice.diagnosticIncidentID
+              == diagnosticCorrelation.incidentID,
+              store.localFirstSyncMessage == expected
         else {
             throw Failure.failed(
                 "post-sync install failure did not retain its incident and status"
@@ -1095,8 +1093,16 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             SQLiteLocalFirstSyncStatus.self,
             from: statusMetadata.value
         )
-        guard case let .failed(reason, _, _) = status,
-              reason == .baselineInvalid
+        guard case let .failed(
+            reason,
+            _,
+            _,
+            diagnosticCorrelation
+        ) = status,
+            reason == .baselineInvalid,
+            let diagnosticCorrelation,
+            store.operationFailureNotice?.diagnosticIncidentID
+            == diagnosticCorrelation.incidentID
         else {
             throw Failure.failed(
                 "restart restored the warning without its typed failure"
@@ -1209,7 +1215,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             SQLiteLocalFirstSyncStatus.self,
             from: metadata.value
         )
-        guard case let .failed(reason, _, _) = status,
+        guard case let .failed(reason, _, _, _) = status,
               reason == .baselineInvalid
         else {
             throw Failure.failed(

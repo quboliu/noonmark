@@ -1634,7 +1634,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             SQLiteLocalFirstSyncStatus.self,
             from: metadata.value
         )
-        guard case let .failed(_, _, failedAt) = status else {
+        guard case let .failed(_, _, failedAt, _) = status else {
             return XCTFail("必须保存失败状态")
         }
         let terminal = try XCTUnwrap(
@@ -1661,6 +1661,74 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             terminal.event.failureDetail,
             DiagnosticFailure(domain: .unknown, code: 0)
         )
+    }
+
+    func testLatestSameSecondFailurePersistsItsExactDiagnosticCorrelation()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("same-second-failure-correlation")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let failedAt = now.addingTimeInterval(91)
+        let recorder = InMemoryDiagnosticRecorder()
+        let firstOperation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .localFolder,
+            at: failedAt.addingTimeInterval(-2)
+        )
+        let secondOperation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .localFolder,
+            at: failedAt.addingTimeInterval(-1)
+        )
+
+        for operation in [firstOperation, secondOperation] {
+            let coordinator = SQLiteLocalFirstSyncCoordinator(
+                databaseURL: databaseURL,
+                transport: FailingFetchSyncTransport(),
+                diagnosticOperation: operation,
+                completesDiagnosticOperationOnSuccess: true,
+                completesDiagnosticOperationOnFailure: true,
+                diagnosticHeartbeatIntervalNanoseconds: 30_000_000_000,
+                failureClock: { failedAt }
+            )
+            do {
+                _ = try await coordinator.sync(now: failedAt)
+                XCTFail("同秒故障注入必须向调用方抛出")
+            } catch {
+                XCTAssertEqual(
+                    error as? FailingFetchSyncTransportError,
+                    .unavailable
+                )
+            }
+        }
+
+        let metadata = try XCTUnwrap(
+            SQLiteSyncRepository(databaseURL: databaseURL).metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: metadata.value
+        )
+        guard case let .failed(_, _, persistedFailedAt, correlation) = status
+        else {
+            return XCTFail("最新失败必须保存精确诊断关联")
+        }
+        let latestTerminal = try XCTUnwrap(
+            recorder.snapshot().last {
+                $0.event.code == .operationFailed
+            }
+        )
+
+        XCTAssertEqual(persistedFailedAt, failedAt)
+        XCTAssertEqual(correlation?.operationID, secondOperation.id)
+        XCTAssertEqual(correlation?.incidentID, latestTerminal.event.incidentID)
+        XCTAssertNotEqual(correlation?.operationID, firstOperation.id)
     }
 
     func testLongSyncWithoutSafeProgressDoesNotEmitHeartbeat()

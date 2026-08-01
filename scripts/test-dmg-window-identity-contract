@@ -221,6 +221,46 @@ if scripts/test-dmg-install \
   exit 1
 fi
 
+rm -f "$response_path"
+mkfifo "$response_path"
+chmod 600 "$response_path"
+scripts/test-dmg-install \
+  --prepare-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  >"${fixture_root}/fifo.stdout" \
+  2>"${fixture_root}/fifo.stderr" &
+fifo_probe_pid=$!
+fifo_probe_finished=0
+for _ in {1..60}; do
+  if ! jobs -pr | grep -qx "$fifo_probe_pid"; then
+    fifo_probe_finished=1
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$fifo_probe_finished" -eq 0 ]]; then
+  printf '%s' 'release-blocked-fifo-reader' >"$response_path" \
+    2>"${fixture_root}/fifo-writer.stderr" &
+  fifo_writer_pid=$!
+  set +e
+  wait "$fifo_probe_pid"
+  wait "$fifo_writer_pid"
+  set -e
+  rm -f "$response_path"
+  echo "stale response FIFO blocked request preparation" >&2
+  exit 1
+fi
+set +e
+wait "$fifo_probe_pid"
+fifo_probe_status=$?
+set -e
+rm -f "$response_path"
+if [[ "$fifo_probe_status" -eq 0 ]]; then
+  echo "stale response FIFO was accepted" >&2
+  exit 1
+fi
+
 request_path="${runtime_evidence_root}/main-window-request.json"
 printf '%s\n' '{"stale":true}' >"$request_path"
 chmod 600 "$request_path"

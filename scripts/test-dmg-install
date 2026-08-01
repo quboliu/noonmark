@@ -377,7 +377,7 @@ func removeVerifiedOwnedFile(_ name: String) {
     let descriptor = openat(
         runtimeFD,
         name,
-        O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
     )
     if descriptor < 0 {
         if errno == ENOENT { return }

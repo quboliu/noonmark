@@ -81,7 +81,8 @@ enum MetricKitExportEnvelopeReader {
     static func read(
         from entryNames: [String],
         in directory: DiagnosticOwnedDirectory,
-        policy: MetricKitExportEnvelopeReadPolicy
+        policy: MetricKitExportEnvelopeReadPolicy,
+        identityCapturedHook: (() throws -> Void)? = nil
     ) -> MetricKitExportEnvelopeReadResult {
         var attachments: [DiagnosticMetricAttachment] = []
         var exclusions: [MetricKitExportEnvelopeExclusion] = []
@@ -90,7 +91,8 @@ enum MetricKitExportEnvelopeReader {
                 named: entryName,
                 in: directory,
                 maximumByteCount: policy.maximumStoredEnvelopeBytes,
-                now: policy.now
+                now: policy.now,
+                identityCapturedHook: identityCapturedHook
             )
             guard let data = read.data,
                   let stored = try? decoder.decode(
@@ -145,12 +147,22 @@ enum MetricKitExportEnvelopeReader {
         named entryName: String,
         in directory: DiagnosticOwnedDirectory,
         maximumByteCount: Int64,
-        now: Date
+        now: Date,
+        identityCapturedHook: (() throws -> Void)?
     ) -> (data: Data?, evidenceTimestamp: Date) {
         let information = try? directory.entryInformation(named: entryName)
         let evidenceTimestamp = information?.modificationDate ?? now
         guard isValidMetricEntryName(entryName),
-              information?.isRegularFile == true,
+              information?.isRegularFile == true
+        else {
+            return (nil, evidenceTimestamp)
+        }
+        do {
+            try identityCapturedHook?()
+        } catch {
+            return (nil, evidenceTimestamp)
+        }
+        guard
               let data = try? directory.readFile(
                   named: entryName,
                   maximumByteCount: maximumByteCount

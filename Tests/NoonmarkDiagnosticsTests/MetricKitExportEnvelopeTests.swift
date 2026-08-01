@@ -605,6 +605,154 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fifoURL.path))
     }
 
+    func testMetricReaderRejectsFileReplacedAfterIdentityCapture() async throws {
+        let (recorder, rootURL) = try makeRecorder(
+            named: "metric-file-identity-replacement"
+        )
+        let summary = makeSummary(kind: .metric)
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data(#"{"metricCount":1}"#.utf8),
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+
+        let metricURL = try XCTUnwrap(try metricURLs(in: rootURL).first)
+        let parkedURL = metricURL.deletingLastPathComponent()
+            .appendingPathComponent("parked-original.json")
+        let replacementURL = metricURL.deletingLastPathComponent()
+            .appendingPathComponent("prepared-replacement.json")
+        try FileManager.default.copyItem(at: metricURL, to: replacementURL)
+        let canary = "REPLACED-AFTER-IDENTITY-\(UUID().uuidString)"
+        try mutateEnvelope(at: replacementURL) { envelope in
+            envelope["sanitizedJSON"] = try JSONSerialization.data(
+                withJSONObject: ["binaryName": canary],
+                options: [.sortedKeys]
+            ).base64EncodedString()
+        }
+        let metricsDirectory = try XCTUnwrap(
+            try DiagnosticOwnedDirectory.openRoot(
+                at: metricURL.deletingLastPathComponent(),
+                permissions: 0o700,
+                fileManager: .default
+            )
+        )
+        var didSwap = false
+
+        let result = MetricKitExportEnvelopeReader.read(
+            from: [metricURL.lastPathComponent],
+            in: metricsDirectory,
+            policy: MetricKitExportEnvelopeReadPolicy(
+                cutoff: metricExportFixtureNow.addingTimeInterval(-3600),
+                now: metricExportFixtureNow,
+                maximumStoredEnvelopeBytes: 8 * 1024,
+                maximumSanitizedJSONBytes: 4 * 1024
+            ),
+            identityCapturedHook: {
+                guard didSwap == false else { return }
+                didSwap = true
+                try FileManager.default.moveItem(at: metricURL, to: parkedURL)
+                try FileManager.default.moveItem(
+                    at: replacementURL,
+                    to: metricURL
+                )
+            }
+        )
+
+        XCTAssertTrue(didSwap)
+        XCTAssertTrue(result.attachments.isEmpty)
+        XCTAssertEqual(result.exclusions.count, 1)
+        XCTAssertFalse(
+            result.attachments.contains { attachment in
+                guard let data = attachment.sanitizedJSON,
+                      let text = String(data: data, encoding: .utf8)
+                else { return false }
+                return text.contains(canary)
+            }
+        )
+    }
+
+    func testFirstMetricAccessNeverAdoptsRuntimeReplacementDirectory() async throws {
+        let (recorder, rootURL) = try makeRecorder(
+            named: "first-metric-access-directory-replacement"
+        )
+        let metricsURL = rootURL.appendingPathComponent(
+            "metrics",
+            isDirectory: true
+        )
+        if FileManager.default.fileExists(atPath: metricsURL.path) == false {
+            try FileManager.default.createDirectory(
+                at: metricsURL,
+                withIntermediateDirectories: false
+            )
+        }
+        let displacedURL = rootURL.appendingPathComponent(
+            "displaced-empty-metrics",
+            isDirectory: true
+        )
+        try FileManager.default.moveItem(at: metricsURL, to: displacedURL)
+        let replacementURL = rootURL.appendingPathComponent(
+            "prepared-external-metrics",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: replacementURL,
+            withIntermediateDirectories: false
+        )
+        let canary = "FIRST-ACCESS-EXTERNAL-\(UUID().uuidString)"
+        let canaryURL = replacementURL.appendingPathComponent(
+            "metric-\(UUID().uuidString).json"
+        )
+        let sanitizedJSON = try JSONSerialization.data(
+            withJSONObject: ["binaryName": canary],
+            options: [.sortedKeys]
+        )
+        let stored = MetricKitStoredPayload(
+            receivedAt: metricExportFixtureNow,
+            summary: makeSummary(kind: .metric),
+            sanitizedJSON: sanitizedJSON,
+            redactionVersion: MetricKitJSONSanitizer.redactionVersion
+        )
+        try JSONEncoder().encode(stored).write(to: canaryURL)
+        try FileManager.default.moveItem(at: replacementURL, to: metricsURL)
+        let installedCanaryURL = metricsURL.appendingPathComponent(
+            canaryURL.lastPathComponent
+        )
+        let fingerprint = try DiagnosticFileFingerprint(at: installedCanaryURL)
+
+        let snapshot = try await recorder.snapshotPackage()
+        XCTAssertFalse(package(snapshot, containsSanitizedMetricToken: canary))
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: fingerprint,
+            "external metric changed after first snapshot"
+        )
+
+        let exportURL = rootURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                "first-access-replacement.noonmarkdiagnostics"
+            )
+        temporaryURLs.append(exportURL)
+        _ = try await recorder.export(to: exportURL)
+        let exported = try JSONDecoder().decode(
+            DiagnosticExportPackage.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertFalse(package(exported, containsSanitizedMetricToken: canary))
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: fingerprint,
+            "external metric changed after export"
+        )
+
+        try await recorder.clear()
+        try XCTAssertDiagnosticFileUnchanged(
+            at: installedCanaryURL,
+            from: fingerprint,
+            "external metric changed after clear"
+        )
+    }
+
     private func package(
         _ package: DiagnosticExportPackage,
         containsSanitizedMetricToken token: String

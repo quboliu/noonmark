@@ -77,11 +77,17 @@ run_check_suite() {
   echo "==> E2E and writer-lease evidence contract"
   scripts/test-e2e-evidence-contract
 
+  echo "==> E2E production-window isolation"
+  scripts/test-e2e-production-window-isolation
+
   echo "==> Tencent IME input coverage contract"
   scripts/test-tencent-ime-input-contract
 
   echo "==> DMG evidence contract"
   scripts/test-dmg-evidence-contract
+
+  echo "==> DMG window identity contract"
+  scripts/test-dmg-window-identity-contract
 
   echo "==> Code-signing policy"
   scripts/test-codesign-common

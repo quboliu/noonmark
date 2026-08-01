@@ -187,20 +187,29 @@ require_literal \
   'arm_ui_entry_start_gate \'
 require_literal \
   scripts/test-e2e \
-  'probe_auxiliary_window_state'
+  'resolve_exact_e2e_window_id \'
+require_literal \
+  scripts/test-e2e \
+  '--e2e-main-window-identity-url'
+require_literal \
+  scripts/test-e2e \
+  '--e2e-main-window-launch-token'
+require_literal \
+  scripts/test-e2e \
+  'mkdir -m 700 -- "$window_identity_directory"'
 require_literal \
   scripts/test-e2e \
   '"$app_pid" 2>/dev/null'
 capture_app_screenshot_function="$(
   sed -n '/^capture_app_screenshot() {$/,/^}$/p' scripts/test-e2e
 )"
-if ! grep -F 'find_window_id \' <<<"$capture_app_screenshot_function" >/dev/null ||
+if ! grep -F 'resolve_exact_e2e_window_id \' <<<"$capture_app_screenshot_function" >/dev/null ||
   ! grep -F 'arm_ui_entry_start_gate \' <<<"$capture_app_screenshot_function" >/dev/null; then
-  echo "UI-entry screenshot capture lacks its explicit post-discovery arm boundary" >&2
+  echo "UI-entry screenshot capture lacks its exact identity arm boundary" >&2
   exit 1
 fi
-find_window_line="$(
-  grep -nF 'find_window_id \' <<<"$capture_app_screenshot_function" |
+resolve_window_line="$(
+  grep -nF 'resolve_exact_e2e_window_id \' <<<"$capture_app_screenshot_function" |
     head -1 |
     cut -d: -f1
 )"
@@ -209,16 +218,27 @@ arm_gate_line="$(
     head -1 |
     cut -d: -f1
 )"
-if [[ -z "$find_window_line" || -z "$arm_gate_line" ]] ||
-  (( find_window_line >= arm_gate_line )); then
-  echo "UI-entry start gate is armed before external main-window discovery" >&2
+if [[ -z "$resolve_window_line" || -z "$arm_gate_line" ]] ||
+  (( resolve_window_line >= arm_gate_line )); then
+  echo "UI-entry start gate is armed before exact main-window identity resolution" >&2
   exit 1
 fi
 ui_entry_gate_function="$(
   sed -n '/^arm_ui_entry_start_gate() {$/,/^}$/p' scripts/test-e2e
 )"
-if grep -E '(^|[[:space:]])sleep([[:space:]]|$)' <<<"$ui_entry_gate_function" >/dev/null; then
-  echo "UI-entry start gate uses a timing delay instead of an explicit event" >&2
+for required_gate_literal in \
+  'for _ in {1..120}; do' \
+  'waiting_state="$(<"$result_path")"' \
+  '"waiting|$token|$process_id"' \
+  'sleep 0.025'; do
+  if ! grep -F -- "$required_gate_literal" \
+    <<<"$ui_entry_gate_function" >/dev/null; then
+    echo "UI-entry start gate lacks its bounded exact waiting event: $required_gate_literal" >&2
+    exit 1
+  fi
+done
+if [[ "$(grep -cF 'sleep 0.025' <<<"$ui_entry_gate_function")" != "1" ]]; then
+  echo "UI-entry start gate has an unbounded or duplicate polling delay" >&2
   exit 1
 fi
 if grep -F '|| true' <<<"$ui_entry_gate_function" >/dev/null; then
@@ -236,8 +256,7 @@ if (
   active_ui_entry_start_gate_token="$gate_contract_token"
   ui_entry_start_gate_fd_open=1
   exec 8<>"$gate_contract_fifo"
-  find_auxiliary_window_id() { return 70; }
-  probe_auxiliary_window_state() { return 71; }
+  printf 'failed:synthetic-identity-handshake\n' >"$gate_contract_result"
   eval "$ui_entry_gate_function"
   if arm_ui_entry_start_gate \
     "$gate_contract_result" \

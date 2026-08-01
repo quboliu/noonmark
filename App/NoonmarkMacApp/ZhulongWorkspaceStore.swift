@@ -1,5 +1,6 @@
 import Foundation
 import NoonmarkCore
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkZhulong
 
@@ -126,6 +127,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
         ZhulongDraftPersistenceLane
     private let applicationJournal: EncryptedFileZhulongApplicationJournal
     private let streamViewRepository: ZhulongStreamViewRepository
+    private let diagnostics: (any DiagnosticRecording)?
     private var retainedInlineTodoEdits: [
         ZhulongTodoDiffID: ZhulongInlineTaskDraftState
     ] = [:]
@@ -136,8 +138,13 @@ final class ZhulongWorkspaceStore: ObservableObject {
     var e2eLastDraftPersistencePerformanceSample:
         ZhulongDraftPersistencePerformanceSample?
 
-    init(directoryURL: URL, keySource: any ZhulongSidecarKeySource) {
+    init(
+        directoryURL: URL,
+        keySource: any ZhulongSidecarKeySource,
+        diagnostics: (any DiagnosticRecording)? = nil
+    ) {
         self.directoryURL = directoryURL
+        self.diagnostics = diagnostics
         let streamViewRepository = ZhulongStreamViewRepository()
         self.streamViewRepository = streamViewRepository
         variant = AppLaunchArguments.value(after: "--e2e-zhulong-stream-variant")
@@ -1459,36 +1466,25 @@ final class ZhulongWorkspaceStore: ObservableObject {
             }
         )
         if let cleanupError = outcome.cleanupError {
-            recordApplicationCommitError(
-                cleanupError,
-                event: "journal_cleanup_failure"
-            )
+            recordApplicationCommitError(cleanupError)
         }
         if let reconciliationError = outcome.reconciliationError {
-            recordApplicationCommitError(
-                reconciliationError,
-                event: "engine_reconciliation_failure"
-            )
+            recordApplicationCommitError(reconciliationError)
         }
         if let recoveredError = outcome.recoveredEnginePersistenceError {
-            recordApplicationCommitError(
-                recoveredError,
-                event: "engine_recovered_after_error"
-            )
+            recordApplicationCommitError(recoveredError)
         }
         return outcome
     }
 
     private func recordApplicationCommitError(
-        _ error: any Error,
-        event: String
+        _ error: any Error
     ) {
-        let telemetry = ZhulongErrorTelemetry(error)
-        NSLog(
-            "NoonmarkZhulongApplicationCommit event=%@ error_kind=%@ error_code=%@",
-            event,
-            telemetry.kind.rawValue,
-            telemetry.code.map(String.init) ?? "none"
+        diagnostics?.record(
+            .persistenceFailed(
+                failure: DiagnosticFailureClassifier.classify(error),
+                incidentID: DiagnosticIncidentID()
+            )
         )
     }
 

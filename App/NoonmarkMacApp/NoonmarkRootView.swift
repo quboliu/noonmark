@@ -63,6 +63,7 @@ enum TaskClassificationDisplay: Equatable {
 
 struct OperationFailureBanner: View {
     let message: String
+    let diagnosticIncidentLabel: String?
     let dismissTitle: String
     let accessibilityIdentifier: String
     let bottomPadding: CGFloat
@@ -75,11 +76,18 @@ struct OperationFailureBanner: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Theme.warn)
                     .accessibilityHidden(true)
-                Text(message)
-                    .font(.noonmarkSystem(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.text1)
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(message)
+                        .font(.noonmarkSystem(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.text1)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let diagnosticIncidentLabel {
+                        Text(diagnosticIncidentLabel)
+                        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.text3)
+                    }
+                }
                 Spacer(minLength: 8)
                 Button(dismissTitle, action: onDismiss)
                     .buttonStyle(.borderless)
@@ -161,6 +169,10 @@ struct NoonmarkRootView: View {
             if let operationFailure = store.operationFailureNotice {
                 OperationFailureBanner(
                     message: operationFailure.message,
+                    diagnosticIncidentLabel: operationFailure
+                        .diagnosticIncidentID.map(
+                            store.copy.diagnosticIncidentLabel
+                        ),
                     dismissTitle: store.copy.dismiss,
                     accessibilityIdentifier: "app.operation-failure",
                     bottomPadding: 76

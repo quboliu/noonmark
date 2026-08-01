@@ -1,6 +1,7 @@
 import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
@@ -340,18 +341,34 @@ extension NoonmarkStore {
             return
         }
 
+        let diagnosticOperation = diagnostics.startOperation(
+            kind: .localFirstSync,
+            endpoint: diagnosticEndpoint(
+                for: engine.preferences.localFirstSyncPolicy.endpoint
+            )
+        )
+        diagnosticOperation.stage(.transportPrepare)
+        let syncOperationID = diagnosticOperation.id.rawValue
+
         let transport: any SyncRecordTransport
         do {
             transport = try localFirstSyncTransport(
                 for: engine.preferences.localFirstSyncPolicy.endpoint,
-                databaseURL: databaseURL
+                databaseURL: databaseURL,
+                diagnosticOperation: diagnosticOperation
             )
         } catch {
-            presentLocalFirstSyncFailure(error)
+            presentLocalFirstSyncFailure(
+                error,
+                diagnosticIncidentID: diagnosticOperation.fail(
+                    DiagnosticFailureClassifier.classify(error)
+                )
+            )
             return
         }
 
         do {
+            diagnosticOperation.stage(.persistenceCommit)
             try save(
                 engine,
                 mutationAt: engine.nextMutationDate(
@@ -359,20 +376,27 @@ extension NoonmarkStore {
                 )
             )
         } catch {
-            presentLocalFirstSyncFailure(error)
+            presentLocalFirstSyncFailure(
+                error,
+                diagnosticIncidentID: diagnosticOperation.fail(
+                    DiagnosticFailureClassifier.classify(error)
+                )
+            )
             return
         }
-        let syncOperationID = UUID()
         exclusiveEngineOperation = .localFirstSync(syncOperationID)
         isLocalFirstSyncing = true
         localFirstSyncMessage = copy.syncingWithEllipsis
-        Task { [databaseURL, syncOperationID, transport] in
+        Task {
+            var coordinatorDidSucceed = false
             do {
                 let coordinator = SQLiteLocalFirstSyncCoordinator(
                     databaseURL: databaseURL,
-                    transport: transport
+                    transport: transport,
+                    diagnosticOperation: diagnosticOperation
                 )
                 let result = try await coordinator.sync()
+                coordinatorDidSucceed = true
                 let syncRepository = SQLiteSyncRepository(
                     databaseURL: databaseURL
                 )
@@ -419,9 +443,28 @@ extension NoonmarkStore {
                     }
                 }
             } catch {
+                let incidentID: DiagnosticIncidentID
+                if coordinatorDidSucceed {
+                    incidentID = DiagnosticIncidentID()
+                    diagnostics.record(
+                        .persistenceFailed(
+                            failure: DiagnosticFailureClassifier.classify(
+                                error
+                            ),
+                            incidentID: incidentID
+                        )
+                    )
+                } else {
+                    incidentID = diagnosticOperation.fail(
+                        DiagnosticFailureClassifier.classify(error)
+                    )
+                }
                 await MainActor.run {
                     finishLocalFirstSyncOperation(syncOperationID)
-                    presentLocalFirstSyncFailure(error)
+                    presentLocalFirstSyncFailure(
+                        error,
+                        diagnosticIncidentID: incidentID
+                    )
                 }
             }
         }
@@ -436,8 +479,10 @@ extension NoonmarkStore {
 
     private func presentLocalFirstSyncFailure(
         _ error: Error,
-        failedAt: Date = Date()
+        failedAt: Date = Date(),
+        diagnosticIncidentID existingIncidentID: DiagnosticIncidentID? = nil
     ) {
+        let incidentID = existingIncidentID ?? DiagnosticIncidentID()
         if let databaseURL {
             do {
                 try SQLiteLocalFirstSyncCoordinator.persistFailure(
@@ -448,13 +493,19 @@ extension NoonmarkStore {
                     )
                 )
             } catch {
-                NSLog(
-                    "Noonmark sync failure status persistence failed: %@",
-                    String(describing: error)
+                diagnostics.record(
+                    .persistenceFailed(
+                        failure: DiagnosticFailureClassifier.classify(error),
+                        incidentID: incidentID
+                    )
                 )
             }
         }
-        showOperationFailure(.sync, error: error)
+        showOperationFailure(
+            .sync,
+            error: error,
+            diagnosticIncidentID: incidentID
+        )
         localFirstSyncMessage = operationFailure
     }
 
@@ -492,17 +543,21 @@ extension NoonmarkStore {
 
     private func localFirstSyncTransport(
         for endpoint: CloudSyncEndpointKind,
-        databaseURL: URL
+        databaseURL: URL,
+        diagnosticOperation: DiagnosticOperation
     ) throws -> any SyncRecordTransport {
         switch endpoint {
         case .iCloud:
             if cloudKitSyncConfiguration != nil {
                 return try cloudKitTransport(databaseURL: databaseURL)
             }
-            return try ICloudDriveSyncTransport()
+            return try ICloudDriveSyncTransport(
+                diagnosticOperation: diagnosticOperation
+            )
         case .localFolder:
             return LocalFolderSyncTransport(
-                rootURL: Self.configuredSyncFolderURL()
+                rootURL: Self.configuredSyncFolderURL(),
+                diagnosticOperation: diagnosticOperation
             )
         case .s3, .webDAV:
             throw ICloudDriveSyncTransportError.unavailable
@@ -619,8 +674,12 @@ extension NoonmarkStore {
                     unresolvedConflictCount: try syncRepository.unresolvedConflicts().count
                 )
                 resolveOperationFailure(.sync)
-            case let .failed(reason, message, _):
-                NSLog("Noonmark previous sync failed: %@", message)
+            case let .failed(reason, _, _):
+                diagnostics.record(
+                    .persistedSyncFailureLoaded(
+                        failure: diagnosticFailure(for: reason)
+                    )
+                )
                 let presentation = AppPresentation(
                     language: engine.preferences.language
                 )
@@ -638,7 +697,10 @@ extension NoonmarkStore {
                 )
             }
         } catch {
-            NSLog("Noonmark sync status load failed: %@", String(describing: error))
+            _ = recordOperationFailureEvidence(
+                .persistence,
+                error: error
+            )
             let failureMessage = AppPresentation(
                 language: engine.preferences.language
             ).failureMessage(for: .sync)
@@ -673,7 +735,10 @@ extension NoonmarkStore {
         }
     }
 
-    static func loadOrCreateSyncDeviceIdentity(databaseURL: URL) -> SyncDeviceIdentity {
+    static func loadOrCreateSyncDeviceIdentity(
+        databaseURL: URL,
+        diagnostics: (any DiagnosticRecording)? = nil
+    ) -> SyncDeviceIdentity {
         let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
         do {
             if let identity = try syncRepository.loadDeviceIdentity() {
@@ -686,11 +751,44 @@ extension NoonmarkStore {
             try syncRepository.saveDeviceIdentity(identity)
             return identity
         } catch {
-            NSLog("Noonmark sync identity load failed: %@", String(describing: error))
+            diagnostics?.record(
+                .persistenceFailed(
+                    failure: DiagnosticFailureClassifier.classify(error),
+                    incidentID: DiagnosticIncidentID()
+                )
+            )
             return SyncDeviceIdentity(
                 displayName: Host.current().localizedName,
                 createdAt: Date()
             )
         }
+    }
+
+    private func diagnosticEndpoint(
+        for endpoint: CloudSyncEndpointKind
+    ) -> DiagnosticEndpoint {
+        switch endpoint {
+        case .iCloud:
+            cloudKitSyncConfiguration == nil ? .iCloudDrive : .cloudKit
+        case .localFolder:
+            .localFolder
+        case .s3, .webDAV:
+            .none
+        }
+    }
+
+    private func diagnosticFailure(
+        for reason: SQLiteLocalFirstSyncFailureReason
+    ) -> DiagnosticFailure {
+        let code = switch reason {
+        case .baselineUnavailable: 1
+        case .baselineInvalid: 2
+        case .baselineNotUploaded: 3
+        case .localRecordsUnpreparable: 4
+        case .localChangesPending: 5
+        case .remoteChangesPending: 6
+        case .transportOrStorage: 7
+        }
+        return DiagnosticFailure(domain: .syncProtocol, code: code)
     }
 }

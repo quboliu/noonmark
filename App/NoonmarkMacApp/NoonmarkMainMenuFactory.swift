@@ -16,6 +16,7 @@ import NoonmarkMacRuntime
     func toggleDetailRailAction(_ sender: Any?)
     func showMainWindowAction(_ sender: Any?)
     func showHelpAction(_ sender: Any?)
+    func exportDiagnosticsAction(_ sender: Any?)
 }
 
 enum NoonmarkMenuAction {
@@ -32,6 +33,9 @@ enum NoonmarkMenuAction {
     static let toggleDetailRail = #selector(NoonmarkMenuCommandTarget.toggleDetailRailAction(_:))
     static let showMainWindow = #selector(NoonmarkMenuCommandTarget.showMainWindowAction(_:))
     static let showHelp = #selector(NoonmarkMenuCommandTarget.showHelpAction(_:))
+    static let exportDiagnostics = #selector(
+        NoonmarkMenuCommandTarget.exportDiagnosticsAction(_:)
+    )
 }
 
 @MainActor
@@ -269,6 +273,13 @@ enum NoonmarkMainMenuFactory {
         addItem(
             copy.noonmarkHelp,
             action: NoonmarkMenuAction.showHelp,
+            target: target,
+            to: helpMenu
+        )
+        helpMenu.addItem(.separator())
+        addItem(
+            copy.exportDiagnostics,
+            action: NoonmarkMenuAction.exportDiagnostics,
             target: target,
             to: helpMenu
         )

@@ -5,6 +5,7 @@ import Foundation
 import NoonmarkAI
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import NoonmarkStorage
@@ -138,11 +139,17 @@ struct AppOperationFailureNotice: Equatable, Identifiable {
     let id: UUID
     let context: AppOperationFailureContext
     let message: String
+    let diagnosticIncidentID: DiagnosticIncidentID?
 
-    init(context: AppOperationFailureContext, message: String) {
+    init(
+        context: AppOperationFailureContext,
+        message: String,
+        diagnosticIncidentID: DiagnosticIncidentID? = nil
+    ) {
         id = UUID()
         self.context = context
         self.message = message
+        self.diagnosticIncidentID = diagnosticIncidentID
     }
 }
 
@@ -746,6 +753,8 @@ final class NoonmarkStore: ObservableObject {
     @Published var localFirstSyncTimestamps:
         SQLiteLocalFirstSyncTimestamps?
     @Published var cloudKitAccountAvailability: CloudKitAccountAvailability?
+    @Published var diagnosticHealth: DiagnosticHealth?
+    @Published var isDiagnosticActionRunning = false
     @Published var today: LocalDate
     @Published var naturalDayState: NaturalDayState
     @Published var dayBoundaryState: DayBoundaryState
@@ -767,10 +776,14 @@ final class NoonmarkStore: ObservableObject {
         RecurringFuturePlanVisibilityRepository
     let databaseURL: URL?
     let syncDeviceIdentity: SyncDeviceIdentity?
+    let diagnostics: any DiagnosticRecording
+    let localDiagnosticRecorder: LocalDiagnosticRecorder?
+    let metricKitDiagnosticSubscriber: MetricKitDiagnosticSubscriber?
     let permitsPersistenceFailureE2E: Bool
     lazy var zhulongWorkspace = ZhulongWorkspaceStore(
         directoryURL: zhulongSidecarDirectoryURL,
-        keySource: zhulongSidecarKeySource
+        keySource: zhulongSidecarKeySource,
+        diagnostics: diagnostics
     )
     let toastScheduler = LatestTransientMessageScheduler()
     var localFirstSyncAutomationTask: Task<Void, Never>?
@@ -815,6 +828,7 @@ final class NoonmarkStore: ObservableObject {
     var dataImportCommitContinuationForE2E: CheckedContinuation<Void, Never>?
     var isDataImportCommitPausedForE2E = false
     var pendingZhulongEngineWriteAuthorized = false
+    var didRecordCleanDiagnosticShutdown = false
 
     init(
         dayContext: NaturalDayContext,
@@ -867,6 +881,11 @@ final class NoonmarkStore: ObservableObject {
             automaticClassificationJobRepository = nil
             databaseURL = nil
             syncDeviceIdentity = nil
+            let recorder = InMemoryDiagnosticRecorder()
+            diagnostics = recorder
+            localDiagnosticRecorder = nil
+            metricKitDiagnosticSubscriber = nil
+            recorder.record(.sessionStarted())
             try seed()
         } else {
             let configuredDatabaseURL = Self.configuredDatabaseURL()
@@ -878,10 +897,49 @@ final class NoonmarkStore: ObservableObject {
             automaticClassificationJobRepository = SQLiteAutomaticClassificationJobRepository(
                 databaseURL: configuredDatabaseURL
             )
+            let diagnosticRootURL = configuredDatabaseURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("Diagnostics", isDirectory: true)
+            do {
+                let recorder = try LocalDiagnosticRecorder(
+                    rootURL: diagnosticRootURL
+                )
+                diagnostics = recorder
+                localDiagnosticRecorder = recorder
+                metricKitDiagnosticSubscriber = MetricKitDiagnosticSubscriber(
+                    recorder: recorder
+                )
+                recorder.startSession()
+            } catch {
+                let recorder = AppleOnlyDiagnosticRecorder()
+                diagnostics = recorder
+                localDiagnosticRecorder = nil
+                metricKitDiagnosticSubscriber = nil
+                recorder.record(.sessionStarted())
+                let fallbackOperation = recorder.startOperation(
+                    kind: .persistence
+                )
+                fallbackOperation.fail(
+                    DiagnosticFailureClassifier.classify(error)
+                )
+            }
             syncDeviceIdentity = Self.loadOrCreateSyncDeviceIdentity(
-                databaseURL: configuredDatabaseURL
+                databaseURL: configuredDatabaseURL,
+                diagnostics: diagnostics
             )
-            try loadOrSeed()
+            let startupLoadOperation = diagnostics.startOperation(
+                kind: .persistence
+            )
+            startupLoadOperation.stage(.localLoad)
+            do {
+                try loadOrSeed()
+                startupLoadOperation.succeed()
+            } catch {
+                startupLoadOperation.fail(
+                    DiagnosticFailureClassifier.classify(error)
+                )
+                throw error
+            }
         }
         recoverPendingZhulongApplication()
         try reconcileNaturalDayAtLaunch(initialMoment)
@@ -902,6 +960,7 @@ final class NoonmarkStore: ObservableObject {
                     self?.objectWillChange.send()
                 }
             }
+        metricKitDiagnosticSubscriber?.start()
     }
 
     deinit {
@@ -912,5 +971,6 @@ final class NoonmarkStore: ObservableObject {
         automaticClassificationCircuitRetryTask?.cancel()
         cloudKitAccountCheckTask?.cancel()
         zhulongProviderHealthCheckTask?.cancel()
+        metricKitDiagnosticSubscriber?.stop()
     }
 }

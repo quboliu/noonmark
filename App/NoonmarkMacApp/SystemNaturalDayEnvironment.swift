@@ -89,13 +89,11 @@ final class SystemNaturalDayEnvironment: NaturalDayEnvironment {
         calendar.locale = Locale(identifier: "en_US_POSIX")
         calendar.timeZone = TimeZone.autoupdatingCurrent
         guard let interval = calendar.dateInterval(of: .day, for: now) else {
-            NSLog("Noonmark natural-day timer could not resolve the current day interval")
             return
         }
 
         let delay = interval.end.timeIntervalSince(now)
         guard delay.isFinite, delay > 0 else {
-            NSLog("Noonmark natural-day timer produced an invalid midnight delay")
             return
         }
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in

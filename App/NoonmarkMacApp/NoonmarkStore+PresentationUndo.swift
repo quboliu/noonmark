@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import SwiftUI
@@ -120,7 +121,6 @@ extension NoonmarkStore {
         if enabled == false, page == .zhulong {
             page = .day
         }
-        NSLog("Noonmark Zhulong page enabled=%@", enabled.description)
     }
 
     func setAutomaticClassificationEnabled(_ enabled: Bool) {
@@ -139,10 +139,6 @@ extension NoonmarkStore {
             automaticClassificationCircuitRetryTask?.cancel()
             refreshAutomaticClassificationStatusesForFeatureChange()
         }
-        NSLog(
-            "Noonmark automatic classification enabled=%@",
-            enabled.description
-        )
     }
 
     func setZhulongDataReadingPolicy(
@@ -158,10 +154,6 @@ extension NoonmarkStore {
         zhulongFeaturePreferencesRepository.save(
             zhulongFeaturePreferences
         )
-        NSLog(
-            "Noonmark Zhulong data reading policy=%@",
-            policy.rawValue
-        )
     }
 
     func setZhulongRemoteSendingPolicy(
@@ -176,10 +168,6 @@ extension NoonmarkStore {
             .conversationPermissionCeiling.remoteSending = policy
         zhulongFeaturePreferencesRepository.save(
             zhulongFeaturePreferences
-        )
-        NSLog(
-            "Noonmark Zhulong remote sending policy=%@",
-            policy.rawValue
         )
     }
 
@@ -610,7 +598,6 @@ extension NoonmarkStore {
                 mutationAt: moment.instant
             )
         } catch {
-            NSLog("Noonmark undo failed: %@", String(describing: error))
             showOperationFailure(.undo, error: error)
             return
         }
@@ -656,7 +643,6 @@ extension NoonmarkStore {
                 mutationAt: moment.instant
             )
         } catch {
-            NSLog("Noonmark redo failed: %@", String(describing: error))
             showOperationFailure(.redo, error: error)
             return
         }
@@ -980,14 +966,19 @@ extension NoonmarkStore {
 
     func showOperationFailure(
         _ context: AppOperationFailureContext,
-        error: Error
+        error: Error,
+        diagnosticIncidentID existingIncidentID: DiagnosticIncidentID? = nil,
+        diagnosticOperationID: DiagnosticOperationID? = nil
     ) {
+        let incidentID = recordOperationFailureEvidence(
+            context,
+            error: error,
+            operationID: diagnosticOperationID,
+            incidentID: existingIncidentID
+        )
         let pendingApplicationIsBlocking = (error as? StoreMutationGateError)?
             .isPendingZhulongApplication == true
         if pendingApplicationIsBlocking {
-            NSLog(
-                "Noonmark mutation blocked pending Zhulong application"
-            )
             showToast(
                 AppPresentation(
                     language: engine.preferences.language
@@ -995,11 +986,6 @@ extension NoonmarkStore {
             )
             return
         }
-        NSLog(
-            "Noonmark operation failed context=%@ error=%@",
-            String(describing: context),
-            String(reflecting: error)
-        )
         let presentation = AppPresentation(
             language: engine.preferences.language
         )
@@ -1011,18 +997,24 @@ extension NoonmarkStore {
         } else {
             presentation.failureMessage(for: context)
         }
-        showPersistentFailureMessage(message, context: context)
+        showPersistentFailureMessage(
+            message,
+            context: context,
+            diagnosticIncidentID: incidentID
+        )
     }
 
     func showPersistentFailureMessage(
         _ message: String,
-        context: AppOperationFailureContext
+        context: AppOperationFailureContext,
+        diagnosticIncidentID: DiagnosticIncidentID? = nil
     ) {
         toastScheduler.cancel()
         toast = nil
         operationFailureNotice = AppOperationFailureNotice(
             context: context,
-            message: message
+            message: message,
+            diagnosticIncidentID: diagnosticIncidentID
         )
     }
 

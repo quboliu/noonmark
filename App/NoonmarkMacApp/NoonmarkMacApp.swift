@@ -4,6 +4,7 @@ import Darwin
 import NoonmarkAI
 @_spi(ClassificationUserDecision) import NoonmarkCore
 import NoonmarkDayContext
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkMacUIContract
 import NoonmarkStorage
@@ -83,8 +84,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 return
             }
         } catch {
-            let message = "Noonmark Provider bootstrap failed.\n"
-            FileHandle.standardError.write(Data(message.utf8))
+            _ = recordEarlyStartupFailure(error)
             exit(EX_CONFIG)
         }
         do {
@@ -92,8 +92,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 arguments: AppLaunchArguments.values
             )
         } catch {
-            let message = "Invalid Noonmark CloudKit launch arguments.\n"
-            FileHandle.standardError.write(Data(message.utf8))
+            _ = recordEarlyStartupFailure(error, endpoint: .cloudKit)
             exit(EX_USAGE)
         }
         let app = NSApplication.shared
@@ -183,16 +182,33 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             .lowercased()
             .hasPrefix("zh") == true
         let copy = AppCopy(language: usesChinese ? .chinese : .english)
-        let diagnostic = "Noonmark startup failed: \(String(reflecting: error))\n"
-        FileHandle.standardError.write(Data(diagnostic.utf8))
+        let incidentID = recordEarlyStartupFailure(error)
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = copy.startupFailureTitle
         alert.informativeText = copy.startupFailureMessage
+            + "\n\n"
+            + copy.diagnosticIncidentLabel(incidentID)
         alert.addButton(withTitle: copy.quit)
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
         exit(EX_SOFTWARE)
+    }
+
+    private static func recordEarlyStartupFailure(
+        _ error: Error,
+        endpoint: DiagnosticEndpoint = .none
+    ) -> DiagnosticIncidentID {
+        let recorder = AppleOnlyDiagnosticRecorder()
+        recorder.record(.sessionStarted())
+        let operation = recorder.startOperation(
+            kind: .appSession,
+            endpoint: endpoint
+        )
+        operation.stage(.launch)
+        return operation.fail(
+            DiagnosticFailureClassifier.classify(error)
+        )
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -232,20 +248,18 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         _ application: NSApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        NSLog(
-            "Noonmark CloudKit remote notifications registered (%d-byte token)",
-            deviceToken.count
-        )
+        _ = deviceToken
     }
 
     func application(
         _ application: NSApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        NSLog(
-            "Noonmark CloudKit remote notification registration failed: %@",
-            error.localizedDescription
+        let operation = store.diagnostics.startOperation(
+            kind: .appSession,
+            endpoint: .cloudKit
         )
+        operation.fail(DiagnosticFailureClassifier.classify(error))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -255,9 +269,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         do {
             try prepareForTerminationIfNeeded()
         } catch {
-            NSLog(
-                "Noonmark termination storage finalization failed: %@",
-                String(reflecting: error)
+            _ = store.recordOperationFailureEvidence(
+                .persistence,
+                error: error
             )
         }
     }
@@ -272,9 +286,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             return .terminateCancel
         }
         guard finalizeActiveTextInput(in: sender) else {
-            NSLog(
-                "Noonmark termination deferred: active text input refused to resign"
-            )
+            store.recordTerminationPersistenceFailure(code: 1)
             return .terminateCancel
         }
         terminationTask = Task { @MainActor [weak self] in
@@ -287,22 +299,16 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             if terminationSucceeded {
                 do {
                     try prepareForTerminationIfNeeded()
+                    await store.recordCleanDiagnosticShutdown()
                 } catch {
                     terminationSucceeded = false
-                    NSLog(
-                        "Noonmark termination deferred: storage finalization failed: %@",
-                        String(reflecting: error)
+                    _ = store.recordOperationFailureEvidence(
+                        .persistence,
+                        error: error
                     )
                 }
             } else {
-                NSLog(
-                    "Noonmark termination deferred: input draft flush was rejected "
-                        + "failed_owners=%@ registered_owners=%@",
-                    store.inputDraftFlushCoordinator
-                        .lastFailedOwnerIDs.joined(separator: ","),
-                    store.inputDraftFlushCoordinator
-                        .registeredOwnerIDs.joined(separator: ",")
-                )
+                store.recordTerminationPersistenceFailure(code: 2)
             }
             terminationTask = nil
             guard terminationSucceeded else {
@@ -498,6 +504,8 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             return store.canPerformEngineMutation
         case NoonmarkMenuAction.importData:
             return store.canBeginDataImport
+        case NoonmarkMenuAction.exportDiagnostics:
+            return store.canManageLocalDiagnostics
         default:
             return true
         }
@@ -592,6 +600,10 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         helpWindowController.show()
     }
 
+    @objc func exportDiagnosticsAction(_ sender: Any?) {
+        store.exportDiagnostics()
+    }
+
     @objc func toggleSidebarAction(_ sender: Any?) {
         store.toggleSidebar()
     }
@@ -682,10 +694,11 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             )
             NSApp.registerForRemoteNotifications()
         } catch {
-            NSLog(
-                "Noonmark CloudKit capability validation failed: %@",
-                error.localizedDescription
+            let operation = store.diagnostics.startOperation(
+                kind: .appSession,
+                endpoint: .cloudKit
             )
+            operation.fail(DiagnosticFailureClassifier.classify(error))
         }
     }
 }

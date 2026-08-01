@@ -877,7 +877,10 @@ extension NoonmarkStore {
             )
         } catch {
             pendingAutomaticClassificationProviderReconciliation = nil
-            NSLog("Noonmark automatic classification provider transition failed")
+            _ = recordOperationFailureEvidence(
+                .provider,
+                error: error
+            )
             return .stop
         }
     }
@@ -925,7 +928,10 @@ extension NoonmarkStore {
                 contentionAttempt: &contentionAttempt
             )
         } catch {
-            NSLog("Noonmark automatic classification circuit read failed")
+            _ = recordOperationFailureEvidence(
+                .persistence,
+                error: error
+            )
             return .stop
         }
     }
@@ -971,7 +977,10 @@ extension NoonmarkStore {
                 contentionAttempt: &contentionAttempt
             )
         } catch {
-            NSLog("Noonmark automatic classification worker storage step failed")
+            _ = recordOperationFailureEvidence(
+                .persistence,
+                error: error
+            )
             return .stop
         }
     }
@@ -1216,9 +1225,9 @@ extension NoonmarkStore {
                     // Keep proposalReady and its exact claim untouched. Lease
                     // recovery will reuse the canonical checkpoint without
                     // another Provider request.
-                    NSLog(
-                        "Noonmark automatic classification checkpoint retained job=%@",
-                        claim.jobID.uuidString
+                    _ = recordOperationFailureEvidence(
+                        .persistence,
+                        error: error
                     )
                 }
                 return
@@ -1238,9 +1247,9 @@ extension NoonmarkStore {
                 // A storage/CAS failure is not a Provider failure. Leave the
                 // claim durable for lease recovery instead of changing the
                 // global Provider circuit on false evidence.
-                NSLog(
-                    "Noonmark automatic classification claim retained job=%@",
-                    claim.jobID.uuidString
+                _ = recordOperationFailureEvidence(
+                    .persistence,
+                    error: error
                 )
             }
         }
@@ -1471,6 +1480,9 @@ extension NoonmarkStore {
     }
 
     func recordAutomaticClassificationDiagnostic(_ fields: String) {
+        guard Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e" else {
+            return
+        }
         NSLog("NoonmarkAutomaticClassificationDiagnostic %@", fields)
     }
 

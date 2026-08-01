@@ -964,13 +964,62 @@ struct SettingsPrivacyCard: View {
 
     var body: some View {
         SettingsCard(subtitle: store.copy.privacySubtitle) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 SettingsBoundaryRow(color: Theme.accent, text: store.copy.privacyRows[0])
                 SettingsBoundaryRow(color: Theme.warn, text: store.copy.privacyRows[1])
                 SettingsBoundaryRow(color: Theme.ok, text: store.copy.privacyRows[2])
                 SettingsBoundaryRow(color: Theme.text3, text: store.copy.privacyRows[3])
+
+                RailDivider()
+                    .padding(.vertical, 4)
+
+                Text(store.copy.localDiagnosticsTitle)
+                    .font(.noonmarkSystem(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.text1)
+                Text(store.copy.localDiagnosticsPrivacySummary)
+                    .font(.noonmarkSystem(size: 11.5))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(diagnosticSummary)
+                    .font(.noonmarkSystem(size: 11))
+                    .foregroundStyle(Theme.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    NativeSmallActionButton(
+                        title: store.copy.exportDiagnostics,
+                        tone: .accent,
+                        identifier: "settings.privacy.diagnostics.export",
+                        accessibilityLabel: store.copy.exportDiagnostics,
+                        isEnabled: store.canManageLocalDiagnostics,
+                        action: store.exportDiagnostics
+                    )
+                    NativeSmallActionButton(
+                        title: store.copy.clearDiagnostics,
+                        tone: .warn,
+                        identifier: "settings.privacy.diagnostics.clear",
+                        accessibilityLabel: store.copy.clearDiagnostics,
+                        isEnabled: store.canManageLocalDiagnostics,
+                        action: store.clearDiagnostics
+                    )
+                }
             }
         }
+        .onAppear {
+            store.refreshDiagnosticHealth()
+        }
+    }
+
+    private var diagnosticSummary: String {
+        if store.localDiagnosticRecorder == nil {
+            return store.copy.localDiagnosticsSystemOnly
+        }
+        guard let health = store.diagnosticHealth else {
+            return store.copy.localDiagnosticsLoading
+        }
+        return store.copy.diagnosticHealthSummary(health)
     }
 }
 

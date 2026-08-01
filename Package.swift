@@ -34,7 +34,7 @@ let package = Package(
             name: "NoonmarkMacApp",
             dependencies: [
                 "NoonmarkCore", "NoonmarkDayContext", "NoonmarkMacRuntime", "NoonmarkAI", "NoonmarkZhulong", "NoonmarkZhulongAI", "NoonmarkMacUIContract",
-                "NoonmarkMacE2ESupport", "NoonmarkDemoSupport", "NoonmarkStorage", "NoonmarkSync"
+                "NoonmarkMacE2ESupport", "NoonmarkDemoSupport", "NoonmarkDiagnostics", "NoonmarkStorage", "NoonmarkSync"
             ],
             path: "App/NoonmarkMacApp",
             exclude: ["Resources"],

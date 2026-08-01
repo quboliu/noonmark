@@ -61,6 +61,7 @@ extension NoonmarkStore {
         naturalDayObservation?.cancel()
         accessibilityDisplayObservation?.cancel()
         try repository?.finalizeForTermination()
+        metricKitDiagnosticSubscriber?.stop()
     }
 
     func refreshNaturalDay() {
@@ -68,9 +69,9 @@ extension NoonmarkStore {
         do {
             moment = try dayContext.moment()
         } catch {
-            NSLog(
-                "Noonmark natural day refresh failed: %@",
-                String(reflecting: error)
+            _ = recordOperationFailureEvidence(
+                .naturalDay,
+                error: error
             )
             blockNaturalDay(
                 candidate: today,
@@ -92,9 +93,9 @@ extension NoonmarkStore {
         case let .refreshed(moment, signal):
             try? reconcileNaturalDay(moment, signal: signal)
         case let .failed(failure, lastKnown, signal):
-            NSLog(
-                "Noonmark natural day observation failed: %@",
-                String(reflecting: failure)
+            _ = recordOperationFailureEvidence(
+                .naturalDay,
+                error: failure
             )
             blockNaturalDay(
                 candidate: lastKnown?.today ?? today,
@@ -148,16 +149,10 @@ extension NoonmarkStore {
                 clearSelection()
             }
             dayBoundaryState = .ready(appliedThrough: moment.today)
-            NSLog(
-                "Noonmark natural day reconciled signal=%@ previous=%@ current=%@",
-                String(describing: signal),
-                previousToday.description,
-                moment.today.description
-            )
         } catch {
-            NSLog(
-                "Noonmark natural day reconciliation failed: %@",
-                String(reflecting: error)
+            _ = recordOperationFailureEvidence(
+                .naturalDay,
+                error: error
             )
             blockNaturalDay(
                 candidate: moment.today,
@@ -195,13 +190,7 @@ extension NoonmarkStore {
             candidate: candidate,
             message: message
         )
-        NSLog(
-            "Noonmark natural day blocked signal=%@ applied=%@ candidate=%@ error=%@",
-            String(describing: signal),
-            today.description,
-            candidate.description,
-            message
-        )
+        _ = signal
     }
 
     @discardableResult
@@ -214,9 +203,9 @@ extension NoonmarkStore {
         do {
             moment = try dayContext.moment()
         } catch {
-            NSLog(
-                "Noonmark mutation date preparation failed: %@",
-                String(reflecting: error)
+            _ = recordOperationFailureEvidence(
+                .naturalDay,
+                error: error
             )
             blockNaturalDay(
                 candidate: dayBoundaryState.candidate,
@@ -462,7 +451,10 @@ extension NoonmarkStore {
                 )
             )
         } catch {
-            NSLog("Noonmark sync status reset failed: %@", String(describing: error))
+            _ = recordOperationFailureEvidence(
+                .persistence,
+                error: error
+            )
             localFirstSyncMessage = AppPresentation(
                 language: engine.preferences.language
             ).failureMessage(for: .sync)
@@ -523,7 +515,6 @@ extension NoonmarkStore {
 
     func persist() {
         guard exclusiveEngineOperation == nil else {
-            NSLog("Noonmark persistence skipped during exclusive engine replacement")
             return
         }
         do {
@@ -545,7 +536,6 @@ extension NoonmarkStore {
                 showOperationFailure(.persistence, error: error)
                 return
             }
-            NSLog("Noonmark persistence save failed: %@", String(describing: error))
             showOperationFailure(.persistence, error: error)
         }
     }
@@ -1278,14 +1268,6 @@ extension NoonmarkStore {
     private func wrappedPersistenceCommitError(
         _ error: Error
     ) -> Error {
-        if error is PersistenceFailureE2EError {
-            NSLog("Noonmark E2E injected persistence save failure")
-        } else {
-            NSLog(
-                "Noonmark persistence save failed: %@",
-                String(describing: error)
-            )
-        }
         return EnginePersistenceCommitError(
             underlying: error
         )

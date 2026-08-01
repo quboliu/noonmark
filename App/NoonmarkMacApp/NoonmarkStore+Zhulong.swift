@@ -124,9 +124,9 @@ extension NoonmarkStore {
     }
 
     private func showZhulongProviderSettingsFailure(_ error: Error) {
-        NSLog(
-            "Noonmark provider settings failed: %@",
-            String(reflecting: error)
+        let incidentID = recordOperationFailureEvidence(
+            .provider,
+            error: error
         )
         let failure = (error as? ZhulongProviderSettingsError)?
             .presentationFailure ?? .unexpected
@@ -136,7 +136,8 @@ extension NoonmarkStore {
         )
         showPersistentFailureMessage(
             zhulongCopy.providerSettingsFailure(failure),
-            context: .provider
+            context: .provider,
+            diagnosticIncidentID: incidentID
         )
     }
 

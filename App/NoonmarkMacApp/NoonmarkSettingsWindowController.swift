@@ -182,6 +182,10 @@ private struct NoonmarkSettingsWindowRoot: View {
             if let operationFailure = store.operationFailureNotice {
                 OperationFailureBanner(
                     message: operationFailure.message,
+                    diagnosticIncidentLabel: operationFailure
+                        .diagnosticIncidentID.map(
+                            store.copy.diagnosticIncidentLabel
+                        ),
                     dismissTitle: store.copy.dismiss,
                     accessibilityIdentifier:
                     "settings.operation-failure",

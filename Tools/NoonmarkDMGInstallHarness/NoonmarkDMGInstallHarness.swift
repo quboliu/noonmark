@@ -15,6 +15,7 @@ enum NoonmarkDMGInstallHarness {
         case restart
         case e2eInspect = "e2e-inspect"
         case e2eMenuCommand = "e2e-menu-command"
+        case diagnosticExport = "diagnostic-export"
     }
 
     struct Configuration {
@@ -31,6 +32,11 @@ enum NoonmarkDMGInstallHarness {
         let menuTitle: String
         let menuItemTitle: String
         let completionPath: String
+        let targetProfile: String
+        let databasePath: String
+        let repositoryLockPath: String
+        let exportPath: String
+        let sentinelsPath: String
 
         static func parse(_ arguments: [String]) throws -> Self {
             var values: [String: String] = [:]
@@ -60,7 +66,12 @@ enum NoonmarkDMGInstallHarness {
                 "--expectations",
                 "--menu-title",
                 "--menu-item-title",
-                "--completion"
+                "--completion",
+                "--target-profile",
+                "--database",
+                "--repository-lock",
+                "--export-path",
+                "--sentinels"
             ])
             let unknown = Set(values.keys).subtracting(allowed)
             guard unknown.isEmpty else {
@@ -102,7 +113,12 @@ enum NoonmarkDMGInstallHarness {
                     expectationsPath: "",
                     menuTitle: "",
                     menuItemTitle: "",
-                    completionPath: ""
+                    completionPath: "",
+                    targetProfile: "",
+                    databasePath: "",
+                    repositoryLockPath: "",
+                    exportPath: "",
+                    sentinelsPath: ""
                 )
             }
             if mode == .e2eInspect {
@@ -138,7 +154,12 @@ enum NoonmarkDMGInstallHarness {
                     expectationsPath: expectationsPath,
                     menuTitle: "",
                     menuItemTitle: "",
-                    completionPath: ""
+                    completionPath: "",
+                    targetProfile: "",
+                    databasePath: "",
+                    repositoryLockPath: "",
+                    exportPath: "",
+                    sentinelsPath: ""
                 )
             }
             if mode == .e2eMenuCommand {
@@ -182,7 +203,71 @@ enum NoonmarkDMGInstallHarness {
                     expectationsPath: "",
                     menuTitle: menuTitle,
                     menuItemTitle: menuItemTitle,
-                    completionPath: completionPath
+                    completionPath: completionPath,
+                    targetProfile: "",
+                    databasePath: "",
+                    repositoryLockPath: "",
+                    exportPath: "",
+                    sentinelsPath: ""
+                )
+            }
+            if mode == .diagnosticExport {
+                guard values.count == 13,
+                      let rawPID = values["--pid"],
+                      let parsedPID = Int32(rawPID),
+                      parsedPID > 0,
+                      let appPath = values["--app-path"],
+                      Self.isAbsoluteSingleLinePath(appPath),
+                      let rawWindowNumber = values["--window-number"],
+                      let windowNumber = CGWindowID(rawWindowNumber),
+                      windowNumber > 0,
+                      let windowTitle = values["--window-title"],
+                      Self.isNonemptySingleLineText(windowTitle),
+                      let targetProfile = values["--target-profile"],
+                      ["e2e", "dmg-validation"].contains(targetProfile),
+                      let databasePath = values["--database"],
+                      Self.isAbsoluteSingleLinePath(databasePath),
+                      databasePath.hasSuffix(".sqlite"),
+                      let repositoryLockPath = values["--repository-lock"],
+                      Self.isAbsoluteSingleLinePath(repositoryLockPath),
+                      repositoryLockPath.hasSuffix("/.repository.lock"),
+                      let exportPath = values["--export-path"],
+                      Self.isAbsoluteSingleLinePath(exportPath),
+                      exportPath.hasSuffix(".noonmarkdiagnostics"),
+                      let sentinelsPath = values["--sentinels"],
+                      Self.isAbsoluteSingleLinePath(sentinelsPath),
+                      Set([
+                          databasePath,
+                          repositoryLockPath,
+                          exportPath,
+                          sentinelsPath
+                      ]).count == 4
+                else {
+                    throw HarnessFailure.invalidArguments(
+                        "diagnostic-export requires exact target identity, "
+                            + "--target-profile e2e|dmg-validation, --database, "
+                            + "--repository-lock, --export-path and --sentinels"
+                    )
+                }
+                return Self(
+                    mode: mode,
+                    pid: parsedPID,
+                    appPath: appPath,
+                    taskTitle: "",
+                    ledgerPath: ledgerPath,
+                    launchToken: launchToken,
+                    startGatePath: startGatePath,
+                    windowNumber: windowNumber,
+                    windowTitle: windowTitle,
+                    expectationsPath: "",
+                    menuTitle: "",
+                    menuItemTitle: "",
+                    completionPath: "",
+                    targetProfile: targetProfile,
+                    databasePath: databasePath,
+                    repositoryLockPath: repositoryLockPath,
+                    exportPath: exportPath,
+                    sentinelsPath: sentinelsPath
                 )
             }
             guard
@@ -214,7 +299,12 @@ enum NoonmarkDMGInstallHarness {
                 expectationsPath: "",
                 menuTitle: "",
                 menuItemTitle: "",
-                completionPath: ""
+                completionPath: "",
+                targetProfile: "",
+                databasePath: "",
+                repositoryLockPath: "",
+                exportPath: "",
+                sentinelsPath: ""
             )
         }
 
@@ -333,6 +423,19 @@ enum NoonmarkDMGInstallHarness {
                     "path=\(configuration.completionPath) atomic=true "
                         + "exact=true lines=7"
                 )
+            case .diagnosticExport:
+                let locks = try DiagnosticExportLocks(
+                    databasePath: configuration.databasePath,
+                    repositoryLockPath: configuration.repositoryLockPath
+                )
+                try locks.proveContention(step: "before-export", ledger: ledger)
+                try runner.performDiagnosticExport()
+                try locks.proveContention(step: "after-export", ledger: ledger)
+                try DiagnosticExportPackageProbe.verify(
+                    exportPath: configuration.exportPath,
+                    sentinelsPath: configuration.sentinelsPath,
+                    ledger: ledger
+                )
             }
             try ledger?.pass("complete", "mode=\(configuration.mode.rawValue)")
             exit(EXIT_SUCCESS)
@@ -399,6 +502,10 @@ enum NoonmarkDMGInstallHarness {
         let expectedBundleIdentifier = switch configuration.mode {
         case .e2eInspect, .e2eMenuCommand:
             expectedE2EBundleIdentifier
+        case .diagnosticExport:
+            configuration.targetProfile == "e2e"
+                ? expectedE2EBundleIdentifier
+                : expectedDMGValidationBundleIdentifier
         case .preflight, .exercise, .restart:
             expectedDMGValidationBundleIdentifier
         }
@@ -457,6 +564,13 @@ private extension NoonmarkDMGInstallHarness.Configuration {
                 + "window_number=\(windowNumber) window=\(windowTitle) "
                 + "menu=\(menuTitle) item=\(menuItemTitle) "
                 + "completion=\(completionPath)"
+        }
+        if mode == .diagnosticExport {
+            return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath) "
+                + "window_number=\(windowNumber) window=\(windowTitle) "
+                + "target_profile=\(targetProfile) database=\(databasePath) "
+                + "repository_lock=\(repositoryLockPath) export=\(exportPath) "
+                + "sentinels=\(sentinelsPath)"
         }
         return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath)"
     }
@@ -1055,6 +1169,341 @@ private final class Runner {
                 + "cg_title=\(helpCGWindow.title == nil ? "private" : "matched") "
                 + "help_frame=\(helpFrame)"
         )
+    }
+
+    func performDiagnosticExport() throws {
+        let correlated = try correlatedE2EWindow(requireFocused: true)
+        let exportURL = URL(fileURLWithPath: configuration.exportPath)
+        try requireDiagnosticExportDestination(exportURL)
+        try ledger?.pass(
+            "diagnostic-window",
+            "window_number=\(configuration.windowNumber) "
+                + "frame=\(correlated.frame) focused=true exact=true"
+        )
+
+        let exportItem = try revealMenuItemWithoutShortcut(
+            topLevelTitles: ["帮助", "Help"],
+            itemTitles: ["导出诊断资料…", "Export Diagnostics…"],
+            step: "diagnostic-menu"
+        )
+        try input.click(
+            frame: target.requiredFrame(
+                exportItem,
+                description: "Export Diagnostics menu item"
+            )
+        )
+
+        let preview = try target.wait(
+            description: "the exact diagnostic export preview"
+        ) {
+            try uniqueDiagnosticWindow(
+                titleTexts: ["导出前预览", "Preview Before Export"],
+                buttonTitles: [
+                    ["选择保存位置…", "Choose Save Location…"],
+                    ["取消", "Cancel"]
+                ],
+                description: "diagnostic preview"
+            )
+        }
+        let previewDescendants = try target.strictDescendants(of: preview)
+        let previewText = previewDescendants.compactMap { match in
+            match.title
+                ?? target.string(match.element, kAXValueAttribute as String)
+                ?? match.description
+        }.joined(separator: "\n")
+        guard previewText.contains("Schema v1"),
+              previewText.contains("预计导出")
+              || previewText.contains("Estimated export"),
+              previewText.contains("不会自动发送")
+              || previewText.contains("Nothing is sent automatically")
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic preview omitted schema, size, or consent disclosure"
+            )
+        }
+        let continueButton = try uniqueMatch(
+            in: preview,
+            roles: [kAXButtonRole as String],
+            titles: ["选择保存位置…", "Choose Save Location…"],
+            identifier: nil,
+            description: "diagnostic preview continue button"
+        )
+        let focusedPreview: AXUIElement = try target.wait(
+            description: "focused diagnostic preview"
+        ) {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            ), CFEqual(focused, preview) else { return nil }
+            return focused
+        }
+        guard CFEqual(focusedPreview, preview),
+              let defaultButton = target.element(
+                  preview,
+                  kAXDefaultButtonAttribute as String
+              ),
+              CFEqual(defaultButton, continueButton.element),
+              continueButton.enabled == true,
+              continueButton.hidden != true
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic preview continue control was not the focused default button"
+            )
+        }
+        try ledger?.pass(
+            "diagnostic-preview",
+            "schema=1 size=visible consent=visible focused=true default=exact"
+        )
+        try input.keyStroke(virtualKey: 36)
+
+        let savePanel: AXUIElement
+        do {
+            savePanel = try target.wait(
+                description: "the app-owned diagnostic save panel"
+            ) {
+                try uniqueDiagnosticWindow(
+                    titleTexts: [
+                        "导出晷迹诊断资料",
+                        "Export Noonmark Diagnostics"
+                    ],
+                    buttonTitles: [
+                        ["存储", "保存", "Save"],
+                        ["取消", "Cancel"]
+                    ],
+                    description: "diagnostic save panel"
+                )
+            }
+        } catch {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic save panel AX mismatch; observed="
+                    + diagnosticWindowSummary()
+            )
+        }
+        try input.keyStroke(
+            virtualKey: 5,
+            flags: [.maskCommand, .maskShift]
+        )
+        let locationField: AXUIElement = try target.wait(
+            description: "save-panel location field"
+        ) {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedUIElementAttribute as String
+            ),
+                target.string(focused, kAXRoleAttribute as String)
+                == kAXTextFieldRole as String
+            else { return nil }
+            return focused
+        }
+        let exportParent = exportURL.deletingLastPathComponent().path
+        try input.typeUnicode(exportParent)
+        _ = try target.wait(description: "exact save-panel location value") {
+            target.string(locationField, kAXValueAttribute as String)
+            == exportParent ? true : nil
+        }
+        try input.keyStroke(virtualKey: 36)
+
+        let basename = exportURL.lastPathComponent
+        let nameField: AXTarget.Match = try target.wait(
+            description: "diagnostic save-panel filename field"
+        ) {
+            let fields = try target.strictMatches(
+                in: savePanel,
+                roles: [kAXTextFieldRole as String]
+            ).filter { match in
+                let value = target.string(
+                    match.element,
+                    kAXValueAttribute as String
+                ) ?? ""
+                return value.hasPrefix("Noonmark-Diagnostics-")
+                    && value.hasSuffix(".noonmarkdiagnostics")
+            }
+            guard fields.count <= 1 else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "diagnostic save panel exposed duplicate filename fields"
+                )
+            }
+            return fields.first
+        }
+        try input.click(
+            frame: target.requiredFrame(
+                nameField,
+                description: "diagnostic filename field"
+            ),
+            clickCount: 3
+        )
+        try input.typeUnicode(basename)
+        _ = try target.wait(description: "exact diagnostic export filename") {
+            target.string(nameField.element, kAXValueAttribute as String)
+            == basename ? true : nil
+        }
+        let saveButton = try uniqueMatch(
+            in: savePanel,
+            roles: [kAXButtonRole as String],
+            titles: ["存储", "保存", "Save"],
+            identifier: nil,
+            description: "diagnostic save button"
+        )
+        try input.click(
+            frame: target.requiredFrame(
+                saveButton,
+                description: "diagnostic save button"
+            )
+        )
+
+        let _: Bool = try target.wait(
+            seconds: 15,
+            description: "diagnostic export file and success toast"
+        ) {
+            guard FileManager.default.fileExists(atPath: exportURL.path) else {
+                return nil
+            }
+            let successToast = target.windows().flatMap {
+                target.descendants(of: $0)
+            }.contains { match in
+                guard match.identifier == "app.toast" else { return false }
+                let text = match.title
+                    ?? target.string(match.element, kAXValueAttribute as String)
+                    ?? match.description
+                return text == "诊断资料已导出"
+                    || text == "Diagnostics exported"
+            }
+            return successToast ? true : nil
+        }
+        try ledger?.pass(
+            "diagnostic-export-ui",
+            "menu=physical preview=physical save_panel=physical "
+                + "path=selected toast=visible source=cghidEventTap"
+        )
+    }
+
+    private func requireDiagnosticExportDestination(_ url: URL) throws {
+        var status = stat()
+        let result = lstat(url.path, &status)
+        guard result == -1, errno == ENOENT else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic export destination already exists"
+            )
+        }
+        var parentStatus = stat()
+        guard lstat(url.deletingLastPathComponent().path, &parentStatus) == 0,
+              parentStatus.st_mode & S_IFMT == S_IFDIR
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic export parent is not a real directory"
+            )
+        }
+    }
+
+    private func uniqueDiagnosticWindow(
+        titleTexts: Set<String>,
+        buttonTitles: [Set<String>],
+        description: String
+    ) throws -> AXUIElement? {
+        var candidates: [AXUIElement] = []
+        for window in target.windows() {
+            let descendants = try target.strictDescendants(of: window)
+            let textValues = Set(descendants.compactMap { match in
+                match.title
+                    ?? target.string(match.element, kAXValueAttribute as String)
+                    ?? match.description
+            })
+            guard textValues.isDisjoint(with: titleTexts) == false else {
+                continue
+            }
+            var hasEveryButton = true
+            for titles in buttonTitles {
+                let matches = descendants.filter {
+                    $0.role == kAXButtonRole as String
+                        && titles.contains($0.title ?? "")
+                }
+                guard matches.count <= 1 else {
+                    throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                        "\(description) duplicated a required button"
+                    )
+                }
+                if matches.isEmpty { hasEveryButton = false }
+            }
+            if hasEveryButton { candidates.append(window) }
+        }
+        guard candidates.count <= 1 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "duplicate \(description) windows: count=\(candidates.count)"
+            )
+        }
+        return candidates.first
+    }
+
+    private func diagnosticWindowSummary() -> String {
+        target.windows().prefix(8).map { window in
+            let windowTitle = target.string(
+                window,
+                kAXTitleAttribute as String
+            ) ?? "nil"
+            let children = target.descendants(
+                of: window,
+                maximumDepth: 8,
+                maximumCount: 256
+            ).compactMap { match -> String? in
+                guard match.role == kAXButtonRole as String
+                    || match.role == kAXTextFieldRole as String
+                    || match.role == kAXStaticTextRole as String
+                else { return nil }
+                let value = target.string(
+                    match.element,
+                    kAXValueAttribute as String
+                )
+                let text = match.title ?? value ?? match.description ?? "nil"
+                return "\(match.role):\(text.prefix(160))"
+            }.prefix(32).joined(separator: ",")
+            return "window=\(windowTitle){\(children)}"
+        }.joined(separator: " | ")
+    }
+
+    private func revealMenuItemWithoutShortcut(
+        topLevelTitles: Set<String>,
+        itemTitles: Set<String>,
+        step: String
+    ) throws -> AXTarget.Match {
+        try target.waitUntilFrontmost()
+        let menuBar = try target.menuBar()
+        let topLevel = try uniqueMatch(
+            in: menuBar,
+            roles: [kAXMenuBarItemRole as String],
+            titles: topLevelTitles,
+            identifier: nil,
+            description: "top-level diagnostic menu"
+        )
+        try input.click(
+            frame: target.requiredFrame(
+                topLevel,
+                description: "top-level diagnostic menu"
+            )
+        )
+        let item = try target.wait(description: "diagnostic menu command") {
+            try uniqueMatchIfPresent(
+                in: menuBar,
+                roles: [kAXMenuItemRole as String],
+                titles: itemTitles,
+                identifier: nil,
+                description: "diagnostic menu command"
+            )
+        }
+        guard target.boolean(item.element, kAXEnabledAttribute as String) == true,
+              target.string(
+                  item.element,
+                  kAXMenuItemCmdCharAttribute as String
+              ) == nil
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic menu command was disabled or gained a shortcut"
+            )
+        }
+        try ledger?.pass(
+            step,
+            "title=\(item.title ?? "unknown") shortcut=none source=cghidEventTap"
+        )
+        return item
     }
 
     private func correlatedE2EWindow(

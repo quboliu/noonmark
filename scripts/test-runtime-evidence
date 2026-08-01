@@ -38,6 +38,8 @@ printf '%s\n' \
   '{"event":{"code":"mutationRejected","mutationContext":"note","mutationRejectionReason":"persistenceFailure"}}' \
   '{"event":{"code":"mutationRejected","mutationContext":"task","mutationRejectionReason":"persistenceFailure"}}' \
   '{"event":{"code":"mutationRejected","mutationContext":"note","mutationRejectionReason":"domainValidation"}}' \
+  '{"event":{"code":"mutationRejected","mutationContext":"task","mutationRejectionReason":"invalidNaturalDay"}}' \
+  '{"event":{"code":"mutationRejected","mutationContext":"task","mutationRejectionReason":"invalidNaturalDay"}}' \
   >"${structured_event_dir}/events-00.ndjson"
 if [[ "$(runtime_evidence_count_persistence_mutation_rejections \
   "$structured_event_dir")" != "2" ]] ||
@@ -46,9 +48,16 @@ if [[ "$(runtime_evidence_count_persistence_mutation_rejections \
   echo "runtime evidence miscounted structured persistence rejections" >&2
   exit 1
 fi
+if [[ "$(runtime_evidence_count_mutation_rejections \
+  "$structured_event_dir" invalidNaturalDay task)" != "2" ]] ||
+  [[ "$(runtime_evidence_count_mutation_rejections \
+    "$structured_event_dir" domainValidation note)" != "1" ]]; then
+  echo "runtime evidence miscounted a typed rejection reason" >&2
+  exit 1
+fi
 printf '{invalid-json}\n' >"${structured_event_dir}/events-01.ndjson"
-if runtime_evidence_count_persistence_mutation_rejections \
-  "$structured_event_dir" >/dev/null 2>&1; then
+if runtime_evidence_count_mutation_rejections \
+  "$structured_event_dir" invalidNaturalDay task >/dev/null 2>&1; then
   echo "runtime evidence accepted a malformed structured event log" >&2
   exit 1
 fi

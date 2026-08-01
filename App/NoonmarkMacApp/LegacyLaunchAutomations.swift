@@ -44,6 +44,10 @@ struct LaunchAutomation {
         append(ProviderE2EAutomation.fromCommandLine(), to: &actions)
         append(InteractiveDemoFixtureAutomation.fromCommandLine(), to: &actions)
         append(DataRootProcessLeaseE2EAutomation.fromCommandLine(), to: &actions)
+        append(
+            DiagnosticEvidenceClosureE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
         append(ZhulongStreamE2EAutomation.fromCommandLine(), to: &actions)
         append(ZhulongChatE2EAutomation.fromCommandLine(), to: &actions)
         append(

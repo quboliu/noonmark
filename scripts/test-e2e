@@ -76,6 +76,7 @@ english_helper_requested=0
 helper_requested=0
 active_native_command_helper_pid=""
 active_native_command_helper_token=""
+active_native_command_helper_mode=""
 active_helper_observer_pid=""
 active_helper_observer_parent_pid=""
 active_helper_observer_token=""
@@ -98,6 +99,7 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-date-picker
   artifacts/e2e-date-strip
   artifacts/e2e-detail-rail
+  artifacts/e2e-diagnostic-closure
   artifacts/e2e-english
   artifacts/e2e-english-native-command-surface
   artifacts/e2e-english-native-command-stress
@@ -230,6 +232,7 @@ only_mode_specs=(
   "NOONMARK_E2E_WORKSPACE_PRODUCTIVITY_ONLY:workspace-productivity"
   "NOONMARK_E2E_DATA_IMPORT_UI_ONLY:data-import-ui"
   "NOONMARK_E2E_DATA_IMPORT_INTEGRITY_ONLY:data-import-integrity"
+  "NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY:diagnostic-closure"
   "NOONMARK_E2E_DATE_PICKER_ONLY:date-picker"
   "NOONMARK_E2E_HORIZONTAL_PAGE_NAVIGATION_ONLY:horizontal-page-navigation"
   "NOONMARK_E2E_POOL_LIST_LAYOUT_ONLY:pool-list-layout"
@@ -367,7 +370,8 @@ if [[ "$screenshots_only" != "1" ]] && {
   (( only_mode_count == 0 )) ||
     [[ "$only_mode" == "native-commands" ]] ||
     [[ "$only_mode" == "english-native-commands" ]] ||
-    [[ "$only_mode" == "completion-sequence" ]];
+    [[ "$only_mode" == "completion-sequence" ]] ||
+    [[ "$only_mode" == "diagnostic-closure" ]];
 }; then
   helper_requested=1
 fi
@@ -481,8 +485,10 @@ native_command_helper_process_matches() {
   local token="$3"
   local command_line
 
-  if [[ ! "$pid" =~ ^[1-9][0-9]*$ || "$mode" != "e2e-menu-command" ||
-    ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]] ||
+    { [[ "$mode" != "e2e-menu-command" ]] &&
+      [[ "$mode" != "diagnostic-export" ]]; } ||
+    [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     return 2
   fi
   if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
@@ -604,7 +610,7 @@ cleanup_native_command_helper() {
     )"
     if native_command_helper_process_matches \
       "$active_native_command_helper_pid" \
-      "e2e-menu-command" \
+      "$active_native_command_helper_mode" \
       "$active_native_command_helper_token"; then
       kill -TERM "$active_native_command_helper_pid" 2>/dev/null || true
       for _ in {1..80}; do
@@ -631,6 +637,7 @@ cleanup_native_command_helper() {
   fi
   active_native_command_helper_pid=""
   active_native_command_helper_token=""
+  active_native_command_helper_mode=""
   active_helper_observer_pid=""
   active_helper_observer_parent_pid=""
   active_helper_observer_token=""
@@ -5457,11 +5464,7 @@ run_natural_day_rollover_probe() {
   local exercise_log="${rollover_dir}/exercise.log"
   local restart_log="${rollover_dir}/restart.log"
   local sqlite_probe
-  local wake_block_count
-  local manual_block_count
-  local retry_count
-  local backward_count
-  local forward_count
+  local natural_day_rejection_count
 
   rm -rf "$rollover_dir"
   mkdir -p "$rollover_dir"
@@ -5481,15 +5484,14 @@ run_natural_day_rollover_probe() {
     --e2e-natural-day-rollover-result-url "$PWD/$exercise_result" \
     --e2e-quit-after-automation
 
-  wake_block_count="$(grep -cF 'natural day blocked signal=wake applied=2026-07-05 candidate=2026-07-06' "$exercise_log" || true)"
-  manual_block_count="$(grep -cF 'natural day blocked signal=manual applied=2026-07-05 candidate=2026-07-06' "$exercise_log" || true)"
-  retry_count="$(grep -cF 'natural day reconciled signal=applicationBecameActive previous=2026-07-05 current=2026-07-06' "$exercise_log" || true)"
-  backward_count="$(grep -cF 'natural day reconciled signal=timeZoneChanged previous=2026-07-06 current=2026-07-05' "$exercise_log" || true)"
-  forward_count="$(grep -cF 'natural day reconciled signal=timeZoneChanged previous=2026-07-05 current=2026-07-06' "$exercise_log" || true)"
-  if [[ "$wake_block_count" -ne 1 || "$manual_block_count" -ne 1 ||
-    "$retry_count" -ne 1 || "$backward_count" -ne 1 || "$forward_count" -ne 1 ]]; then
-    echo "natural-day lifecycle log markers are incomplete or duplicated" >&2
-    cat "$exercise_log" >&2
+  natural_day_rejection_count="$(
+    runtime_evidence_count_mutation_rejections \
+      "${rollover_dir}/Diagnostics" \
+      invalidNaturalDay \
+      task
+  )"
+  if [[ "$natural_day_rejection_count" != "2" ]]; then
+    echo "natural-day structured rejection evidence was incomplete: $natural_day_rejection_count" >&2
     exit 1
   fi
 
@@ -8917,6 +8919,7 @@ dump_native_command_helper_evidence() {
 wait_for_native_command_helper_process_record() {
   local ledger_path="$1"
   local token="$2"
+  local expected_mode="${3:-e2e-menu-command}"
   local process_count process_detail mode_field pid_field token_field extra_field
   local helper_pid live_pids
 
@@ -8939,7 +8942,7 @@ wait_for_native_command_helper_process_record() {
       fi
       if [[ "$process_count" -eq 1 ]]; then
         read -r mode_field pid_field token_field extra_field <<<"$process_detail"
-        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=e2e-menu-command" ||
+        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=$expected_mode" ||
           "$pid_field" != helper_pid=* || "$token_field" != "launch_token=$token" ]]; then
           echo "native command Helper process record was invalid: $process_detail" >&2
           return 1
@@ -8947,7 +8950,7 @@ wait_for_native_command_helper_process_record() {
         helper_pid="${pid_field#helper_pid=}"
         if ! native_command_helper_process_matches \
           "$helper_pid" \
-          "e2e-menu-command" \
+          "$expected_mode" \
           "$token"; then
           echo "native command Helper executable, mode, or token identity did not match" >&2
           return 1
@@ -9127,6 +9130,7 @@ run_native_command_menu_helper() {
 
   active_native_command_helper_pid=""
   active_native_command_helper_token="$token"
+  active_native_command_helper_mode="e2e-menu-command"
 
   if ! /usr/bin/open \
     -n \
@@ -9231,6 +9235,199 @@ run_native_command_menu_helper() {
   fi
   active_native_command_helper_pid=""
   active_native_command_helper_token=""
+  active_native_command_helper_mode=""
+}
+
+run_diagnostic_export_helper() {
+  local target_pid="$1"
+  local target_app_path="$2"
+  local window_number="$3"
+  local window_title="$4"
+  local token="$5"
+  local database_path="$6"
+  local repository_lock_path="$7"
+  local export_path="$8"
+  local sentinels_path="$9"
+  local evidence_dir="${10}"
+  local ledger_path="$evidence_dir/ledger.tsv"
+  local stdout_path="$evidence_dir/stdout.log"
+  local stderr_path="$evidence_dir/stderr.log"
+  local launch_path="$evidence_dir/open.log"
+  local observer_log_path="$evidence_dir/exit-observer.log"
+  local observer_gate_path="$evidence_dir/exit-observer-gate.txt"
+  local exit_result_path="$evidence_dir/exit-status.txt"
+  local helper_pid=""
+  local live_pids=""
+
+  if [[ "$evidence_dir" != /* ]]; then
+    evidence_dir="$PWD/$evidence_dir"
+    ledger_path="$evidence_dir/ledger.tsv"
+    stdout_path="$evidence_dir/stdout.log"
+    stderr_path="$evidence_dir/stderr.log"
+    launch_path="$evidence_dir/open.log"
+    observer_log_path="$evidence_dir/exit-observer.log"
+    observer_gate_path="$evidence_dir/exit-observer-gate.txt"
+    exit_result_path="$evidence_dir/exit-status.txt"
+  fi
+  if [[ "$helper_requested" != "1" || ! -x "$helper_executable_path" ]] ||
+    ! codesign --verify --deep --strict "$helper_bundle" >/dev/null 2>&1; then
+    echo "diagnostic export lacks its verified signed Helper bundle" >&2
+    return 1
+  fi
+  if [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    ! "$target_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$window_number" =~ ^[1-9][0-9]*$ ||
+    "$target_app_path" != /* || "$database_path" != /* ||
+    "$repository_lock_path" != /* || "$export_path" != /* ||
+    "$sentinels_path" != /* || -e "$export_path" || -L "$export_path" ]]; then
+    echo "diagnostic export Helper received an invalid controlled boundary" >&2
+    return 1
+  fi
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if [[ -n "$live_pids" ]]; then
+    echo "diagnostic export refuses live Helper overlap: $live_pids" >&2
+    return 1
+  fi
+
+  mkdir -p "$evidence_dir"
+  rm -f \
+    "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path" \
+    "$observer_log_path" "$observer_gate_path" "$exit_result_path"
+  : >"$stdout_path"
+  : >"$stderr_path"
+  : >"$launch_path"
+  : >"$observer_log_path"
+  active_native_command_helper_pid=""
+  active_native_command_helper_token="$token"
+  active_native_command_helper_mode="diagnostic-export"
+
+  if ! /usr/bin/open \
+    -n \
+    -g \
+    --stdout "$stdout_path" \
+    --stderr "$stderr_path" \
+    "$PWD/$helper_bundle" \
+    --args \
+    --mode diagnostic-export \
+    --ledger "$ledger_path" \
+    --launch-token "$token" \
+    --start-gate "$observer_gate_path" \
+    --pid "$target_pid" \
+    --app-path "$target_app_path" \
+    --window-number "$window_number" \
+    --window-title "$window_title" \
+    --target-profile e2e \
+    --database "$database_path" \
+    --repository-lock "$repository_lock_path" \
+    --export-path "$export_path" \
+    --sentinels "$sentinels_path" \
+    >"$launch_path" 2>&1; then
+    echo "LaunchServices rejected the diagnostic export Helper" >&2
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path"
+    return 1
+  fi
+  if [[ -s "$launch_path" ]] ||
+    ! wait_for_native_command_helper_process_record \
+      "$ledger_path" \
+      "$token" \
+      "diagnostic-export"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path"
+    return 1
+  fi
+  helper_pid="$NATIVE_COMMAND_HELPER_PID"
+  active_native_command_helper_pid="$helper_pid"
+  if ! start_helper_exit_observer_process \
+    "diagnostic-export" \
+    "$helper_pid" \
+    "$token" \
+    "$observer_gate_path" \
+    "$exit_result_path" \
+    "$observer_log_path" \
+    45 \
+    "$repo_root/scripts/dmg-install-exit-observer.swift" ||
+    ! wait_for_helper_observer_gate \
+      "diagnostic-export" \
+      "$helper_pid" \
+      "$token" \
+      "$observer_gate_path" \
+      "$exit_result_path" ||
+    ! wait_for_helper_exit_result \
+      "$helper_pid" \
+      "diagnostic-export" \
+      "$token" \
+      "$exit_result_path"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stderr_path" "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  if ! awk -v pid="$helper_pid" -v token="$token" '
+    NR == 1 { valid += ($0 == "status=PASS") }
+    NR == 2 { valid += ($0 == "mode=diagnostic-export") }
+    NR == 3 { valid += ($0 == "helper_pid=" pid) }
+    NR == 4 { valid += ($0 == "launch_token=" token) }
+    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
+    NR == 6 { valid += ($0 == "raw_status=0") }
+    NR == 7 { valid += ($0 == "normal_exit=true") }
+    NR == 8 { valid += ($0 == "exit_code=0") }
+    NR == 9 { valid += ($0 == "signal=0") }
+    END { exit !(NR == 9 && valid == 9) }
+  ' "$exit_result_path"; then
+    echo "diagnostic export Helper did not expose one normal kernel exit" >&2
+    return 1
+  fi
+  if [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
+    [[ -s "$stderr_path" || -s "$launch_path" || -s "$observer_log_path" ]] ||
+    grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1 ||
+    ! awk -F $'\t' \
+      -v pid="$helper_pid" \
+      -v token="$token" \
+      -v app="$target_app_path" '
+        BEGIN {
+          expected[1] = "arguments"
+          expected[2] = "process"
+          expected[3] = "exit-observer"
+          expected[4] = "permissions"
+          expected[5] = "target"
+          expected[6] = "diagnostic-locks-before-export"
+          expected[7] = "diagnostic-window"
+          expected[8] = "diagnostic-menu"
+          expected[9] = "diagnostic-preview"
+          expected[10] = "diagnostic-export-ui"
+          expected[11] = "diagnostic-locks-after-export"
+          expected[12] = "diagnostic-package"
+          expected[13] = "complete"
+        }
+        NF != 4 || $2 != "PASS" || $3 != expected[NR] { exit 1 }
+        NR == 2 && $4 != "mode=diagnostic-export helper_pid=" pid " launch_token=" token { exit 1 }
+        NR == 5 && index($4, "bundle=app.noonmark.mac.e2e path=" app " frontmost=true windows=") != 1 { exit 1 }
+        NR == 6 && $4 != "sqlite_writer=busy repository_flock=would-block held=true" { exit 1 }
+        NR == 11 && $4 != "sqlite_writer=busy repository_flock=would-block held=true" { exit 1 }
+        NR == 12 && index($4, "schema=1 bytes=") != 1 { exit 1 }
+        NR == 13 && $4 != "mode=diagnostic-export" { exit 1 }
+        END { exit !(NR == 13) }
+      ' "$ledger_path"; then
+    echo "diagnostic export Helper evidence was incomplete or out of order" >&2
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path" \
+      "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  for _ in {1..160}; do
+    if ! kill -0 "$helper_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if kill -0 "$helper_pid" 2>/dev/null || [[ -n "$live_pids" ]]; then
+    echo "diagnostic export Helper remained after verified exit" >&2
+    return 1
+  fi
+  active_native_command_helper_pid=""
+  active_native_command_helper_token=""
+  active_native_command_helper_mode=""
 }
 
 run_native_command_surface_exercise() {
@@ -9347,6 +9544,342 @@ run_native_command_surface_exercise() {
   assert_clean_app_log "$label" "$log"
 }
 
+diagnostic_closure_app_process_matches() {
+  local pid="$1"
+  local token="$2"
+  local mode="$3"
+  local command_line=""
+
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ||
+    ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    "$mode" != "seed-failure" && "$mode" != "stall" && "$mode" != "restart" ]]; then
+    return 2
+  fi
+  if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
+    return 1
+  fi
+  [[ "$command_line" == "$PWD/$app_executable_path "* ]] &&
+    [[ " $command_line " == *" --e2e-diagnostic-evidence-$mode "* ]] &&
+    [[ " $command_line " == *" --e2e-diagnostic-evidence-launch-token $token "* ]] &&
+    [[ " $command_line " == *" --data-url $PWD/artifacts/e2e-diagnostic-closure/Noonmark.sqlite "* ]] &&
+    [[ " $command_line " == *" --sync-folder-url $PWD/artifacts/e2e-diagnostic-closure/SyncRepository "* ]]
+}
+
+run_diagnostic_evidence_closure_probe() {
+  local closure_dir="artifacts/e2e-diagnostic-closure"
+  local database="$PWD/$closure_dir/Noonmark.sqlite"
+  local sync_root="$PWD/$closure_dir/SyncRepository"
+  local state="$PWD/$closure_dir/state.json"
+  local seed_result="$PWD/$closure_dir/seed-result.txt"
+  local stall_result="$PWD/$closure_dir/stall-result.txt"
+  local restart_result="$PWD/$closure_dir/restart-result.txt"
+  local export_path="$PWD/$closure_dir/Noonmark-Diagnostic-Closure.noonmarkdiagnostics"
+  local sentinels="$PWD/$closure_dir/privacy-sentinels.txt"
+  local lock_holder_source="$PWD/scripts/e2e-repository-lock-holder.swift"
+  local lock_holder_binary="$PWD/$closure_dir/repository-lock-holder"
+  local lock_holder_ready="$PWD/$closure_dir/repository-lock-holder.ready"
+  local lock_holder_log="$PWD/$closure_dir/repository-lock-holder.log"
+  local repository_lock="$sync_root/.repository.lock"
+  local window_title="晷迹 · Day Todo — 7月5日"
+  local seed_token stall_token restart_token helper_token lock_token
+  local seed_pid stall_pid restart_pid lock_pid window_number
+  local seed_status=0 stall_status=0 restart_status=0 lock_status=0
+  local failed_operation_id failed_incident_id stalled_operation_id
+  local mutation_incident_id
+
+  rm -rf "$closure_dir"
+  mkdir -p "$closure_dir"
+  printf 'this path is intentionally not a directory\n' >"$sync_root"
+  seed_token="$(uuidgen)"
+  "$PWD/$app_executable_path" \
+    --data-url "$database" \
+    --sync-folder-url "$sync_root" \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-diagnostic-evidence-seed-failure \
+    --e2e-diagnostic-evidence-state-url "$state" \
+    --e2e-diagnostic-evidence-result-url "$seed_result" \
+    --e2e-diagnostic-evidence-launch-token "$seed_token" \
+    >"$closure_dir/seed-app.log" 2>&1 &
+  seed_pid=$!
+  if ! diagnostic_closure_app_process_matches \
+    "$seed_pid" "$seed_token" "seed-failure"; then
+    echo "diagnostic seed App identity did not match its exact launch" >&2
+    return 1
+  fi
+  for _ in {1..600}; do
+    if [[ -f "$seed_result" ]] || ! kill -0 "$seed_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ ! -f "$seed_result" ||
+    "$(<"$seed_result")" != "ok: seed failure persisted" ]]; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$seed_pid" 2>/dev/null || true
+    echo "diagnostic seed failure session did not converge" >&2
+    [[ -f "$seed_result" ]] && cat "$seed_result" >&2
+    cat "$closure_dir/seed-app.log" >&2
+    return 1
+  fi
+  if wait "$seed_pid"; then seed_status=0; else seed_status=$?; fi
+  if [[ "$seed_status" != "0" || ! -s "$state" ]]; then
+    echo "diagnostic seed App did not exit cleanly with durable state" >&2
+    return 1
+  fi
+
+  rm -f "$sync_root"
+  mkdir -p "$sync_root"
+  xcrun swiftc "$lock_holder_source" -o "$lock_holder_binary"
+  lock_token="$(uuidgen)"
+  "$lock_holder_binary" \
+    "$repository_lock" \
+    "$lock_holder_ready" \
+    "$lock_token" \
+    >"$lock_holder_log" 2>&1 &
+  lock_pid=$!
+  for _ in {1..200}; do
+    if [[ -f "$lock_holder_ready" ]] || ! kill -0 "$lock_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  if [[ ! -f "$lock_holder_ready" ]] ||
+    ! awk -v pid="$lock_pid" -v token="$lock_token" -v lock="$repository_lock" '
+      NR == 1 { valid += ($0 == "status=ready") }
+      NR == 2 { valid += ($0 == "pid=" pid) }
+      NR == 3 { valid += ($0 == "token=" token) }
+      NR == 4 { valid += ($0 == "lock=" lock) }
+      END { exit !(NR == 4 && valid == 4) }
+    ' "$lock_holder_ready" ||
+    [[ "$(ps -ww -p "$lock_pid" -o command= 2>/dev/null)" != \
+      "$lock_holder_binary $repository_lock $lock_holder_ready $lock_token" ]]; then
+    kill -TERM "$lock_pid" 2>/dev/null || true
+    wait "$lock_pid" 2>/dev/null || true
+    echo "external sync-lock holder did not publish its exact identity" >&2
+    cat "$lock_holder_log" >&2
+    return 1
+  fi
+
+  stall_token="$(uuidgen)"
+  "$PWD/$app_executable_path" \
+    --data-url "$database" \
+    --sync-folder-url "$sync_root" \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-diagnostic-evidence-stall \
+    --e2e-diagnostic-evidence-state-url "$state" \
+    --e2e-diagnostic-evidence-result-url "$stall_result" \
+    --e2e-diagnostic-evidence-launch-token "$stall_token" \
+    >"$closure_dir/stall-app.log" 2>&1 &
+  stall_pid=$!
+  if ! diagnostic_closure_app_process_matches \
+    "$stall_pid" "$stall_token" "stall"; then
+    echo "diagnostic stalled App identity did not match its exact launch" >&2
+    return 1
+  fi
+  for _ in {1..600}; do
+    if [[ -f "$stall_result" ]] || ! kill -0 "$stall_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ ! -f "$stall_result" ||
+    "$(<"$stall_result")" != "ready: stalled sync and rejected mutation" ]] ||
+    ! diagnostic_closure_app_process_matches \
+      "$stall_pid" "$stall_token" "stall"; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    kill -TERM "$lock_pid" 2>/dev/null || true
+    wait "$stall_pid" 2>/dev/null || true
+    wait "$lock_pid" 2>/dev/null || true
+    echo "diagnostic stalled App did not reach its durable interruption boundary" >&2
+    [[ -f "$stall_result" ]] && cat "$stall_result" >&2
+    cat "$closure_dir/stall-app.log" >&2
+    return 1
+  fi
+  if ! kill -KILL "$stall_pid"; then
+    echo "could not interrupt the exact diagnostic E2E App" >&2
+    return 1
+  fi
+  if wait "$stall_pid"; then stall_status=0; else stall_status=$?; fi
+  if [[ "$stall_status" != "137" ]]; then
+    echo "diagnostic E2E interruption was not exact SIGKILL: $stall_status" >&2
+    return 1
+  fi
+  if [[ "$(ps -ww -p "$lock_pid" -o command= 2>/dev/null)" != \
+    "$lock_holder_binary $repository_lock $lock_holder_ready $lock_token" ]]; then
+    echo "refusing to release an unverified repository lock holder" >&2
+    return 1
+  fi
+  kill -TERM "$lock_pid"
+  if wait "$lock_pid"; then lock_status=0; else lock_status=$?; fi
+  if [[ "$lock_status" != "143" && "$lock_status" != "0" ]]; then
+    echo "repository lock holder exited unexpectedly: $lock_status" >&2
+    return 1
+  fi
+
+  failed_operation_id="$(jq -er '.failedOperationID' "$state")"
+  failed_incident_id="$(jq -er '.failedIncidentID' "$state")"
+  stalled_operation_id="$(jq -er '.stalledOperationID' "$state")"
+  mutation_incident_id="$(jq -er '.mutationIncidentID' "$state")"
+  if [[ ! "$failed_operation_id" =~ ^[0-9A-F-]{36}$ ||
+    ! "$failed_incident_id" =~ ^[0-9A-F-]{36}$ ||
+    ! "$stalled_operation_id" =~ ^[0-9A-F-]{36}$ ||
+    ! "$mutation_incident_id" =~ ^[0-9A-F-]{36}$ ||
+    "$failed_operation_id" == "$stalled_operation_id" ||
+    "$failed_incident_id" == "$mutation_incident_id" ]]; then
+    echo "diagnostic closure state lost distinct exact correlations" >&2
+    return 1
+  fi
+
+  printf '%s\n' \
+    'E2E_PRIVATE_TASK_CONTENT_MUST_NOT_ENTER_DIAGNOSTICS_8D31A6' \
+    "$database" \
+    "$sync_root" \
+    'sk-private-e2e-credential-9927' \
+    'diagnostic-private-person@example.test' \
+    'https://secret.example.test/private/path?token=9927' \
+    '192.0.2.147' \
+    'RUUyRV9QUklWQVRFX0JBU0U2NF9TRU5USU5FTA==' \
+    >"$sentinels"
+  restart_token="$(uuidgen)"
+  "$PWD/$app_executable_path" \
+    --data-url "$database" \
+    --sync-folder-url "$sync_root" \
+    --e2e-fixed-instant 2026-07-05T16:00:00Z \
+    --e2e-fixed-time-zone America/New_York \
+    --e2e-fixed-locale zh_Hans_SG \
+    --e2e-diagnostic-evidence-restart \
+    --e2e-diagnostic-evidence-state-url "$state" \
+    --e2e-diagnostic-evidence-result-url "$restart_result" \
+    --e2e-diagnostic-evidence-export-url "$export_path" \
+    --e2e-diagnostic-evidence-launch-token "$restart_token" \
+    >"$closure_dir/restart-app.log" 2>&1 &
+  restart_pid=$!
+  if ! diagnostic_closure_app_process_matches \
+    "$restart_pid" "$restart_token" "restart"; then
+    echo "diagnostic restart App identity did not match its exact launch" >&2
+    return 1
+  fi
+  for _ in {1..600}; do
+    if [[ -f "$restart_result" ]] || ! kill -0 "$restart_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ ! -f "$restart_result" ||
+    "$(<"$restart_result")" != "ready: restart evidence converged" ]]; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$restart_pid" 2>/dev/null || true
+    echo "diagnostic restart App did not converge before UI export" >&2
+    [[ -f "$restart_result" ]] && cat "$restart_result" >&2
+    cat "$closure_dir/restart-app.log" >&2
+    return 1
+  fi
+  window_number="$(
+    find_window_id \
+      "$window_title" \
+      "$expected_window_width" \
+      "$expected_window_height" \
+      "$restart_pid"
+  )"
+  if [[ ! "$window_number" =~ ^[1-9][0-9]*$ ]] ||
+    ! native_command_app_ready_identity_matches \
+      "$restart_pid" \
+      "$PWD/$app_path" \
+      "$window_number" \
+      "$window_title"; then
+    echo "diagnostic restart main-window identity did not match" >&2
+    dump_visible_windows >&2
+    return 1
+  fi
+  helper_token="$(uuidgen)"
+  if ! run_diagnostic_export_helper \
+    "$restart_pid" \
+    "$PWD/$app_path" \
+    "$window_number" \
+    "$window_title" \
+    "$helper_token" \
+    "$database" \
+    "$repository_lock" \
+    "$export_path" \
+    "$sentinels" \
+    "$PWD/$closure_dir/helper"; then
+    terminate_e2e_app >/dev/null 2>&1 || true
+    wait "$restart_pid" 2>/dev/null || true
+    echo "diagnostic export UI/lock Helper failed" >&2
+    return 1
+  fi
+  for _ in {1..200}; do
+    if [[ "$(<"$restart_result")" == \
+      "ok: restarted evidence exported through UI" ]] ||
+      ! kill -0 "$restart_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$(<"$restart_result")" != \
+    "ok: restarted evidence exported through UI" ]]; then
+    echo "diagnostic restart App rejected its UI export" >&2
+    cat "$restart_result" >&2
+    return 1
+  fi
+  if wait "$restart_pid"; then restart_status=0; else restart_status=$?; fi
+  if [[ "$restart_status" != "0" ]]; then
+    echo "diagnostic restart App did not terminate cleanly: $restart_status" >&2
+    return 1
+  fi
+  if ! jq -e \
+    --arg failed_operation "$failed_operation_id" \
+    --arg failed_incident "$failed_incident_id" \
+    --arg stalled_operation "$stalled_operation_id" \
+    --arg mutation_incident "$mutation_incident_id" '
+      ([.operationCapsules[] | select(
+        .operationID.rawValue == $failed_operation
+        and .incidentID.rawValue == $failed_incident
+        and .kind == "localFirstSync"
+        and .endpoint == "localFolder"
+        and .outcome == "failed"
+      )] | length) == 1
+      and ([.operationCapsules[] | select(
+        .operationID.rawValue == $stalled_operation
+        and .kind == "localFirstSync"
+        and .lastStage == "transportLockWait"
+        and .outcome == "interrupted"
+      )] | length) == 1
+      and ([.records[] | select(
+        .event.code == "previousSessionInterrupted"
+        and .event.operationID.rawValue == $stalled_operation
+        and .event.stage == "transportLockWait"
+      )] | length) == 1
+      and ([.records[] | select(
+        .event.code == "mutationRejected"
+        and .event.operationID.rawValue == $stalled_operation
+        and .event.incidentID.rawValue == $mutation_incident
+        and .event.mutationContext == "task"
+        and .event.mutationRejectionReason == "exclusiveOperationInProgress"
+      )] | length) == 1
+      and ([.records[] | select(
+        .event.code == "persistedSyncFailureLoaded"
+        and .event.operationID.rawValue == $failed_operation
+        and .event.incidentID.rawValue == $failed_incident
+      )] | length) >= 1
+    ' "$export_path" >/dev/null; then
+    echo "diagnostic export lost its exact cross-session evidence graph" >&2
+    return 1
+  fi
+  if [[ "$(stat -f '%z' "$export_path")" -gt 8388608 ]] ||
+    grep -F -f "$sentinels" "$export_path" >/dev/null 2>&1; then
+    echo "diagnostic export violated capacity or privacy" >&2
+    return 1
+  fi
+  assert_clean_app_log "diagnostic seed App" "$closure_dir/seed-app.log"
+  assert_clean_app_log "diagnostic restart App" "$closure_dir/restart-app.log"
+  echo "E2E diagnostic closure: failed-sync -> lock-wait -> rejected-mutation -> SIGKILL -> restart -> locked UI export"
+}
+
 run_terminating_ui_probe() {
   local label="$1"
   local result="$2"
@@ -9404,6 +9937,11 @@ run_terminating_ui_probe() {
   fi
   assert_clean_app_log "$label" "$log"
 }
+
+if [[ "${NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY:-0}" == "1" ]]; then
+  run_diagnostic_evidence_closure_probe
+  exit 0
+fi
 
 if [[ "${NOONMARK_E2E_AUTOMATIC_CLASSIFICATION_ONLY:-0}" == "1" ]]; then
   run_automatic_classification_probe
@@ -9779,6 +10317,8 @@ if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
 fi
 
 terminate_e2e_app
+
+run_diagnostic_evidence_closure_probe
 
 run_task_note_persistence_probe
 

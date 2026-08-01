@@ -44,7 +44,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "NoonmarkDMGInstallHarness",
-            path: "Tools/NoonmarkDMGInstallHarness"
+            path: "Tools/NoonmarkDMGInstallHarness",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .executableTarget(
             name: "NoonmarkAIProviderLiveSmoke",

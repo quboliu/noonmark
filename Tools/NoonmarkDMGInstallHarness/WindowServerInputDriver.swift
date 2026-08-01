@@ -64,11 +64,12 @@ final class WindowServerInputDriver {
         userData = Int64.random(in: 1 ... Int64.max)
     }
 
-    func click(frame: CGRect) throws {
+    func click(frame: CGRect, clickCount: Int = 1) throws {
         guard frame.isNull == false,
               frame.isInfinite == false,
               frame.width >= 2,
-              frame.height >= 2
+              frame.height >= 2,
+              (1 ... 3).contains(clickCount)
         else {
             throw Failure.eventConstructionFailed("click for invalid AX frame \(frame)")
         }
@@ -83,53 +84,60 @@ final class WindowServerInputDriver {
             type: .mouseMoved,
             at: point,
             gestureNumber: gestureNumber,
-            pressure: 0
+            pressure: 0,
+            clickCount: 0
         )
         guard waitForPointer(at: point) else {
             throw Failure.pointerDidNotSettle(point)
         }
 
-        var mouseDownWasPosted = false
-        do {
-            try postMouse(
-                type: .leftMouseDown,
-                at: point,
-                gestureNumber: gestureNumber,
-                pressure: 1
-            )
-            mouseDownWasPosted = true
-            guard waitForButtonState(expectedDown: true) else {
-                throw Failure.buttonStateDidNotChange(expectedDown: true)
-            }
-            try postMouse(
-                type: .leftMouseUp,
-                at: point,
-                gestureNumber: gestureNumber,
-                pressure: 0
-            )
-            guard waitForButtonState(expectedDown: false) else {
-                throw Failure.buttonStateDidNotChange(expectedDown: false)
-            }
-        } catch {
-            let originalError = error
-            guard mouseDownWasPosted else { throw originalError }
+        for clickIndex in 1 ... clickCount {
+            var mouseDownWasPosted = false
             do {
+                try postMouse(
+                    type: .leftMouseDown,
+                    at: point,
+                    gestureNumber: gestureNumber,
+                    pressure: 1,
+                    clickCount: Int64(clickIndex)
+                )
+                mouseDownWasPosted = true
+                guard waitForButtonState(expectedDown: true) else {
+                    throw Failure.buttonStateDidNotChange(expectedDown: true)
+                }
                 try postMouse(
                     type: .leftMouseUp,
                     at: point,
                     gestureNumber: gestureNumber,
-                    pressure: 0
+                    pressure: 0,
+                    clickCount: Int64(clickIndex)
                 )
                 guard waitForButtonState(expectedDown: false) else {
                     throw Failure.buttonStateDidNotChange(expectedDown: false)
                 }
+                if clickIndex < clickCount { usleep(30000) }
             } catch {
-                throw Failure.releaseCleanupFailed(
-                    original: originalError.localizedDescription,
-                    cleanup: error.localizedDescription
-                )
+                let originalError = error
+                guard mouseDownWasPosted else { throw originalError }
+                do {
+                    try postMouse(
+                        type: .leftMouseUp,
+                        at: point,
+                        gestureNumber: gestureNumber,
+                        pressure: 0,
+                        clickCount: Int64(clickIndex)
+                    )
+                    guard waitForButtonState(expectedDown: false) else {
+                        throw Failure.buttonStateDidNotChange(expectedDown: false)
+                    }
+                } catch {
+                    throw Failure.releaseCleanupFailed(
+                        original: originalError.localizedDescription,
+                        cleanup: error.localizedDescription
+                    )
+                }
+                throw originalError
             }
-            throw originalError
         }
     }
 
@@ -158,6 +166,10 @@ final class WindowServerInputDriver {
                     unicodeString: buffer.baseAddress
                 )
             }
+            // A combined-session source inherits shortcut modifier flags.
+            // Text entry must explicitly clear them after Command/Shift keys.
+            keyDown.flags = []
+            keyUp.flags = []
             keyDown.setIntegerValueField(.eventSourceUserData, value: userData)
             keyUp.setIntegerValueField(.eventSourceUserData, value: userData)
             keyDown.post(tap: .cghidEventTap)
@@ -165,6 +177,31 @@ final class WindowServerInputDriver {
             keyUp.post(tap: .cghidEventTap)
             usleep(8000)
         }
+    }
+
+    func keyStroke(
+        virtualKey: CGKeyCode,
+        flags: CGEventFlags = []
+    ) throws {
+        guard let keyDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: virtualKey,
+            keyDown: true
+        ), let keyUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: virtualKey,
+            keyDown: false
+        ) else {
+            throw Failure.eventConstructionFailed("keyboard shortcut")
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.setIntegerValueField(.eventSourceUserData, value: userData)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: userData)
+        keyDown.post(tap: .cghidEventTap)
+        usleep(25000)
+        keyUp.post(tap: .cghidEventTap)
+        usleep(25000)
     }
 
     private var isLeftButtonDown: Bool {
@@ -179,7 +216,8 @@ final class WindowServerInputDriver {
         type: CGEventType,
         at point: CGPoint,
         gestureNumber: Int64,
-        pressure: Double
+        pressure: Double,
+        clickCount: Int64
     ) throws {
         guard let event = CGEvent(
             mouseEventSource: source,
@@ -194,7 +232,7 @@ final class WindowServerInputDriver {
         event.setIntegerValueField(.mouseEventNumber, value: gestureNumber)
         event.setIntegerValueField(
             .mouseEventClickState,
-            value: type == .mouseMoved ? 0 : 1
+            value: type == .mouseMoved ? 0 : clickCount
         )
         event.setDoubleValueField(.mouseEventPressure, value: pressure)
         event.post(tap: .cghidEventTap)

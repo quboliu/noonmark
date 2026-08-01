@@ -196,15 +196,16 @@ runtime_evidence_assert_clean_logs() {
   done
 }
 
-runtime_evidence_count_persistence_mutation_rejections() {
+runtime_evidence_count_mutation_rejections() {
   local diagnostic_dir="${1:-}"
-  local expected_context="${2:-}"
+  local expected_reason="${2:-}"
+  local expected_context="${3:-}"
   local invalid_entry
   local count
   local event_files=()
 
-  if [[ -z "$diagnostic_dir" ]]; then
-    echo "structured diagnostic directory is required" >&2
+  if [[ -z "$diagnostic_dir" || -z "$expected_reason" ]]; then
+    echo "structured diagnostic directory and rejection reason are required" >&2
     return 1
   fi
   if [[ ! -e "$diagnostic_dir" && ! -L "$diagnostic_dir" ]]; then
@@ -251,12 +252,13 @@ runtime_evidence_count_persistence_mutation_rejections() {
   if ! count="$(
     /usr/bin/jq \
       -s \
+      --arg expected_reason "$expected_reason" \
       --arg expected_context "$expected_context" \
       '[.[]
         | select((.event | type) == "object")
         | select(
             .event.code == "mutationRejected"
-            and .event.mutationRejectionReason == "persistenceFailure"
+            and .event.mutationRejectionReason == $expected_reason
             and (
               $expected_context == ""
               or .event.mutationContext == $expected_context
@@ -273,6 +275,13 @@ runtime_evidence_count_persistence_mutation_rejections() {
     return 1
   fi
   printf '%s\n' "$count"
+}
+
+runtime_evidence_count_persistence_mutation_rejections() {
+  runtime_evidence_count_mutation_rejections \
+    "${1:-}" \
+    "persistenceFailure" \
+    "${2:-}"
 }
 
 runtime_evidence_snapshot_diagnostics() {

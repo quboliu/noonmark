@@ -43,7 +43,8 @@ do {
               "exercise",
               "restart",
               "e2e-inspect",
-              "e2e-menu-command"
+              "e2e-menu-command",
+              "diagnostic-export"
           ].contains(mode),
           let rawPID = environment["NOONMARK_HELPER_PID"],
           let pid = UInt64(rawPID), pid > 0,

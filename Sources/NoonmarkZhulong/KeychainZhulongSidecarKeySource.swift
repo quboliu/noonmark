@@ -15,7 +15,7 @@ public struct KeychainZhulongSidecarKeySource: ZhulongSidecarKeySource {
     public let account: String
 
     public init(
-        service: String = Self.defaultService,
+        service: String,
         account: String = Self.defaultAccount
     ) {
         self.service = service

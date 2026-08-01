@@ -412,9 +412,7 @@ enum ZhulongProviderKeychain {
     private static let accountSuffix = "-api-key"
 
     static var serviceIdentifier: String {
-        Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"
-            ? "app.noonmark.zhulong.provider.e2e"
-            : "app.noonmark.zhulong.provider"
+        AppLaunchArguments.validatedRuntimeProfile.providerKeychainService
     }
 
     static func keyRef(for executionRevision: UUID) -> String {

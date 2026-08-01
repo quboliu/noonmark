@@ -226,6 +226,8 @@ production_data="$fixture_home/Library/Application Support/noonmark"
 development_data="$fixture_home/Library/Application Support/noonmark-development"
 production_icloud="$fixture_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark/SyncRepository"
 development_icloud="$fixture_home/Library/Mobile Documents/com~apple~CloudDocs/Noonmark-Development/SyncRepository"
+development_icloud_profile_root="${development_icloud%/SyncRepository}"
+development_icloud_live="$development_icloud_profile_root/LiveTests/stale-repository"
 production_cache="$fixture_home/Library/Caches/app.noonmark.mac"
 development_cache="$fixture_home/Library/Caches/app.noonmark.mac.development"
 production_state="$fixture_home/Library/Saved Application State/app.noonmark.mac.savedState"
@@ -236,6 +238,7 @@ mkdir -p \
   "$development_data" \
   "$production_icloud" \
   "$development_icloud" \
+  "$development_icloud_live" \
   "$production_cache" \
   "$development_cache" \
   "$production_state" \
@@ -245,6 +248,7 @@ touch \
   "$development_data/development-data" \
   "$production_icloud/formal-sync-record" \
   "$development_icloud/development-sync-record" \
+  "$development_icloud_live/crashed-live-test-record" \
   "$production_cache/formal-cache" \
   "$development_cache/development-cache" \
   "$production_state/formal-state" \
@@ -260,7 +264,7 @@ if [[ "$reset_status" -ne 0 ]]; then
 fi
 for selected_path in \
   "$development_data" \
-  "$development_icloud" \
+  "$development_icloud_profile_root" \
   "$development_cache" \
   "$development_state" \
   "$defaults_state/app.noonmark.mac.development"; do
@@ -418,6 +422,18 @@ require_literal "$repo_root/scripts/build-mac-app" 'profile="${2:-}"'
 require_literal "$repo_root/scripts/build-mac-app" \
   'NOONMARK_PRODUCTION_BUILD_CONTEXT'
 forbid_literal "$repo_root/scripts/build-mac-app" 'profile="${2:-app}"'
+forbid_literal "$repo_root/Sources/NoonmarkSync/ICloudDriveSyncTransport.swift" \
+  'repositoryName: String = ICloudDriveSyncTransport.defaultRepositoryName'
+forbid_literal "$repo_root/Sources/NoonmarkSync/CloudKitSyncEngineTransport.swift" \
+  'zoneName: String = CloudKitSyncEngineTransport.defaultZoneName'
+forbid_literal "$repo_root/Sources/NoonmarkSync/CloudKitSyncLaunchConfiguration.swift" \
+  '?? CloudKitSyncEngineTransport.defaultZoneName'
+forbid_literal "$repo_root/Sources/NoonmarkZhulong/KeychainZhulongSidecarKeySource.swift" \
+  'service: String = Self.defaultService'
+require_literal "$repo_root/Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift" \
+  'Noonmark-E2E/LiveTests/'
+forbid_literal "$repo_root/Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift" \
+  'NoonmarkLiveTests/'
 for build_only_script in \
   "$repo_root/scripts/build-mac-app" \
   "$repo_root/scripts/build-dmg-install-harness" \
@@ -430,6 +446,9 @@ require_literal "$repo_root/scripts/package-dmg" \
   'scripts/build-mac-app "$configuration" app'
 require_literal "$repo_root/Makefile" \
   $'build-app:\n\tscripts/build-mac-app debug development'
+require_literal "$repo_root/Makefile" \
+  $'build:\n\tscripts/test-app-icon\n\tswift build'
+forbid_literal "$repo_root/Makefile" 'RESET_PROFILE ?='
 require_literal "$repo_root/scripts/run-mac-app" \
   'scripts/reset-dev-data development'
 require_literal "$repo_root/scripts/run-mac-app" \
@@ -463,9 +482,8 @@ while IFS='|' read -r relative_path literal; do
   [[ -n "$relative_path" ]] || continue
   require_literal "$repo_root/$relative_path" "$literal"
 done <<'CALLERS'
-Makefile|RESET_PROFILE ?= development
+Makefile|test -n "$(RESET_PROFILE)"
 Makefile|scripts/reset-dev-data "$(RESET_PROFILE)"
-Makefile|scripts/reset-dev-data development
 Makefile|scripts/reset-dev-data audit
 scripts/check|scripts/reset-dev-data audit
 scripts/check|scripts/test-runtime-profile-isolation

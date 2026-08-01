@@ -10,10 +10,12 @@ public final class AppleOnlyDiagnosticRecorder: DiagnosticRecording, Sendable {
 
     public init(
         sessionID: DiagnosticSessionID = DiagnosticSessionID(),
-        subsystem: String = Bundle.main.bundleIdentifier ?? "app.noonmark.mac"
+        subsystem: String? = nil
     ) {
         self.sessionID = sessionID
-        logger = AppleDiagnosticLogger(subsystem: subsystem)
+        logger = AppleDiagnosticLogger(
+            subsystem: subsystem ?? DiagnosticSubsystemIdentity.current
+        )
     }
 
     public func record(_ event: EvidenceEvent, at timestamp: Date) {

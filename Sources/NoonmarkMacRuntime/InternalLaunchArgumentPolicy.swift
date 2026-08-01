@@ -1,17 +1,21 @@
-/// Defines the only application identity allowed to consume Noonmark's
-/// internal launch arguments.
+/// Defines the application identities allowed to consume Noonmark's internal
+/// launch arguments.
 ///
 /// Build configuration is deliberately irrelevant: both Debug and Release
 /// production bundles receive only their executable argument. This keeps test
-/// controls unavailable unless the process is packaged with the dedicated E2E
-/// bundle identity.
+/// controls unavailable unless the process is packaged with an explicitly
+/// authorized nonproduction identity.
 public enum InternalLaunchArgumentPolicy {
-    public static let e2eBundleIdentifier = "app.noonmark.mac.e2e"
+    public static let e2eBundleIdentifier = NoonmarkRuntimeProfile.e2e
+        .bundleIdentifier
 
     public static func permitsInternalArguments(
         bundleIdentifier: String?
     ) -> Bool {
-        bundleIdentifier == e2eBundleIdentifier
+        guard let profile = try? NoonmarkRuntimeProfile.resolve(
+            bundleIdentifier: bundleIdentifier
+        ) else { return false }
+        return profile.permitsInternalLaunchArguments
     }
 
     public static func visibleArguments(

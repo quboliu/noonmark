@@ -1,8 +1,8 @@
 .PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install test test-unit test-integration test-system test-deterministic-sim test-e2e test-runtime-profile-isolation test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
 
-RESET_PROFILE ?= development
-
 reset-dev-data:
+	@test -n "$(RESET_PROFILE)" || \
+		(echo "RESET_PROFILE must explicitly name a nonproduction profile" >&2; exit 1)
 	scripts/reset-dev-data "$(RESET_PROFILE)"
 
 generate-app-icon:
@@ -13,7 +13,6 @@ verify-app-icon:
 
 build:
 	scripts/test-app-icon
-	scripts/reset-dev-data development
 	swift build
 
 build-app:

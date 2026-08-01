@@ -60,7 +60,7 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     public init(
         containerIdentifier: String,
         persistence: any CloudKitSyncPersistence,
-        zoneName: String = CloudKitSyncEngineTransport.defaultZoneName,
+        zoneName: String,
         automaticallySync: Bool = true
     ) throws {
         let trimmedContainerID = containerIdentifier.trimmingCharacters(

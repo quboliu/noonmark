@@ -344,7 +344,7 @@ struct AppCopy {
     var iCloudDriveLocationTitle: String { language == .chinese ? "iCloud Drive 位置" : "iCloud Drive location" }
     var localCachePathTitle: String { language == .chinese ? "本机缓存路径" : "Local cache path" }
     var iCloudDriveLogicalLocation: String {
-        "iCloud Drive/\(ICloudDriveSyncTransport.defaultRepositoryName)"
+        "iCloud Drive/\(AppLaunchArguments.validatedRuntimeProfile.iCloudRepositoryName)"
     }
 
     var localFolderSyncReady: String {

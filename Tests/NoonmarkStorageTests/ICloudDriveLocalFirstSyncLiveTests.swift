@@ -12,7 +12,7 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             throw XCTSkip("Set NOONMARK_LIVE_ICLOUD_SYNC=1 to run the live iCloud Drive sync test.")
         }
 
-        let repositoryName = "NoonmarkLiveTests/\(UUID().uuidString)"
+        let repositoryName = "Noonmark-E2E/LiveTests/\(UUID().uuidString)"
         let rootURL = try ICloudDriveSyncTransport.defaultRootURL(repositoryName: repositoryName)
         XCTAssertTrue(rootURL.path.contains("Mobile Documents") || rootURL.path.contains("CloudDocs"))
         addTeardownBlock {
@@ -122,7 +122,7 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             from: packageURL
         )
         let repositoryName =
-            "NoonmarkLiveTests/ImportedDataPackage-\(UUID().uuidString)"
+            "Noonmark-E2E/LiveTests/ImportedDataPackage-\(UUID().uuidString)"
         let rootURL = try ICloudDriveSyncTransport.defaultRootURL(
             repositoryName: repositoryName
         )

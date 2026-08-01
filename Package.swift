@@ -63,7 +63,9 @@ let package = Package(
         ),
         .target(
             name: "NoonmarkMacRuntime",
-            dependencies: ["NoonmarkCore", "NoonmarkDayContext"]
+            dependencies: [
+                "NoonmarkCore", "NoonmarkDayContext", "NoonmarkDiagnostics"
+            ]
         ),
         .target(
             name: "NoonmarkDemoSupport",

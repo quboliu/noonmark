@@ -665,7 +665,10 @@ extension NoonmarkStore {
 
     var zhulongSidecarKeySource: any ZhulongSidecarKeySource {
         guard AppLaunchArguments.contains("--e2e-zhulong-sidecar-key") else {
-            return KeychainZhulongSidecarKeySource()
+            return KeychainZhulongSidecarKeySource(
+                service: AppLaunchArguments.validatedRuntimeProfile
+                    .sidecarKeychainService
+            )
         }
         return ZhulongE2ESidecarKeySource()
     }

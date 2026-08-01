@@ -139,7 +139,7 @@ terminate_process() {
 
 terminate_process "$process_name"
 
-rm -rf -- "$data_root" "$icloud_sync_root" "$cache_path" "$saved_state_path"
+rm -rf -- "$data_root" "$icloud_profile_root" "$cache_path" "$saved_state_path"
 
 keychain_status=0
 security delete-generic-password \
@@ -173,7 +173,7 @@ fi
 
 removed_paths=(
   "$data_root"
-  "$icloud_sync_root"
+  "$icloud_profile_root"
   "$cache_path"
   "$saved_state_path"
 )

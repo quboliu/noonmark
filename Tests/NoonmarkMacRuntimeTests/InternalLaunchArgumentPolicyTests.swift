@@ -27,6 +27,21 @@ final class InternalLaunchArgumentPolicyTests: XCTestCase {
         )
     }
 
+    func testDemoBundleCanSeeItsFixtureArguments() {
+        XCTAssertEqual(
+            InternalLaunchArgumentPolicy.visibleArguments(
+                bundleIdentifier: "app.noonmark.mac.demo",
+                processArguments: processArguments
+            ),
+            processArguments
+        )
+        XCTAssertTrue(
+            InternalLaunchArgumentPolicy.permitsInternalArguments(
+                bundleIdentifier: "app.noonmark.mac.demo"
+            )
+        )
+    }
+
     func testProductionBundleCannotSeeInternalArgumentsInAnyBuildConfiguration() {
         for buildMarker in ["debug", "release"] {
             let arguments = processArguments + ["--build-marker", buildMarker]
@@ -46,10 +61,12 @@ final class InternalLaunchArgumentPolicyTests: XCTestCase {
         )
     }
 
-    func testUnknownAuditAndLookalikeBundlesAreFailClosed() {
+    func testUnknownRestrictedAndLookalikeBundlesAreFailClosed() {
         let deniedBundleIdentifiers: [String?] = [
             nil,
+            "app.noonmark.mac.development",
             "app.noonmark.mac.audit",
+            "app.noonmark.mac.dmg-validation",
             "app.noonmark.mac.e2e.debug",
             "app.noonmark.mac.e2e-malicious"
         ]

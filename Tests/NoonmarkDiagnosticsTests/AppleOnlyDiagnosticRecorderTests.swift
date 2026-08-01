@@ -3,6 +3,19 @@ import Foundation
 import XCTest
 
 final class AppleOnlyDiagnosticRecorderTests: XCTestCase {
+    func testMissingBundleIdentityUsesANonproductionUnifiedLogSubsystem() {
+        XCTAssertEqual(
+            DiagnosticSubsystemIdentity.resolve(bundleIdentifier: nil),
+            "app.noonmark.invalid-runtime"
+        )
+        XCTAssertEqual(
+            DiagnosticSubsystemIdentity.resolve(
+                bundleIdentifier: "app.noonmark.mac.e2e"
+            ),
+            "app.noonmark.mac.e2e"
+        )
+    }
+
     func testFallbackRecorderKeepsTypedRecordingAvailableWithoutDiskStorage() {
         let sessionID = DiagnosticSessionID(rawValue: UUID())
         let recorder: any DiagnosticRecording = AppleOnlyDiagnosticRecorder(

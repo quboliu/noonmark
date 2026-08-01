@@ -173,7 +173,10 @@ extension NoonmarkStore {
     }
 
     var isICloudDriveAvailable: Bool {
-        (try? ICloudDriveSyncTransport.defaultRootURL()) != nil
+        (try? ICloudDriveSyncTransport.defaultRootURL(
+            repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                .iCloudRepositoryName
+        )) != nil
     }
 
     var cloudKitSyncConfiguration: CloudKitSyncLaunchConfiguration? {
@@ -209,7 +212,10 @@ extension NoonmarkStore {
                 )
             }
         } else {
-            _ = try ICloudDriveSyncTransport.defaultRootURL()
+            _ = try ICloudDriveSyncTransport.defaultRootURL(
+                repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                    .iCloudRepositoryName
+            )
         }
     }
 
@@ -591,6 +597,8 @@ extension NoonmarkStore {
                 return try cloudKitTransport(databaseURL: databaseURL)
             }
             return try ICloudDriveSyncTransport(
+                repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                    .iCloudRepositoryName,
                 diagnosticOperation: diagnosticOperation
             )
         case .localFolder:
@@ -810,15 +818,17 @@ extension NoonmarkStore {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base
-            .appendingPathComponent("noonmark", isDirectory: true)
-            .appendingPathComponent("sync-repository", isDirectory: true)
+        return AppLaunchArguments.validatedRuntimeProfile
+            .localSyncRepositoryURL(baseURL: base)
     }
 
     static func configuredLocalFirstSyncEndpointURL(for endpoint: CloudSyncEndpointKind) -> URL? {
         switch endpoint {
         case .iCloud:
-            return try? ICloudDriveSyncTransport.defaultRootURL()
+            return try? ICloudDriveSyncTransport.defaultRootURL(
+                repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                    .iCloudRepositoryName
+            )
         case .localFolder:
             return configuredSyncFolderURL()
         case .s3, .webDAV:

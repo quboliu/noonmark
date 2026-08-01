@@ -27,7 +27,7 @@ public actor ICloudDriveSyncTransport: SyncRecordTransport {
     public let rootURL: URL
 
     public init(
-        repositoryName: String = ICloudDriveSyncTransport.defaultRepositoryName,
+        repositoryName: String,
         fileManager: FileManager = .default,
         diagnosticOperation: DiagnosticOperation? = nil
     ) throws {
@@ -50,7 +50,7 @@ public actor ICloudDriveSyncTransport: SyncRecordTransport {
     }
 
     public nonisolated static func defaultRootURL(
-        repositoryName: String = ICloudDriveSyncTransport.defaultRepositoryName,
+        repositoryName: String,
         fileManager: FileManager = .default
     ) throws -> URL {
         let cloudDocsURL = fileManager.homeDirectoryForCurrentUser

@@ -485,9 +485,9 @@ extension NoonmarkStore {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base
-            .appendingPathComponent("noonmark", isDirectory: true)
-            .appendingPathComponent("Noonmark.sqlite")
+        return AppLaunchArguments.validatedRuntimeProfile.databaseURL(
+            baseURL: base
+        )
     }
 
     func loadOrSeed() throws {

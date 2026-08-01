@@ -38,15 +38,16 @@ public struct CloudKitSyncLaunchConfiguration: Equatable, Sendable {
         let containerIdentifier = rawContainerIdentifier.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        let zoneName = (zoneValues.first
-            ?? CloudKitSyncEngineTransport.defaultZoneName)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let explicitZoneIsIsolated = zoneValues.isEmpty
-            || (zoneName.hasPrefix(
-                CloudKitSyncEngineTransport.liveValidationZonePrefix
-            )
-                && zoneName.count > CloudKitSyncEngineTransport
-                .liveValidationZonePrefix.count)
+        guard let rawZoneName = zoneValues.first else {
+            throw CloudKitSyncLaunchConfigurationError.invalidArguments
+        }
+        let zoneName = rawZoneName.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let explicitZoneIsIsolated = zoneName.hasPrefix(
+            CloudKitSyncEngineTransport.liveValidationZonePrefix
+        ) && zoneName.count > CloudKitSyncEngineTransport
+            .liveValidationZonePrefix.count
         guard containerIdentifier.hasPrefix("iCloud."),
               containerIdentifier.count > "iCloud.".count,
               zoneName.isEmpty == false,

@@ -9,7 +9,7 @@ struct AppleDiagnosticLogger {
     private let transport: Logger
     private let diagnostics: Logger
 
-    init(subsystem: String = Bundle.main.bundleIdentifier ?? "app.noonmark.mac") {
+    init(subsystem: String = DiagnosticSubsystemIdentity.current) {
         lifecycle = Logger(subsystem: subsystem, category: "lifecycle")
         mutation = Logger(subsystem: subsystem, category: "mutation")
         persistence = Logger(subsystem: subsystem, category: "persistence")

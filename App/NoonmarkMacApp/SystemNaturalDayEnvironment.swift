@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NoonmarkDayContext
+import NoonmarkMacRuntime
 
 @MainActor
 final class SystemNaturalDayEnvironment: NaturalDayEnvironment {
@@ -173,12 +174,14 @@ enum NaturalDayEnvironmentFactory {
         arguments: [String],
         bundleIdentifier: String?
     ) throws -> any NaturalDayEnvironment {
-        let isE2EBundle = bundleIdentifier == "app.noonmark.mac.e2e"
+        let permitsFixedClock = (try? NoonmarkRuntimeProfile.resolve(
+            bundleIdentifier: bundleIdentifier
+        ).permitsFixedNaturalDayArguments) == true
         let containsFixedFlag = fixedFlags.contains { arguments.contains($0) }
-        guard isE2EBundle || containsFixedFlag == false else {
-            throw NaturalDayBootstrapError.fixedClockRequiresE2EBundle
+        guard permitsFixedClock || containsFixedFlag == false else {
+            throw NaturalDayBootstrapError.fixedClockRequiresAuthorizedBundle
         }
-        guard isE2EBundle else {
+        guard permitsFixedClock else {
             return SystemNaturalDayEnvironment()
         }
 
@@ -221,14 +224,14 @@ enum NaturalDayEnvironmentFactory {
 }
 
 enum NaturalDayBootstrapError: LocalizedError {
-    case fixedClockRequiresE2EBundle
+    case fixedClockRequiresAuthorizedBundle
     case invalidFixedInstant(String)
     case invalidFixedTimeZone(String)
 
     var errorDescription: String? {
         switch self {
-        case .fixedClockRequiresE2EBundle:
-            "Fixed natural-day arguments require app.noonmark.mac.e2e"
+        case .fixedClockRequiresAuthorizedBundle:
+            "Fixed natural-day arguments require the E2E or Demo runtime profile"
         case let .invalidFixedInstant(value):
             "Invalid E2E fixed instant: \(value)"
         case let .invalidFixedTimeZone(value):

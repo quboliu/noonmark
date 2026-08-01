@@ -7,6 +7,7 @@ final class CloudKitSyncEngineTransportTests: XCTestCase {
             try CloudKitSyncEngineTransport(
                 containerIdentifier: "not-an-icloud-container",
                 persistence: TransportPersistence(),
+                zoneName: CloudKitSyncEngineTransport.defaultZoneName,
                 automaticallySync: false
             )
         ) { error in
@@ -22,6 +23,7 @@ final class CloudKitSyncEngineTransportTests: XCTestCase {
         let transport = try CloudKitSyncEngineTransport(
             containerIdentifier: "iCloud.app.noonmark.mac",
             persistence: persistence,
+            zoneName: CloudKitSyncEngineTransport.defaultZoneName,
             automaticallySync: false
         )
 
@@ -37,6 +39,7 @@ final class CloudKitSyncEngineTransportTests: XCTestCase {
         let transport = try CloudKitSyncEngineTransport(
             containerIdentifier: "iCloud.app.noonmark.mac",
             persistence: TransportPersistence(),
+            zoneName: CloudKitSyncEngineTransport.defaultZoneName,
             automaticallySync: false
         )
 
@@ -97,6 +100,7 @@ final class CloudKitSyncEngineTransportTests: XCTestCase {
         let transport = try CloudKitSyncEngineTransport(
             containerIdentifier: "iCloud.app.noonmark.mac",
             persistence: TransportPersistence(),
+            zoneName: CloudKitSyncEngineTransport.defaultZoneName,
             automaticallySync: false
         )
 

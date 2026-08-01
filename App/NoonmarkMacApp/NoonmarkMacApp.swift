@@ -78,6 +78,13 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     static func main() {
         do {
+            _ = try AppLaunchArguments.runtimeProfile
+            try AppLaunchArguments.validateRuntimeDataIsolation()
+        } catch {
+            _ = recordEarlyStartupFailure(error)
+            exit(EX_CONFIG)
+        }
+        do {
             let didBootstrapProvider = try ZhulongProviderLaunchBootstrap
                 .applyIfRequested()
             if try ZhulongProviderLaunchBootstrap.reportPersistedReadinessIfRequested() {

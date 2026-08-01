@@ -8,17 +8,19 @@ final class CloudKitSyncLaunchConfigurationTests: XCTestCase {
         )
     }
 
-    func testContainerArgumentSelectsDefaultZone() throws {
-        let configuration = try XCTUnwrap(
-            CloudKitSyncLaunchConfiguration.resolve(arguments: [
+    func testContainerArgumentWithoutAnExplicitIsolatedZoneFailsClosed() {
+        XCTAssertThrowsError(
+            try CloudKitSyncLaunchConfiguration.resolve(arguments: [
                 "Noonmark",
                 "--cloudkit-container-id",
                 "iCloud.app.noonmark.mac"
             ])
-        )
-
-        XCTAssertEqual(configuration.containerIdentifier, "iCloud.app.noonmark.mac")
-        XCTAssertEqual(configuration.zoneName, CloudKitSyncEngineTransport.defaultZoneName)
+        ) { error in
+            XCTAssertEqual(
+                error as? CloudKitSyncLaunchConfigurationError,
+                .invalidArguments
+            )
+        }
     }
 
     func testExplicitZoneIsPreservedForIsolatedLiveValidation() throws {

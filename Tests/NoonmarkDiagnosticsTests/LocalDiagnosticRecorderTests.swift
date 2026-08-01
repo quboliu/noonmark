@@ -142,6 +142,43 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(health.recordCount, 0)
     }
 
+    func testRelaunchExcludesCorruptSegmentLineAndReportsPartialCollection() async throws {
+        let rootURL = temporaryDirectory(named: "corrupt")
+        var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        recorder?.startSession(at: Date(timeIntervalSince1970: 1_800_000_000))
+        await recorder?.flush()
+        recorder = nil
+
+        let segmentURL = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: rootURL,
+                includingPropertiesForKeys: nil
+            ).first { $0.lastPathComponent.hasPrefix("events-") }
+        )
+        let handle = try FileHandle(forWritingTo: segmentURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{corrupt-record}\n".utf8))
+        try handle.close()
+
+        let relaunched = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        let package = try await relaunched.snapshotPackage()
+
+        XCTAssertEqual(package.manifest.corruptRecordCount, 1)
+        XCTAssertTrue(package.manifest.collectionWasPartial)
+        XCTAssertFalse(
+            String(
+                decoding: try Data(contentsOf: segmentURL),
+                as: UTF8.self
+            ).contains("corrupt-record")
+        )
+    }
+
     private func temporaryDirectory(named name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(

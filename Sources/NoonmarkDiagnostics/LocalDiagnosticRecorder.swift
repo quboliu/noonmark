@@ -763,19 +763,22 @@ private final class DiagnosticDiskStore {
             let url = segmentURL(index)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             let allLines = try Data(contentsOf: url).split(separator: 0x0A)
+            var corruptCount = 0
             let retained = allLines.compactMap { line -> Data? in
                 guard let record = try? Self.decoder.decode(
                     RecordedEvidence.self,
                     from: Data(line)
-                ), record.schemaVersion == RecordedEvidence.currentSchemaVersion,
-                record.timestamp >= cutoff
+                ), record.schemaVersion == RecordedEvidence.currentSchemaVersion
                 else {
+                    corruptCount += 1
                     return nil
                 }
+                guard record.timestamp >= cutoff else { return nil }
                 var data = Data(line)
                 data.append(0x0A)
                 return data
             }
+            state.corruptRecordCount += corruptCount
             guard retained.count != allLines.count else { continue }
             if retained.isEmpty {
                 try fileManager.removeItem(at: url)

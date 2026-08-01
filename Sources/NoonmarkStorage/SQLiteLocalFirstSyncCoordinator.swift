@@ -542,27 +542,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 ? storedManifest
                 : nil
         }
-        NSLog(
-            "Noonmark sync baseline audit incomplete missing=%ld "
-                + "days=%ld series=%ld chains=%ld definitions=%ld "
-                + "traces=%ld subtasks=%ld classificationCommits=%ld "
-                + "classificationEvents=%ld journal=%ld journalTypes=%@",
-            missingFactCount,
-            snapshot.days.count,
-            snapshot.taskCycleSeries.count,
-            snapshot.chains.count,
-            snapshot.definitions.count,
-            snapshot.traces.count,
-            snapshot.subtasks.count,
-            snapshot.classifications.changeRecords.count,
-            snapshot.classifications.snapshotEventsByTraceID.values
-                .reduce(0) { $0 + $1.count },
-            journalEntries.count,
-            Dictionary(grouping: journalEntries, by: \.entityType)
-                .mapValues(\.count)
-                .map { "\($0.key.rawValue)=\($0.value)" }
-                .sorted()
-                .joined(separator: ",")
+        diagnosticOperation?.stage(
+            .baselineCoverageGap,
+            progress: DiagnosticProgress(
+                recordCount: missingFactCount,
+                pendingCount: journalEntries.count
+            )
         )
         if let storedManifest, storedManifest.state == .pending {
             do {
@@ -592,10 +577,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 throw SQLiteLocalFirstSyncError
                     .baselinePreparationFailed
             }
-            NSLog(
-                "Noonmark pending sync baseline could not cover the "
-                    + "current snapshot after requeue; creating a new "
-                    + "complete baseline"
+            diagnosticOperation?.stage(
+                .baselineRecovery,
+                progress: DiagnosticProgress(
+                    recordCount: missingFactCount,
+                    pendingCount: journalEntries.count
+                )
             )
         }
 

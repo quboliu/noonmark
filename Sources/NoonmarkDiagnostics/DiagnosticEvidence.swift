@@ -92,6 +92,8 @@ public enum DiagnosticOperationStage: String, Codable, CaseIterable, Sendable {
     case transportLockReleased
     case transportFetch
     case baselinePrepare
+    case baselineCoverageGap
+    case baselineRecovery
     case upload
     case downloadMerge
     case catchUpUpload

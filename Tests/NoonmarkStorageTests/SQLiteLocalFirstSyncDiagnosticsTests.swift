@@ -18,8 +18,20 @@ final class SQLiteLocalFirstSyncDiagnosticsTests: XCTestCase {
         async throws
     {
         let databaseURL = makeDatabaseURL("success")
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "diagnostic baseline fixture",
+            now: Date(timeIntervalSince1970: 1_799_999_999)
+        )
         try SQLiteEngineRepository(databaseURL: databaseURL)
-            .save(NoonmarkEngine().snapshot())
+            .save(engine.snapshot())
+        try SQLiteSyncRepository(databaseURL: databaseURL)
+            .saveDeviceIdentity(
+                SyncDeviceIdentity(
+                    deviceID: SyncDeviceID("diagnostic-baseline-device"),
+                    createdAt: Date(timeIntervalSince1970: 1_799_999_999)
+                )
+            )
         let recorder = InMemoryDiagnosticRecorder()
         let operation = recorder.startOperation(
             kind: .localFirstSync,
@@ -38,6 +50,7 @@ final class SQLiteLocalFirstSyncDiagnosticsTests: XCTestCase {
             DiagnosticOperationStage.localLoad,
             .transportFetch,
             .baselinePrepare,
+            .baselineCoverageGap,
             .upload,
             .downloadMerge,
             .catchUpUpload,

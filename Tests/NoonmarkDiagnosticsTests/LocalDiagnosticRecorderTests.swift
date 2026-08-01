@@ -259,6 +259,42 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(health.recordCount, 0)
     }
 
+    func testInitializerRejectsDiagnosticRootSymlinkWithoutTouchingExternalFiles() throws {
+        let parentURL = temporaryDirectory(named: "root-symlink-parent")
+        let externalURL = temporaryDirectory(named: "root-symlink-external")
+        try FileManager.default.createDirectory(
+            at: parentURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL,
+            withIntermediateDirectories: true
+        )
+        let canaryURL = externalURL.appendingPathComponent("index.json")
+        let canary = Data("EXTERNAL-DIAGNOSTIC-ROOT-CANARY".utf8)
+        try canary.write(to: canaryURL)
+        let diagnosticRootURL = parentURL.appendingPathComponent(
+            "Diagnostics",
+            isDirectory: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: diagnosticRootURL,
+            withDestinationURL: externalURL
+        )
+
+        XCTAssertThrowsError(
+            try LocalDiagnosticRecorder(
+                rootURL: diagnosticRootURL,
+                appIdentity: .testFixture,
+                configuration: .production,
+                unifiedLoggingEnabled: false
+            )
+        ) { error in
+            XCTAssertEqual(error as? DiagnosticStorageError, .invalidRoot)
+        }
+        XCTAssertEqual(try Data(contentsOf: canaryURL), canary)
+    }
+
     func testRelaunchExcludesCorruptSegmentLineAndReportsPartialCollection() async throws {
         let rootURL = temporaryDirectory(named: "corrupt")
         var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
@@ -299,6 +335,7 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
     func testTinyMetricStormNeverCrossesAllocatedCapAtAnyWriteObservation() async throws {
         let rootURL = temporaryDirectory(named: "metric-cap")
         let maximumPersistentBytes: Int64 = 64 * 1024
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
         let recorder = try LocalDiagnosticRecorder(
             rootURL: rootURL,
             appIdentity: .testFixture,
@@ -311,9 +348,10 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
                 maximumMetricPayloadBytes: 1024,
                 maximumQueuedEvents: 16,
                 maximumQueuedBytes: 8 * 1024
-            )
+            ),
+            unifiedLoggingEnabled: false,
+            now: { start.addingTimeInterval(400) }
         )
-        let start = Date(timeIntervalSince1970: 1_800_000_000)
         recorder.startSession(at: start)
 
         for index in 0 ..< 400 {
@@ -435,7 +473,7 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             appIdentity: .testFixture,
             configuration: configuration,
             unifiedLoggingEnabled: false,
-            now: { base }
+            now: { base.addingTimeInterval(6) }
         )
         recorder?.startSession(at: base)
         let active = try XCTUnwrap(recorder).startOperation(

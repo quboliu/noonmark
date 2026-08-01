@@ -78,10 +78,10 @@ enum MetricKitJSONSanitizer {
         switch value {
         case let dictionary as [String: Any]:
             var result: [String: Any] = [:]
-            for (index, pair) in dictionary.sorted(by: {
+            for pair in dictionary.sorted(by: {
                 $0.key < $1.key
-            }).enumerated() {
-                let key = safeKey(pair.key) ?? "redacted_key_\(index)"
+            }) {
+                guard let key = safeKey(pair.key) else { continue }
                 result[key] = sanitize(pair.value, valueKey: key)
             }
             return result

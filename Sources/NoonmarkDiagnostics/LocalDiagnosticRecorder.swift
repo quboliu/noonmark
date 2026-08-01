@@ -467,6 +467,16 @@ private final class DiagnosticDiskStore {
         case oversizedMetricPayload
     }
 
+    private struct MetricReconciliation {
+        let attachments: [DiagnosticMetricAttachment]
+    }
+
+    private enum ManagedDirectoryStatus: Equatable {
+        case absent
+        case ownedDirectory
+        case invalidEntry
+    }
+
     private struct PersistentState: Codable {
         var schemaVersion = RecordedEvidence.currentSchemaVersion
         var currentSegment = 0
@@ -492,13 +502,6 @@ private final class DiagnosticDiskStore {
         }
     }
 
-    private struct StoredMetricPayload: Codable {
-        let receivedAt: Date
-        let summary: MetricKitPayloadSummary
-        let sanitizedJSON: Data?
-        let redactionVersion: Int
-    }
-
     private let rootURL: URL
     private let appIdentity: DiagnosticAppIdentity
     private let configuration: DiagnosticStorageConfiguration
@@ -507,6 +510,7 @@ private final class DiagnosticDiskStore {
     private var state: PersistentState
     private var activeOperations: [DiagnosticActiveOperation]
     private var operationCapsules: [DiagnosticOperationCapsule]
+    private var currentMetricCorruptRecordCount = 0
 
     init(
         rootURL: URL,
@@ -525,14 +529,10 @@ private final class DiagnosticDiskStore {
         self.configuration = configuration
         self.fileManager = fileManager
         self.now = now
-        try fileManager.createDirectory(
+        try Self.prepareOwnedDirectory(
             at: self.rootURL,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: self.rootURL.path
+            permissions: 0o700,
+            fileManager: fileManager
         )
         state = Self.loadJSON(
             PersistentState.self,
@@ -672,14 +672,11 @@ private final class DiagnosticDiskStore {
                     sessionID: sessionID
                 )
             }
-            let metricsURL = rootURL.appendingPathComponent(
-                "metrics",
-                isDirectory: true
-            )
-            try fileManager.createDirectory(
+            let metricsURL = metricsDirectoryURL
+            try Self.prepareOwnedDirectory(
                 at: metricsURL,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
+                permissions: 0o700,
+                fileManager: fileManager
             )
             let sanitizedJSON: Data?
             if rawJSONWasDropped {
@@ -709,7 +706,7 @@ private final class DiagnosticDiskStore {
                 diskWriteExceptionCount: summary.diskWriteExceptionCount,
                 rawJSONByteCount: rawJSON.count
             )
-            let stored = StoredMetricPayload(
+            let stored = MetricKitStoredPayload(
                 receivedAt: receivedAt,
                 summary: normalizedSummary,
                 sanitizedJSON: sanitizedJSON,
@@ -765,7 +762,8 @@ private final class DiagnosticDiskStore {
             evictedMetricPayloadCount:
             lossCounts.evictedMetricPayloadCount,
             corruptRecordCount: lossCounts.corruptRecordCount
-                + snapshot.corruptCount,
+                + snapshot.corruptCount
+                + currentMetricCorruptRecordCount,
             oversizedEventCount: lossCounts.oversizedEventCount,
             oversizedMetricPayloadCount:
             lossCounts.oversizedMetricPayloadCount,
@@ -782,22 +780,8 @@ private final class DiagnosticDiskStore {
             incrementLoss(.corruptRecord, by: snapshot.corruptCount)
             try? saveMetadata()
         }
-        let metrics: [DiagnosticMetricAttachment] = try metricURLs()
-            .compactMap { url in
-            guard let stored = Self.loadJSON(
-                StoredMetricPayload.self,
-                from: url,
-                fileManager: fileManager
-            ) else {
-                return nil
-            }
-            return DiagnosticMetricAttachment(
-                receivedAt: stored.receivedAt,
-                summary: stored.summary,
-                sanitizedJSON: stored.sanitizedJSON,
-                redactionVersion: stored.redactionVersion
-            )
-            }
+        let metricReconciliation = try reconcileMetricPayloads(now: now())
+        let metrics = metricReconciliation.attachments
         let records = snapshot.records.sorted {
             if $0.sequence == $1.sequence {
                 return $0.eventID.uuidString < $1.eventID.uuidString
@@ -876,21 +860,23 @@ private final class DiagnosticDiskStore {
         ) {
             try fileManager.removeItem(at: url)
         }
-        let metricsURL = rootURL.appendingPathComponent(
-            "metrics",
-            isDirectory: true
-        )
-        if fileManager.fileExists(atPath: metricsURL.path) {
+        switch metricDirectoryStatus() {
+        case .absent:
+            break
+        case .ownedDirectory:
             for url in try metricURLs() {
                 try fileManager.removeItem(at: url)
             }
-            try? fileManager.removeItem(at: metricsURL)
+            try fileManager.removeItem(at: metricsDirectoryURL)
+        case .invalidEntry:
+            try unlinkInvalidManagedEntry(at: metricsDirectoryURL)
         }
         state = PersistentState(
             segmentCount: configuration.eventSegmentCount
         )
         activeOperations = []
         operationCapsules = []
+        currentMetricCorruptRecordCount = 0
     }
 
     private func persistOne(
@@ -1162,6 +1148,69 @@ private final class DiagnosticDiskStore {
         }
     }
 
+    private func reconcileMetricPayloads(now: Date) throws
+        -> MetricReconciliation
+    {
+        switch metricDirectoryStatus() {
+        case .absent:
+            currentMetricCorruptRecordCount = 0
+            return MetricReconciliation(attachments: [])
+        case .invalidEntry:
+            do {
+                try unlinkInvalidManagedEntry(at: metricsDirectoryURL)
+                incrementLoss(.corruptRecord, by: 1)
+                currentMetricCorruptRecordCount = 0
+                try? saveMetadata()
+                return MetricReconciliation(attachments: [])
+            } catch {
+                state.fileSinkDisabled = true
+                currentMetricCorruptRecordCount = 1
+                return MetricReconciliation(attachments: [])
+            }
+        case .ownedDirectory:
+            break
+        }
+        let metricSnapshot = MetricKitExportEnvelopeReader.read(
+            from: try metricURLs(),
+            policy: MetricKitExportEnvelopeReadPolicy(
+                metricsDirectoryURL: metricsDirectoryURL,
+                cutoff: now.addingTimeInterval(
+                    -configuration.retentionInterval
+                ),
+                now: now,
+                maximumStoredEnvelopeBytes: max(
+                    1024,
+                    configuration.metricCacheBytes
+                ),
+                maximumSanitizedJSONBytes:
+                configuration.maximumMetricPayloadBytes
+            )
+        )
+        var currentCorruptRecordCount = 0
+        for exclusion in metricSnapshot.exclusions {
+            do {
+                try fileManager.removeItem(at: exclusion.url)
+                if exclusion.isCurrentCorruption {
+                    incrementLoss(.corruptRecord, by: 1)
+                }
+            } catch {
+                state.fileSinkDisabled = true
+                if exclusion.isCurrentCorruption {
+                    currentCorruptRecordCount += 1
+                }
+            }
+        }
+        currentMetricCorruptRecordCount = currentCorruptRecordCount
+        if metricSnapshot.exclusions.isEmpty == false {
+            do {
+                try saveMetadata()
+            } catch {
+                state.fileSinkDisabled = true
+            }
+        }
+        return MetricReconciliation(attachments: metricSnapshot.attachments)
+    }
+
     private func pruneExpiredRecords(now: Date) throws {
         let cutoff = now.addingTimeInterval(-configuration.retentionInterval)
         for index in 0 ..< configuration.eventSegmentCount {
@@ -1212,18 +1261,7 @@ private final class DiagnosticDiskStore {
         pruneLossBuckets(cutoff: cutoff, now: now)
 
         try pruneExpiredRecords(now: now)
-        for url in try metricURLs() {
-            guard let stored = Self.loadJSON(
-                StoredMetricPayload.self,
-                from: url,
-                fileManager: fileManager
-            ) else {
-                continue
-            }
-            if stored.receivedAt < cutoff {
-                try fileManager.removeItem(at: url)
-            }
-        }
+        _ = try reconcileMetricPayloads(now: now)
         activeOperations.removeAll { $0.updatedAt < cutoff }
         operationCapsules.removeAll { $0.finishedAt < cutoff }
         trimActiveOperations()
@@ -1673,11 +1711,8 @@ private final class DiagnosticDiskStore {
     }
 
     private func metricURLs() throws -> [URL] {
-        let metricsURL = rootURL.appendingPathComponent(
-            "metrics",
-            isDirectory: true
-        )
-        guard fileManager.fileExists(atPath: metricsURL.path) else {
+        let metricsURL = metricsDirectoryURL
+        guard metricDirectoryStatus() == .ownedDirectory else {
             return []
         }
         return try fileManager.contentsOfDirectory(
@@ -1687,6 +1722,39 @@ private final class DiagnosticDiskStore {
             $0.lastPathComponent.hasPrefix("metric-")
                 && $0.pathExtension == "json"
         }
+    }
+
+    private func metricDirectoryStatus() -> ManagedDirectoryStatus {
+        var linkInformation = stat()
+        guard lstat(metricsDirectoryURL.path, &linkInformation) == 0 else {
+            return errno == ENOENT ? .absent : .invalidEntry
+        }
+        guard (linkInformation.st_mode & S_IFMT) == S_IFDIR else {
+            return .invalidEntry
+        }
+        let descriptor = Darwin.open(
+            metricsDirectoryURL.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else { return .invalidEntry }
+        defer { Darwin.close(descriptor) }
+        var openedInformation = stat()
+        guard fstat(descriptor, &openedInformation) == 0,
+              (openedInformation.st_mode & S_IFMT) == S_IFDIR
+        else {
+            return .invalidEntry
+        }
+        return .ownedDirectory
+    }
+
+    private func unlinkInvalidManagedEntry(at url: URL) throws {
+        guard Darwin.unlink(url.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private var metricsDirectoryURL: URL {
+        rootURL.appendingPathComponent("metrics", isDirectory: true)
     }
 
     private func modificationDate(of url: URL) throws -> Date {
@@ -1723,6 +1791,45 @@ private final class DiagnosticDiskStore {
             return nil
         }
         return try? decoder.decode(type, from: data)
+    }
+
+    private static func prepareOwnedDirectory(
+        at url: URL,
+        permissions: mode_t,
+        fileManager: FileManager
+    ) throws {
+        var linkInformation = stat()
+        if lstat(url.path, &linkInformation) != 0 {
+            guard errno == ENOENT else {
+                throw DiagnosticStorageError.invalidRoot
+            }
+            try fileManager.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: Int(permissions)]
+            )
+            guard lstat(url.path, &linkInformation) == 0 else {
+                throw DiagnosticStorageError.invalidRoot
+            }
+        }
+        guard (linkInformation.st_mode & S_IFMT) == S_IFDIR else {
+            throw DiagnosticStorageError.invalidRoot
+        }
+        let descriptor = Darwin.open(
+            url.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw DiagnosticStorageError.invalidRoot
+        }
+        defer { Darwin.close(descriptor) }
+        var openedInformation = stat()
+        guard fstat(descriptor, &openedInformation) == 0,
+              (openedInformation.st_mode & S_IFMT) == S_IFDIR,
+              fchmod(descriptor, permissions) == 0
+        else {
+            throw DiagnosticStorageError.invalidRoot
+        }
     }
 
     private static func normalized(

@@ -284,7 +284,9 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
                 maximumMetricPayloadBytes: maximumMetricPayloadBytes,
                 maximumQueuedEvents: 16,
                 maximumQueuedBytes: 8 * 1024
-            )
+            ),
+            unifiedLoggingEnabled: false,
+            now: { Date(timeIntervalSince1970: 1_800_010_000) }
         )
     }
 

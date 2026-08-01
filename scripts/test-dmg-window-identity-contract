@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "$repo_root"
+
+temporary_parent="${TMPDIR:-/tmp}"
+temporary_parent="${temporary_parent%/}"
+temporary_parent="$(cd "$temporary_parent" && pwd -P)"
+fixture_root="$(mktemp -d "${temporary_parent}/noonmark-dmg-window-identity.XXXXXX")"
+cleanup() {
+  case "$fixture_root" in
+    "${temporary_parent}"/noonmark-dmg-window-identity.*) ;;
+    *)
+      echo "refusing to clean an unexpected window identity fixture" >&2
+      return 1
+      ;;
+  esac
+  chmod -R u+rwX "$fixture_root" >/dev/null 2>&1 || true
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+
+application_support_root="${fixture_root}/Library/Application Support"
+validation_data_root="${application_support_root}/noonmark-dmg-validation"
+runtime_evidence_root="${validation_data_root}/RuntimeEvidence"
+response_path="${runtime_evidence_root}/main-window-identity.json"
+launch_token="4F47608A-F1E1-45A9-B8C9-21F4D9063327"
+process_identifier="4242"
+bundle_identifier="app.noonmark.mac.dmg-validation"
+window_number="73"
+window_title="晷迹 · Day Todo — 8月1日"
+
+mkdir -p "$application_support_root"
+mkdir -m 700 "$validation_data_root"
+mkdir -m 700 "$runtime_evidence_root"
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+
+if ! result="$({
+    scripts/test-dmg-install \
+      --verify-window-identity-fixture \
+      "$runtime_evidence_root" \
+      "$launch_token" \
+      "$process_identifier" \
+      "$bundle_identifier" \
+      "$window_title"
+  } 2>"${fixture_root}/valid.stderr")"; then
+  echo "valid window identity response reader failed" >&2
+  cat "${fixture_root}/valid.stderr" >&2
+  exit 1
+fi
+if [[ "$result" != "${window_number}|${window_title}" ]]; then
+  echo "valid window identity response was not accepted" >&2
+  cat "${fixture_root}/valid.stderr" >&2
+  exit 1
+fi
+
+parent_target_root="${fixture_root}/parent-target/Library/Application Support"
+parent_target_data="${parent_target_root}/noonmark-dmg-validation"
+parent_target_runtime="${parent_target_data}/RuntimeEvidence"
+parent_symlink_base="${fixture_root}/live-shape"
+parent_symlink_root="${parent_symlink_base}/Library/Application Support/noonmark-dmg-validation/RuntimeEvidence"
+mkdir -p "$parent_target_root" "$parent_symlink_base"
+mkdir -m 700 "$parent_target_data"
+mkdir -m 700 "$parent_target_runtime"
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"${parent_target_runtime}/main-window-identity.json"
+chmod 600 "${parent_target_runtime}/main-window-identity.json"
+ln -s "${fixture_root}/parent-target/Library" "${parent_symlink_base}/Library"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$parent_symlink_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/parent-symlink-read.stdout" \
+  2>"${fixture_root}/parent-symlink-read.stderr"; then
+  echo "parent-symlinked response root was accepted" >&2
+  exit 1
+fi
+if scripts/test-dmg-install \
+  --prepare-window-identity-fixture \
+  "$parent_symlink_root" \
+  "$launch_token" \
+  >"${fixture_root}/parent-symlink-prepare.stdout" \
+  2>"${fixture_root}/parent-symlink-prepare.stderr"; then
+  echo "parent-symlinked request root was accepted" >&2
+  exit 1
+fi
+
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"0B381FE4-E1D0-4CF9-8746-BBECAAD2E620","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/stale-token.stdout" \
+  2>"${fixture_root}/stale-token.stderr"; then
+  echo "stale launch token was accepted" >&2
+  exit 1
+fi
+
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4243,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/wrong-pid.stdout" \
+  2>"${fixture_root}/wrong-pid.stderr"; then
+  echo "wrong process identifier was accepted" >&2
+  exit 1
+fi
+
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","unexpected":"field","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/unknown-key.stdout" \
+  2>"${fixture_root}/unknown-key.stderr"; then
+  echo "unknown response key was accepted" >&2
+  exit 1
+fi
+
+symlink_target="${fixture_root}/symlink-target.json"
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$symlink_target"
+chmod 600 "$symlink_target"
+rm -f "$response_path"
+ln -s "$symlink_target" "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/symlink.stdout" \
+  2>"${fixture_root}/symlink.stderr"; then
+  echo "symlinked response was accepted" >&2
+  exit 1
+fi
+
+rm -f "$response_path"
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 644 "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/mode.stdout" \
+  2>"${fixture_root}/mode.stderr"; then
+  echo "non-owner-only response mode was accepted" >&2
+  exit 1
+fi
+
+rm -f "$response_path"
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+hardlink_path="${fixture_root}/response-hardlink.json"
+ln "$response_path" "$hardlink_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/hardlink.stdout" \
+  2>"${fixture_root}/hardlink.stderr"; then
+  echo "multiply-linked response was accepted" >&2
+  exit 1
+fi
+rm -f "$hardlink_path"
+
+printf '%s' \
+  '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
+  >"$response_path"
+chmod 600 "$response_path"
+if scripts/test-dmg-install \
+  --verify-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  "$process_identifier" \
+  "$bundle_identifier" \
+  "$window_title" \
+  >"${fixture_root}/duplicate-key.stdout" \
+  2>"${fixture_root}/duplicate-key.stderr"; then
+  echo "duplicate response key was accepted" >&2
+  exit 1
+fi
+
+request_path="${runtime_evidence_root}/main-window-request.json"
+printf '%s\n' '{"stale":true}' >"$request_path"
+chmod 600 "$request_path"
+if ! scripts/test-dmg-install \
+  --prepare-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  >"${fixture_root}/prepare.stdout" \
+  2>"${fixture_root}/prepare.stderr"; then
+  echo "valid synthetic request preparation failed" >&2
+  cat "${fixture_root}/prepare.stderr" >&2
+  exit 1
+fi
+if [[ ! -f "$request_path" || -L "$request_path" ||
+  -e "$response_path" || -L "$response_path" ]]; then
+  echo "request preparation did not atomically replace request and clear response" >&2
+  exit 1
+fi
+if [[ "$(stat -f '%Lp' "$request_path")" != "600" ||
+  "$(stat -f '%Lp' "$runtime_evidence_root")" != "700" ]]; then
+  echo "request preparation did not preserve owner-only modes" >&2
+  exit 1
+fi
+if ! jq -e \
+  --arg launch_token "$launch_token" \
+  'keys == ["launch_token", "profile", "schema_version"] and
+   .schema_version == 1 and
+   .profile == "dmg-validation" and
+   .launch_token == $launch_token' \
+  "$request_path" >/dev/null; then
+  echo "prepared request did not match the exact schema" >&2
+  exit 1
+fi
+canonical_request='{"launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","profile":"dmg-validation","schema_version":1}'
+if ! printf '%s' "$canonical_request" | cmp -s - "$request_path"; then
+  echo "prepared request was not exact canonical JSON bytes" >&2
+  exit 1
+fi
+
+request_symlink_target="${fixture_root}/request-symlink-target.txt"
+printf '%s' 'request-target-canary' >"$request_symlink_target"
+rm -f "$request_path"
+ln -s "$request_symlink_target" "$request_path"
+if scripts/test-dmg-install \
+  --prepare-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  >"${fixture_root}/request-symlink.stdout" \
+  2>"${fixture_root}/request-symlink.stderr"; then
+  echo "symlinked stale request was accepted" >&2
+  exit 1
+fi
+if [[ "$(<"$request_symlink_target")" != "request-target-canary" ]]; then
+  echo "symlinked stale request target changed" >&2
+  exit 1
+fi
+rm -f "$request_path"
+if [[ "$validation_data_root" != \
+  "${fixture_root}/Library/Application Support/noonmark-dmg-validation" ]]; then
+  echo "refusing to rebuild an unexpected synthetic validation root" >&2
+  exit 1
+fi
+rm -rf "$validation_data_root"
+if ! scripts/test-dmg-install \
+  --prepare-window-identity-fixture \
+  "$runtime_evidence_root" \
+  "$launch_token" \
+  >"${fixture_root}/fresh-root.stdout" \
+  2>"${fixture_root}/fresh-root.stderr"; then
+  echo "request preparation could not rebuild a fresh dmg-validation scope" >&2
+  exit 1
+fi
+if [[ ! -f "$request_path" || -L "$request_path" ||
+  "$(stat -f '%Lp' "$validation_data_root")" != "700" ||
+  "$(stat -f '%Lp' "$runtime_evidence_root")" != "700" ||
+  "$(stat -f '%Lp' "$request_path")" != "600" ]]; then
+  echo "fresh request preparation did not rebuild owner-only scope" >&2
+  exit 1
+fi
+
+if rg -n \
+  'optionOnScreenOnly|kCGNullWindowID|find_main_window_metadata|dump_process_windows' \
+  scripts/test-dmg-install >"${fixture_root}/global-window-list.txt"; then
+  echo "DMG install still contains a global WindowServer enumeration path" >&2
+  cat "${fixture_root}/global-window-list.txt" >&2
+  exit 1
+fi
+if ! rg -Fq '.optionIncludingWindow' scripts/test-dmg-install; then
+  echo "DMG install does not verify only the publisher-owned window number" >&2
+  exit 1
+fi
+window_query_count="$({
+  rg -F 'CGWindowListCopyWindowInfo(' scripts/test-dmg-install || true
+} | wc -l | tr -d '[:space:]')"
+if [[ "$window_query_count" != "1" ]] ||
+  ! rg -Fq 'CGWindowID(rawWindowNumber)' scripts/test-dmg-install; then
+  echo "DMG install did not reduce WindowServer inspection to one exact ID query" >&2
+  exit 1
+fi
+installed_open_count="$({
+  rg -F '/usr/bin/open -n "$installed_app"' scripts/test-dmg-install || true
+} | wc -l | tr -d '[:space:]')"
+if [[ "$installed_open_count" != "1" ]]; then
+  echo "installed App launches are not centralized behind one token handshake: count=$installed_open_count" >&2
+  exit 1
+fi
+for required_literal in \
+  'noonmark-dmg-validation/RuntimeEvidence' \
+  'main-window-request.json' \
+  'main-window-identity.json'; do
+  if ! rg -Fq "$required_literal" scripts/test-dmg-install; then
+    echo "DMG install omitted window handshake literal: $required_literal" >&2
+    exit 1
+  fi
+done
+for required_literal in \
+  'let maximumResponseBytes = 4 * 1024' \
+  'renameatx_np(' \
+  'UInt32(RENAME_EXCL)' \
+  'AT_SYMLINK_NOFOLLOW'; do
+  if ! rg -Fq "$required_literal" scripts/test-dmg-install; then
+    echo "DMG install omitted secure window handshake primitive: $required_literal" >&2
+    exit 1
+  fi
+done
+
+echo "DMG window identity contract passed"

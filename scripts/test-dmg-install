@@ -1,6 +1,552 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Synthetic contract probes dispatch before repository setup so they cannot
+# inspect or reset any signed runtime profile.
+dmg_window_identity_read_response() {
+  local runtime_evidence_root="$1"
+  local launch_token="$2"
+  local process_identifier="$3"
+  local bundle_identifier="$4"
+  local window_title="$5"
+  local scope="$6"
+
+  NOONMARK_DMG_WINDOW_EVIDENCE_ROOT="$runtime_evidence_root" \
+    NOONMARK_DMG_WINDOW_LAUNCH_TOKEN="$launch_token" \
+    NOONMARK_DMG_WINDOW_PROCESS_IDENTIFIER="$process_identifier" \
+    NOONMARK_DMG_WINDOW_BUNDLE_IDENTIFIER="$bundle_identifier" \
+    NOONMARK_DMG_WINDOW_TITLE="$window_title" \
+    NOONMARK_DMG_WINDOW_SCOPE="$scope" \
+    swift -e '
+import CoreFoundation
+import Foundation
+import Darwin
+
+func exactInteger(_ value: Any?) -> Int? {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID(),
+          number.doubleValue.isFinite,
+          number.doubleValue.rounded(.towardZero) == number.doubleValue
+    else {
+        return nil
+    }
+    return number.intValue
+}
+
+let environment = ProcessInfo.processInfo.environment
+guard let root = environment["NOONMARK_DMG_WINDOW_EVIDENCE_ROOT"],
+      let scope = environment["NOONMARK_DMG_WINDOW_SCOPE"],
+      scope == "live" || scope == "fixture",
+      let expectedToken = environment["NOONMARK_DMG_WINDOW_LAUNCH_TOKEN"],
+      UUID(uuidString: expectedToken)?.uuidString == expectedToken,
+      let expectedProcessIdentifier = environment[
+          "NOONMARK_DMG_WINDOW_PROCESS_IDENTIFIER"
+      ].flatMap(Int.init),
+      expectedProcessIdentifier > 0,
+      let expectedBundleIdentifier = environment[
+          "NOONMARK_DMG_WINDOW_BUNDLE_IDENTIFIER"
+      ],
+      expectedBundleIdentifier.isEmpty == false,
+      let expectedTitle = environment["NOONMARK_DMG_WINDOW_TITLE"],
+      expectedTitle.isEmpty == false
+else {
+    exit(1)
+}
+
+func lexicalComponents(_ path: String) -> [Substring]? {
+    guard path.hasPrefix("/"),
+          path.contains("//") == false,
+          path.contains("\n") == false,
+          path.contains("\r") == false,
+          path.contains("\0") == false
+    else {
+        return nil
+    }
+    let pieces = path.split(separator: "/", omittingEmptySubsequences: false)
+    guard pieces.first?.isEmpty == true else { return nil }
+    let components = Array(pieces.dropFirst())
+    guard components.isEmpty == false,
+          components.allSatisfy({ $0.isEmpty == false && $0 != "." && $0 != ".." })
+    else {
+        return nil
+    }
+    return components
+}
+
+let expectedLiveRoot = NSHomeDirectory()
+    + "/Library/Application Support/noonmark-dmg-validation/RuntimeEvidence"
+guard let rootComponents = lexicalComponents(root),
+      rootComponents.suffix(2).map(String.init) == [
+          "noonmark-dmg-validation",
+          "RuntimeEvidence",
+      ],
+      scope != "live" || rootComponents.suffix(3).map(String.init) == [
+          "Application Support",
+          "noonmark-dmg-validation",
+          "RuntimeEvidence",
+      ],
+      scope != "live" || root == expectedLiveRoot
+else {
+    exit(1)
+}
+
+func openDirectoryChain(_ components: [Substring]) -> Int32 {
+    var descriptor = open(
+        "/",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { exit(1) }
+    for component in components {
+        let nextDescriptor = openat(
+            descriptor,
+            String(component),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        _ = close(descriptor)
+        guard nextDescriptor >= 0 else { exit(1) }
+        var status = stat()
+        guard fstat(nextDescriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFDIR
+        else {
+            _ = close(nextDescriptor)
+            exit(1)
+        }
+        descriptor = nextDescriptor
+    }
+    return descriptor
+}
+
+let rootFD = openDirectoryChain(rootComponents)
+guard rootFD >= 0 else { exit(1) }
+defer { close(rootFD) }
+var rootStatus = stat()
+guard fstat(rootFD, &rootStatus) == 0,
+      (rootStatus.st_mode & S_IFMT) == S_IFDIR,
+      rootStatus.st_uid == geteuid(),
+      (rootStatus.st_mode & 0o777) == 0o700
+else {
+    exit(1)
+}
+
+let responseFD = openat(
+    rootFD,
+    "main-window-identity.json",
+    O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+)
+guard responseFD >= 0 else { exit(1) }
+defer { close(responseFD) }
+
+let maximumResponseBytes = 4 * 1024
+var statusBefore = stat()
+guard fstat(responseFD, &statusBefore) == 0,
+      (statusBefore.st_mode & S_IFMT) == S_IFREG,
+      statusBefore.st_uid == geteuid(),
+      statusBefore.st_nlink == 1,
+      (statusBefore.st_mode & 0o777) == 0o600,
+      statusBefore.st_size > 0,
+      statusBefore.st_size <= maximumResponseBytes
+else {
+    exit(1)
+}
+
+var data = Data()
+var buffer = [UInt8](repeating: 0, count: 4096)
+while true {
+    let count = buffer.withUnsafeMutableBytes {
+        Darwin.read(responseFD, $0.baseAddress, $0.count)
+    }
+    if count < 0 {
+        if errno == EINTR { continue }
+        exit(1)
+    }
+    if count == 0 { break }
+    guard data.count + count <= maximumResponseBytes else { exit(1) }
+    data.append(contentsOf: buffer.prefix(count))
+}
+
+var statusAfter = stat()
+var pathStatus = stat()
+guard fstat(responseFD, &statusAfter) == 0,
+      fstatat(
+          rootFD,
+          "main-window-identity.json",
+          &pathStatus,
+          AT_SYMLINK_NOFOLLOW
+      ) == 0,
+      statusBefore.st_dev == statusAfter.st_dev,
+      statusBefore.st_ino == statusAfter.st_ino,
+      statusBefore.st_size == statusAfter.st_size,
+      statusBefore.st_mtimespec.tv_sec == statusAfter.st_mtimespec.tv_sec,
+      statusBefore.st_mtimespec.tv_nsec == statusAfter.st_mtimespec.tv_nsec,
+      statusBefore.st_ctimespec.tv_sec == statusAfter.st_ctimespec.tv_sec,
+      statusBefore.st_ctimespec.tv_nsec == statusAfter.st_ctimespec.tv_nsec,
+      statusAfter.st_dev == pathStatus.st_dev,
+      statusAfter.st_ino == pathStatus.st_ino,
+      statusAfter.st_size == pathStatus.st_size,
+      statusAfter.st_mtimespec.tv_sec == pathStatus.st_mtimespec.tv_sec,
+      statusAfter.st_mtimespec.tv_nsec == pathStatus.st_mtimespec.tv_nsec,
+      statusAfter.st_ctimespec.tv_sec == pathStatus.st_ctimespec.tv_sec,
+      statusAfter.st_ctimespec.tv_nsec == pathStatus.st_ctimespec.tv_nsec,
+      (pathStatus.st_mode & S_IFMT) == S_IFREG,
+      pathStatus.st_uid == geteuid(),
+      pathStatus.st_nlink == 1,
+      (pathStatus.st_mode & 0o777) == 0o600,
+      data.count == statusBefore.st_size,
+      data.isEmpty == false,
+      let object = try? JSONSerialization.jsonObject(with: data),
+      let response = object as? [String: Any],
+      Set(response.keys) == Set([
+          "schema_version",
+          "profile",
+          "launch_token",
+          "process_identifier",
+          "bundle_identifier",
+          "window_number",
+          "title",
+      ]),
+      let schemaVersion = exactInteger(response["schema_version"]),
+      schemaVersion == 1,
+      let profile = response["profile"] as? String,
+      profile == "dmg-validation",
+      let launchToken = response["launch_token"] as? String,
+      launchToken == expectedToken,
+      let processIdentifier = exactInteger(response["process_identifier"]),
+      processIdentifier == expectedProcessIdentifier,
+      let bundleIdentifier = response["bundle_identifier"] as? String,
+      bundleIdentifier == expectedBundleIdentifier,
+      let windowNumber = exactInteger(response["window_number"]),
+      windowNumber > 0,
+      let title = response["title"] as? String,
+      title == expectedTitle
+else {
+    exit(1)
+}
+let canonicalResponse: [String: Any] = [
+    "schema_version": schemaVersion,
+    "profile": profile,
+    "launch_token": launchToken,
+    "process_identifier": processIdentifier,
+    "bundle_identifier": bundleIdentifier,
+    "window_number": windowNumber,
+    "title": title,
+]
+guard let canonicalData = try? JSONSerialization.data(
+          withJSONObject: canonicalResponse,
+          options: [.sortedKeys, .withoutEscapingSlashes]
+      ),
+      canonicalData == data
+else {
+    exit(1)
+}
+print("\(windowNumber)|\(title)")
+'
+}
+
+dmg_window_identity_prepare_request() {
+  local runtime_evidence_root="$1"
+  local launch_token="$2"
+  local scope="$3"
+
+  NOONMARK_DMG_WINDOW_EVIDENCE_ROOT="$runtime_evidence_root" \
+    NOONMARK_DMG_WINDOW_LAUNCH_TOKEN="$launch_token" \
+    NOONMARK_DMG_WINDOW_SCOPE="$scope" \
+    swift -e '
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawRoot = environment["NOONMARK_DMG_WINDOW_EVIDENCE_ROOT"],
+      let scope = environment["NOONMARK_DMG_WINDOW_SCOPE"],
+      scope == "live" || scope == "fixture",
+      let launchToken = environment["NOONMARK_DMG_WINDOW_LAUNCH_TOKEN"],
+      UUID(uuidString: launchToken)?.uuidString == launchToken
+else {
+    exit(1)
+}
+
+func lexicalComponents(_ path: String) -> [Substring]? {
+    guard path.hasPrefix("/"),
+          path.contains("//") == false,
+          path.contains("\n") == false,
+          path.contains("\r") == false,
+          path.contains("\0") == false
+    else {
+        return nil
+    }
+    let pieces = path.split(separator: "/", omittingEmptySubsequences: false)
+    guard pieces.first?.isEmpty == true else { return nil }
+    let components = Array(pieces.dropFirst())
+    guard components.count >= 3,
+          components.allSatisfy({ $0.isEmpty == false && $0 != "." && $0 != ".." })
+    else {
+        return nil
+    }
+    return components
+}
+
+let expectedLiveRoot = NSHomeDirectory()
+    + "/Library/Application Support/noonmark-dmg-validation/RuntimeEvidence"
+guard let rootComponents = lexicalComponents(rawRoot),
+      rootComponents.suffix(2).map(String.init) == [
+          "noonmark-dmg-validation",
+          "RuntimeEvidence",
+      ],
+      scope != "live" || rawRoot == expectedLiveRoot
+else {
+    exit(1)
+}
+
+func openDirectoryChain(_ components: ArraySlice<Substring>) -> Int32 {
+    var descriptor = open(
+        "/",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { exit(1) }
+    for component in components {
+        let nextDescriptor = openat(
+            descriptor,
+            String(component),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        _ = close(descriptor)
+        guard nextDescriptor >= 0 else { exit(1) }
+        var status = stat()
+        guard fstat(nextDescriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFDIR
+        else {
+            _ = close(nextDescriptor)
+            exit(1)
+        }
+        descriptor = nextDescriptor
+    }
+    return descriptor
+}
+
+let applicationSupportFD = openDirectoryChain(rootComponents.dropLast(2))
+guard applicationSupportFD >= 0 else { exit(1) }
+defer { close(applicationSupportFD) }
+var applicationSupportStatus = stat()
+guard fstat(applicationSupportFD, &applicationSupportStatus) == 0,
+      (applicationSupportStatus.st_mode & S_IFMT) == S_IFDIR,
+      applicationSupportStatus.st_uid == geteuid()
+else {
+    exit(1)
+}
+
+func openOwnedDirectory(parentFD: Int32, name: String) -> Int32 {
+    if mkdirat(parentFD, name, 0o700) != 0, errno != EEXIST {
+        exit(1)
+    }
+    let descriptor = openat(
+        parentFD,
+        name,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { exit(1) }
+    var status = stat()
+    guard fstat(descriptor, &status) == 0,
+          (status.st_mode & S_IFMT) == S_IFDIR,
+          status.st_uid == geteuid(),
+          (status.st_mode & 0o777) == 0o700
+    else {
+        close(descriptor)
+        exit(1)
+    }
+    return descriptor
+}
+
+let dataFD = openOwnedDirectory(
+    parentFD: applicationSupportFD,
+    name: "noonmark-dmg-validation"
+)
+defer { close(dataFD) }
+let runtimeFD = openOwnedDirectory(parentFD: dataFD, name: "RuntimeEvidence")
+defer { close(runtimeFD) }
+
+func sameIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+    lhs.st_dev == rhs.st_dev
+        && lhs.st_ino == rhs.st_ino
+        && lhs.st_size == rhs.st_size
+        && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+        && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+        && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+        && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+}
+
+func removeVerifiedOwnedFile(_ name: String) {
+    let descriptor = openat(
+        runtimeFD,
+        name,
+        O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+    )
+    if descriptor < 0 {
+        if errno == ENOENT { return }
+        exit(1)
+    }
+    defer { close(descriptor) }
+
+    var descriptorStatus = stat()
+    var pathStatus = stat()
+    guard fstat(descriptor, &descriptorStatus) == 0,
+          fstatat(runtimeFD, name, &pathStatus, AT_SYMLINK_NOFOLLOW) == 0,
+          sameIdentity(descriptorStatus, pathStatus),
+          (descriptorStatus.st_mode & S_IFMT) == S_IFREG,
+          descriptorStatus.st_uid == geteuid(),
+          descriptorStatus.st_nlink == 1,
+          (descriptorStatus.st_mode & 0o777) == 0o600,
+          unlinkat(runtimeFD, name, 0) == 0
+    else {
+        exit(1)
+    }
+
+    var unlinkedStatus = stat()
+    guard fstat(descriptor, &unlinkedStatus) == 0,
+          descriptorStatus.st_dev == unlinkedStatus.st_dev,
+          descriptorStatus.st_ino == unlinkedStatus.st_ino,
+          descriptorStatus.st_size == unlinkedStatus.st_size,
+          descriptorStatus.st_mtimespec.tv_sec
+              == unlinkedStatus.st_mtimespec.tv_sec,
+          descriptorStatus.st_mtimespec.tv_nsec
+              == unlinkedStatus.st_mtimespec.tv_nsec,
+          unlinkedStatus.st_nlink == 0
+    else {
+        exit(1)
+    }
+    var absentStatus = stat()
+    guard fstatat(runtimeFD, name, &absentStatus, AT_SYMLINK_NOFOLLOW) != 0,
+          errno == ENOENT
+    else {
+        exit(1)
+    }
+}
+
+let requestName = "main-window-request.json"
+let responseName = "main-window-identity.json"
+removeVerifiedOwnedFile(responseName)
+removeVerifiedOwnedFile(requestName)
+
+let requestObject: [String: Any] = [
+    "schema_version": 1,
+    "profile": "dmg-validation",
+    "launch_token": launchToken,
+]
+guard JSONSerialization.isValidJSONObject(requestObject),
+      var requestData = try? JSONSerialization.data(
+          withJSONObject: requestObject,
+          options: [.sortedKeys, .withoutEscapingSlashes]
+      )
+else {
+    exit(1)
+}
+
+let temporaryName = ".main-window-request.\(launchToken).tmp"
+var temporaryFD = openat(
+    runtimeFD,
+    temporaryName,
+    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+    0o600
+)
+guard temporaryFD >= 0 else { exit(1) }
+var temporaryPublished = false
+defer {
+    if temporaryFD >= 0 { close(temporaryFD) }
+    if temporaryPublished == false {
+        _ = unlinkat(runtimeFD, temporaryName, 0)
+    }
+}
+
+var offset = 0
+let writeSucceeded = requestData.withUnsafeBytes { rawBuffer -> Bool in
+    guard let baseAddress = rawBuffer.baseAddress else { return false }
+    while offset < requestData.count {
+        let count = write(
+            temporaryFD,
+            baseAddress.advanced(by: offset),
+            requestData.count - offset
+        )
+        if count < 0 {
+            if errno == EINTR { continue }
+            return false
+        }
+        guard count > 0 else { return false }
+        offset += count
+    }
+    return true
+}
+guard writeSucceeded, fsync(temporaryFD) == 0 else { exit(1) }
+
+var temporaryStatus = stat()
+guard fstat(temporaryFD, &temporaryStatus) == 0,
+      (temporaryStatus.st_mode & S_IFMT) == S_IFREG,
+      temporaryStatus.st_uid == geteuid(),
+      temporaryStatus.st_nlink == 1,
+      (temporaryStatus.st_mode & 0o777) == 0o600,
+      temporaryStatus.st_size == requestData.count
+else {
+    exit(1)
+}
+guard renameatx_np(
+          runtimeFD,
+          temporaryName,
+          runtimeFD,
+          requestName,
+          UInt32(RENAME_EXCL)
+      ) == 0
+else {
+    exit(1)
+}
+temporaryPublished = true
+guard fsync(runtimeFD) == 0 else { exit(1) }
+
+var publishedFDStatus = stat()
+var publishedStatus = stat()
+guard fstat(temporaryFD, &publishedFDStatus) == 0,
+      fstatat(runtimeFD, requestName, &publishedStatus, AT_SYMLINK_NOFOLLOW) == 0,
+      (publishedStatus.st_mode & S_IFMT) == S_IFREG,
+      publishedStatus.st_uid == geteuid(),
+      publishedStatus.st_nlink == 1,
+      (publishedStatus.st_mode & 0o777) == 0o600,
+      publishedStatus.st_dev == publishedFDStatus.st_dev,
+      publishedStatus.st_ino == publishedFDStatus.st_ino,
+      publishedStatus.st_size == publishedFDStatus.st_size,
+      publishedStatus.st_mtimespec.tv_sec == publishedFDStatus.st_mtimespec.tv_sec,
+      publishedStatus.st_mtimespec.tv_nsec == publishedFDStatus.st_mtimespec.tv_nsec,
+      publishedStatus.st_ctimespec.tv_sec == publishedFDStatus.st_ctimespec.tv_sec,
+      publishedStatus.st_ctimespec.tv_nsec == publishedFDStatus.st_ctimespec.tv_nsec
+else {
+    exit(1)
+}
+var responseStatusAfterPublication = stat()
+guard fstatat(
+          runtimeFD,
+          responseName,
+          &responseStatusAfterPublication,
+          AT_SYMLINK_NOFOLLOW
+      ) != 0,
+      errno == ENOENT
+else {
+    exit(1)
+}
+'
+}
+
+if [[ "${1:-}" == "--verify-window-identity-fixture" ]]; then
+  if [[ "$#" -ne 6 ]]; then
+    echo "usage: scripts/test-dmg-install --verify-window-identity-fixture ROOT TOKEN PID BUNDLE TITLE" >&2
+    exit 64
+  fi
+  dmg_window_identity_read_response "$2" "$3" "$4" "$5" "$6" fixture
+  exit $?
+fi
+if [[ "${1:-}" == "--prepare-window-identity-fixture" ]]; then
+  if [[ "$#" -ne 3 ]]; then
+    echo "usage: scripts/test-dmg-install --prepare-window-identity-fixture ROOT TOKEN" >&2
+    exit 64
+  fi
+  dmg_window_identity_prepare_request "$2" "$3" fixture
+  exit $?
+fi
+
 # The LaunchServices helper posts physical WindowServer input. Require a stable
 # designated requirement so its one-time TCC authorization survives rebuilds.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
@@ -34,6 +580,7 @@ validation_bundle_name="NoonmarkDMGValidation.app"
 validation_executable_name="NoonmarkMacAppDMGValidation"
 validation_data_directory_name="noonmark-dmg-validation"
 validation_icloud_repository="Noonmark-DMGValidation/SyncRepository"
+window_runtime_evidence_root=""
 task_title="dmgvalidationtask"
 database_path=""
 screenshot_path="${work_dir}/installed-day.png"
@@ -97,6 +644,7 @@ executable_name="NoonmarkMacApp"
 installed_app=""
 installed_executable=""
 active_app_pid=""
+active_window_launch_token=""
 active_helper_pid=""
 active_helper_mode=""
 active_helper_token=""
@@ -1753,111 +2301,130 @@ print("\(localDay)|\(title)")
 '
 }
 
-find_main_window_metadata() {
-  local pid="$1"
+prepare_main_window_identity_handshake() {
+  local token
 
-  NOONMARK_DMG_APP_PID="$pid" swift -e '
+  active_window_launch_token=""
+  if [[ -z "$window_runtime_evidence_root" ]]; then
+    echo "dmg-validation window evidence root is unavailable" >&2
+    return 1
+  fi
+  token="$(uuidgen)"
+  if [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "uuidgen returned an invalid main-window launch token" >&2
+    return 1
+  fi
+  dmg_window_identity_prepare_request \
+    "$window_runtime_evidence_root" \
+    "$token" \
+    live
+  active_window_launch_token="$token"
+}
+
+launch_installed_app() {
+  local launch_log_path="$1"
+
+  prepare_main_window_identity_handshake
+  /usr/bin/open -n "$installed_app" >"$launch_log_path" 2>&1
+}
+
+verify_exact_main_window() {
+  local pid="$1"
+  local window_number="$2"
+  local window_title="$3"
+
+  NOONMARK_DMG_APP_PID="$pid" \
+    NOONMARK_DMG_WINDOW_NUMBER="$window_number" \
+    NOONMARK_DMG_WINDOW_TITLE="$window_title" \
+    swift -e '
 import CoreGraphics
 import Darwin
 import Foundation
 
 let environment = ProcessInfo.processInfo.environment
 guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
+      expectedPID > 0,
+      let rawWindowNumber = UInt32(
+          environment["NOONMARK_DMG_WINDOW_NUMBER"] ?? ""
+      ),
+      rawWindowNumber > 0,
+      let expectedTitle = environment["NOONMARK_DMG_WINDOW_TITLE"],
+      expectedTitle.isEmpty == false,
       let windows = CGWindowListCopyWindowInfo(
-          [.optionOnScreenOnly],
-          kCGNullWindowID
-      ) as? [[String: Any]]
+          [.optionIncludingWindow],
+          CGWindowID(rawWindowNumber)
+      ) as? [[String: Any]],
+      windows.count == 1,
+      let window = windows.first,
+      let windowNumber = window[kCGWindowNumber as String] as? NSNumber,
+      windowNumber.uint32Value == rawWindowNumber,
+      let ownerPID = window[kCGWindowOwnerPID as String] as? NSNumber,
+      ownerPID.intValue == expectedPID,
+      let title = window[kCGWindowName as String] as? String,
+      title == expectedTitle,
+      let layer = window[kCGWindowLayer as String] as? NSNumber,
+      layer.intValue == 0,
+      let isOnscreen = window[kCGWindowIsOnscreen as String] as? NSNumber,
+      isOnscreen.boolValue,
+      let bounds = window[kCGWindowBounds as String] as? [String: Any],
+      let width = bounds["Width"] as? NSNumber,
+      width.doubleValue >= 960,
+      let height = bounds["Height"] as? NSNumber,
+      height.doubleValue >= 720
 else {
     exit(1)
-}
-
-var calendar = Calendar(identifier: .gregorian)
-calendar.locale = Locale(identifier: "en_US_POSIX")
-calendar.timeZone = .autoupdatingCurrent
-let now = Date()
-let components = calendar.dateComponents([.year, .month, .day], from: now)
-guard let year = components.year,
-      let month = components.month,
-      let day = components.day
-else {
-    exit(1)
-}
-let formatter = DateFormatter()
-formatter.calendar = Calendar(identifier: .gregorian)
-formatter.locale = Locale(identifier: "zh_Hans_SG")
-formatter.timeZone = .autoupdatingCurrent
-formatter.dateFormat = "M月d日"
-let localDay = String(format: "%04d-%02d-%02d", year, month, day)
-let expectedTitle = "晷迹 · Day Todo — \(formatter.string(from: now))"
-
-for window in windows {
-    let pid = window[kCGWindowOwnerPID as String] as? Int ?? -1
-    let title = window[kCGWindowName as String] as? String ?? ""
-    let layer = window[kCGWindowLayer as String] as? Int ?? -1
-    let bounds = window[kCGWindowBounds as String] as? [String: Any]
-    let width = bounds?["Width"] as? Double ?? 0
-    let height = bounds?["Height"] as? Double ?? 0
-    guard pid == expectedPID,
-          title == expectedTitle,
-          layer == 0,
-          width >= 960,
-          height >= 720,
-          let number = window[kCGWindowNumber as String]
-    else { continue }
-    print("\(number)|\(localDay)|\(expectedTitle)")
-    exit(0)
-}
-exit(1)
-'
-}
-
-dump_process_windows() {
-  local pid="$1"
-
-  NOONMARK_DMG_APP_PID="$pid" swift -e '
-import CoreGraphics
-import Foundation
-
-let environment = ProcessInfo.processInfo.environment
-guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
-      let windows = CGWindowListCopyWindowInfo(
-          [.optionOnScreenOnly],
-          kCGNullWindowID
-      ) as? [[String: Any]]
-else {
-    exit(1)
-}
-
-for window in windows where
-    (window[kCGWindowOwnerPID as String] as? Int) == expectedPID
-{
-    let number = window[kCGWindowNumber as String] as? Int ?? -1
-    let title = window[kCGWindowName as String] as? String ?? ""
-    let layer = window[kCGWindowLayer as String] as? Int ?? -1
-    let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
-    print("window id=\(number) title=\(title) layer=\(layer) bounds=\(bounds)")
 }
 '
 }
 
 wait_for_main_window_metadata() {
   local pid="$1"
-  local window_metadata=""
+  local launch_token="$2"
+  local natural_day=""
+  local expected_title=""
+  local response=""
+  local window_number=""
+  local response_title=""
+
+  if [[ ! "$launch_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "main-window launch token was invalid" >&2
+    return 1
+  fi
+  IFS='|' read -r natural_day expected_title < <(current_day_metadata)
+  if [[ -z "$natural_day" || -z "$expected_title" ]]; then
+    echo "dmg-validation natural-day window identity was unavailable" >&2
+    return 1
+  fi
 
   for _ in {1..80}; do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
-      echo "installed app exited before presenting its main window" >&2
+      echo "dmg-validation App exited before its scoped window response: profile=dmg-validation pid=$pid token=$launch_token" >&2
       return 1
     fi
-    if window_metadata="$(find_main_window_metadata "$pid" 2>/dev/null)"; then
-      printf '%s\n' "$window_metadata"
-      return 0
+    if response="$(
+      dmg_window_identity_read_response \
+        "$window_runtime_evidence_root" \
+        "$launch_token" \
+        "$pid" \
+        "$validation_bundle_identifier" \
+        "$expected_title" \
+        live \
+        2>/dev/null
+    )"; then
+      IFS='|' read -r window_number response_title <<<"$response"
+      if [[ "$response_title" == "$expected_title" ]] &&
+        verify_exact_main_window \
+          "$pid" \
+          "$window_number" \
+          "$response_title" \
+          2>/dev/null; then
+        printf '%s|%s|%s\n' "$window_number" "$natural_day" "$response_title"
+        return 0
+      fi
     fi
     sleep 0.1
   done
-  IFS='|' read -r _ current_expected_title < <(current_day_metadata)
-  echo "installed app main window not found for dynamic title: $current_expected_title" >&2
-  dump_process_windows "$pid" >&2 || true
+  echo "dmg-validation scoped main window was not verified: profile=dmg-validation pid=$pid token=$launch_token response=RuntimeEvidence/main-window-identity.json" >&2
   return 1
 }
 
@@ -1894,9 +2461,10 @@ capture_window_evidence() {
   local destination_screenshot="$2"
   local destination_metadata="$3"
   local phase="$4"
+  local launch_token="$5"
   local metadata window_id natural_day expected_title width height
 
-  metadata="$(wait_for_main_window_metadata "$pid")"
+  metadata="$(wait_for_main_window_metadata "$pid" "$launch_token")"
   IFS='|' read -r window_id natural_day expected_title <<<"$metadata"
   if [[ -z "$window_id" || -z "$natural_day" || -z "$expected_title" ]]; then
     echo "$phase window metadata was incomplete: $metadata" >&2
@@ -1981,7 +2549,7 @@ run_validation_helper_phase() {
     "$console_log_path"
   start_runtime_capture "$console_log_path"
   : >"$launch_log_path"
-  /usr/bin/open -n "$installed_app" >"$launch_log_path" 2>&1
+  launch_installed_app "$launch_log_path"
   pid="$(wait_for_installed_pid)"
   verify_installed_process_identity "$pid"
   active_app_pid="$pid"
@@ -1989,7 +2557,8 @@ run_validation_helper_phase() {
     "$pid" \
     "$phase_screenshot_path" \
     "$phase_window_metadata_path" \
-    "$phase_label"
+    "$phase_label" \
+    "$active_window_launch_token"
   VALIDATION_PHASE_DAY="$CAPTURED_WINDOW_DAY"
 
   run_helper \
@@ -2310,7 +2879,7 @@ run_validation_diagnostic_export_phase() {
     "$diagnostic_export_window_metadata_path"
   start_runtime_capture "$diagnostic_export_console_log"
   : >"$diagnostic_export_launch_log"
-  /usr/bin/open -n "$installed_app" >"$diagnostic_export_launch_log" 2>&1
+  launch_installed_app "$diagnostic_export_launch_log"
   pid="$(wait_for_installed_pid)"
   verify_installed_process_identity "$pid"
   active_app_pid="$pid"
@@ -2318,7 +2887,8 @@ run_validation_diagnostic_export_phase() {
     "$pid" \
     "$diagnostic_export_screenshot_path" \
     "$diagnostic_export_window_metadata_path" \
-    "dmg-validation diagnostic export"
+    "dmg-validation diagnostic export" \
+    "$active_window_launch_token"
   run_helper \
     "diagnostic-export" \
     "$pid" \
@@ -2565,6 +3135,17 @@ print(base
 if [[ "$database_path" != \
   */Library/Application\ Support/noonmark-dmg-validation/Noonmark.sqlite ]]; then
   echo "refusing to inspect an unexpected DMG validation database path: $database_path" >&2
+  exit 1
+fi
+window_runtime_evidence_root="${database_path%/Noonmark.sqlite}/RuntimeEvidence"
+if [[ "$window_runtime_evidence_root" != \
+    */Library/Application\ Support/noonmark-dmg-validation/RuntimeEvidence ||
+  "$window_runtime_evidence_root" == *"//"* ||
+  "$window_runtime_evidence_root" == *"/./"* ||
+  "$window_runtime_evidence_root" == *"/../"* ||
+  "$window_runtime_evidence_root" == *$'\n'* ||
+  "$window_runtime_evidence_root" == *$'\r'* ]]; then
+  echo "refusing an unexpected dmg-validation window evidence root" >&2
   exit 1
 fi
 
@@ -2923,7 +3504,7 @@ run_permission_preflight
 
 : >"$initial_launch_log"
 start_runtime_capture "$initial_console_log"
-/usr/bin/open -n "$installed_app" >"$initial_launch_log" 2>&1
+launch_installed_app "$initial_launch_log"
 
 installed_pid="$(wait_for_installed_pid)"
 verify_installed_process_identity "$installed_pid"
@@ -2932,7 +3513,8 @@ capture_window_evidence \
   "$installed_pid" \
   "$screenshot_path" \
   "$window_metadata_path" \
-  "dmg-validation initial"
+  "dmg-validation initial" \
+  "$active_window_launch_token"
 window_id="$CAPTURED_WINDOW_ID"
 initial_day="$CAPTURED_WINDOW_DAY"
 expected_window_title="$CAPTURED_WINDOW_TITLE"

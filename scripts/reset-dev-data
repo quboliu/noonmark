@@ -69,6 +69,25 @@ for guarded_path in "${guarded_paths[@]}"; do
   fi
 done
 
+keychain_probe_status=0
+security find-generic-password \
+  -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
+  -a sidecar-encryption-key-v1 \
+  >/dev/null 2>&1 || keychain_probe_status=$?
+if [[ "$keychain_probe_status" -ne 0 && "$keychain_probe_status" -ne 44 ]]; then
+  echo "failed to inspect the $profile Noonmark sidecar key" >&2
+  exit 1
+fi
+
+defaults_domain_present=0
+defaults_output=""
+if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
+  defaults_domain_present=1
+elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
+  echo "failed to inspect defaults for $bundle_identifier: $defaults_output" >&2
+  exit 1
+fi
+
 probe_process() {
   local target_process_name="$1"
   local probe_status=0
@@ -151,15 +170,11 @@ if [[ "$keychain_status" -ne 0 && "$keychain_status" -ne 44 ]]; then
   exit 1
 fi
 
-defaults_output=""
-if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
+if [[ "$defaults_domain_present" -eq 1 ]]; then
   if ! defaults delete "$bundle_identifier" >/dev/null 2>&1; then
     echo "failed to clear defaults for $bundle_identifier" >&2
     exit 1
   fi
-elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
-  echo "failed to inspect defaults for $bundle_identifier: $defaults_output" >&2
-  exit 1
 fi
 
 defaults_output=""

@@ -169,6 +169,9 @@ set -euo pipefail
 printf 'defaults' >>"$NOONMARK_FIXTURE_TRACE"
 printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
 printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
+if [[ "${NOONMARK_STUB_DEFAULTS_STATUS:-0}" -ne 0 ]]; then
+  exit "$NOONMARK_STUB_DEFAULTS_STATUS"
+fi
 if [[ "${1:-}" == "read" ]]; then
   if [[ -f "$NOONMARK_FIXTURE_DEFAULTS_STATE/${2:-missing}" ]]; then
     printf '{ fixture = true; }\n'
@@ -196,6 +199,8 @@ run_reset() {
   NOONMARK_FIXTURE_DEFAULTS_STATE="$defaults_state" \
   NOONMARK_STUB_PGREP_STATUS="${NOONMARK_TEST_PGREP_STATUS:-1}" \
   NOONMARK_STUB_PKILL_STATUS="${NOONMARK_TEST_PKILL_STATUS:-1}" \
+  NOONMARK_STUB_SECURITY_STATUS="${NOONMARK_TEST_SECURITY_STATUS:-44}" \
+  NOONMARK_STUB_DEFAULTS_STATUS="${NOONMARK_TEST_DEFAULTS_STATUS:-0}" \
   NOONMARK_STUB_REALPATH_RESULT="${NOONMARK_TEST_REALPATH_RESULT:-$fixture_home}" \
     "$repo_root/scripts/reset-dev-data" "$@" \
       >"$reset_output" 2>&1
@@ -232,6 +237,64 @@ production_cache="$fixture_home/Library/Caches/app.noonmark.mac"
 development_cache="$fixture_home/Library/Caches/app.noonmark.mac.development"
 production_state="$fixture_home/Library/Saved Application State/app.noonmark.mac.savedState"
 development_state="$fixture_home/Library/Saved Application State/app.noonmark.mac.development.savedState"
+development_defaults="$defaults_state/app.noonmark.mac.development"
+development_preflight_canaries=(
+  "$development_data/preflight-canary"
+  "$development_icloud/preflight-canary"
+  "$development_cache/preflight-canary"
+  "$development_state/preflight-canary"
+)
+
+seed_development_preflight_canaries() {
+  mkdir -p \
+    "$development_data" \
+    "$development_icloud" \
+    "$development_cache" \
+    "$development_state"
+  for canary in "${development_preflight_canaries[@]}"; do
+    printf 'preflight-canary\n' >"$canary"
+  done
+  printf 'defaults-canary\n' >"$development_defaults"
+}
+
+assert_development_preflight_canaries_preserved() {
+  local label="$1"
+  local canary
+  for canary in "${development_preflight_canaries[@]}"; do
+    if [[ ! -f "$canary" || -L "$canary" \
+      || "$(<"$canary")" != "preflight-canary" ]]; then
+      echo "$label changed canary: $canary" >&2
+      sed -n '1,120p' "$trace_path" >&2
+      exit 1
+    fi
+  done
+  if [[ ! -f "$development_defaults" || -L "$development_defaults" \
+    || "$(<"$development_defaults")" != "defaults-canary" ]]; then
+    echo "$label changed defaults canary: $development_defaults" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+}
+
+assert_no_delete_action() {
+  local label="$1"
+  if grep -Eq \
+    '^(rm |defaults delete |security delete-generic-password )' \
+    "$trace_path"; then
+    echo "$label reached a delete action" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+}
+
+clear_development_preflight_canaries() {
+  /bin/rm -rf -- \
+    "$development_data" \
+    "$development_icloud_profile_root" \
+    "$development_cache" \
+    "$development_state"
+  /bin/rm -f -- "$development_defaults"
+}
 
 mkdir -p \
   "$production_data" \
@@ -303,6 +366,7 @@ if grep -Fq 'zhulong.provider' "$trace_path"; then
   exit 1
 fi
 for required_trace in \
+  'security find-generic-password -s app.noonmark.zhulong.sidecar-key.development -a sidecar-encryption-key-v1' \
   'pgrep -x NoonmarkMacAppDevelopment' \
   'defaults read app.noonmark.mac.development' \
   'defaults delete app.noonmark.mac.development' \
@@ -322,6 +386,7 @@ while IFS='|' read -r selected_profile selected_process selected_bundle selected
     exit 1
   fi
   for required_trace in \
+    "security find-generic-password -s $selected_sidecar -a sidecar-encryption-key-v1" \
     "pgrep -x $selected_process" \
     "defaults read $selected_bundle" \
     "security delete-generic-password -s $selected_sidecar -a sidecar-encryption-key-v1"; do
@@ -345,6 +410,32 @@ audit|NoonmarkMacAppAudit|app.noonmark.mac.audit|app.noonmark.zhulong.sidecar-ke
 dmg-validation|NoonmarkMacAppDMGValidation|app.noonmark.mac.dmg-validation|app.noonmark.zhulong.sidecar-key.dmg-validation
 RESETTABLE_PROFILES
 
+seed_development_preflight_canaries
+NOONMARK_TEST_SECURITY_STATUS=2
+run_reset development
+unset NOONMARK_TEST_SECURITY_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a Keychain preflight failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "Keychain preflight failure"
+assert_no_delete_action "Keychain preflight failure"
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+NOONMARK_TEST_DEFAULTS_STATUS=2
+run_reset development
+unset NOONMARK_TEST_DEFAULTS_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a defaults preflight failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "defaults preflight failure"
+assert_no_delete_action "defaults preflight failure"
+clear_development_preflight_canaries
+
 NOONMARK_TEST_PGREP_STATUS=2
 run_reset development
 unset NOONMARK_TEST_PGREP_STATUS
@@ -352,7 +443,9 @@ if [[ "$reset_status" -eq 0 ]]; then
   echo "development reset treated a process-probe failure as no process" >&2
   exit 1
 fi
-if grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+if grep -Eq \
+  '^(rm |defaults delete |security delete-generic-password )' \
+  "$trace_path"; then
   echo "development reset deleted state after a process-probe failure" >&2
   sed -n '1,120p' "$trace_path" >&2
   exit 1
@@ -381,7 +474,9 @@ NOONMARK_TEST_PKILL_STATUS=2
 run_reset development
 unset NOONMARK_TEST_PGREP_STATUS NOONMARK_TEST_PKILL_STATUS
 if [[ "$reset_status" -eq 0 ]] \
-  || grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+  || grep -Eq \
+    '^(rm |defaults delete |security delete-generic-password )' \
+    "$trace_path"; then
   echo "development reset deleted state after a process-signal failure" >&2
   sed -n '1,120p' "$trace_path" >&2
   exit 1
@@ -392,7 +487,9 @@ NOONMARK_TEST_PKILL_STATUS=0
 run_reset development
 unset NOONMARK_TEST_PGREP_STATUS NOONMARK_TEST_PKILL_STATUS
 if [[ "$reset_status" -eq 0 ]] \
-  || grep -Eq '^(rm|security|defaults) ' "$trace_path"; then
+  || grep -Eq \
+    '^(rm |defaults delete |security delete-generic-password )' \
+    "$trace_path"; then
   echo "development reset deleted state while its process survived" >&2
   sed -n '1,120p' "$trace_path" >&2
   exit 1

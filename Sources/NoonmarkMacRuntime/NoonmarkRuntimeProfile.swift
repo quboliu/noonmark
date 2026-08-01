@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// A bundle identity whose data-bearing resources are isolated from every
@@ -146,7 +147,9 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
     /// Proves that an internal test/demo path cannot alias, contain, or sit
     /// below a production-owned root. The comparison is deliberately
     /// case-insensitive so it remains conservative on the default macOS file
-    /// system, and resolves existing symlinks before checking ancestry.
+    /// system. Production roots are compared lexically before any filesystem
+    /// inspection. Existing candidate symlinks are rejected with `lstat`
+    /// instead of being followed into an untrusted target.
     public func validateInternalPathOverride(
         _ candidateURL: URL,
         protectedProductionRoots: [URL]
@@ -164,7 +167,7 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
             throw NoonmarkRuntimePathOverrideError.missingProductionScope
         }
 
-        let candidatePath = Self.resolvedComparisonPath(for: candidateURL)
+        let candidatePath = Self.lexicalComparisonPath(for: candidateURL)
         for protectedRoot in protectedProductionRoots {
             // Production roots are lexical canaries. A nonproduction process
             // must not stat or traverse them merely to prove isolation.
@@ -178,33 +181,8 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
                     .productionScopeOverlap
             }
         }
-    }
 
-    private static func resolvedComparisonPath(for url: URL) -> String {
-        var existingAncestor = url.standardizedFileURL
-        var missingSuffix: [String] = []
-        let fileManager = FileManager.default
-
-        while fileManager.fileExists(atPath: existingAncestor.path) == false,
-              existingAncestor.path != "/"
-        {
-            missingSuffix.insert(
-                existingAncestor.lastPathComponent,
-                at: 0
-            )
-            let parent = existingAncestor.deletingLastPathComponent()
-            guard parent.path != existingAncestor.path else { break }
-            existingAncestor = parent
-        }
-
-        let resolvedAncestor = existingAncestor
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-        return missingSuffix.reduce(resolvedAncestor) { partialURL, component in
-            partialURL.appendingPathComponent(component)
-        }
-            .path
-            .precomposedStringWithCanonicalMapping
+        try Self.rejectExistingCandidateSymlink(in: candidateURL)
     }
 
     private static func lexicalComparisonPath(for url: URL) -> String {
@@ -218,6 +196,35 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
         let candidate = candidatePath.lowercased()
         let root = rootPath.lowercased()
         return candidate == root || candidate.hasPrefix(root + "/")
+    }
+
+    private static func rejectExistingCandidateSymlink(
+        in candidateURL: URL
+    ) throws {
+        var currentURL = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in candidateURL.standardizedFileURL.pathComponents
+            where component != "/"
+        {
+            currentURL.appendPathComponent(component)
+            var information = stat()
+            let result: (status: Int32, errorCode: Int32) = currentURL
+                .withUnsafeFileSystemRepresentation { path in
+                    guard let path else { return (-1, EINVAL) }
+                    let status = lstat(path, &information)
+                    return (status, status == 0 ? 0 : errno)
+                }
+            if result.status == 0 {
+                if information.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK) {
+                    throw NoonmarkRuntimePathOverrideError
+                        .productionScopeOverlap
+                }
+                continue
+            }
+            if result.errorCode == ENOENT || result.errorCode == ENOTDIR {
+                return
+            }
+            throw NoonmarkRuntimePathOverrideError.productionScopeOverlap
+        }
     }
 }
 

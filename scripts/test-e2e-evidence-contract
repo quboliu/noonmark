@@ -99,6 +99,15 @@ require_literal() {
   fi
 }
 
+forbid_literal() {
+  local path="$1"
+  local literal="$2"
+  if grep -F -- "$literal" "$path" >/dev/null; then
+    echo "$path contains forbidden evidence behavior: $literal" >&2
+    exit 1
+  fi
+}
+
 require_order() {
   local path="$1"
   local earlier="$2"
@@ -117,6 +126,8 @@ require_order() {
 
 # Integration checks supplement the public seam above: these guard the exact
 # suites/workflows without coupling the fixture to real App launch internals.
+forbid_literal scripts/test-dmg-install 'ps -axww -o pid=,command='
+require_literal scripts/test-dmg-install 'pgrep -x "$helper_executable_name"'
 require_literal scripts/test-e2e "source scripts/evidence-common"
 require_order \
   scripts/test-e2e \

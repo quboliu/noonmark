@@ -337,21 +337,23 @@ matching_owned_helper_pids() {
   local mode="$1"
   local token="$2"
   local candidate
-  local command_line
   local matches=""
   local match_status
-  local process_table=""
+  local pgrep_output=""
+  local pgrep_status
 
-  if ! process_table="$(ps -axww -o pid=,command= 2>/dev/null)"; then
-    echo "failed to enumerate processes while locating the token-scoped helper" >&2
+  if pgrep_output="$(pgrep -x "$helper_executable_name" 2>/dev/null)"; then
+    :
+  else
+    pgrep_status=$?
+    if [[ "$pgrep_status" -eq 1 ]]; then
+      return 0
+    fi
+    echo "failed to enumerate $helper_executable_name processes (pgrep=$pgrep_status)" >&2
     return 2
   fi
-  while read -r candidate command_line; do
+  while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    case "$command_line" in
-      "$helper_executable" | "$helper_executable "*) ;;
-      *) continue ;;
-    esac
     if process_has_helper_command_identity "$candidate" "$mode" "$token"; then
       if [[ -n "$matches" ]]; then
         matches+=$'\n'
@@ -363,7 +365,7 @@ matching_owned_helper_pids() {
         return "$match_status"
       fi
     fi
-  done <<<"$process_table"
+  done <<<"$pgrep_output"
   if [[ -n "$matches" ]]; then
     printf '%s\n' "$matches"
   fi

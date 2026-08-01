@@ -260,6 +260,72 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
         }
     }
 
+    func testOverrideRejectsLexicalProductionOverlapBeforeResolvingCandidateSymlink() throws {
+        let fixtureRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let unrelatedTarget = fixtureRoot
+            .appendingPathComponent("unrelated-target", isDirectory: true)
+        let protectedProductionRoot = fixtureRoot
+            .appendingPathComponent("production-canary", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unrelatedTarget,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: protectedProductionRoot,
+            withDestinationURL: unrelatedTarget
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fixtureRoot)
+        }
+
+        XCTAssertThrowsError(
+            try NoonmarkRuntimeProfile.e2e.validateInternalPathOverride(
+                protectedProductionRoot,
+                protectedProductionRoots: [protectedProductionRoot]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkRuntimePathOverrideError,
+                .productionScopeOverlap
+            )
+        }
+    }
+
+    func testOverrideRejectsEveryExistingCandidateSymlinkWithoutFollowingItsTarget() throws {
+        let fixtureRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let unrelatedTarget = fixtureRoot
+            .appendingPathComponent("unrelated-target", isDirectory: true)
+        let candidateAlias = fixtureRoot
+            .appendingPathComponent("candidate-alias", isDirectory: true)
+        let protectedProductionRoot = fixtureRoot
+            .appendingPathComponent("production-canary", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unrelatedTarget,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: candidateAlias,
+            withDestinationURL: unrelatedTarget
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fixtureRoot)
+        }
+
+        XCTAssertThrowsError(
+            try NoonmarkRuntimeProfile.demo.validateInternalPathOverride(
+                candidateAlias.appendingPathComponent("Noonmark.sqlite"),
+                protectedProductionRoots: [protectedProductionRoot]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkRuntimePathOverrideError,
+                .productionScopeOverlap
+            )
+        }
+    }
+
     func testOverrideRejectsNonFileURLsAndAnEmptyProtectionSet() {
         XCTAssertThrowsError(
             try NoonmarkRuntimeProfile.e2e.validateInternalPathOverride(

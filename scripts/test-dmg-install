@@ -2349,10 +2349,13 @@ guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
       ),
       rawWindowNumber > 0,
       let expectedTitle = environment["NOONMARK_DMG_WINDOW_TITLE"],
-      expectedTitle.isEmpty == false,
-      let windows = CGWindowListCopyWindowInfo(
-          [.optionIncludingWindow],
-          CGWindowID(rawWindowNumber)
+      expectedTitle.isEmpty == false
+else {
+    exit(1)
+}
+let windowIdentifiers = [NSNumber(value: rawWindowNumber)] as CFArray
+guard let windows = CGWindowListCreateDescriptionFromArray(
+          windowIdentifiers
       ) as? [[String: Any]],
       windows.count == 1,
       let window = windows.first,

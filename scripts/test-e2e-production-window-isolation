@@ -14,8 +14,9 @@ validate_production_window_isolation() {
   local forbidden
   local required
   local query_count
-  local exact_option_count
-  local exact_identifier_count
+  local exact_array_count
+  local enumerating_query='CGWindowList''CopyWindowInfo'
+  local relative_window_option='.option''IncludingWindow'
   local forbidden_literals=(
     '.optionOnScreenOnly'
     'kCGNullWindowID'
@@ -23,6 +24,8 @@ validate_production_window_isolation() {
     'owner.contains("晷迹")'
     'expectedOwner == "NoonmarkMacApp"'
     'identityPath).standardizedFileURL'
+    "$enumerating_query"
+    "$relative_window_option"
   )
   local required_literals=(
     '--e2e-main-window-identity-url'
@@ -36,6 +39,7 @@ validate_production_window_isolation() {
     'pathStatus.st_nlink == 1'
     'directoryStatus.st_mode & mode_t(0o777) == mode_t(0o700)'
     'pathStatus.st_mode & mode_t(0o777) == mode_t(0o600)'
+    'CGWindowListCreateDescriptionFromArray'
   )
 
   for forbidden in "${forbidden_literals[@]}"; do
@@ -51,13 +55,11 @@ validate_production_window_isolation() {
     fi
   done
 
-  query_count="$(rg -c 'CGWindowListCopyWindowInfo\(' "$source_path")"
-  exact_option_count="$(rg -c '\[\.optionIncludingWindow\]' "$source_path")"
-  exact_identifier_count="$(rg -c 'CGWindowID\(' "$source_path")"
+  query_count="$(rg -c 'CGWindowListCreateDescriptionFromArray\(' "$source_path")"
+  exact_array_count="$(rg -c '\[NSNumber\(value:' "$source_path")"
   if [[ "$query_count" -le 0 ||
-    "$query_count" != "$exact_option_count" ||
-    "$query_count" != "$exact_identifier_count" ]]; then
-    echo "every WindowServer query must consume one explicit CGWindowID" >&2
+    "$query_count" != "$exact_array_count" ]]; then
+    echo "every WindowServer query must consume one exact NSNumber ID array" >&2
     return 1
   fi
 }
@@ -67,8 +69,11 @@ validate_production_window_isolation "$test_e2e"
 fixture="$(mktemp "${TMPDIR:-/tmp}/noonmark-e2e-window-isolation.XXXXXX")"
 trap 'rm -f "$fixture"' EXIT
 cp "$test_e2e" "$fixture"
+enumerating_query='CGWindowList''CopyWindowInfo'
+relative_window_option='.option''IncludingWindow'
 printf '%s\n' \
-  'CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)' \
+  "${enumerating_query}([${relative_window_option}], CGWindowID(1))" \
+  'CGWindowListCreateDescriptionFromArray([] as CFArray)' \
   'print("window pid=1 owner=NoonmarkMacApp title=production")' \
   >>"$fixture"
 if validate_production_window_isolation "$fixture" >/dev/null 2>&1; then

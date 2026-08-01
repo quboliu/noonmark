@@ -567,12 +567,16 @@ else {
 let expectedPath = URL(fileURLWithPath: expectedApp)
     .standardizedFileURL.resolvingSymlinksInPath().path
 let actualPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+let windowIdentifiers = [NSNumber(value: windowNumber)] as CFArray
 guard actualPath == expectedPath,
-      let records = CGWindowListCopyWindowInfo(
-          [.optionIncludingWindow],
-          CGWindowID(windowNumber)
+      let records = CGWindowListCreateDescriptionFromArray(
+          windowIdentifiers
       ) as? [[String: Any]],
       records.count == 1,
+      let returnedWindowNumber = (
+          records[0][kCGWindowNumber as String] as? NSNumber
+      )?.uint32Value,
+      returnedWindowNumber == windowNumber,
       let ownerPID = (records[0][kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
       ownerPID == pid,
       let layer = (records[0][kCGWindowLayer as String] as? NSNumber)?.intValue,
@@ -1302,10 +1306,10 @@ else { exit(1) }
 let actualAppPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
 let normalizedExpectedAppPath = URL(fileURLWithPath: expectedAppPath)
     .standardizedFileURL.resolvingSymlinksInPath().path
+let windowIdentifiers = [NSNumber(value: identity.windowNumber)] as CFArray
 guard actualAppPath == normalizedExpectedAppPath,
-      let records = CGWindowListCopyWindowInfo(
-          [.optionIncludingWindow],
-          CGWindowID(identity.windowNumber)
+      let records = CGWindowListCreateDescriptionFromArray(
+          windowIdentifiers
       ) as? [[String: Any]],
       records.count == 1,
       let record = records.first,
@@ -1354,9 +1358,9 @@ guard let mainID = UInt32(environment["NOONMARK_E2E_MAIN_WINDOW_ID"] ?? ""), mai
 else { exit(2) }
 
 func exactWindow(_ identifier: UInt32) -> [String: Any]? {
-    guard let records = CGWindowListCopyWindowInfo(
-        [.optionIncludingWindow],
-        CGWindowID(identifier)
+    let windowIdentifiers = [NSNumber(value: identifier)] as CFArray
+    guard let records = CGWindowListCreateDescriptionFromArray(
+        windowIdentifiers
     ) as? [[String: Any]], records.count == 1,
         let record = records.first,
         (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value == identifier,

@@ -348,15 +348,26 @@ if rg -n \
   cat "${fixture_root}/global-window-list.txt" >&2
   exit 1
 fi
-if ! rg -Fq '.optionIncludingWindow' scripts/test-dmg-install; then
-  echo "DMG install does not verify only the publisher-owned window number" >&2
+enumerating_window_query='CGWindowList''CopyWindowInfo'
+relative_window_option='.option''IncludingWindow'
+if rg -Fq "$enumerating_window_query" scripts/test-dmg-install ||
+  rg -Fq "$relative_window_option" scripts/test-dmg-install; then
+  echo "DMG install still uses an enumerating WindowServer query" >&2
+  exit 1
+fi
+if ! rg -Fq \
+  'CGWindowListCreateDescriptionFromArray' \
+  scripts/test-dmg-install; then
+  echo "DMG install lacks an exact-ID WindowServer description query" >&2
   exit 1
 fi
 window_query_count="$({
-  rg -F 'CGWindowListCopyWindowInfo(' scripts/test-dmg-install || true
+  rg -F 'CGWindowListCreateDescriptionFromArray(' scripts/test-dmg-install || true
 } | wc -l | tr -d '[:space:]')"
 if [[ "$window_query_count" != "1" ]] ||
-  ! rg -Fq 'CGWindowID(rawWindowNumber)' scripts/test-dmg-install; then
+  ! rg -Fq \
+    '[NSNumber(value: rawWindowNumber)] as CFArray' \
+    scripts/test-dmg-install; then
   echo "DMG install did not reduce WindowServer inspection to one exact ID query" >&2
   exit 1
 fi

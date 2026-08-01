@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import NoonmarkDiagnostics
 
 enum LocalFolderSyncPublicationPoint: Equatable {
     case willPublishBatch
@@ -33,6 +34,12 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         var publishedRecords: [SyncRecord]
     }
 
+    private struct StoredRecordsObservation {
+        var records: [SyncRecord]
+        var fileCount: Int
+        var byteCount: Int64
+    }
+
     private let rootURL: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder = {
@@ -49,25 +56,33 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     }()
 
     private let currentRecordMerger = CurrentSyncRecordMerger()
+    private let diagnosticOperation: DiagnosticOperation?
     private let publicationFault: @Sendable (
         LocalFolderSyncPublicationPoint
     ) throws -> Void
 
-    public init(rootURL: URL, fileManager: FileManager = .default) {
+    public init(
+        rootURL: URL,
+        fileManager: FileManager = .default,
+        diagnosticOperation: DiagnosticOperation? = nil
+    ) {
         self.rootURL = rootURL
         self.fileManager = fileManager
+        self.diagnosticOperation = diagnosticOperation
         publicationFault = { _ in }
     }
 
     init(
         rootURL: URL,
         fileManager: FileManager = .default,
+        diagnosticOperation: DiagnosticOperation? = nil,
         publicationFault: @escaping @Sendable (
             LocalFolderSyncPublicationPoint
         ) throws -> Void
     ) {
         self.rootURL = rootURL
         self.fileManager = fileManager
+        self.diagnosticOperation = diagnosticOperation
         self.publicationFault = publicationFault
     }
 
@@ -135,15 +150,34 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     public func fetchAll() async throws -> [SyncRecord] {
         try prepareRepository()
         return try withExclusiveRepositoryLock {
-            try storedRecords()
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let observation = try storedRecords()
+            let durationMilliseconds = Self.durationMilliseconds(
+                since: startedAt
+            )
+            diagnosticOperation?.stage(
+                .transportFetch,
+                progress: DiagnosticProgress(
+                    recordCount: observation.records.count,
+                    fileCount: observation.fileCount,
+                    byteCount: observation.byteCount
+                ),
+                durationMilliseconds: durationMilliseconds
+            )
+            return observation.records
         }
     }
 
-    private func storedRecords() throws -> [SyncRecord] {
+    private func storedRecords() throws -> StoredRecordsObservation {
         let repositoryState = try storedRepositoryState()
-        return try canonicalRecords(
-            from: repositoryState.recordFiles
-                + externalConflictRecordFiles()
+        let files = repositoryState.recordFiles
+            + (try externalConflictRecordFiles())
+        return try StoredRecordsObservation(
+            records: canonicalRecords(from: files),
+            fileCount: files.count,
+            byteCount: files.reduce(0) {
+                $0 + Int64($1.data.count)
+            }
         )
     }
 
@@ -439,13 +473,35 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         }
         defer { close(descriptor) }
 
+        let waitStartedAt = ProcessInfo.processInfo.systemUptime
+        diagnosticOperation?.stage(.transportLockWait)
         while flock(descriptor, LOCK_EX) != 0 {
             guard errno == EINTR else {
                 throw posixError(code: errno, path: repositoryLockURL.path)
             }
         }
-        defer { _ = flock(descriptor, LOCK_UN) }
+        diagnosticOperation?.stage(
+            .transportLockAcquired,
+            durationMilliseconds: Self.durationMilliseconds(
+                since: waitStartedAt
+            )
+        )
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            diagnosticOperation?.stage(.transportLockReleased)
+        }
         return try operation()
+    }
+
+    private nonisolated static func durationMilliseconds(
+        since startedAt: TimeInterval
+    ) -> Int64 {
+        let duration = max(
+            0,
+            (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+        )
+        guard duration < Double(Int64.max) else { return Int64.max }
+        return Int64(duration.rounded())
     }
 
     private func posixError(code: Int32, path: String) -> NSError {

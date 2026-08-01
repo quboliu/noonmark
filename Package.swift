@@ -25,6 +25,7 @@ let package = Package(
         .library(name: "NoonmarkZhulong", targets: ["NoonmarkZhulong"]),
         .library(name: "NoonmarkZhulongAI", targets: ["NoonmarkZhulongAI"]),
         .library(name: "NoonmarkMacUIContract", targets: ["NoonmarkMacUIContract"]),
+        .library(name: "NoonmarkDiagnostics", targets: ["NoonmarkDiagnostics"]),
         .library(name: "NoonmarkStorage", targets: ["NoonmarkStorage"]),
         .library(name: "NoonmarkSync", targets: ["NoonmarkSync"])
     ],
@@ -85,16 +86,19 @@ let package = Package(
         ),
         .target(name: "NoonmarkMacUIContract"),
         .target(name: "NoonmarkMacE2ESupport"),
+        .target(name: "NoonmarkDiagnostics"),
         .target(
             name: "NoonmarkStorage",
-            dependencies: ["NoonmarkCore", "NoonmarkSync"],
+            dependencies: [
+                "NoonmarkCore", "NoonmarkDiagnostics", "NoonmarkSync"
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
         ),
         .target(
             name: "NoonmarkSync",
-            dependencies: ["NoonmarkCore"],
+            dependencies: ["NoonmarkCore", "NoonmarkDiagnostics"],
             linkerSettings: [
                 .linkedFramework("CloudKit"),
                 .linkedFramework("Security")
@@ -143,12 +147,20 @@ let package = Package(
             dependencies: ["NoonmarkDemoSupport", "NoonmarkCore"]
         ),
         .testTarget(
+            name: "NoonmarkDiagnosticsTests",
+            dependencies: ["NoonmarkDiagnostics"]
+        ),
+        .testTarget(
             name: "NoonmarkStorageTests",
-            dependencies: ["NoonmarkStorage", "NoonmarkSync"]
+            dependencies: [
+                "NoonmarkDiagnostics", "NoonmarkStorage", "NoonmarkSync"
+            ]
         ),
         .testTarget(
             name: "NoonmarkSyncTests",
-            dependencies: ["NoonmarkSync", "NoonmarkCore"]
+            dependencies: [
+                "NoonmarkCore", "NoonmarkDiagnostics", "NoonmarkSync"
+            ]
         ),
         .testTarget(
             name: "NoonmarkSimulationTests",

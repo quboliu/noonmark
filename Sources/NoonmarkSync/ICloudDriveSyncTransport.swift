@@ -1,4 +1,5 @@
 import Foundation
+import NoonmarkDiagnostics
 
 public enum ICloudDriveSyncTransportError: Error, Equatable, Sendable {
     case unavailable
@@ -27,15 +28,25 @@ public actor ICloudDriveSyncTransport: SyncRecordTransport {
 
     public init(
         repositoryName: String = ICloudDriveSyncTransport.defaultRepositoryName,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        diagnosticOperation: DiagnosticOperation? = nil
     ) throws {
         let rootURL = try Self.defaultRootURL(repositoryName: repositoryName, fileManager: fileManager)
-        self.init(rootURL: rootURL)
+        self.init(
+            rootURL: rootURL,
+            diagnosticOperation: diagnosticOperation
+        )
     }
 
-    public init(rootURL: URL) {
+    public init(
+        rootURL: URL,
+        diagnosticOperation: DiagnosticOperation? = nil
+    ) {
         self.rootURL = rootURL
-        localTransport = LocalFolderSyncTransport(rootURL: rootURL)
+        localTransport = LocalFolderSyncTransport(
+            rootURL: rootURL,
+            diagnosticOperation: diagnosticOperation
+        )
     }
 
     public nonisolated static func defaultRootURL(

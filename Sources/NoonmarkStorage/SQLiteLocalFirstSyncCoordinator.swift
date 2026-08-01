@@ -1,4 +1,5 @@
 import Foundation
+import NoonmarkDiagnostics
 import NoonmarkSync
 
 public enum SQLiteLocalFirstSyncError:
@@ -154,21 +155,35 @@ public final class SQLiteLocalFirstSyncCoordinator {
     private let syncRepository: SQLiteSyncRepository
     private let transport: SyncRecordTransport
     private let taskChangeAnalyzer: SQLiteSyncTaskChangeAnalyzer
+    private let diagnosticOperation: DiagnosticOperation?
     private let maximumFinalizationAttempts = 8
 
-    public init(databaseURL: URL, transport: SyncRecordTransport) {
+    public init(
+        databaseURL: URL,
+        transport: SyncRecordTransport,
+        diagnosticOperation: DiagnosticOperation? = nil
+    ) {
         uploadCoordinator = SQLiteSyncUploadCoordinator(databaseURL: databaseURL, transport: transport)
         downloadCoordinator = SQLiteSyncDownloadCoordinator(databaseURL: databaseURL, transport: transport)
         engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
         syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
         self.transport = transport
+        self.diagnosticOperation = diagnosticOperation
         taskChangeAnalyzer = SQLiteSyncTaskChangeAnalyzer()
     }
 
     public func sync(limit: Int = 100, now: Date = Date()) async throws -> SQLiteLocalFirstSyncResult {
         do {
+            diagnosticOperation?.stage(.localLoad)
             let localBefore = try engineRepository.load().snapshot()
+            diagnosticOperation?.stage(.transportFetch)
             let remoteBefore = try await transport.fetchAll()
+            diagnosticOperation?.stage(
+                .baselinePrepare,
+                progress: DiagnosticProgress(
+                    recordCount: remoteBefore.count
+                )
+            )
             var pendingBaseline = try prepareCompleteLocalBaseline(
                 now: now,
                 remoteRecords: remoteBefore
@@ -188,6 +203,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
             )
 
             for finalizationAttempt in 1 ... maximumFinalizationAttempts {
+                diagnosticOperation?.stage(
+                    .upload,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt
+                    )
+                )
                 let initialUpload = try await uploadAllPending(
                     limit: limit
                 )
@@ -196,10 +217,23 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 if let pendingBaseline {
                     try requireBaselineUploaded(pendingBaseline)
                 }
+                diagnosticOperation?.stage(
+                    .transportFetch,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt
+                    )
+                )
                 let fetchedForDownload = try await transport.fetchAll()
                 observedRemoteRecords = retainingRemoteRecoveryEvidence(
                     observedRemoteRecords,
                     plus: fetchedForDownload
+                )
+                diagnosticOperation?.stage(
+                    .downloadMerge,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt,
+                        recordCount: observedRemoteRecords.count
+                    )
                 )
                 let downloadObservation = try downloadCoordinator
                     .downloadAndMergeObservingRecords(
@@ -208,6 +242,15 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     )
                 accumulate(downloadObservation.result, into: &download)
 
+                diagnosticOperation?.stage(
+                    .catchUpUpload,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt,
+                        pendingCount: download.waitingCount,
+                        appliedCount: download.appliedCount,
+                        conflictCount: download.conflictCount
+                    )
+                )
                 let catchUpUpload = try await uploadAllPending(limit: limit)
                 accumulate(catchUpUpload, into: &upload)
                 try requireSuccessfulUpload(catchUpUpload)
@@ -215,6 +258,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     try requireBaselineUploaded(pendingBaseline)
                 }
 
+                diagnosticOperation?.stage(
+                    .finalFetch,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt
+                    )
+                )
                 remoteAfter = try await transport.fetchAll()
                 let remoteObservationIsStable =
                     hasSameExactRemoteEvidence(
@@ -233,6 +282,17 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         journalEntries: journalEntries,
                         remoteRecords: remoteAfter
                     )
+                diagnosticOperation?.stage(
+                    .coverageAndStability,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt,
+                        recordCount: remoteAfter.count,
+                        pendingCount: journalEntries.filter {
+                            $0.state == .pendingUpload
+                        }.count,
+                        conflictCount: download.conflictCount
+                    )
+                )
                 guard remoteObservationIsStable,
                       endpointCoverageIsComplete
                 else {
@@ -281,6 +341,16 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     lastEffectiveSyncedAt:
                     result.transferredData ? now : nil
                 )
+                diagnosticOperation?.stage(
+                    .successMetadata,
+                    progress: DiagnosticProgress(
+                        attempt: finalizationAttempt,
+                        recordCount: remoteAfter.count,
+                        pendingCount: upload.pendingCount,
+                        appliedCount: download.appliedCount,
+                        conflictCount: download.conflictCount
+                    )
+                )
                 if try saveSuccessMetadata(
                     status: .succeeded(result),
                     timestamps: timestamps,
@@ -288,6 +358,14 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         at: now
                     )
                 ) {
+                    diagnosticOperation?.succeed(
+                        progress: DiagnosticProgress(
+                            recordCount: remoteAfter.count,
+                            pendingCount: upload.pendingCount,
+                            appliedCount: download.appliedCount,
+                            conflictCount: download.conflictCount
+                        )
+                    )
                     return result
                 }
                 guard finalizationAttempt < maximumFinalizationAttempts else {
@@ -299,6 +377,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 "sync finalization loop must return or throw"
             )
         } catch {
+            diagnosticOperation?.fail(Self.diagnosticFailure(for: error))
             try? Self.persistFailure(
                 error,
                 at: now,
@@ -306,6 +385,31 @@ public final class SQLiteLocalFirstSyncCoordinator {
             )
             throw error
         }
+    }
+
+    private static func diagnosticFailure(
+        for error: Error
+    ) -> DiagnosticFailure {
+        guard let syncError = error as? SQLiteLocalFirstSyncError else {
+            return DiagnosticFailureClassifier.classify(error)
+        }
+        let code: Int = switch syncError {
+        case .baselineDeviceIdentityUnavailable:
+            1
+        case .baselinePreparationFailed:
+            2
+        case .baselineManifestInvalid:
+            3
+        case .baselineUploadIncomplete:
+            4
+        case .uploadMaterializationFailed:
+            5
+        case .uploadQueueNotDrained:
+            6
+        case .remoteChangesPending:
+            7
+        }
+        return DiagnosticFailure(domain: .syncProtocol, code: code)
     }
 
     private func retainingRemoteRecoveryEvidence(

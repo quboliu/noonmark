@@ -80,13 +80,29 @@ if noonmark_runtime_paths_overlap \
 fi
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-runtime-profile.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && /bin/pwd -P)"
 fixture_home="$fixture_root/home"
 stub_bin="$fixture_root/stubs"
 trace_path="$fixture_root/trace.log"
 reset_output="$fixture_root/reset-output.log"
 defaults_state="$fixture_root/defaults-state"
-mkdir -p "$fixture_home" "$stub_bin" "$defaults_state"
-trap '/bin/rm -rf -- "$fixture_root"' EXIT
+keychain_state="$fixture_root/keychain-state"
+boundary_temp_root="$fixture_root/helper-temp"
+mkdir -p \
+  "$fixture_home" \
+  "$stub_bin" \
+  "$defaults_state" \
+  "$keychain_state" \
+  "$boundary_temp_root"
+mounted_test_path=""
+cleanup_runtime_profile_fixture() {
+  if [[ -n "$mounted_test_path" ]]; then
+    /usr/bin/hdiutil detach -quiet -force "$mounted_test_path" \
+      >/dev/null 2>&1 || true
+  fi
+  /bin/rm -rf -- "$fixture_root"
+}
+trap cleanup_runtime_profile_fixture EXIT
 
 cat >"$stub_bin/id" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -160,7 +176,47 @@ set -euo pipefail
 printf 'security' >>"$NOONMARK_FIXTURE_TRACE"
 printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
 printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
-exit "${NOONMARK_STUB_SECURITY_STATUS:-44}"
+if [[ "${1:-}" == "find-generic-password" \
+  && -n "${NOONMARK_STUB_NAMESPACE_RACE_SOURCE:-}" \
+  && ! -e "${NOONMARK_STUB_NAMESPACE_RACE_MARKER:-}" ]]; then
+  /bin/mv -- \
+    "$NOONMARK_STUB_NAMESPACE_RACE_SOURCE" \
+    "$NOONMARK_STUB_NAMESPACE_RACE_BACKUP"
+  /bin/ln -s -- \
+    "$NOONMARK_STUB_NAMESPACE_RACE_TARGET" \
+    "$NOONMARK_STUB_NAMESPACE_RACE_SOURCE"
+  : >"$NOONMARK_STUB_NAMESPACE_RACE_MARKER"
+fi
+if [[ "${1:-}" == "find-generic-password" ]]; then
+  if [[ -f "$NOONMARK_FIXTURE_KEYCHAIN_STATE/verify-phase" \
+    && -n "${NOONMARK_STUB_SECURITY_VERIFY_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_SECURITY_VERIFY_STATUS"
+  fi
+  if [[ -n "${NOONMARK_STUB_SECURITY_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_SECURITY_STATUS"
+  fi
+  if [[ -f "$NOONMARK_FIXTURE_KEYCHAIN_STATE/sidecar-key" ]]; then
+    exit 0
+  fi
+  exit 44
+fi
+if [[ "${1:-}" == "delete-generic-password" ]]; then
+  : >"$NOONMARK_FIXTURE_KEYCHAIN_STATE/verify-phase"
+  if [[ "${NOONMARK_STUB_SECURITY_DELETE_REMOVE:-0}" -eq 1 ]]; then
+    /bin/rm -f -- "$NOONMARK_FIXTURE_KEYCHAIN_STATE/sidecar-key"
+  fi
+  if [[ -n "${NOONMARK_STUB_SECURITY_DELETE_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_SECURITY_DELETE_STATUS"
+  fi
+  if [[ -f "$NOONMARK_FIXTURE_KEYCHAIN_STATE/sidecar-key" ]]; then
+    if [[ "${NOONMARK_STUB_SECURITY_DELETE_PRESERVE:-0}" -ne 1 ]]; then
+      /bin/rm -f -- "$NOONMARK_FIXTURE_KEYCHAIN_STATE/sidecar-key"
+    fi
+    exit 0
+  fi
+  exit 44
+fi
+exit 2
 SCRIPT
 
 cat >"$stub_bin/defaults" <<'SCRIPT'
@@ -169,10 +225,14 @@ set -euo pipefail
 printf 'defaults' >>"$NOONMARK_FIXTURE_TRACE"
 printf ' %q' "$@" >>"$NOONMARK_FIXTURE_TRACE"
 printf '\n' >>"$NOONMARK_FIXTURE_TRACE"
-if [[ "${NOONMARK_STUB_DEFAULTS_STATUS:-0}" -ne 0 ]]; then
+if [[ -n "${NOONMARK_STUB_DEFAULTS_STATUS:-}" ]]; then
   exit "$NOONMARK_STUB_DEFAULTS_STATUS"
 fi
 if [[ "${1:-}" == "read" ]]; then
+  if [[ -f "$NOONMARK_FIXTURE_DEFAULTS_STATE/.verify-phase" \
+    && -n "${NOONMARK_STUB_DEFAULTS_VERIFY_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_DEFAULTS_VERIFY_STATUS"
+  fi
   if [[ -f "$NOONMARK_FIXTURE_DEFAULTS_STATE/${2:-missing}" ]]; then
     printf '{ fixture = true; }\n'
     exit 0
@@ -181,7 +241,31 @@ if [[ "${1:-}" == "read" ]]; then
   exit 1
 fi
 if [[ "${1:-}" == "delete" && "$#" -eq 2 ]]; then
-  /bin/rm -f -- "$NOONMARK_FIXTURE_DEFAULTS_STATE/$2"
+  : >"$NOONMARK_FIXTURE_DEFAULTS_STATE/.verify-phase"
+  if [[ "${NOONMARK_STUB_DEFAULTS_DELETE_REMOVE:-0}" -eq 1 ]]; then
+    /bin/rm -f -- "$NOONMARK_FIXTURE_DEFAULTS_STATE/$2"
+  fi
+  if [[ -n "${NOONMARK_STUB_DEFAULTS_DELETE_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_DEFAULTS_DELETE_STATUS"
+  fi
+  if [[ "${NOONMARK_STUB_DEFAULTS_DELETE_PRESERVE:-0}" -ne 1 ]]; then
+    /bin/rm -f -- "$NOONMARK_FIXTURE_DEFAULTS_STATE/$2"
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == "export" && "${3:-}" == "-" ]]; then
+  if [[ -f "$NOONMARK_FIXTURE_DEFAULTS_STATE/${2:-missing}" ]]; then
+    /bin/cat "$NOONMARK_FIXTURE_DEFAULTS_STATE/$2"
+    exit 0
+  fi
+  echo "Domain ${2:-missing} does not exist" >&2
+  exit 1
+fi
+if [[ "${1:-}" == "import" && "${3:-}" == "-" ]]; then
+  if [[ -n "${NOONMARK_STUB_DEFAULTS_IMPORT_STATUS:-}" ]]; then
+    exit "$NOONMARK_STUB_DEFAULTS_IMPORT_STATUS"
+  fi
+  /bin/cat >"$NOONMARK_FIXTURE_DEFAULTS_STATE/${2:-missing}"
   exit 0
 fi
 exit 0
@@ -192,20 +276,41 @@ chmod +x "$stub_bin"/*
 run_reset() {
   : >"$trace_path"
   set +e
+  TMPDIR="$boundary_temp_root/" \
   HOME="$fixture_home" \
   PATH="$stub_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   NOONMARK_FIXTURE_HOME="$fixture_home" \
   NOONMARK_FIXTURE_TRACE="$trace_path" \
   NOONMARK_FIXTURE_DEFAULTS_STATE="$defaults_state" \
+  NOONMARK_FIXTURE_KEYCHAIN_STATE="$keychain_state" \
   NOONMARK_STUB_PGREP_STATUS="${NOONMARK_TEST_PGREP_STATUS:-1}" \
   NOONMARK_STUB_PKILL_STATUS="${NOONMARK_TEST_PKILL_STATUS:-1}" \
-  NOONMARK_STUB_SECURITY_STATUS="${NOONMARK_TEST_SECURITY_STATUS:-44}" \
-  NOONMARK_STUB_DEFAULTS_STATUS="${NOONMARK_TEST_DEFAULTS_STATUS:-0}" \
+  NOONMARK_STUB_SECURITY_STATUS="${NOONMARK_TEST_SECURITY_STATUS:-}" \
+  NOONMARK_STUB_SECURITY_DELETE_STATUS="${NOONMARK_TEST_SECURITY_DELETE_STATUS:-}" \
+  NOONMARK_STUB_SECURITY_DELETE_REMOVE="${NOONMARK_TEST_SECURITY_DELETE_REMOVE:-0}" \
+  NOONMARK_STUB_SECURITY_DELETE_PRESERVE="${NOONMARK_TEST_SECURITY_DELETE_PRESERVE:-0}" \
+  NOONMARK_STUB_SECURITY_VERIFY_STATUS="${NOONMARK_TEST_SECURITY_VERIFY_STATUS:-}" \
+  NOONMARK_STUB_DEFAULTS_STATUS="${NOONMARK_TEST_DEFAULTS_STATUS:-}" \
+  NOONMARK_STUB_DEFAULTS_DELETE_STATUS="${NOONMARK_TEST_DEFAULTS_DELETE_STATUS:-}" \
+  NOONMARK_STUB_DEFAULTS_DELETE_REMOVE="${NOONMARK_TEST_DEFAULTS_DELETE_REMOVE:-0}" \
+  NOONMARK_STUB_DEFAULTS_DELETE_PRESERVE="${NOONMARK_TEST_DEFAULTS_DELETE_PRESERVE:-0}" \
+  NOONMARK_STUB_DEFAULTS_VERIFY_STATUS="${NOONMARK_TEST_DEFAULTS_VERIFY_STATUS:-}" \
+  NOONMARK_STUB_DEFAULTS_IMPORT_STATUS="${NOONMARK_TEST_DEFAULTS_IMPORT_STATUS:-}" \
   NOONMARK_STUB_REALPATH_RESULT="${NOONMARK_TEST_REALPATH_RESULT:-$fixture_home}" \
+  NOONMARK_STUB_NAMESPACE_RACE_SOURCE="${NOONMARK_TEST_NAMESPACE_RACE_SOURCE:-}" \
+  NOONMARK_STUB_NAMESPACE_RACE_BACKUP="${NOONMARK_TEST_NAMESPACE_RACE_BACKUP:-}" \
+  NOONMARK_STUB_NAMESPACE_RACE_TARGET="${NOONMARK_TEST_NAMESPACE_RACE_TARGET:-}" \
+  NOONMARK_STUB_NAMESPACE_RACE_MARKER="${NOONMARK_TEST_NAMESPACE_RACE_MARKER:-}" \
     "$repo_root/scripts/reset-dev-data" "$@" \
       >"$reset_output" 2>&1
   reset_status=$?
   set -e
+  if find "$boundary_temp_root" -mindepth 1 -maxdepth 1 -print -quit \
+    | grep -q .; then
+    echo "reset left a bootstrap helper artifact" >&2
+    find "$boundary_temp_root" -mindepth 1 -maxdepth 1 -print >&2
+    exit 1
+  fi
 }
 
 assert_reset_rejected_without_effects() {
@@ -276,6 +381,24 @@ assert_development_preflight_canaries_preserved() {
   fi
 }
 
+assert_development_state_removed() {
+  local label="$1"
+  local selected_path
+  for selected_path in \
+    "$development_data" \
+    "$development_icloud_profile_root" \
+    "$development_cache" \
+    "$development_state" \
+    "$development_defaults" \
+    "$keychain_state/sidecar-key"; do
+    if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+      echo "$label left selected state: $selected_path" >&2
+      sed -n '1,160p' "$trace_path" >&2
+      exit 1
+    fi
+  done
+}
+
 assert_no_delete_action() {
   local label="$1"
   if grep -Eq \
@@ -294,6 +417,10 @@ clear_development_preflight_canaries() {
     "$development_cache" \
     "$development_state"
   /bin/rm -f -- "$development_defaults"
+  /bin/rm -f -- \
+    "$defaults_state/.verify-phase" \
+    "$keychain_state/sidecar-key" \
+    "$keychain_state/verify-phase"
 }
 
 mkdir -p \
@@ -436,6 +563,214 @@ assert_development_preflight_canaries_preserved \
 assert_no_delete_action "defaults preflight failure"
 clear_development_preflight_canaries
 
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+/usr/bin/awk 'BEGIN { for (counter = 0; counter < 262145; counter++) printf "x" }' \
+  >"$development_defaults"
+NOONMARK_TEST_DEFAULTS_SIZE_BEFORE="$(
+  /usr/bin/wc -c <"$development_defaults" | /usr/bin/tr -d '[:space:]'
+)"
+run_reset development
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted an oversized defaults snapshot" >&2
+  exit 1
+fi
+for canary in "${development_preflight_canaries[@]}"; do
+  if [[ ! -f "$canary" || "$(<"$canary")" != "preflight-canary" ]]; then
+    echo "oversized defaults snapshot changed path canary: $canary" >&2
+    exit 1
+  fi
+done
+NOONMARK_TEST_DEFAULTS_SIZE_AFTER="$(
+  /usr/bin/wc -c <"$development_defaults" | /usr/bin/tr -d '[:space:]'
+)"
+if [[ "$NOONMARK_TEST_DEFAULTS_SIZE_AFTER" \
+  != "$NOONMARK_TEST_DEFAULTS_SIZE_BEFORE" ]]; then
+  echo "oversized defaults snapshot changed the defaults domain" >&2
+  exit 1
+fi
+assert_no_delete_action "oversized defaults snapshot"
+unset NOONMARK_TEST_DEFAULTS_SIZE_BEFORE NOONMARK_TEST_DEFAULTS_SIZE_AFTER
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_SECURITY_DELETE_STATUS=2
+run_reset development
+unset NOONMARK_TEST_SECURITY_DELETE_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a Keychain delete failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "Keychain delete failure"
+if [[ ! -f "$keychain_state/sidecar-key" \
+  || "$(<"$keychain_state/sidecar-key")" != "synthetic-key-presence" ]]; then
+  echo "Keychain delete failure changed the synthetic key presence" >&2
+  exit 1
+fi
+if ! grep -Fq 'defaults import app.noonmark.mac.development -' \
+  "$trace_path"; then
+  echo "Keychain delete failure did not roll back defaults" >&2
+  sed -n '1,160p' "$trace_path" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_SECURITY_DELETE_STATUS=2
+NOONMARK_TEST_DEFAULTS_IMPORT_STATUS=2
+run_reset development
+unset NOONMARK_TEST_SECURITY_DELETE_STATUS \
+  NOONMARK_TEST_DEFAULTS_IMPORT_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a defaults rollback failure" >&2
+  exit 1
+fi
+for canary in "${development_preflight_canaries[@]}"; do
+  if [[ ! -f "$canary" || "$(<"$canary")" != "preflight-canary" ]]; then
+    echo "defaults rollback failure changed path canary: $canary" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$keychain_state/sidecar-key" \
+  || "$(<"$keychain_state/sidecar-key")" != "synthetic-key-presence" ]]; then
+  echo "defaults rollback failure changed the synthetic key presence" >&2
+  exit 1
+fi
+if ! grep -Fq 'rollback failed' "$reset_output"; then
+  echo "defaults rollback failure was not reported explicitly" >&2
+  sed -n '1,160p' "$reset_output" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_DEFAULTS_DELETE_STATUS=2
+run_reset development
+unset NOONMARK_TEST_DEFAULTS_DELETE_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a defaults delete failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "defaults delete failure"
+if [[ ! -f "$keychain_state/sidecar-key" \
+  || "$(<"$keychain_state/sidecar-key")" != "synthetic-key-presence" ]]; then
+  echo "defaults delete failure changed the synthetic key presence" >&2
+  exit 1
+fi
+if grep -Fq \
+  'security delete-generic-password -s app.noonmark.zhulong.sidecar-key.development -a sidecar-encryption-key-v1' \
+  "$trace_path"; then
+  echo "defaults delete failure crossed the Keychain commit point" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_SECURITY_DELETE_STATUS=2
+NOONMARK_TEST_SECURITY_DELETE_REMOVE=1
+run_reset development
+unset NOONMARK_TEST_SECURITY_DELETE_STATUS \
+  NOONMARK_TEST_SECURITY_DELETE_REMOVE
+if [[ "$reset_status" -ne 0 ]]; then
+  echo "development reset rejected a semantically absent Keychain delete" >&2
+  sed -n '1,160p' "$reset_output" >&2
+  exit 1
+fi
+assert_development_state_removed \
+  "semantically absent Keychain delete"
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_DEFAULTS_DELETE_STATUS=2
+NOONMARK_TEST_DEFAULTS_DELETE_REMOVE=1
+run_reset development
+unset NOONMARK_TEST_DEFAULTS_DELETE_STATUS \
+  NOONMARK_TEST_DEFAULTS_DELETE_REMOVE
+if [[ "$reset_status" -ne 0 ]]; then
+  echo "development reset rejected semantically absent defaults" >&2
+  sed -n '1,160p' "$reset_output" >&2
+  exit 1
+fi
+assert_development_state_removed \
+  "semantically absent defaults delete"
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_DEFAULTS_DELETE_PRESERVE=1
+run_reset development
+unset NOONMARK_TEST_DEFAULTS_DELETE_PRESERVE
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted defaults that survived delete=0" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "defaults survived delete=0"
+if grep -Fq \
+  'security delete-generic-password -s app.noonmark.zhulong.sidecar-key.development -a sidecar-encryption-key-v1' \
+  "$trace_path"; then
+  echo "surviving defaults crossed the Keychain commit point" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_SECURITY_DELETE_PRESERVE=1
+run_reset development
+unset NOONMARK_TEST_SECURITY_DELETE_PRESERVE
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a sidecar key that survived delete=0" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "Keychain survived delete=0"
+if ! grep -Fq 'defaults import app.noonmark.mac.development -' \
+  "$trace_path"; then
+  echo "surviving Keychain did not roll back defaults" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_DEFAULTS_VERIFY_STATUS=2
+run_reset development
+unset NOONMARK_TEST_DEFAULTS_VERIFY_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a defaults verification failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "defaults verification failure"
+clear_development_preflight_canaries
+
+seed_development_preflight_canaries
+printf 'synthetic-key-presence\n' >"$keychain_state/sidecar-key"
+NOONMARK_TEST_SECURITY_VERIFY_STATUS=2
+run_reset development
+unset NOONMARK_TEST_SECURITY_VERIFY_STATUS
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a Keychain verification failure" >&2
+  exit 1
+fi
+assert_development_preflight_canaries_preserved \
+  "Keychain verification failure"
+if ! grep -Fq 'defaults import app.noonmark.mac.development -' \
+  "$trace_path"; then
+  echo "Keychain verification failure did not roll back defaults" >&2
+  exit 1
+fi
+clear_development_preflight_canaries
+
 NOONMARK_TEST_PGREP_STATUS=2
 run_reset development
 unset NOONMARK_TEST_PGREP_STATUS
@@ -468,6 +803,113 @@ if [[ "$reset_status" -eq 0 || -s "$trace_path" ]]; then
   exit 1
 fi
 /bin/rm -f -- "$development_data"
+
+cross_device_image="$fixture_root/cross-device.dmg"
+cross_device_mount="$development_data/cross-device-mount"
+mkdir -p "$cross_device_mount"
+/usr/bin/hdiutil create \
+  -quiet \
+  -size 8m \
+  -fs HFS+ \
+  -volname NoonmarkResetBoundaryFixture \
+  "$cross_device_image"
+/usr/bin/hdiutil attach \
+  -quiet \
+  -nobrowse \
+  -mountpoint "$cross_device_mount" \
+  "$cross_device_image"
+mounted_test_path="$cross_device_mount"
+printf 'external-canary\n' >"$cross_device_mount/external-canary"
+run_reset development
+if [[ "$reset_status" -eq 0 ]]; then
+  echo "development reset accepted a cross-device target descendant" >&2
+  exit 1
+fi
+if [[ ! -f "$cross_device_mount/external-canary" \
+  || "$(<"$cross_device_mount/external-canary")" != "external-canary" ]]; then
+  echo "cross-device reset changed its mounted canary" >&2
+  exit 1
+fi
+if [[ -s "$trace_path" ]]; then
+  echo "cross-device reset reached a system side effect" >&2
+  sed -n '1,120p' "$trace_path" >&2
+  exit 1
+fi
+/usr/bin/hdiutil detach -quiet "$cross_device_mount"
+mounted_test_path=""
+/bin/rm -f -- "$cross_device_image"
+/bin/rm -rf -- "$development_data"
+
+assert_namespace_replacement_rejected() {
+  local label="$1"
+  local source_path="$2"
+  local backup_path="$3"
+  local target_path="$4"
+  local canary_path="$5"
+  local marker_path="$fixture_root/$label-race-injected"
+  local race_status=0
+  local canary_value=""
+
+  NOONMARK_TEST_NAMESPACE_RACE_SOURCE="$source_path"
+  NOONMARK_TEST_NAMESPACE_RACE_BACKUP="$backup_path"
+  NOONMARK_TEST_NAMESPACE_RACE_TARGET="$target_path"
+  NOONMARK_TEST_NAMESPACE_RACE_MARKER="$marker_path"
+  run_reset development
+  race_status="$reset_status"
+  unset \
+    NOONMARK_TEST_NAMESPACE_RACE_SOURCE \
+    NOONMARK_TEST_NAMESPACE_RACE_BACKUP \
+    NOONMARK_TEST_NAMESPACE_RACE_TARGET \
+    NOONMARK_TEST_NAMESPACE_RACE_MARKER
+
+  if [[ -f "$canary_path" && ! -L "$canary_path" ]]; then
+    canary_value="$(<"$canary_path")"
+  fi
+
+  if [[ -L "$source_path" ]]; then
+    /bin/rm -f -- "$source_path"
+  fi
+  if [[ -e "$backup_path" && ! -L "$backup_path" ]]; then
+    /bin/mv -- "$backup_path" "$source_path"
+  fi
+
+  if [[ "$race_status" -eq 0 ]]; then
+    echo "$label namespace replacement was accepted" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+  if [[ "$canary_value" != "external-canary" ]]; then
+    echo "$label namespace replacement changed its external canary" >&2
+    sed -n '1,120p' "$trace_path" >&2
+    exit 1
+  fi
+}
+
+ancestor_source="$fixture_home/Library/Application Support"
+ancestor_backup="$fixture_home/Library/Application Support.bound-before-race"
+ancestor_target="$fixture_root/ancestor-race-target"
+mkdir -p "$development_data" "$ancestor_target/noonmark-development"
+printf 'selected-canary\n' >"$development_data/selected-canary"
+printf 'external-canary\n' \
+  >"$ancestor_target/noonmark-development/external-canary"
+assert_namespace_replacement_rejected \
+  "ancestor" \
+  "$ancestor_source" \
+  "$ancestor_backup" \
+  "$ancestor_target" \
+  "$ancestor_target/noonmark-development/external-canary"
+
+leaf_backup="$development_data.bound-before-race"
+leaf_target="$fixture_root/leaf-race-target"
+mkdir -p "$development_data" "$leaf_target"
+printf 'selected-canary\n' >"$development_data/selected-canary"
+printf 'external-canary\n' >"$leaf_target/external-canary"
+assert_namespace_replacement_rejected \
+  "leaf" \
+  "$development_data" \
+  "$leaf_backup" \
+  "$leaf_target" \
+  "$leaf_target/external-canary"
 
 NOONMARK_TEST_PGREP_STATUS=0
 NOONMARK_TEST_PKILL_STATUS=2
@@ -512,6 +954,42 @@ forbid_literal() {
     exit 1
   fi
 }
+
+reset_script="$repo_root/scripts/reset-dev-data"
+reset_boundary_helper="$repo_root/scripts/reset-data-boundary-helper.swift"
+forbid_literal "$reset_script" 'rm -rf'
+forbid_literal "$reset_script" '.build/'
+require_literal "$reset_script" '/usr/bin/xcrun swiftc'
+require_literal "$reset_script" '/usr/bin/shasum -a 256'
+require_literal "$reset_script" 'boundary_protocol_timeout_seconds=15'
+require_literal "$reset_script" 'read -r -t "$boundary_protocol_timeout_seconds"'
+require_literal "$reset_script" 'kill -KILL "$boundary_process_id"'
+require_literal "$reset_script" 'defaults_snapshot_maximum_bytes=$((256 * 1024))'
+require_literal "$reset_boundary_helper" 'expectedDevice: homeIdentity.device'
+require_literal "$reset_boundary_helper" 'information.st_uid == geteuid()'
+require_literal "$reset_boundary_helper" 'AT_SYMLINK_NOFOLLOW'
+require_literal "$reset_boundary_helper" 'unlinkat('
+forbid_literal "$reset_boundary_helper" 'case "production"'
+
+while IFS='|' read -r \
+  selected_profile \
+  selected_data_directory \
+  selected_icloud_root \
+  selected_bundle_identifier; do
+  require_literal "$reset_boundary_helper" "case \"$selected_profile\":"
+  require_literal "$reset_boundary_helper" \
+    "dataDirectory = \"$selected_data_directory\""
+  require_literal "$reset_boundary_helper" \
+    "iCloudRoot = \"$selected_icloud_root\""
+  require_literal "$reset_boundary_helper" \
+    "bundleIdentifier = \"$selected_bundle_identifier\""
+done <<'BOUNDARY_PROFILES'
+development|noonmark-development|Noonmark-Development|app.noonmark.mac.development
+e2e|noonmark-e2e|Noonmark-E2E|app.noonmark.mac.e2e
+demo|noonmark-demo|Noonmark-Demo|app.noonmark.mac.demo
+audit|noonmark-audit|Noonmark-Audit|app.noonmark.mac.audit
+dmg-validation|noonmark-dmg-validation|Noonmark-DMGValidation|app.noonmark.mac.dmg-validation
+BOUNDARY_PROFILES
 
 require_literal "$repo_root/scripts/build-mac-app" \
   'source scripts/runtime-profile-common'

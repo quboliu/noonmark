@@ -69,6 +69,163 @@ for guarded_path in "${guarded_paths[@]}"; do
   fi
 done
 
+boundary_source="$script_dir/reset-data-boundary-helper.swift"
+boundary_build_directory=""
+boundary_process_id=""
+boundary_control_descriptor_open=0
+boundary_status_descriptor_open=0
+boundary_waiting=0
+boundary_protocol_timeout_seconds=15
+
+wait_for_reset_boundary() {
+  local helper_status=0
+  local watchdog_process_id=""
+
+  if [[ "$boundary_waiting" -ne 1 || -z "$boundary_process_id" ]]; then
+    return 0
+  fi
+  (
+    /bin/sleep "$boundary_protocol_timeout_seconds"
+    kill -TERM "$boundary_process_id" >/dev/null 2>&1 || exit 0
+    /bin/sleep 1
+    kill -KILL "$boundary_process_id" >/dev/null 2>&1 || true
+  ) &
+  watchdog_process_id=$!
+  wait "$boundary_process_id" || helper_status=$?
+  boundary_waiting=0
+  kill -TERM "$watchdog_process_id" >/dev/null 2>&1 || true
+  wait "$watchdog_process_id" >/dev/null 2>&1 || true
+  return "$helper_status"
+}
+
+cleanup_reset_boundary() {
+  if [[ "$boundary_control_descriptor_open" -eq 1 ]]; then
+    exec 8>&-
+    boundary_control_descriptor_open=0
+  fi
+  if [[ "$boundary_waiting" -eq 1 && -n "$boundary_process_id" ]]; then
+    wait_for_reset_boundary >/dev/null 2>&1 || true
+  fi
+  if [[ "$boundary_status_descriptor_open" -eq 1 ]]; then
+    exec 9<&-
+    boundary_status_descriptor_open=0
+  fi
+}
+trap cleanup_reset_boundary EXIT
+
+start_reset_boundary() {
+  local source_sha_before=""
+  local source_sha_after=""
+  local boundary_binary=""
+  local control_fifo=""
+  local status_fifo=""
+  local ready_line=""
+
+  if [[ ! -f "$boundary_source" || -L "$boundary_source" ]]; then
+    echo "reset boundary source is unavailable" >&2
+    return 1
+  fi
+  if ! boundary_build_directory="$(
+    /usr/bin/mktemp -d \
+      "${TMPDIR:-/tmp}/noonmark-reset-boundary.XXXXXX"
+  )"; then
+    echo "failed to create the reset boundary build directory" >&2
+    return 1
+  fi
+  if [[ ! -d "$boundary_build_directory" \
+    || -L "$boundary_build_directory" ]]; then
+    echo "reset boundary build directory is unsafe" >&2
+    return 1
+  fi
+  /bin/chmod 700 "$boundary_build_directory"
+  boundary_build_directory="$(
+    cd "$boundary_build_directory" && /bin/pwd -P
+  )"
+
+  source_sha_before="$(
+    /usr/bin/shasum -a 256 "$boundary_source" | /usr/bin/awk '{print $1}'
+  )"
+  if [[ ! "$source_sha_before" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "failed to hash the reset boundary source" >&2
+    return 1
+  fi
+  boundary_binary="$boundary_build_directory/reset-data-boundary-helper"
+  if ! /usr/bin/xcrun swiftc \
+    "$boundary_source" \
+    -o "$boundary_binary"; then
+    echo "failed to compile the reset boundary helper" >&2
+    return 1
+  fi
+  source_sha_after="$(
+    /usr/bin/shasum -a 256 "$boundary_source" | /usr/bin/awk '{print $1}'
+  )"
+  if [[ "$source_sha_after" != "$source_sha_before" \
+    || ! -f "$boundary_binary" \
+    || -L "$boundary_binary" ]]; then
+    echo "reset boundary source or binary changed during compilation" >&2
+    return 1
+  fi
+  /bin/chmod 700 "$boundary_binary"
+
+  control_fifo="$boundary_build_directory/control.fifo"
+  status_fifo="$boundary_build_directory/status.fifo"
+  /usr/bin/mkfifo -m 600 "$control_fifo" "$status_fifo"
+
+  "$boundary_binary" \
+    "$profile" \
+    "$canonical_home" \
+    "$boundary_build_directory" \
+    <"$control_fifo" \
+    >"$status_fifo" \
+    2>/dev/null &
+  boundary_process_id=$!
+  boundary_waiting=1
+  exec 8>"$control_fifo"
+  boundary_control_descriptor_open=1
+  exec 9<"$status_fifo"
+  boundary_status_descriptor_open=1
+
+  if ! IFS= read -r -t "$boundary_protocol_timeout_seconds" ready_line <&9 \
+    || [[ "$ready_line" != "READY" ]]; then
+    echo "reset boundary helper rejected the selected paths: ${ready_line:-no-status}" >&2
+    return 1
+  fi
+}
+
+delete_bound_runtime_paths() {
+  local result_line=""
+  local helper_status=0
+
+  printf 'GO\n' >&8
+  exec 8>&-
+  boundary_control_descriptor_open=0
+  IFS= read -r -t "$boundary_protocol_timeout_seconds" result_line <&9 \
+    || true
+  wait_for_reset_boundary || helper_status=$?
+  if [[ "$helper_status" -ne 0 || "$result_line" != "DONE" ]]; then
+    echo "reset boundary helper refused to delete changed paths: ${result_line:-no-status}" >&2
+    return 1
+  fi
+  if [[ -e "$boundary_build_directory" \
+    || -L "$boundary_build_directory" ]]; then
+    echo "reset boundary helper left an unsafe bootstrap directory" >&2
+    return 1
+  fi
+}
+
+validate_bound_runtime_paths() {
+  local result_line=""
+
+  printf 'VALIDATE\n' >&8
+  if ! IFS= read -r -t "$boundary_protocol_timeout_seconds" result_line <&9 \
+    || [[ "$result_line" != "VALIDATED" ]]; then
+    echo "reset boundary helper rejected changed paths: ${result_line:-no-status}" >&2
+    return 1
+  fi
+}
+
+start_reset_boundary
+
 keychain_probe_status=0
 security find-generic-password \
   -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
@@ -79,14 +236,83 @@ if [[ "$keychain_probe_status" -ne 0 && "$keychain_probe_status" -ne 44 ]]; then
   exit 1
 fi
 
+defaults_snapshot_maximum_bytes=$((256 * 1024))
+captured_defaults_snapshot=""
+defaults_snapshot=""
+
+inspect_defaults_domain() {
+  local probe_output=""
+  if probe_output="$(
+    defaults read "$bundle_identifier" 2>&1 >/dev/null
+  )"; then
+    return 0
+  fi
+  if [[ "$probe_output" == *"Domain $bundle_identifier does not exist"* ]]; then
+    return 1
+  fi
+  return 2
+}
+
+capture_defaults_snapshot() {
+  local candidate=""
+  local byte_count=""
+  if ! candidate="$(
+    export LC_ALL=C
+    defaults export "$bundle_identifier" - 2>/dev/null \
+      | /usr/bin/head -c "$((defaults_snapshot_maximum_bytes + 1))"
+  )"; then
+    return 1
+  fi
+  if ! byte_count="$(
+    LC_ALL=C printf '%s' "$candidate" \
+      | /usr/bin/wc -c \
+      | /usr/bin/tr -d '[:space:]'
+  )"; then
+    return 1
+  fi
+  if [[ ! "$byte_count" =~ ^[0-9]+$ \
+    || "$byte_count" -gt "$defaults_snapshot_maximum_bytes" ]]; then
+    return 1
+  fi
+  captured_defaults_snapshot="$candidate"
+}
+
+restore_defaults_snapshot() {
+  local restored_snapshot=""
+  if ! printf '%s\n' "$defaults_snapshot" \
+    | defaults import "$bundle_identifier" - >/dev/null 2>&1; then
+    echo "failed to roll back defaults for $bundle_identifier" >&2
+    return 1
+  fi
+  if ! capture_defaults_snapshot; then
+    echo "failed to verify rolled back defaults for $bundle_identifier" >&2
+    return 1
+  fi
+  restored_snapshot="$captured_defaults_snapshot"
+  if [[ "$restored_snapshot" != "$defaults_snapshot" ]]; then
+    echo "rolled back defaults changed for $bundle_identifier" >&2
+    return 1
+  fi
+}
+
 defaults_domain_present=0
-defaults_output=""
-if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
-  defaults_domain_present=1
-elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
-  echo "failed to inspect defaults for $bundle_identifier: $defaults_output" >&2
-  exit 1
-fi
+defaults_probe_status=0
+inspect_defaults_domain || defaults_probe_status=$?
+case "$defaults_probe_status" in
+  0)
+    defaults_domain_present=1
+    if ! capture_defaults_snapshot; then
+      echo "failed to capture bounded defaults for $bundle_identifier" >&2
+      exit 1
+    fi
+    defaults_snapshot="$captured_defaults_snapshot"
+    ;;
+  1) ;;
+  *)
+    echo "failed to inspect defaults for $bundle_identifier" >&2
+    exit 1
+    ;;
+esac
 
 probe_process() {
   local target_process_name="$1"
@@ -158,33 +384,58 @@ terminate_process() {
 
 terminate_process "$process_name"
 
-rm -rf -- "$data_root" "$icloud_profile_root" "$cache_path" "$saved_state_path"
+validate_bound_runtime_paths
 
-keychain_status=0
-security delete-generic-password \
-  -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
-  -a sidecar-encryption-key-v1 \
-  >/dev/null 2>&1 || keychain_status=$?
-if [[ "$keychain_status" -ne 0 && "$keychain_status" -ne 44 ]]; then
-  echo "failed to remove the $profile Noonmark sidecar key" >&2
-  exit 1
-fi
-
+defaults_deleted=0
 if [[ "$defaults_domain_present" -eq 1 ]]; then
-  if ! defaults delete "$bundle_identifier" >/dev/null 2>&1; then
-    echo "failed to clear defaults for $bundle_identifier" >&2
+  defaults_delete_status=0
+  defaults delete "$bundle_identifier" \
+    >/dev/null 2>&1 || defaults_delete_status=$?
+
+  defaults_verify_status=0
+  inspect_defaults_domain || defaults_verify_status=$?
+  if [[ "$defaults_verify_status" -eq 1 ]]; then
+    defaults_deleted=1
+  else
+    if ! restore_defaults_snapshot; then
+      echo "defaults rollback failed; runtime paths were not deleted" >&2
+      exit 1
+    fi
+    if [[ "$defaults_delete_status" -ne 0 ]]; then
+      echo "failed to clear defaults for $bundle_identifier" >&2
+    else
+      echo "failed to verify cleared defaults for $bundle_identifier" >&2
+    fi
     exit 1
   fi
 fi
 
-defaults_output=""
-if defaults_output="$(defaults read "$bundle_identifier" 2>&1)"; then
-  echo "failed to clear defaults for $bundle_identifier" >&2
-  exit 1
-elif [[ "$defaults_output" != *"Domain $bundle_identifier does not exist"* ]]; then
-  echo "failed to verify defaults for $bundle_identifier: $defaults_output" >&2
+security delete-generic-password \
+  -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
+  -a sidecar-encryption-key-v1 \
+  >/dev/null 2>&1 || true
+keychain_verify_status=0
+security find-generic-password \
+  -s "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
+  -a sidecar-encryption-key-v1 \
+  >/dev/null 2>&1 || keychain_verify_status=$?
+if [[ "$keychain_verify_status" -ne 44 ]]; then
+  if [[ "$defaults_deleted" -eq 1 ]] \
+    && ! restore_defaults_snapshot; then
+    echo "defaults rollback failed after the Keychain commit point refused" >&2
+    exit 1
+  fi
+  if [[ "$keychain_verify_status" -eq 0 ]]; then
+    echo "failed to remove the $profile Noonmark sidecar key" >&2
+  else
+    echo "failed to verify removal of the $profile Noonmark sidecar key" >&2
+  fi
   exit 1
 fi
+
+delete_bound_runtime_paths
+defaults_snapshot=""
+captured_defaults_snapshot=""
 
 removed_paths=(
   "$data_root"

@@ -8,6 +8,8 @@ public extension DiagnosticAppIdentity {
             "Version: \(version) (\(build)) [\(buildArchitecture)]",
             "Commit: \(versionInformationValue(commitSHA))",
             "Date: \(versionInformationValue(buildDate))",
+            "Runtime: \(versionInformationValue(runtime))",
+            "Minimum OS: \(minimumOSVersion.map { "macOS \($0)" } ?? "unknown")",
             "Mach-O UUID: \(versionInformationValue(binaryUUID))",
             "Binary SHA256: \(versionInformationValue(binarySHA256))",
             "Binary SHA256 Scope: \(versionInformationValue(binarySHA256Scope?.rawValue))",

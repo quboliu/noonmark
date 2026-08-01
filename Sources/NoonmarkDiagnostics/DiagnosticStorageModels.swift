@@ -16,6 +16,8 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
     public let build: String
     public let commitSHA: String?
     public let buildDate: String?
+    public let runtime: String?
+    public let minimumOSVersion: String?
     public let buildArchitecture: String
     public let operatingSystemMajorVersion: Int
     public let operatingSystemMinorVersion: Int
@@ -31,6 +33,8 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
         case build
         case commitSHA
         case buildDate
+        case runtime
+        case minimumOSVersion
         case buildArchitecture
         case operatingSystemMajorVersion
         case operatingSystemMinorVersion
@@ -47,6 +51,8 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
         build: String,
         commitSHA: String? = nil,
         buildDate: String? = nil,
+        runtime: String? = nil,
+        minimumOSVersion: String? = nil,
         buildArchitecture: String? = nil,
         operatingSystemMajorVersion: Int,
         operatingSystemMinorVersion: Int,
@@ -61,6 +67,10 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
         self.build = Self.safeBuildValue(build)
         self.commitSHA = commitSHA.flatMap(Self.safeCommitSHA)
         self.buildDate = buildDate.flatMap(Self.safeBuildDate)
+        self.runtime = runtime.flatMap(Self.safeRuntime)
+        self.minimumOSVersion = minimumOSVersion.flatMap(
+            Self.safeDottedVersion
+        )
         self.buildArchitecture = Self.safeBuildValue(
             buildArchitecture ?? architecture
         )
@@ -90,6 +100,14 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
             buildDate: try container.decodeIfPresent(
                 String.self,
                 forKey: .buildDate
+            ),
+            runtime: try container.decodeIfPresent(
+                String.self,
+                forKey: .runtime
+            ),
+            minimumOSVersion: try container.decodeIfPresent(
+                String.self,
+                forKey: .minimumOSVersion
             ),
             buildArchitecture: try container.decodeIfPresent(
                 String.self,
@@ -146,6 +164,12 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
             ),
             buildDate: bundleString(
                 forInfoDictionaryKey: "NoonmarkBuildDate"
+            ),
+            runtime: bundleString(
+                forInfoDictionaryKey: "NoonmarkRuntime"
+            ),
+            minimumOSVersion: bundleString(
+                forInfoDictionaryKey: "NoonmarkMinimumOSVersion"
             ),
             buildArchitecture: buildArchitecture,
             operatingSystemMajorVersion: os.majorVersion,
@@ -252,6 +276,14 @@ public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
     }
 
     private static func safeDarwinVersion(_ value: String) -> String? {
+        safeDottedVersion(value)
+    }
+
+    private static func safeRuntime(_ value: String) -> String? {
+        value == "Swift-native" ? value : nil
+    }
+
+    private static func safeDottedVersion(_ value: String) -> String? {
         guard value.utf8.count <= 32 else { return nil }
         let components = value.split(
             separator: ".",

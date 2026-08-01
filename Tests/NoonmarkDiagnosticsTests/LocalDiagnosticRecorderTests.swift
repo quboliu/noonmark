@@ -295,6 +295,82 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: canaryURL), canary)
     }
 
+    func testRuntimeRootReplacementNeverRedirectsManagedIOToExternalDirectory() async throws {
+        let parentURL = temporaryDirectory(named: "root-runtime-parent")
+        let externalURL = temporaryDirectory(named: "root-runtime-external")
+        try FileManager.default.createDirectory(
+            at: parentURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL.appendingPathComponent("metrics"),
+            withIntermediateDirectories: true
+        )
+        let rootURL = parentURL.appendingPathComponent(
+            "Diagnostics",
+            isDirectory: true
+        )
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: .production,
+            unifiedLoggingEnabled: false
+        )
+        recorder.startSession()
+        await recorder.flush()
+
+        let indexCanaryURL = externalURL.appendingPathComponent("index.json")
+        let eventCanaryURL = externalURL.appendingPathComponent(
+            "events-00.ndjson"
+        )
+        let metricCanaryURL = externalURL
+            .appendingPathComponent("metrics")
+            .appendingPathComponent("metric-external-canary.json")
+        let canaries = [
+            indexCanaryURL: Data("EXTERNAL-INDEX-CANARY".utf8),
+            eventCanaryURL: Data("EXTERNAL-EVENT-CANARY".utf8),
+            metricCanaryURL: Data("EXTERNAL-METRIC-CANARY".utf8)
+        ]
+        for (url, data) in canaries {
+            try data.write(to: url)
+        }
+        let displacedRootURL = parentURL.appendingPathComponent(
+            "DisplacedDiagnostics",
+            isDirectory: true
+        )
+        try FileManager.default.moveItem(at: rootURL, to: displacedRootURL)
+        try FileManager.default.createSymbolicLink(
+            at: rootURL,
+            withDestinationURL: externalURL
+        )
+
+        recorder.record(.cleanShutdown())
+        let summary = MetricKitPayloadSummary(
+            kind: .diagnostic,
+            intervalStart: Date(),
+            intervalEnd: Date(),
+            crashCount: 0,
+            hangCount: 1,
+            cpuExceptionCount: 0,
+            diskWriteExceptionCount: 0,
+            rawJSONByteCount: 2
+        )
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data("{}".utf8),
+            receivedAt: Date()
+        )
+        await recorder.flush()
+        _ = try await recorder.snapshotPackage()
+        let exportURL = temporaryFile(named: "runtime-root.noonmarkdiagnostics")
+        _ = try await recorder.export(to: exportURL)
+        try await recorder.clear()
+
+        for (url, data) in canaries {
+            XCTAssertEqual(try Data(contentsOf: url), data)
+        }
+    }
+
     func testRelaunchExcludesCorruptSegmentLineAndReportsPartialCollection() async throws {
         let rootURL = temporaryDirectory(named: "corrupt")
         var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
@@ -866,6 +942,64 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertTrue(package.manifest.collectionWasPartial)
     }
 
+    func testLossLedgerRejectsNonMidnightUTCDayStartInsteadOfNormalizingIt() async throws {
+        let rootURL = temporaryDirectory(named: "loss-ledger-non-midnight")
+        let day: TimeInterval = 24 * 60 * 60
+        let seed: TimeInterval = 1_800_000_000
+        let utcDayStart = Date(
+            timeIntervalSince1970: seed
+                - seed.truncatingRemainder(dividingBy: day)
+        )
+        let now = utcDayStart.addingTimeInterval(day / 2)
+        let configuration = DiagnosticStorageConfiguration(
+            maximumMetricPayloadBytes: 8
+        )
+        var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { now }
+        )
+        cacheOversizedMetric(
+            on: try XCTUnwrap(recorder),
+            rawJSON: Data(repeating: 0x41, count: 9),
+            receivedAt: now
+        )
+        await recorder?.flush()
+        recorder = nil
+
+        let indexURL = rootURL.appendingPathComponent("index.json")
+        var index = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: indexURL)
+            ) as? [String: Any]
+        )
+        var buckets = try XCTUnwrap(
+            index["lossBuckets"] as? [[String: Any]]
+        )
+        XCTAssertEqual(buckets.count, 1)
+        buckets[0]["utcDayStart"] = try encodedDateValue(
+            utcDayStart.addingTimeInterval(60)
+        )
+        index["lossBuckets"] = buckets
+        try JSONSerialization.data(
+            withJSONObject: index,
+            options: [.sortedKeys]
+        ).write(to: indexURL, options: .atomic)
+
+        let relaunched = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { now }
+        )
+        let package = try await relaunched.snapshotPackage()
+
+        XCTAssertEqual(package.manifest.oversizedMetricPayloadCount, 0)
+    }
+
     private func temporaryDirectory(named name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -894,6 +1028,13 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             ),
             rawJSON: rawJSON,
             receivedAt: receivedAt
+        )
+    }
+
+    private func encodedDateValue(_ date: Date) throws -> Any {
+        try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(date),
+            options: [.fragmentsAllowed]
         )
     }
 

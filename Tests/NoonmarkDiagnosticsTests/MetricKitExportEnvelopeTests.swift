@@ -423,6 +423,69 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: metricsURL.path))
     }
 
+    func testRuntimeMetricsDirectoryReplacementNeverRedirectsManagedIO() async throws {
+        let (recorder, rootURL) = try makeRecorder(
+            named: "metrics-directory-runtime-replacement"
+        )
+        let summary = makeSummary(kind: .metric)
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data(#"{"metricCount":1}"#.utf8),
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+        _ = try await recorder.snapshotPackage()
+
+        let metricsURL = rootURL.appendingPathComponent(
+            "metrics",
+            isDirectory: true
+        )
+        let displacedMetricsURL = rootURL.appendingPathComponent(
+            "displaced-metrics",
+            isDirectory: true
+        )
+        let replacementURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-replacement-metrics-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        temporaryURLs.append(replacementURL)
+        try FileManager.default.createDirectory(
+            at: replacementURL,
+            withIntermediateDirectories: true
+        )
+        let canary = Data("EXTERNAL-RUNTIME-METRICS-CANARY".utf8)
+        let replacementCanaryURL = replacementURL.appendingPathComponent(
+            "metric-runtime-canary.json"
+        )
+        try canary.write(to: replacementCanaryURL)
+        try FileManager.default.moveItem(
+            at: metricsURL,
+            to: displacedMetricsURL
+        )
+        try FileManager.default.moveItem(at: replacementURL, to: metricsURL)
+        let installedCanaryURL = metricsURL.appendingPathComponent(
+            "metric-runtime-canary.json"
+        )
+
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: Data(#"{"metricCount":2}"#.utf8),
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+        _ = try await recorder.snapshotPackage()
+        let exportURL = rootURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                "metrics-runtime-replacement.noonmarkdiagnostics"
+            )
+        temporaryURLs.append(exportURL)
+        _ = try await recorder.export(to: exportURL)
+        try await recorder.clear()
+
+        XCTAssertEqual(try Data(contentsOf: installedCanaryURL), canary)
+    }
+
     private func assertDefensivelySanitized(
         _ attachment: DiagnosticMetricAttachment,
         excludes canary: String

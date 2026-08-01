@@ -14,6 +14,48 @@ trap cleanup EXIT
 mkdir -p "$fixture_root/scripts" "$fixture_root/bin" "$fixture_root/dist/Noonmark.app"
 cp "$repo_root/scripts/package-dmg" "$fixture_root/scripts/package-dmg"
 cp "$repo_root/scripts/verify-dmg" "$fixture_root/scripts/verify-dmg"
+cp \
+  "$repo_root/scripts/verify-window-lookup-boundary" \
+  "$fixture_root/scripts/verify-window-lookup-boundary"
+chmod +x "$fixture_root/scripts/verify-window-lookup-boundary"
+
+window_boundary_source="$fixture_root/window-boundary-production.c"
+window_boundary_binary="$fixture_root/scripts/window-boundary-production-binary"
+cat >"$window_boundary_source" <<'SOURCE'
+#include <CoreGraphics/CoreGraphics.h>
+
+int main(void) {
+  CFArrayRef identifiers = CFArrayCreate(NULL, NULL, 0, NULL);
+  CFArrayRef descriptions =
+    CGWindowListCreateDescriptionFromArray(identifiers);
+  if (descriptions != NULL) CFRelease(descriptions);
+  CFRelease(identifiers);
+  return 0;
+}
+SOURCE
+/usr/bin/xcrun --sdk macosx clang \
+  "$window_boundary_source" \
+  -framework CoreFoundation \
+  -framework CoreGraphics \
+  -o "$window_boundary_binary"
+rm "$window_boundary_source"
+
+window_boundary_root="$fixture_root/window-boundary-staging"
+mkdir -p "$window_boundary_root/Noonmark.app/Contents/MacOS"
+cp \
+  "$window_boundary_binary" \
+  "$window_boundary_root/Noonmark.app/Contents/MacOS/NoonmarkMacApp"
+ln -s /Applications "$window_boundary_root/Applications"
+"$fixture_root/scripts/verify-window-lookup-boundary" \
+  dmg-staging-root \
+  "$window_boundary_root"
+mkdir -p "$window_boundary_root/NoonmarkDMGInstallHarness.app"
+if "$fixture_root/scripts/verify-window-lookup-boundary" \
+  dmg-staging-root \
+  "$window_boundary_root" >/dev/null 2>&1; then
+  echo "DMG staging boundary accepted the install harness" >&2
+  exit 1
+fi
 
 : >"$fixture_root/dist/Noonmark.dmg"
 : >"$fixture_root/dist/Noonmark.dmg.sha256"
@@ -49,7 +91,9 @@ if [[ "${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-}" != "1" ]]; then
 fi
 mkdir -p dist/Noonmark.app/Contents/MacOS
 mkdir -p dist/Noonmark.app.dSYM/Contents/Resources/DWARF
-printf 'fixture-production-binary\n' >dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+cp \
+  scripts/window-boundary-production-binary \
+  dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
 chmod +x dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
 printf 'fixture-production-dwarf\n' \
   >dist/Noonmark.app.dSYM/Contents/Resources/DWARF/NoonmarkMacApp

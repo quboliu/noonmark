@@ -299,6 +299,7 @@ require_install_window_metadata() {
   local expected_bundle_path="$5"
   local expected_executable_path="$6"
   local expected_bundle_identifier="$7"
+  local expected_phase="${8:-dmg-validation $mode}"
   local arguments_detail
   local ledger_pid
   local ledger_app_path
@@ -338,14 +339,32 @@ require_install_window_metadata() {
   fi
 
   arguments_detail="$(awk -F $'\t' '$3 == "arguments" { print $4 }' "$ledger")"
-  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
-    echo "DMG install $mode ledger cannot be bound to window metadata" >&2
-    return 1
+  if [[ "$mode" == "diagnostic-export" ]]; then
+    local diagnostic_argument_tail
+    diagnostic_argument_tail="${arguments_detail#mode=diagnostic-export pid=}"
+    if [[ "$diagnostic_argument_tail" == "$arguments_detail" ||
+      "$diagnostic_argument_tail" != *" app="* ]]; then
+      echo "DMG install $mode ledger cannot be bound to window metadata" >&2
+      return 1
+    fi
+    ledger_pid="${diagnostic_argument_tail%% app=*}"
+    diagnostic_argument_tail="${diagnostic_argument_tail#* app=}"
+    ledger_app_path="${diagnostic_argument_tail%% window_number=*}"
+    ledger_app_path="${ledger_app_path% }"
+    if [[ ! "$ledger_pid" =~ ^[1-9][0-9]*$ ]]; then
+      echo "DMG install $mode ledger cannot be bound to window metadata" >&2
+      return 1
+    fi
+  else
+    if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
+      echo "DMG install $mode ledger cannot be bound to window metadata" >&2
+      return 1
+    fi
+    ledger_pid="${BASH_REMATCH[1]}"
+    ledger_app_path="${BASH_REMATCH[2]}"
   fi
-  ledger_pid="${BASH_REMATCH[1]}"
-  ledger_app_path="${BASH_REMATCH[2]}"
   metadata_pid="$(evidence_read "$path" pid)"
-  if [[ "$(evidence_read "$path" phase)" != "dmg-validation $mode" ]] ||
+  if [[ "$(evidence_read "$path" phase)" != "$expected_phase" ]] ||
     [[ "$metadata_pid" != "$ledger_pid" ]] ||
     [[ "$(evidence_read "$path" bundle_identifier)" != "$expected_bundle_identifier" ]] ||
     [[ "$ledger_app_path" != "$expected_bundle_path" ]] ||
@@ -538,6 +557,11 @@ require_install_ledger_semantics() {
   local mode="$1"
   local path="$2"
   local expected_steps="$3"
+  local expected_bundle_path="${4:-}"
+  local expected_export_path="${5:-}"
+  local expected_sentinels_path="${6:-}"
+  local expected_window_number="${7:-}"
+  local expected_window_title="${8:-}"
   local actual_steps
 
   if [[ ! -f "$path" || -L "$path" ]]; then
@@ -588,6 +612,101 @@ require_install_ledger_semantics() {
   if [[ "$mode" == "preflight" ]]; then
     if [[ "$arguments_detail" != "mode=preflight" ]]; then
       echo "DMG install preflight ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ "$mode" == "diagnostic-export" ]]; then
+    local argument_tail
+    local argument_pid
+    local diagnostic_database
+    local diagnostic_repository_lock
+    local expected_argument_prefix
+    local expected_argument_suffix
+    local diagnostic_window_detail
+    local diagnostic_menu_detail
+    local diagnostic_package_detail
+
+    argument_tail="${arguments_detail#mode=diagnostic-export pid=}"
+    if [[ "$argument_tail" == "$arguments_detail" ||
+      "$argument_tail" != *" app="* ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    argument_pid="${argument_tail%% app=*}"
+    argument_tail="${argument_tail#* app=}"
+    expected_argument_prefix="$expected_bundle_path window_number=$expected_window_number window=$expected_window_title target_profile=dmg-validation database="
+    if [[ ! "$argument_pid" =~ ^[1-9][0-9]*$ ||
+      -z "$expected_bundle_path" || -z "$expected_export_path" ||
+      -z "$expected_sentinels_path" ||
+      "$argument_tail" != "$expected_argument_prefix"* ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    argument_tail="${argument_tail#"$expected_argument_prefix"}"
+    if [[ "$argument_tail" != *" repository_lock="* ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    diagnostic_database="${argument_tail%% repository_lock=*}"
+    argument_tail="${argument_tail#* repository_lock=}"
+    if [[ "$argument_tail" != *" export="* ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid arguments proof" >&2
+      return 1
+    fi
+    diagnostic_repository_lock="${argument_tail%% export=*}"
+    argument_tail="${argument_tail#* export=}"
+    expected_argument_suffix="$expected_export_path sentinels=$expected_sentinels_path"
+    if [[ "$argument_tail" != "$expected_argument_suffix" ||
+      "$diagnostic_database" != \
+        */Library/Application\ Support/noonmark-dmg-validation/Noonmark.sqlite ||
+      "$diagnostic_repository_lock" != \
+        */Library/Application\ Support/noonmark-dmg-validation/sync-repository/.repository.lock ||
+      "${diagnostic_database%/Noonmark.sqlite}" != \
+        "${diagnostic_repository_lock%/sync-repository/.repository.lock}" ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid isolated persistence proof" >&2
+      return 1
+    fi
+    app_path="$expected_bundle_path"
+    if [[ "$(awk -F $'\t' '$3 == "target" { print $4 }' "$path")" != \
+      "bundle=app.noonmark.mac.dmg-validation path=$app_path frontmost=true windows=1" ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid target proof" >&2
+      return 1
+    fi
+    if [[ "$(awk -F $'\t' '$3 == "diagnostic-locks-before-export" { print $4 }' "$path")" != \
+        "sqlite_writer=busy repository_flock=would-block held=true" ||
+      "$(awk -F $'\t' '$3 == "diagnostic-locks-after-export" { print $4 }' "$path")" != \
+        "sqlite_writer=busy repository_flock=would-block held=true" ]]; then
+      echo "DMG install diagnostic-export ledger lacks exact overlapping lock proof" >&2
+      return 1
+    fi
+    diagnostic_window_detail="$(
+      awk -F $'\t' '$3 == "diagnostic-window" { print $4 }' "$path"
+    )"
+    if [[ ! "$diagnostic_window_detail" =~ ^window_number=$expected_window_number[[:space:]]frame=\([-0-9.]+,[[:space:]][-0-9.]+,[[:space:]][1-9][0-9.]*,[[:space:]][1-9][0-9.]*\)[[:space:]]focused=true[[:space:]]exact=true$ ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid exact-window proof" >&2
+      return 1
+    fi
+    diagnostic_menu_detail="$(
+      awk -F $'\t' '$3 == "diagnostic-menu" { print $4 }' "$path"
+    )"
+    if [[ "$diagnostic_menu_detail" != \
+        "title=导出诊断资料… shortcut=none source=cghidEventTap" &&
+      "$diagnostic_menu_detail" != \
+        "title=Export Diagnostics… shortcut=none source=cghidEventTap" ]] ||
+      [[ "$(awk -F $'\t' '$3 == "diagnostic-preview" { print $4 }' "$path")" != \
+        "schema=1 size=visible consent=visible focused=true default=exact" ]] ||
+      [[ "$(awk -F $'\t' '$3 == "diagnostic-export-ui" { print $4 }' "$path")" != \
+        "menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap" ]]; then
+      echo "DMG install diagnostic-export ledger lacks exact physical UI proof" >&2
+      return 1
+    fi
+    diagnostic_package_detail="$(
+      awk -F $'\t' '$3 == "diagnostic-package" { print $4 }' "$path"
+    )"
+    if [[ ! "$diagnostic_package_detail" =~ ^schema=1[[:space:]]bytes=[1-9][0-9]*[[:space:]]sha256=[0-9a-f]{64}[[:space:]]records=[0-9]+[[:space:]]active=[0-9]+[[:space:]]capsules=[0-9]+[[:space:]]metrics=[0-9]+[[:space:]]sentinels=absent[[:space:]]owner_only=true$ ]]; then
+      echo "DMG install diagnostic-export ledger has an invalid package proof" >&2
       return 1
     fi
     return 0
@@ -710,6 +829,322 @@ require_install_task_snapshot() {
   rm -f "$json_path"
 }
 
+require_diagnostic_export_package() {
+  local export_path="$1"
+  local sentinels_path="$2"
+  local report_path="$3"
+  local ledger_path="$4"
+  local window_metadata_path="$5"
+  local console_path="$6"
+  local expected_relative_path="$7"
+  local bytes
+  local mode
+  local sha256
+  local counts
+  local record_count
+  local active_count
+  local capsule_count
+  local metric_count
+  local expected_ledger_detail
+  local sentinel
+  local runtime_architecture
+  local operating_system_version
+  local darwin_version
+  local os_major
+  local os_minor
+  local os_patch
+  local os_extra
+  local release_uuid_set
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "diagnostic export validation requires jq" >&2
+    return 1
+  fi
+  if [[ ! -f "$export_path" || -L "$export_path" ]]; then
+    echo "DMG install diagnostic export is missing or unsafe" >&2
+    return 1
+  fi
+  bytes="$(stat -f '%z' "$export_path")"
+  mode="$(stat -f '%Lp' "$export_path")"
+  if [[ ! "$bytes" =~ ^[1-9][0-9]*$ ]] || ((bytes > 8 * 1024 * 1024)) ||
+    [[ "$mode" != "600" ]]; then
+    echo "DMG install diagnostic export is not a bounded 0600 regular file" >&2
+    return 1
+  fi
+  sha256="$(shasum -a 256 "$export_path" | awk '{print $1}')"
+  if [[ "$(evidence_read "$install_manifest" diagnostic_export_path)" != \
+      "$expected_relative_path" ||
+    "$(evidence_read "$install_manifest" diagnostic_export_bytes)" != \
+      "$bytes" ||
+    "$(evidence_read "$install_manifest" diagnostic_export_sha256)" != \
+      "$sha256" ]]; then
+    echo "DMG install diagnostic export disagrees with its manifest size, path, or SHA" >&2
+    return 1
+  fi
+  runtime_architecture="$(uname -m)"
+  operating_system_version="$(sw_vers -productVersion)"
+  darwin_version="$(uname -r)"
+  IFS=. read -r os_major os_minor os_patch os_extra \
+    <<<"$operating_system_version"
+  os_patch="${os_patch:-0}"
+  if [[ ! "$runtime_architecture" =~ ^(arm64|x86_64)$ ||
+    ! "$operating_system_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ||
+    ! "$darwin_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
+    ! "$os_major" =~ ^[0-9]+$ || ! "$os_minor" =~ ^[0-9]+$ ||
+    ! "$os_patch" =~ ^[0-9]+$ || -n "${os_extra:-}" ]] ||
+    [[ "$(evidence_read "$install_manifest" diagnostic_export_runtime_architecture)" != \
+        "$runtime_architecture" ||
+      "$(evidence_read "$install_manifest" diagnostic_export_operating_system_version)" != \
+        "$operating_system_version" ||
+      "$(evidence_read "$install_manifest" diagnostic_export_darwin_version)" != \
+        "$darwin_version" ]]; then
+    echo "DMG install diagnostic export runtime identity is invalid or stale" >&2
+    return 1
+  fi
+
+  if ! jq -e \
+    --arg version "$(evidence_read "$package_manifest" release_identity_version)" \
+    --arg build "$(evidence_read "$package_manifest" release_identity_build)" \
+    --arg commit "$(evidence_read "$package_manifest" release_identity_git_commit)" \
+    --arg build_date "$(evidence_read "$package_manifest" release_identity_build_date)" \
+    --arg runtime "$(evidence_read "$package_manifest" release_identity_runtime)" \
+    --arg minimum_os "$(evidence_read "$package_manifest" release_identity_minimum_os_version)" \
+    --arg build_architecture "$(evidence_read "$package_manifest" release_identity_architecture)" \
+    --arg binary_uuid "$(evidence_read "$package_manifest" release_identity_binary_uuid_set)" \
+    --arg binary_sha256 "$(evidence_read "$package_manifest" release_identity_binary_sha256)" \
+    --arg binary_scope "$(evidence_read "$package_manifest" release_identity_binary_sha256_scope)" \
+    --arg runtime_architecture "$runtime_architecture" \
+    --arg darwin_version "$darwin_version" \
+    --argjson os_major "$os_major" \
+    --argjson os_minor "$os_minor" \
+    --argjson os_patch "$os_patch" '
+      def nonnegative_integer:
+        type == "number" and . >= 0 and floor == .;
+      type == "object" and
+      (keys == [
+        "activeOperations",
+        "manifest",
+        "metricAttachments",
+        "operationCapsules",
+        "records"
+      ]) and
+      (.manifest | type == "object") and
+      (.manifest.schemaVersion == 1) and
+      (.manifest.redactionVersion == 1) and
+      (.records | type == "array") and
+      (.activeOperations | type == "array") and
+      (.operationCapsules | type == "array") and
+      (.metricAttachments | type == "array") and
+      (.manifest.recordCount | nonnegative_integer) and
+      (.manifest.activeOperationCount | nonnegative_integer) and
+      (.manifest.operationCapsuleCount | nonnegative_integer) and
+      (.manifest.metricPayloadCount | nonnegative_integer) and
+      (.manifest.recordCount == (.records | length)) and
+      (.manifest.activeOperationCount == (.activeOperations | length)) and
+      (.manifest.operationCapsuleCount == (.operationCapsules | length)) and
+      (.manifest.metricPayloadCount == (.metricAttachments | length)) and
+      (.manifest.droppedRecordCount | nonnegative_integer) and
+      (.manifest.droppedCriticalRecordCount | nonnegative_integer) and
+      (.manifest.compactedCriticalEvidenceCount | nonnegative_integer) and
+      (.manifest.evictedMetricPayloadCount | nonnegative_integer) and
+      (.manifest.corruptRecordCount | nonnegative_integer) and
+      (.manifest.oversizedEventCount | nonnegative_integer) and
+      (.manifest.oversizedMetricPayloadCount | nonnegative_integer) and
+      (.manifest.maximumObservedAllocatedBytes | nonnegative_integer) and
+      (.manifest.collectionWasPartial | type == "boolean") and
+      (.manifest.appIdentity.version == $version) and
+      (.manifest.appIdentity.build == $build) and
+      (.manifest.appIdentity.commitSHA == $commit) and
+      (.manifest.appIdentity.buildDate == $build_date) and
+      (.manifest.appIdentity.runtime == $runtime) and
+      (.manifest.appIdentity.minimumOSVersion == $minimum_os) and
+      (.manifest.appIdentity.buildArchitecture == $build_architecture) and
+      (.manifest.appIdentity.binaryUUID == $binary_uuid) and
+      (.manifest.appIdentity.binarySHA256 == $binary_sha256) and
+      (.manifest.appIdentity.binarySHA256Scope == $binary_scope) and
+      (.manifest.appIdentity.architecture == $runtime_architecture) and
+      (.manifest.appIdentity.operatingSystemMajorVersion == $os_major) and
+      (.manifest.appIdentity.operatingSystemMinorVersion == $os_minor) and
+      (.manifest.appIdentity.operatingSystemPatchVersion == $os_patch) and
+      (.manifest.appIdentity.darwinVersion == $darwin_version)
+    ' "$export_path" >/dev/null; then
+    echo "DMG install diagnostic export schema, counts, or release identity disagrees" >&2
+    return 1
+  fi
+  release_uuid_set="$(
+    evidence_read "$package_manifest" release_identity_binary_uuid_set
+  )"
+  if [[ "$release_uuid_set" != "$runtime_architecture:"* &&
+    "$release_uuid_set" != *",$runtime_architecture:"* ]]; then
+    echo "DMG install diagnostic export runtime architecture is absent from the release UUID set" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$sentinels_path" || -L "$sentinels_path" ||
+    "$(stat -f '%Lp' "$sentinels_path")" != "600" ]] ||
+    ! awk '
+      length($0) < 8 || length($0) > 1024 || seen[$0]++ {
+        invalid = 1
+      }
+      END { exit !(invalid == 0 && NR >= 1 && NR <= 64) }
+    ' "$sentinels_path"; then
+    echo "DMG install diagnostic privacy sentinel evidence is invalid" >&2
+    return 1
+  fi
+  while IFS= read -r sentinel || [[ -n "$sentinel" ]]; do
+    if LC_ALL=C grep -Fq -- "$sentinel" "$export_path"; then
+      echo "DMG install diagnostic export contains a privacy sentinel" >&2
+      return 1
+    fi
+  done <"$sentinels_path"
+
+  counts="$(
+    jq -r '[
+      (.records | length),
+      (.activeOperations | length),
+      (.operationCapsules | length),
+      (.metricAttachments | length)
+    ] | @tsv' "$export_path"
+  )"
+  IFS=$'\t' read -r \
+    record_count active_count capsule_count metric_count <<<"$counts"
+  expected_ledger_detail="schema=1 bytes=$bytes sha256=$sha256 records=$record_count active=$active_count capsules=$capsule_count metrics=$metric_count sentinels=absent owner_only=true"
+  if [[ "$(awk -F $'\t' '$3 == "diagnostic-package" { print $4 }' "$ledger_path")" != \
+    "$expected_ledger_detail" ]]; then
+    echo "DMG install diagnostic export package disagrees with its helper ledger" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$report_path" || -L "$report_path" ||
+    "$(wc -l <"$report_path" | tr -d ' ')" != "16" ]] ||
+    ! evidence_require_manifest \
+      "$report_path" \
+      "schema_version=1" \
+      "path=$expected_relative_path" \
+      "bytes=$bytes" \
+      "sha256=$sha256" \
+      "mode=$mode" \
+      "record_count=$record_count" \
+      "active_operation_count=$active_count" \
+      "operation_capsule_count=$capsule_count" \
+      "metric_payload_count=$metric_count" \
+      "identity_match=true" \
+      "runtime_identity_match=true" \
+      "runtime_architecture=$runtime_architecture" \
+      "operating_system_version=$operating_system_version" \
+      "darwin_version=$darwin_version" \
+      "sentinels_absent=true" \
+      "lock_overlap=sqlite-writer+sync-repository"; then
+    echo "DMG install diagnostic export package report is incomplete or contradictory" >&2
+    return 1
+  fi
+
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_ledger_sha256 \
+    "$ledger_path" \
+    "diagnostic export ledger" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_app_launch_sha256 \
+    "$diagnostic_export_launch" \
+    "diagnostic export App launch log" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_stdout_sha256 \
+    "$diagnostic_export_helper" \
+    "diagnostic export helper stdout" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_stderr_sha256 \
+    "$diagnostic_export_helper_stderr" \
+    "diagnostic export helper stderr" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_launch_sha256 \
+    "$diagnostic_export_helper_launch" \
+    "diagnostic export helper launch log" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_observer_sha256 \
+    "$diagnostic_export_helper_observer" \
+    "diagnostic export helper observer log" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_observer_gate_sha256 \
+    "$diagnostic_export_helper_observer_gate" \
+    "diagnostic export helper observer gate" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_helper_exit_status_sha256 \
+    "$diagnostic_export_helper_exit_status" \
+    "diagnostic export helper exit status" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_window_metadata_sha256 \
+    "$window_metadata_path" \
+    "diagnostic export window metadata" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_console_sha256 \
+    "$console_path" \
+    "diagnostic export console" || return 1
+  require_file_sha256 \
+    "$install_manifest" \
+    diagnostic_export_package_report_sha256 \
+    "$report_path" \
+    "diagnostic export package report" || return 1
+}
+
+require_diagnostic_helper_process_artifacts() {
+  local ledger_path="$1"
+  local process_detail
+  local helper_pid
+  local launch_token
+
+  process_detail="$(awk -F $'\t' '$3 == "process" { print $4 }' "$ledger_path")"
+  if [[ ! "$process_detail" =~ ^mode=diagnostic-export[[:space:]]helper_pid=([1-9][0-9]*)[[:space:]]launch_token=([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})$ ]]; then
+    echo "DMG install diagnostic helper process identity is invalid" >&2
+    return 1
+  fi
+  helper_pid="${BASH_REMATCH[1]}"
+  launch_token="${BASH_REMATCH[2]}"
+
+  if ! cmp -s "$ledger_path" "$diagnostic_export_helper" ||
+    [[ -s "$diagnostic_export_launch" ||
+      -s "$diagnostic_export_helper_stderr" ||
+      -s "$diagnostic_export_helper_launch" ||
+      -s "$diagnostic_export_helper_observer" ]]; then
+    echo "DMG install diagnostic helper stdout or empty runtime logs disagree" >&2
+    return 1
+  fi
+  if ! awk -v pid="$helper_pid" -v token="$launch_token" '
+    NR == 1 { valid += ($0 == "mode=diagnostic-export") }
+    NR == 2 { valid += ($0 == "helper_pid=" pid) }
+    NR == 3 { valid += ($0 == "launch_token=" token) }
+    NR == 4 { valid += ($0 == "observer=EVFILT_PROC+NOTE_EXITSTATUS") }
+    END { exit !(NR == 4 && valid == 4) }
+  ' "$diagnostic_export_helper_observer_gate"; then
+    echo "DMG install diagnostic helper observer gate is incomplete or cross-process" >&2
+    return 1
+  fi
+  if ! awk -v pid="$helper_pid" -v token="$launch_token" '
+    NR == 1 { valid += ($0 == "status=PASS") }
+    NR == 2 { valid += ($0 == "mode=diagnostic-export") }
+    NR == 3 { valid += ($0 == "helper_pid=" pid) }
+    NR == 4 { valid += ($0 == "launch_token=" token) }
+    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]*[1-9A-F][0-9A-F]*$/) }
+    NR == 6 { valid += ($0 == "raw_status=0") }
+    NR == 7 { valid += ($0 == "normal_exit=true") }
+    NR == 8 { valid += ($0 == "exit_code=0") }
+    NR == 9 { valid += ($0 == "signal=0") }
+    END { exit !(NR == 9 && valid == 9) }
+  ' "$diagnostic_export_helper_exit_status"; then
+    echo "DMG install diagnostic helper exit status is incomplete or cross-process" >&2
+    return 1
+  fi
+}
+
 runtime_manifests=("$e2e_manifest" "$lease_manifest")
 if [[ "$scope" == "full" ]]; then
   runtime_manifests+=("$package_manifest" "$install_manifest")
@@ -767,7 +1202,16 @@ if [[ "$scope" == "full" ]]; then
     "helper_signature_unchanged=true" \
     "release_symbols_unchanged=true" \
     "release_identity_provenance_unchanged=true" \
-    "diagnostic_diff_status=clean"
+    "diagnostic_diff_status=clean" \
+    "diagnostic_export_ui_completed=true" \
+    "diagnostic_export_lock_overlap=sqlite-writer+sync-repository" \
+    "diagnostic_export_schema_version=1" \
+    "diagnostic_export_identity_match=true" \
+    "diagnostic_export_runtime_identity_match=true" \
+    "diagnostic_export_size_within_limit=true" \
+    "diagnostic_export_sentinels_absent=true" \
+    "diagnostic_export_owner_only=true" \
+    "diagnostic_export_path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
 fi
 
 current_source_fragment="$(
@@ -1311,6 +1755,29 @@ require_file_sha256 \
   "$install_inventory" \
   "install artifact inventory"
 validation_derivation_fragment="$repo_root/artifacts/dmg-install/dmg-validation-derivation.fragment"
+diagnostic_export_relative="$(
+  evidence_read "$install_manifest" diagnostic_export_path
+)"
+if ! require_safe_repo_relative_path "$diagnostic_export_relative" ||
+  [[ "$diagnostic_export_relative" != \
+    "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics" ]]; then
+  echo "install manifest contains an unsafe diagnostic export path" >&2
+  exit 1
+fi
+diagnostic_export_path="$repo_root/$diagnostic_export_relative"
+diagnostic_export_ledger="$repo_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_export_launch="$repo_root/artifacts/dmg-install/diagnostic-export-launch.log"
+diagnostic_export_helper="$repo_root/artifacts/dmg-install/diagnostic-export-helper.log"
+diagnostic_export_helper_stderr="$repo_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
+diagnostic_export_helper_launch="$repo_root/artifacts/dmg-install/diagnostic-export-helper-launch.log"
+diagnostic_export_helper_observer="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
+diagnostic_export_helper_observer_gate="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt"
+diagnostic_export_helper_exit_status="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt"
+diagnostic_export_console="$repo_root/artifacts/dmg-install/diagnostic-export-console.log"
+diagnostic_export_screenshot="$repo_root/artifacts/dmg-install/installed-diagnostic-export.png"
+diagnostic_export_window_metadata="$repo_root/artifacts/dmg-install/installed-diagnostic-export-window.txt"
+diagnostic_export_sentinels="$repo_root/artifacts/dmg-install/diagnostic-export-sentinels.txt"
+diagnostic_export_package_report="$repo_root/artifacts/dmg-install/diagnostic-export-package.txt"
 require_file_sha256 \
   "$install_manifest" \
   validation_derivation_fragment_sha256 \
@@ -1334,6 +1801,27 @@ for derivation_key in \
     "validation derivation fragment $derivation_key"
 done
 evidence_verify_inventory "$repo_root" "$install_inventory"
+IFS=$'\t' read -r \
+  diagnostic_inventory_count \
+  diagnostic_inventory_digest \
+  diagnostic_inventory_size < <(
+    awk -F $'\t' -v expected="$diagnostic_export_relative" '
+      $3 == expected {
+        count += 1
+        digest = $1
+        size = $2
+      }
+      END { printf "%d\t%s\t%s\n", count, digest, size }
+    ' "$install_inventory"
+  )
+if [[ "$diagnostic_inventory_count" != "1" ||
+  "$diagnostic_inventory_digest" != \
+    "$(evidence_read "$install_manifest" diagnostic_export_sha256)" ||
+  "$diagnostic_inventory_size" != \
+    "$(evidence_read "$install_manifest" diagnostic_export_bytes)" ]]; then
+  echo "diagnostic export inventory row disagrees with its manifest digest or size" >&2
+  exit 1
+fi
 evidence_require_inventory_paths \
   "$repo_root" \
   "$install_inventory" \
@@ -1354,6 +1842,20 @@ evidence_require_inventory_paths \
   "$repo_root/artifacts/dmg-install/installed-restart-window.txt" \
   "$repo_root/artifacts/dmg-install/exercise-console.log" \
   "$repo_root/artifacts/dmg-install/restart-console.log" \
+  "$diagnostic_export_path" \
+  "$diagnostic_export_ledger" \
+  "$diagnostic_export_launch" \
+  "$diagnostic_export_helper" \
+  "$diagnostic_export_helper_stderr" \
+  "$diagnostic_export_helper_launch" \
+  "$diagnostic_export_helper_observer" \
+  "$diagnostic_export_helper_observer_gate" \
+  "$diagnostic_export_helper_exit_status" \
+  "$diagnostic_export_console" \
+  "$diagnostic_export_screenshot" \
+  "$diagnostic_export_window_metadata" \
+  "$diagnostic_export_sentinels" \
+  "$diagnostic_export_package_report" \
   "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
   "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
   "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
@@ -1375,6 +1877,20 @@ require_png_evidence \
 require_png_evidence \
   "$repo_root/artifacts/dmg-install/installed-restart.png" \
   "installed App restart screenshot"
+require_png_evidence \
+  "$diagnostic_export_screenshot" \
+  "installed App diagnostic export screenshot"
+installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
+installed_executable_path="$(evidence_read "$install_manifest" validation_executable)"
+validation_bundle_identifier="$(
+  evidence_read "$install_manifest" validation_bundle_identifier
+)"
+if [[ "$installed_executable_path" != \
+    "$installed_bundle_path/Contents/MacOS/NoonmarkMacAppDMGValidation" ]] ||
+  [[ "$validation_bundle_identifier" != "app.noonmark.mac.dmg-validation" ]]; then
+  echo "install manifest does not identify the archived validation App" >&2
+  exit 1
+fi
 require_install_ledger_semantics \
   preflight \
   "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
@@ -1387,17 +1903,6 @@ require_install_ledger_semantics \
   restart \
   "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
   "arguments,process,exit-observer,permissions,target,main-window,restart-title-visible,quit-menu,quit,complete"
-installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
-installed_executable_path="$(evidence_read "$install_manifest" validation_executable)"
-validation_bundle_identifier="$(
-  evidence_read "$install_manifest" validation_bundle_identifier
-)"
-if [[ "$installed_executable_path" != \
-    "$installed_bundle_path/Contents/MacOS/NoonmarkMacAppDMGValidation" ]] ||
-  [[ "$validation_bundle_identifier" != "app.noonmark.mac.dmg-validation" ]]; then
-  echo "install manifest does not identify the archived validation App" >&2
-  exit 1
-fi
 exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
 restart_window_metadata="$repo_root/artifacts/dmg-install/installed-restart-window.txt"
 require_install_window_metadata \
@@ -1416,8 +1921,35 @@ require_install_window_metadata \
   "$installed_bundle_path" \
   "$installed_executable_path" \
   "$validation_bundle_identifier"
+require_install_window_metadata \
+  diagnostic-export \
+  "$diagnostic_export_window_metadata" \
+  "$diagnostic_export_ledger" \
+  "$diagnostic_export_screenshot" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$validation_bundle_identifier" \
+  "dmg-validation diagnostic export"
+diagnostic_window_number="$(
+  evidence_read "$diagnostic_export_window_metadata" window_id
+)"
+diagnostic_window_title="$(
+  evidence_read "$diagnostic_export_window_metadata" title
+)"
+require_install_ledger_semantics \
+  diagnostic-export \
+  "$diagnostic_export_ledger" \
+  "arguments,process,exit-observer,permissions,target,diagnostic-locks-before-export,diagnostic-window,diagnostic-menu,diagnostic-preview,diagnostic-export-ui,diagnostic-locks-after-export,diagnostic-package,complete" \
+  "$installed_bundle_path" \
+  "$diagnostic_export_path" \
+  "$diagnostic_export_sentinels" \
+  "$diagnostic_window_number" \
+  "$diagnostic_window_title"
 exercise_natural_day="$(evidence_read "$exercise_window_metadata" natural_day)"
 restart_natural_day="$(evidence_read "$restart_window_metadata" natural_day)"
+diagnostic_natural_day="$(
+  evidence_read "$diagnostic_export_window_metadata" natural_day
+)"
 require_install_process_log \
   exercise \
   "$repo_root/artifacts/dmg-install/exercise-console.log" \
@@ -1438,6 +1970,33 @@ require_install_process_log \
   "$restart_natural_day" \
   "$(evidence_read "$install_manifest" started_at)" \
   "$(evidence_read "$install_manifest" finished_at)"
+require_install_process_log \
+  diagnostic-export \
+  "$diagnostic_export_console" \
+  "$(evidence_read "$diagnostic_export_window_metadata" pid)" \
+  "$installed_bundle_path" \
+  "$installed_executable_path" \
+  "$validation_bundle_identifier" \
+  "$diagnostic_natural_day" \
+  "$(evidence_read "$install_manifest" started_at)" \
+  "$(evidence_read "$install_manifest" finished_at)"
+require_diagnostic_helper_process_artifacts "$diagnostic_export_ledger"
+runtime_evidence_assert_clean_logs \
+  "DMG install diagnostic export archived evidence" \
+  "$diagnostic_export_launch" \
+  "$diagnostic_export_helper" \
+  "$diagnostic_export_helper_stderr" \
+  "$diagnostic_export_helper_launch" \
+  "$diagnostic_export_helper_observer" \
+  "$diagnostic_export_console"
+require_diagnostic_export_package \
+  "$diagnostic_export_path" \
+  "$diagnostic_export_sentinels" \
+  "$diagnostic_export_package_report" \
+  "$diagnostic_export_ledger" \
+  "$diagnostic_export_window_metadata" \
+  "$diagnostic_export_console" \
+  "$diagnostic_export_relative"
 task_identity="$repo_root/artifacts/dmg-install/task-identity.tsv"
 require_install_task_identity "$task_identity"
 independent_task_identity="$(tail -n 1 "$task_identity")"

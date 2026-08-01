@@ -524,7 +524,8 @@ cp -R \
 for install_screenshot in \
   installed-day.png \
   installed-exercise-before-input.png \
-  installed-restart.png; do
+  installed-restart.png \
+  installed-diagnostic-export.png; do
   cp \
     "$repo_root/App/NoonmarkMacApp/Resources/AppIcon-master.png" \
     "$fixture_root/artifacts/dmg-install/$install_screenshot"
@@ -600,6 +601,12 @@ fixture_restart_process_timestamp="$(
   /bin/date -r "$(
     /bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
       '2026-07-17T12:00:02Z' '+%s'
+  )" '+%Y-%m-%d %H:%M:%S'
+)"
+fixture_diagnostic_process_timestamp="$(
+  /bin/date -r "$(
+    /bin/date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
+      '2026-07-17T12:00:04Z' '+%s'
   )" '+%Y-%m-%d %H:%M:%S'
 )"
 cat >"$fixture_root/artifacts/dmg-install/exercise-console.log" <<EOF
@@ -775,6 +782,161 @@ validation_source_linked_binary_uuid_set=$release_identity_binary_uuid_set
 validation_signed_binary_sha256=$validation_fixture_binary
 validation_signed_binary_uuid_set=$release_symbols_binary_uuid_set
 EOF
+diagnostic_export="$fixture_root/artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+diagnostic_ledger="$fixture_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_window="$fixture_root/artifacts/dmg-install/installed-diagnostic-export-window.txt"
+diagnostic_console="$fixture_root/artifacts/dmg-install/diagnostic-export-console.log"
+diagnostic_sentinels="$fixture_root/artifacts/dmg-install/diagnostic-export-sentinels.txt"
+diagnostic_package_report="$fixture_root/artifacts/dmg-install/diagnostic-export-package.txt"
+diagnostic_database="$fixture_root/Library/Application Support/noonmark-dmg-validation/Noonmark.sqlite"
+diagnostic_repository_lock="$fixture_root/Library/Application Support/noonmark-dmg-validation/sync-repository/.repository.lock"
+diagnostic_runtime_architecture="$(uname -m)"
+diagnostic_operating_system_version="$(sw_vers -productVersion)"
+diagnostic_darwin_version="$(uname -r)"
+IFS=. read -r \
+  diagnostic_os_major diagnostic_os_minor diagnostic_os_patch \
+  <<<"$diagnostic_operating_system_version"
+diagnostic_os_patch="${diagnostic_os_patch:-0}"
+cat >"$diagnostic_export" <<EOF
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "generatedAt": 806587204,
+    "appIdentity": {
+      "version": "$release_identity_version",
+      "build": "$release_identity_build",
+      "commitSHA": "$release_identity_git_commit",
+      "buildDate": "$release_identity_build_date",
+      "runtime": "$release_identity_runtime",
+      "minimumOSVersion": "$release_identity_minimum_os_version",
+      "buildArchitecture": "$release_identity_architecture",
+      "operatingSystemMajorVersion": $diagnostic_os_major,
+      "operatingSystemMinorVersion": $diagnostic_os_minor,
+      "operatingSystemPatchVersion": $diagnostic_os_patch,
+      "darwinVersion": "$diagnostic_darwin_version",
+      "architecture": "$diagnostic_runtime_architecture",
+      "binaryUUID": "$release_identity_binary_uuid_set",
+      "binarySHA256": "$release_identity_binary_sha256",
+      "binarySHA256Scope": "$release_identity_binary_sha256_scope"
+    },
+    "recordCount": 1,
+    "activeOperationCount": 0,
+    "operationCapsuleCount": 0,
+    "metricPayloadCount": 0,
+    "oldestRecordAt": 806587200,
+    "newestRecordAt": 806587201,
+    "droppedRecordCount": 0,
+    "droppedCriticalRecordCount": 0,
+    "compactedCriticalEvidenceCount": 0,
+    "evictedMetricPayloadCount": 0,
+    "corruptRecordCount": 0,
+    "oversizedEventCount": 0,
+    "oversizedMetricPayloadCount": 0,
+    "maximumObservedAllocatedBytes": 4096,
+    "redactionVersion": 1,
+    "collectionWasPartial": false
+  },
+  "records": [{"fixture": "typed-evidence"}],
+  "activeOperations": [],
+  "operationCapsules": [],
+  "metricAttachments": []
+}
+EOF
+chmod 600 "$diagnostic_export"
+cat >"$diagnostic_sentinels" <<'EOF'
+dmgvalidationtask
+fixture-private-api-key-1234567890
+fixture.private.user@example.invalid
+https://private.example.invalid/sync/fixture
+192.0.2.55
+EOF
+chmod 600 "$diagnostic_sentinels"
+diagnostic_export_sha256="$(shasum -a 256 "$diagnostic_export" | awk '{print $1}')"
+diagnostic_export_bytes="$(stat -f '%z' "$diagnostic_export")"
+cat >"$diagnostic_ledger" <<EOF
+2026-07-17T00:00:04Z	PASS	arguments	mode=diagnostic-export pid=501 app=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app window_number=403 window=晷迹 · Day Todo — 7月17日 target_profile=dmg-validation database=$diagnostic_database repository_lock=$diagnostic_repository_lock export=$diagnostic_export sentinels=$diagnostic_sentinels
+2026-07-17T00:00:04Z	PASS	process	mode=diagnostic-export helper_pid=502 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
+2026-07-17T00:00:04Z	PASS	exit-observer	helper_pid=502 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222 observer=EVFILT_PROC+NOTE_EXITSTATUS
+2026-07-17T00:00:04Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:04Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
+2026-07-17T00:00:04Z	PASS	diagnostic-locks-before-export	sqlite_writer=busy repository_flock=would-block held=true
+2026-07-17T00:00:04Z	PASS	diagnostic-window	window_number=403 frame=(0.0, 0.0, 1280.0, 800.0) focused=true exact=true
+2026-07-17T00:00:04Z	PASS	diagnostic-menu	title=导出诊断资料… shortcut=none source=cghidEventTap
+2026-07-17T00:00:04Z	PASS	diagnostic-preview	schema=1 size=visible consent=visible focused=true default=exact
+2026-07-17T00:00:04Z	PASS	diagnostic-export-ui	menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap
+2026-07-17T00:00:04Z	PASS	diagnostic-locks-after-export	sqlite_writer=busy repository_flock=would-block held=true
+2026-07-17T00:00:04Z	PASS	diagnostic-package	schema=1 bytes=$diagnostic_export_bytes sha256=$diagnostic_export_sha256 records=1 active=0 capsules=0 metrics=0 sentinels=absent owner_only=true
+2026-07-17T00:00:04Z	PASS	complete	mode=diagnostic-export
+EOF
+cp "$diagnostic_ledger" \
+  "$fixture_root/artifacts/dmg-install/diagnostic-export-helper.log"
+: >"$fixture_root/artifacts/dmg-install/diagnostic-export-launch.log"
+: >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
+: >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-launch.log"
+: >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
+cat >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" <<'EOF'
+mode=diagnostic-export
+helper_pid=502
+launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
+observer=EVFILT_PROC+NOTE_EXITSTATUS
+EOF
+cat >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt" <<'EOF'
+status=PASS
+mode=diagnostic-export
+helper_pid=502
+launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
+fflags=0x84000000
+raw_status=0
+normal_exit=true
+exit_code=0
+signal=0
+EOF
+cat >"$diagnostic_window" <<EOF
+phase=dmg-validation diagnostic export
+pid=501
+bundle_identifier=app.noonmark.mac.dmg-validation
+bundle_path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app
+executable_path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation
+window_id=403
+natural_day=2026-07-17
+title=晷迹 · Day Todo — 7月17日
+screenshot=$fixture_root/artifacts/dmg-install/installed-diagnostic-export.png
+pixel_size=1024x1024
+EOF
+cat >"$diagnostic_console" <<EOF
+runtime_evidence_capture_started=2026-07-17T12:00:03Z
+$fixture_diagnostic_process_timestamp.500 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=501 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSAuditToken"=\$0000000000000000000000000000000000000000F50100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
+$fixture_diagnostic_process_timestamp.600 I  NoonmarkMacAppDMGValidation[501:def] [com.apple.launchservices:cas] fixture diagnostic export
+EOF
+cat >"$diagnostic_package_report" <<EOF
+schema_version=1
+path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics
+bytes=$diagnostic_export_bytes
+sha256=$diagnostic_export_sha256
+mode=600
+record_count=1
+active_operation_count=0
+operation_capsule_count=0
+metric_payload_count=0
+identity_match=true
+runtime_identity_match=true
+runtime_architecture=$diagnostic_runtime_architecture
+operating_system_version=$diagnostic_operating_system_version
+darwin_version=$diagnostic_darwin_version
+sentinels_absent=true
+lock_overlap=sqlite-writer+sync-repository
+EOF
+diagnostic_ledger_sha256="$(shasum -a 256 "$diagnostic_ledger" | awk '{print $1}')"
+diagnostic_app_launch_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-launch.log" | awk '{print $1}')"
+diagnostic_helper_stdout_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper.log" | awk '{print $1}')"
+diagnostic_helper_stderr_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log" | awk '{print $1}')"
+diagnostic_helper_launch_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-launch.log" | awk '{print $1}')"
+diagnostic_helper_observer_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log" | awk '{print $1}')"
+diagnostic_helper_observer_gate_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" | awk '{print $1}')"
+diagnostic_helper_exit_status_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt" | awk '{print $1}')"
+diagnostic_window_sha256="$(shasum -a 256 "$diagnostic_window" | awk '{print $1}')"
+diagnostic_console_sha256="$(shasum -a 256 "$diagnostic_console" | awk '{print $1}')"
+diagnostic_package_report_sha256="$(shasum -a 256 "$diagnostic_package_report" | awk '{print $1}')"
 printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' \
   >"$fixture_root/artifacts/e2e-runtime/english-scenario-ledger.tsv"
 mkdir -p "$fixture_root/artifacts/e2e"
@@ -1152,6 +1314,31 @@ dmg_sha256=$dmg_sha256
 dmg_checksum_sha256=$dmg_checksum_sha256
 package_manifest_sha256=$package_manifest_sha256
 diagnostic_diff_status=clean
+diagnostic_export_ui_completed=true
+diagnostic_export_lock_overlap=sqlite-writer+sync-repository
+diagnostic_export_schema_version=1
+diagnostic_export_identity_match=true
+diagnostic_export_runtime_identity_match=true
+diagnostic_export_size_within_limit=true
+diagnostic_export_sentinels_absent=true
+diagnostic_export_owner_only=true
+diagnostic_export_path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics
+diagnostic_export_bytes=$diagnostic_export_bytes
+diagnostic_export_sha256=$diagnostic_export_sha256
+diagnostic_export_runtime_architecture=$diagnostic_runtime_architecture
+diagnostic_export_operating_system_version=$diagnostic_operating_system_version
+diagnostic_export_darwin_version=$diagnostic_darwin_version
+diagnostic_export_ledger_sha256=$diagnostic_ledger_sha256
+diagnostic_export_app_launch_sha256=$diagnostic_app_launch_sha256
+diagnostic_export_helper_stdout_sha256=$diagnostic_helper_stdout_sha256
+diagnostic_export_helper_stderr_sha256=$diagnostic_helper_stderr_sha256
+diagnostic_export_helper_launch_sha256=$diagnostic_helper_launch_sha256
+diagnostic_export_helper_observer_sha256=$diagnostic_helper_observer_sha256
+diagnostic_export_helper_observer_gate_sha256=$diagnostic_helper_observer_gate_sha256
+diagnostic_export_helper_exit_status_sha256=$diagnostic_helper_exit_status_sha256
+diagnostic_export_window_metadata_sha256=$diagnostic_window_sha256
+diagnostic_export_console_sha256=$diagnostic_console_sha256
+diagnostic_export_package_report_sha256=$diagnostic_package_report_sha256
 app_diagnostic_baseline_sha256=$empty_sha256
 app_diagnostic_final_sha256=$empty_sha256
 app_diagnostic_diff_sha256=$empty_sha256
@@ -1620,6 +1807,19 @@ refresh_install_manifest_binding() {
     "$install_manifest"
 }
 
+refresh_install_manifest_artifact_binding() {
+  local relative_path="$1"
+  local manifest_key="$2"
+  local artifact_path="$fixture_root/$relative_path"
+  local artifact_sha256
+
+  refresh_install_manifest_binding "$relative_path"
+  artifact_sha256="$(shasum -a 256 "$artifact_path" | awk '{print $1}')"
+  sed -i '' \
+    "s/^${manifest_key}=.*/${manifest_key}=${artifact_sha256}/" \
+    "$install_manifest"
+}
+
 expect_install_semantic_mutation_rejected() {
   local label="$1"
   local expected_message="$2"
@@ -1648,6 +1848,190 @@ expect_install_semantic_mutation_rejected() {
     exit 1
   fi
 }
+
+diagnostic_ledger="$fixture_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_ledger_pristine="${diagnostic_ledger}.pristine"
+diagnostic_helper="$fixture_root/artifacts/dmg-install/diagnostic-export-helper.log"
+diagnostic_helper_pristine="${diagnostic_helper}.pristine"
+diagnostic_export_pristine="${diagnostic_export}.pristine"
+diagnostic_package_report_pristine="${diagnostic_package_report}.pristine"
+diagnostic_sentinels_pristine="${diagnostic_sentinels}.pristine"
+diagnostic_helper_gate="$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt"
+diagnostic_helper_gate_pristine="${diagnostic_helper_gate}.pristine"
+cp "$diagnostic_ledger" "$diagnostic_ledger_pristine"
+cp "$diagnostic_helper" "$diagnostic_helper_pristine"
+cp "$diagnostic_export" "$diagnostic_export_pristine"
+cp "$diagnostic_package_report" "$diagnostic_package_report_pristine"
+cp "$diagnostic_sentinels" "$diagnostic_sentinels_pristine"
+cp "$diagnostic_helper_gate" "$diagnostic_helper_gate_pristine"
+
+restore_diagnostic_fixture() {
+  cp "$diagnostic_ledger_pristine" "$diagnostic_ledger"
+  cp "$diagnostic_helper_pristine" "$diagnostic_helper"
+  cp "$diagnostic_export_pristine" "$diagnostic_export"
+  chmod 600 "$diagnostic_export"
+  cp "$diagnostic_package_report_pristine" "$diagnostic_package_report"
+  cp "$diagnostic_sentinels_pristine" "$diagnostic_sentinels"
+  chmod 600 "$diagnostic_sentinels"
+  cp "$diagnostic_helper_gate_pristine" "$diagnostic_helper_gate"
+  cp "$install_inventory_pristine" "$install_inventory"
+  cp "$install_manifest_pristine" "$install_manifest"
+}
+
+rebind_diagnostic_export_claims() {
+  local bytes
+  local sha256
+  local counts
+  local record_count
+  local active_count
+  local capsule_count
+  local metric_count
+  local detail
+
+  bytes="$(stat -f '%z' "$diagnostic_export")"
+  sha256="$(shasum -a 256 "$diagnostic_export" | awk '{print $1}')"
+  counts="$(
+    jq -r '[
+      (.records | length),
+      (.activeOperations | length),
+      (.operationCapsules | length),
+      (.metricAttachments | length)
+    ] | @tsv' "$diagnostic_export"
+  )"
+  IFS=$'\t' read -r \
+    record_count active_count capsule_count metric_count <<<"$counts"
+  detail="schema=1 bytes=$bytes sha256=$sha256 records=$record_count active=$active_count capsules=$capsule_count metrics=$metric_count sentinels=absent owner_only=true"
+  awk -F $'\t' -v OFS=$'\t' -v detail="$detail" '
+    $3 == "diagnostic-package" { $4 = detail }
+    { print }
+  ' "$diagnostic_ledger" >"${diagnostic_ledger}.rebound"
+  mv "${diagnostic_ledger}.rebound" "$diagnostic_ledger"
+  cp "$diagnostic_ledger" "$diagnostic_helper"
+  sed -i '' \
+    -e "s/^bytes=.*/bytes=${bytes}/" \
+    -e "s/^sha256=.*/sha256=${sha256}/" \
+    "$diagnostic_package_report"
+  sed -i '' \
+    -e "s/^diagnostic_export_bytes=.*/diagnostic_export_bytes=${bytes}/" \
+    -e "s/^diagnostic_export_sha256=.*/diagnostic_export_sha256=${sha256}/" \
+    "$install_manifest"
+  refresh_install_manifest_binding \
+    "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+  refresh_install_manifest_artifact_binding \
+    "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+    "diagnostic_export_ledger_sha256"
+  refresh_install_manifest_artifact_binding \
+    "artifacts/dmg-install/diagnostic-export-helper.log" \
+    "diagnostic_export_helper_stdout_sha256"
+  refresh_install_manifest_artifact_binding \
+    "artifacts/dmg-install/diagnostic-export-package.txt" \
+    "diagnostic_export_package_report_sha256"
+}
+
+awk 'NR == 8 { held = $0; next } NR == 9 { print; print held; next } { print }' \
+  "$diagnostic_ledger" >"${diagnostic_ledger}.reordered"
+mv "${diagnostic_ledger}.reordered" "$diagnostic_ledger"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+  "diagnostic_export_ledger_sha256"
+expect_install_semantic_mutation_rejected \
+  reordered-diagnostic-export-ledger \
+  "DMG install diagnostic-export ledger has an incomplete or reordered phase set"
+restore_diagnostic_fixture
+
+awk -F $'\t' -v OFS=$'\t' '
+  $3 == "diagnostic-locks-before-export" {
+    $4 = "sqlite_writer=available repository_flock=would-block held=true"
+  }
+  { print }
+' "$diagnostic_ledger" >"${diagnostic_ledger}.forged-lock"
+mv "${diagnostic_ledger}.forged-lock" "$diagnostic_ledger"
+cp "$diagnostic_ledger" "$diagnostic_helper"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+  "diagnostic_export_ledger_sha256"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-helper.log" \
+  "diagnostic_export_helper_stdout_sha256"
+expect_install_semantic_mutation_rejected \
+  forged-diagnostic-lock-overlap \
+  "DMG install diagnostic-export ledger lacks exact overlapping lock proof"
+restore_diagnostic_fixture
+
+sed -i '' 's/^helper_pid=.*/helper_pid=999999/' "$diagnostic_helper_gate"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" \
+  "diagnostic_export_helper_observer_gate_sha256"
+expect_install_semantic_mutation_rejected \
+  forged-diagnostic-helper-observer-gate \
+  "DMG install diagnostic helper observer gate is incomplete or cross-process"
+restore_diagnostic_fixture
+
+jq '.manifest.appIdentity.version = "9.9.9"' \
+  "$diagnostic_export" >"${diagnostic_export}.forged-identity"
+mv "${diagnostic_export}.forged-identity" "$diagnostic_export"
+chmod 600 "$diagnostic_export"
+rebind_diagnostic_export_claims
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-diagnostic-identity \
+  "DMG install diagnostic export schema, counts, or release identity disagrees"
+restore_diagnostic_fixture
+
+jq '.manifest.recordCount = 2' \
+  "$diagnostic_export" >"${diagnostic_export}.forged-count"
+mv "${diagnostic_export}.forged-count" "$diagnostic_export"
+chmod 600 "$diagnostic_export"
+rebind_diagnostic_export_claims
+expect_install_semantic_mutation_rejected \
+  self-consistent-forged-diagnostic-count \
+  "DMG install diagnostic export schema, counts, or release identity disagrees"
+restore_diagnostic_fixture
+
+jq '.records[0].fixture = "dmgvalidationtask"' \
+  "$diagnostic_export" >"${diagnostic_export}.privacy-leak"
+mv "${diagnostic_export}.privacy-leak" "$diagnostic_export"
+chmod 600 "$diagnostic_export"
+rebind_diagnostic_export_claims
+expect_install_semantic_mutation_rejected \
+  self-consistent-diagnostic-privacy-leak \
+  "DMG install diagnostic export contains a privacy sentinel"
+restore_diagnostic_fixture
+
+printf '\n' >>"$diagnostic_export"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+expect_install_semantic_mutation_rejected \
+  diagnostic-export-sha-mismatch \
+  "diagnostic export inventory row disagrees with its manifest digest or size"
+restore_diagnostic_fixture
+
+chmod 644 "$diagnostic_export"
+expect_install_semantic_mutation_rejected \
+  diagnostic-export-open-permissions \
+  "DMG install diagnostic export is not a bounded 0600 regular file"
+restore_diagnostic_fixture
+
+printf 'short\n' >"$diagnostic_sentinels"
+chmod 600 "$diagnostic_sentinels"
+refresh_install_manifest_binding \
+  "artifacts/dmg-install/diagnostic-export-sentinels.txt"
+expect_install_semantic_mutation_rejected \
+  invalid-diagnostic-privacy-sentinel-set \
+  "DMG install diagnostic privacy sentinel evidence is invalid"
+restore_diagnostic_fixture
+
+sed -i '' '/artifacts\/dmg-install\/diagnostic-export-console\.log$/d' \
+  "$install_inventory"
+inventory_without_diagnostic_console_sha256="$(
+  shasum -a 256 "$install_inventory" | awk '{print $1}'
+)"
+sed -i '' \
+  "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${inventory_without_diagnostic_console_sha256}/" \
+  "$install_manifest"
+expect_install_semantic_mutation_rejected \
+  missing-diagnostic-console-inventory-binding \
+  "required artifact is not present exactly once"
+restore_diagnostic_fixture
 
 task_after="$fixture_root/artifacts/dmg-install/task-row-after-restart.txt"
 task_after_pristine="$fixture_root/artifacts/dmg-install/task-row-after-restart.pristine"
@@ -1999,6 +2383,75 @@ expect_install_manifest_mutation_rejected \
 expect_install_manifest_mutation_rejected \
   replaced-validation-derivation-fragment \
   's/^validation_derivation_fragment_sha256=.*/validation_derivation_fragment_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-export-ui \
+  's/^diagnostic_export_ui_completed=.*/diagnostic_export_ui_completed=false/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-lock-overlap \
+  's/^diagnostic_export_lock_overlap=.*/diagnostic_export_lock_overlap=sqlite-writer-only/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-schema \
+  's/^diagnostic_export_schema_version=.*/diagnostic_export_schema_version=2/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-identity-match \
+  's/^diagnostic_export_identity_match=.*/diagnostic_export_identity_match=false/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-runtime-identity-match \
+  's/^diagnostic_export_runtime_identity_match=.*/diagnostic_export_runtime_identity_match=false/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-size-bound \
+  's/^diagnostic_export_size_within_limit=.*/diagnostic_export_size_within_limit=false/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-sentinels-absent \
+  's/^diagnostic_export_sentinels_absent=.*/diagnostic_export_sentinels_absent=false/'
+expect_install_manifest_mutation_rejected \
+  false-diagnostic-owner-only \
+  's/^diagnostic_export_owner_only=.*/diagnostic_export_owner_only=false/'
+expect_install_manifest_mutation_rejected \
+  unsafe-diagnostic-export-path \
+  's#^diagnostic_export_path=.*#diagnostic_export_path=../Noonmark.noonmarkdiagnostics#'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-ledger-sha \
+  's/^diagnostic_export_ledger_sha256=.*/diagnostic_export_ledger_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-runtime-architecture \
+  's/^diagnostic_export_runtime_architecture=.*/diagnostic_export_runtime_architecture=forged/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-operating-system \
+  's/^diagnostic_export_operating_system_version=.*/diagnostic_export_operating_system_version=99.99.99/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-darwin-version \
+  's/^diagnostic_export_darwin_version=.*/diagnostic_export_darwin_version=99.99.99/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-app-launch-sha \
+  's/^diagnostic_export_app_launch_sha256=.*/diagnostic_export_app_launch_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-stdout-sha \
+  's/^diagnostic_export_helper_stdout_sha256=.*/diagnostic_export_helper_stdout_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-stderr-sha \
+  's/^diagnostic_export_helper_stderr_sha256=.*/diagnostic_export_helper_stderr_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-launch-sha \
+  's/^diagnostic_export_helper_launch_sha256=.*/diagnostic_export_helper_launch_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-observer-sha \
+  's/^diagnostic_export_helper_observer_sha256=.*/diagnostic_export_helper_observer_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-gate-sha \
+  's/^diagnostic_export_helper_observer_gate_sha256=.*/diagnostic_export_helper_observer_gate_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-helper-exit-sha \
+  's/^diagnostic_export_helper_exit_status_sha256=.*/diagnostic_export_helper_exit_status_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-window-sha \
+  's/^diagnostic_export_window_metadata_sha256=.*/diagnostic_export_window_metadata_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-console-sha \
+  's/^diagnostic_export_console_sha256=.*/diagnostic_export_console_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+expect_install_manifest_mutation_rejected \
+  replaced-diagnostic-report-sha \
+  's/^diagnostic_export_package_report_sha256=.*/diagnostic_export_package_report_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
 
 cp "$install_manifest_pristine" "$install_manifest"
 

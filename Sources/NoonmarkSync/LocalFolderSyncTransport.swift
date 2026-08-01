@@ -87,8 +87,31 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     }
 
     public func push(_ records: [SyncRecord]) async throws {
+        let startedAt = ProcessInfo.processInfo.systemUptime
         try prepareRepository()
-        guard records.isEmpty == false else { return }
+        guard records.isEmpty == false else {
+            diagnosticOperation?.stage(
+                .upload,
+                progress: DiagnosticProgress(
+                    recordCount: 0,
+                    fileCount: 0,
+                    byteCount: 0
+                ),
+                durationMilliseconds: Self.durationMilliseconds(
+                    since: startedAt
+                )
+            )
+            return
+        }
+        let payloadByteCount = try records.reduce(into: Int64(0)) {
+            byteCount,
+            record in
+            let encodedCount = Int64(try encoder.encode(record).count)
+            let (sum, overflow) = byteCount.addingReportingOverflow(
+                encodedCount
+            )
+            byteCount = overflow ? Int64.max : sum
+        }
 
         try withExclusiveRepositoryLock {
             let repositoryState = try storedRepositoryState()
@@ -143,6 +166,21 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             try repairDerivedArtifacts(
                 currentRecords: applied.currentRecords,
                 commits: repositoryState.commits + [commit]
+            )
+            let fileWriteCount = 1
+                + applied.currentRecords.count
+                + repositoryState.commits.count + 1
+                + 1
+            diagnosticOperation?.stage(
+                .upload,
+                progress: DiagnosticProgress(
+                    recordCount: records.count,
+                    fileCount: fileWriteCount,
+                    byteCount: payloadByteCount
+                ),
+                durationMilliseconds: Self.durationMilliseconds(
+                    since: startedAt
+                )
             )
         }
     }

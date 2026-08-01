@@ -75,6 +75,41 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         )
     }
 
+    func testPushRecordsSafeBatchCountsAndBytesWithoutRepositoryPath() async throws {
+        let rootURL = makeFolderURL()
+        let record = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            modifiedBy: SyncDeviceID("diagnostics-fixture")
+        )
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .localFolder
+        )
+
+        try await LocalFolderSyncTransport(
+            rootURL: rootURL,
+            diagnosticOperation: operation
+        ).push([record])
+
+        let events = recorder.snapshot().map(\.event)
+        let upload = try XCTUnwrap(events.last {
+            $0.stage == .upload && $0.progress != nil
+        })
+        XCTAssertEqual(upload.progress?.recordCount, 1)
+        XCTAssertGreaterThanOrEqual(upload.progress?.fileCount ?? 0, 1)
+        XCTAssertGreaterThan(upload.progress?.byteCount ?? 0, 0)
+        XCTAssertNotNil(upload.durationMilliseconds)
+        XCTAssertFalse(
+            DiagnosticEvidenceTextRenderer.render(events)
+                .contains(rootURL.path)
+        )
+    }
+
     private func lockRepository(at rootURL: URL) throws -> Int32 {
         let lockURL = rootURL.appendingPathComponent(".repository.lock")
         let descriptor = lockURL.withUnsafeFileSystemRepresentation { path in

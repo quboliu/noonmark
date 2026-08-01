@@ -69,10 +69,19 @@ evidence_guard_repo_path() {
   local repo_root="$1"
   local requested_path="$2"
   local repo_absolute
+  local repo_logical
+  local requested_relative
+  local requested_basename
+  local parent_relative
+  local current_parent
+  local next_parent
   local parent_absolute
   local requested_absolute
+  local component
+  local components=()
 
   repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  repo_logical="$(cd "$repo_root" && pwd -L)" || return 1
   if [[ -z "$requested_path" || "$requested_path" == *$'\n'* ||
     "$requested_path" == *$'\r'* ]]; then
     echo "evidence path is empty or contains a line break" >&2
@@ -84,21 +93,77 @@ evidence_guard_repo_path() {
       return 1
       ;;
   esac
+  if [[ "$requested_path" == */ ]]; then
+    echo "evidence path is not canonical: $requested_path" >&2
+    return 1
+  fi
   if [[ "$requested_path" == /* ]]; then
     requested_absolute="$requested_path"
+    while [[ "$requested_absolute" == *//* ]]; do
+      requested_absolute="${requested_absolute%%//*}/${requested_absolute#*//}"
+    done
+    if [[ "$requested_absolute" == "$repo_logical/"* ]]; then
+      requested_relative="${requested_absolute#"$repo_logical/"}"
+    elif [[ "$requested_absolute" == "$repo_absolute/"* ]]; then
+      requested_relative="${requested_absolute#"$repo_absolute/"}"
+    else
+      echo "evidence path escapes the repository: $requested_path" >&2
+      return 1
+    fi
   else
-    requested_absolute="$repo_absolute/$requested_path"
+    requested_relative="$requested_path"
   fi
-  if ! mkdir -p "$(dirname "$requested_absolute")"; then
-    echo "could not create the evidence parent directory" >&2
-    return 1
-  fi
-  parent_absolute="$(cd "$(dirname "$requested_absolute")" && pwd -P)" ||
-    return 1
-  requested_absolute="$parent_absolute/$(basename "$requested_absolute")"
-  if [[ "$requested_absolute" == "$repo_absolute" ||
-    "$requested_absolute" != "$repo_absolute/"* ]]; then
+
+  # Reject lexical escapes before creating anything. Resolving the parent first
+  # would let an invalid absolute path create directories outside the repository.
+  if [[ -z "$requested_relative" ]]; then
     echo "evidence path escapes the repository: $requested_path" >&2
+    return 1
+  fi
+
+  requested_basename="${requested_relative##*/}"
+  parent_relative="${requested_relative%/*}"
+  if [[ "$parent_relative" == "$requested_relative" ]]; then
+    parent_relative=""
+  fi
+
+  # Walk from the physical repository root and create one directory at a time.
+  # Every existing component must be a real directory, never a symlink. This
+  # keeps later cleanup and writes inside the owned repository boundary.
+  current_parent="$repo_absolute"
+  if [[ -n "$parent_relative" ]]; then
+    IFS='/' read -r -a components <<<"$parent_relative"
+    for component in "${components[@]}"; do
+      next_parent="$current_parent/$component"
+      if [[ -L "$next_parent" ]]; then
+        echo "evidence parent must not be a symlink: $next_parent" >&2
+        return 1
+      fi
+      if [[ -e "$next_parent" ]]; then
+        if [[ ! -d "$next_parent" ]]; then
+          echo "evidence parent is not a directory: $next_parent" >&2
+          return 1
+        fi
+      elif ! mkdir -- "$next_parent"; then
+        echo "could not create the evidence parent directory: $next_parent" >&2
+        return 1
+      fi
+      if [[ -L "$next_parent" || ! -d "$next_parent" ]]; then
+        echo "evidence parent changed while being validated: $next_parent" >&2
+        return 1
+      fi
+      parent_absolute="$(cd "$next_parent" && pwd -P)" || return 1
+      if [[ "$parent_absolute" != "$next_parent" ]]; then
+        echo "evidence parent escapes through a symlink: $next_parent" >&2
+        return 1
+      fi
+      current_parent="$next_parent"
+    done
+  fi
+
+  requested_absolute="$current_parent/$requested_basename"
+  if [[ -L "$requested_absolute" ]]; then
+    echo "evidence path must not be a symlink: $requested_path" >&2
     return 1
   fi
   printf '%s\n' "$requested_absolute"

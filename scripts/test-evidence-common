@@ -62,6 +62,26 @@ if evidence_prepare_fresh_directory "$git_fixture" "$git_fixture/../outside" \
   fail "fresh evidence accepted an escaping path"
 fi
 
+missing_escape_parent="$fixture/missing-outside-parent"
+if evidence_prepare_fresh_directory \
+  "$git_fixture" \
+  "$missing_escape_parent/evidence" >/dev/null 2>&1; then
+  fail "fresh evidence accepted a missing absolute escape"
+fi
+[[ ! -e "$missing_escape_parent" ]] ||
+  fail "escaping evidence path created an outside parent before rejection"
+
+symlink_target="$fixture/symlink-target"
+mkdir -p "$symlink_target"
+ln -s "$symlink_target" "$git_fixture/evidence-link"
+if evidence_prepare_fresh_directory \
+  "$git_fixture" \
+  "$git_fixture/evidence-link/created/evidence" >/dev/null 2>&1; then
+  fail "fresh evidence accepted a symlink parent"
+fi
+[[ ! -e "$symlink_target/created" ]] ||
+  fail "symlinked evidence path created an outside parent before rejection"
+
 mkdir -p "$fresh_root/current"
 printf 'current\n' >"$fresh_root/current/result.txt"
 ln -s result.txt "$fresh_root/current/result-link"

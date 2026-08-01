@@ -84,7 +84,10 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         )
         operation.fail(
             DiagnosticFailure(domain: .syncProtocol, code: 7),
-            detail: DiagnosticFailureClassifier.classify(sourceError),
+            detail: DiagnosticSystemFailureMapper.map(
+                domain: sourceError.domain,
+                code: sourceError.code
+            ),
             at: Date(timeIntervalSince1970: 1_800_000_002)
         )
         await recorder.flush()
@@ -110,18 +113,15 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
     }
 
     func testUnknownErrorDoesNotExposeThirdPartyDomainOrCode() {
-        let failure = DiagnosticFailureClassifier.classify(
-            NSError(
-                domain: "com.vendor.PRIVATE-TASK-TITLE-7Q9X",
-                code: 98765,
-                userInfo: [NSLocalizedDescriptionKey: "sk-live-secret"]
-            )
+        let failure = DiagnosticSystemFailureMapper.map(
+            domain: "com.vendor.PRIVATE-TASK-TITLE-7Q9X",
+            code: 98765
         )
 
         XCTAssertEqual(failure, DiagnosticFailure(domain: .unknown, code: 0))
     }
 
-    func testRecognizedUnderlyingSystemFailureSurvivesSafeWrapper() {
+    func testSystemMapperDoesNotTraverseWrapperUserInfo() {
         let underlying = NSError(
             domain: NSPOSIXErrorDomain,
             code: Int(EIO),
@@ -137,20 +137,57 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            DiagnosticFailureClassifier.classify(wrapper),
-            DiagnosticFailure(domain: .posix, code: Int(EIO))
+            DiagnosticSystemFailureMapper.map(
+                domain: wrapper.domain,
+                code: wrapper.code
+            ),
+            DiagnosticFailure(domain: .unknown, code: 0)
         )
     }
 
     func testDomainOwnedTypedFailureMappingTakesPrecedenceWithoutText() {
-        let failure = DiagnosticFailureClassifier.classify(
-            SafeMappedFailure.privatePayload("PRIVATE-TASK-TITLE-7Q9X")
-        )
+        let failure = SafeMappedFailure
+            .privatePayload("PRIVATE-TASK-TITLE-7Q9X")
+            .diagnosticFailure
 
         XCTAssertEqual(
             failure,
             DiagnosticFailure(domain: .syncProtocol, code: 701)
         )
+    }
+
+    func testSystemMapperKeepsOnlyAllowedDomainAndNumericCode() {
+        let expected: [(String, DiagnosticErrorDomain)] = [
+            (NSCocoaErrorDomain, .cocoa),
+            (NSPOSIXErrorDomain, .posix),
+            (NSURLErrorDomain, .url),
+            ("CKErrorDomain", .cloudKit)
+        ]
+
+        for (domain, expectedDomain) in expected {
+            XCTAssertEqual(
+                DiagnosticSystemFailureMapper.map(
+                    domain: domain,
+                    code: 513
+                ),
+                DiagnosticFailure(domain: expectedDomain, code: 513)
+            )
+        }
+    }
+
+    func testDiagnosticStorageFailuresHaveStableTypedCodes() {
+        let expected: [(DiagnosticStorageError, Int)] = [
+            (.invalidRoot, 1),
+            (.exportTooLarge, 2),
+            (.allocatedSizeUnavailable, 3)
+        ]
+
+        for (error, code) in expected {
+            XCTAssertEqual(
+                error.diagnosticFailure,
+                DiagnosticFailure(domain: .diagnostics, code: code)
+            )
+        }
     }
 
     private func diagnosticFileText(in rootURL: URL) throws -> String {

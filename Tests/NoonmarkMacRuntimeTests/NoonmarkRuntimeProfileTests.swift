@@ -286,7 +286,7 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
     }
 
     func testRuntimeIsolationFailuresHaveStableTypedDiagnosticCodes() {
-        let expected: [(any Error, Int)] = [
+        let expected: [(any DiagnosticFailureProviding, Int)] = [
             (NoonmarkRuntimeProfileResolutionError.missingBundleIdentifier, 701),
             (
                 NoonmarkRuntimeProfileResolutionError
@@ -305,7 +305,7 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
 
         for (error, code) in expected {
             XCTAssertEqual(
-                DiagnosticFailureClassifier.classify(error),
+                error.diagnosticFailure,
                 DiagnosticFailure(domain: .domainValidation, code: code)
             )
         }

@@ -606,7 +606,11 @@ require_order \
 require_order \
   App/NoonmarkMacApp/NoonmarkMacApp.swift \
   "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
-  "store: try NoonmarkStore(dayContext: dayContext)"
+  "try await NoonmarkStore.preparePersistentBootstrap()"
+require_order \
+  App/NoonmarkMacApp/NoonmarkMacApp.swift \
+  "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
+  "store: try NoonmarkStore("
 if grep -F \
   "WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
   App/NoonmarkMacApp/LegacyLaunchAutomations.swift >/dev/null; then

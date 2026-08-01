@@ -5,24 +5,21 @@ import XCTest
 final class DiagnosticFailureMappingTests: XCTestCase {
     func testICloudEndpointFailuresHaveStableSafeCodes() {
         XCTAssertEqual(
-            DiagnosticFailureClassifier.classify(
-                ICloudDriveSyncTransportError.accountUnavailable
-            ),
+            ICloudDriveSyncTransportError.accountUnavailable
+                .diagnosticFailure,
             DiagnosticFailure(domain: .syncProtocol, code: 102)
         )
         XCTAssertEqual(
-            DiagnosticFailureClassifier.classify(
-                ICloudDriveSyncTransportError.driveUnavailable
-            ),
+            ICloudDriveSyncTransportError.driveUnavailable
+                .diagnosticFailure,
             DiagnosticFailure(domain: .syncProtocol, code: 103)
         )
     }
 
     func testCloudKitAssociatedTextDoesNotCrossMappingBoundary() {
         let canary = "PRIVATE-TASK-TITLE-7Q9X"
-        let failure = DiagnosticFailureClassifier.classify(
-            CloudKitSyncEngineTransportError.cloudKitFailure(canary)
-        )
+        let failure = CloudKitSyncEngineTransportError
+            .cloudKitFailure(canary).diagnosticFailure
         let event = EvidenceEvent.persistenceFailed(
             failure: failure,
             incidentID: DiagnosticIncidentID()
@@ -39,11 +36,10 @@ final class DiagnosticFailureMappingTests: XCTestCase {
 
     func testRecordIdentityDoesNotCrossTransportFailureMapping() {
         let canary = "PRIVATE-TASK-TITLE-7Q9X"
-        let failure = DiagnosticFailureClassifier.classify(
-            SyncRecordTransportError.immutableRecordCollision(
-                recordID: SyncRecordID(canary)
-            )
+        let failure = SyncRecordTransportError.immutableRecordCollision(
+            recordID: SyncRecordID(canary)
         )
+        .diagnosticFailure
 
         XCTAssertEqual(
             failure,

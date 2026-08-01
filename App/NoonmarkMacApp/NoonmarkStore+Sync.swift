@@ -547,7 +547,7 @@ extension NoonmarkStore {
             } catch {
                 diagnostics.record(
                     .persistenceFailed(
-                        failure: DiagnosticFailureClassifier.classify(error),
+                        failure: AppDiagnosticFailureMapping.map(error),
                         incidentID: correlation.incidentID
                     )
                 )
@@ -771,7 +771,7 @@ extension NoonmarkStore {
         _ failureMessage: String,
         repository: SQLiteSyncRepository
     ) {
-        let failure = diagnosticFailure(for: reason)
+        let failure = reason.diagnosticFailure
         let diagnostics = diagnostics
         Task { [weak self] in
             let correlation = if let diagnosticCorrelation {
@@ -875,7 +875,7 @@ extension NoonmarkStore {
         } catch {
             diagnostics?.record(
                 .persistenceFailed(
-                    failure: DiagnosticFailureClassifier.classify(error),
+                    failure: AppDiagnosticFailureMapping.map(error),
                     incidentID: DiagnosticIncidentID()
                 )
             )
@@ -899,27 +899,10 @@ extension NoonmarkStore {
         }
     }
 
-    private func diagnosticFailure(
-        for reason: SQLiteLocalFirstSyncFailureReason
-    ) -> DiagnosticFailure {
-        let code = switch reason {
-        case .baselineUnavailable: 1
-        case .baselineInvalid: 2
-        case .baselineNotUploaded: 3
-        case .localRecordsUnpreparable: 4
-        case .localChangesPending: 5
-        case .remoteChangesPending: 6
-        case .transportOrStorage: 7
-        }
-        return DiagnosticFailure(domain: .syncProtocol, code: code)
-    }
-
     private func persistedSyncDiagnosticFailure(
         for error: Error
     ) -> DiagnosticFailure {
-        diagnosticFailure(
-            for: (error as? SQLiteLocalFirstSyncError)?.failureReason
-                ?? .transportOrStorage
-        )
+        ((error as? SQLiteLocalFirstSyncError)?.failureReason
+            ?? .transportOrStorage).diagnosticFailure
     }
 }

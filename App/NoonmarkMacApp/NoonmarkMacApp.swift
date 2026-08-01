@@ -76,7 +76,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         super.init()
     }
 
-    static func main() {
+    static func main() async {
         do {
             _ = try AppLaunchArguments.runtimeProfile
             try AppLaunchArguments.validateRuntimeDataIsolation()
@@ -131,8 +131,17 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 bundleIdentifier: Bundle.main.bundleIdentifier
             )
             let dayContext = NaturalDayContext(environment: environment)
+            let persistentBootstrap: NoonmarkPersistentStoreBootstrap? =
+                if AppLaunchArguments.contains("--ephemeral") {
+                    nil
+                } else {
+                    try await NoonmarkStore.preparePersistentBootstrap()
+                }
             delegate = NoonmarkMacApp(
-                store: try NoonmarkStore(dayContext: dayContext),
+                store: try NoonmarkStore(
+                    dayContext: dayContext,
+                    persistentBootstrap: persistentBootstrap
+                ),
                 fixedNaturalDayEnvironment: environment
                     as? FixedNaturalDayEnvironment,
                 workspaceStateRepository: workspaceStateRepository,
@@ -192,7 +201,11 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             .lowercased()
             .hasPrefix("zh") == true
         let copy = AppCopy(language: usesChinese ? .chinese : .english)
-        let incidentID = recordEarlyStartupFailure(error)
+        let incidentID = StartupFailureIncidentResolver.resolve(
+            for: error
+        ) {
+            recordEarlyStartupFailure(error)
+        }
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = copy.startupFailureTitle
@@ -217,7 +230,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         )
         operation.stage(.launch)
         return operation.fail(
-            DiagnosticFailureClassifier.classify(error)
+            AppDiagnosticFailureMapping.map(error)
         )
     }
 
@@ -270,7 +283,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             kind: .appSession,
             endpoint: .cloudKit
         )
-        operation.fail(DiagnosticFailureClassifier.classify(error))
+        operation.fail(AppDiagnosticFailureMapping.map(error))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -687,7 +700,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 kind: .appSession,
                 endpoint: .cloudKit
             )
-            operation.fail(DiagnosticFailureClassifier.classify(error))
+            operation.fail(AppDiagnosticFailureMapping.map(error))
         }
     }
 }

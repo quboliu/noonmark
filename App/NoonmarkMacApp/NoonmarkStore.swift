@@ -81,6 +81,21 @@ struct EnginePersistenceCommitError: LocalizedError {
     }
 }
 
+enum NoonmarkStoreBootstrapError: Error, DiagnosticFailureProviding {
+    case missingPersistentBootstrap
+
+    var diagnosticFailure: DiagnosticFailure {
+        DiagnosticFailure(domain: .domainValidation, code: 801)
+    }
+}
+
+struct NoonmarkPersistentStoreBootstrap {
+    let databaseURL: URL
+    let dataRootProcessLease: NoonmarkDataRootProcessLease
+    let diagnostics: any DiagnosticRecording
+    let localDiagnosticRecorder: LocalDiagnosticRecorder?
+}
+
 @MainActor
 final class ReviewAutosaveStatus: ObservableObject {
     @Published private(set) var message: String?
@@ -830,8 +845,36 @@ final class NoonmarkStore: ObservableObject {
     var pendingZhulongEngineWriteAuthorized = false
     var didRecordCleanDiagnosticShutdown = false
 
+    static func preparePersistentBootstrap() async throws
+        -> NoonmarkPersistentStoreBootstrap
+    {
+        let databaseURL = configuredDatabaseURL()
+        let dataRootURL = databaseURL.deletingLastPathComponent()
+        let dataRootProcessLease = try await Task.detached(
+            priority: .utility
+        ) {
+            try NoonmarkDataRootProcessLease.acquire(
+                dataRootURL: dataRootURL
+            )
+        }.value
+        let diagnosticRootURL = dataRootURL.appendingPathComponent(
+            "Diagnostics",
+            isDirectory: true
+        )
+        let diagnosticBootstrap = await DiagnosticRecordingBootstrap.prepare(
+            rootURL: diagnosticRootURL
+        )
+        return NoonmarkPersistentStoreBootstrap(
+            databaseURL: databaseURL,
+            dataRootProcessLease: dataRootProcessLease,
+            diagnostics: diagnosticBootstrap.recorder,
+            localDiagnosticRecorder: diagnosticBootstrap.localRecorder
+        )
+    }
+
     init(
         dayContext: NaturalDayContext,
+        persistentBootstrap: NoonmarkPersistentStoreBootstrap?,
         automaticClassificationOperationalClock: AutomaticClassificationOperationalClock = .system
     ) throws {
         let initialMoment = try dayContext.moment()
@@ -888,40 +931,25 @@ final class NoonmarkStore: ObservableObject {
             recorder.record(.sessionStarted())
             try seed()
         } else {
-            let configuredDatabaseURL = Self.configuredDatabaseURL()
-            dataRootProcessLease = try NoonmarkDataRootProcessLease.acquire(
-                dataRootURL: configuredDatabaseURL.deletingLastPathComponent()
-            )
+            guard let persistentBootstrap else {
+                throw NoonmarkStoreBootstrapError.missingPersistentBootstrap
+            }
+            let configuredDatabaseURL = persistentBootstrap.databaseURL
+            dataRootProcessLease = persistentBootstrap.dataRootProcessLease
             databaseURL = configuredDatabaseURL
             repository = SQLiteEngineRepository(databaseURL: configuredDatabaseURL)
             automaticClassificationJobRepository = SQLiteAutomaticClassificationJobRepository(
                 databaseURL: configuredDatabaseURL
             )
-            let diagnosticRootURL = configuredDatabaseURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("Diagnostics", isDirectory: true)
-            do {
-                let recorder = try LocalDiagnosticRecorder(
-                    rootURL: diagnosticRootURL
-                )
-                diagnostics = recorder
-                localDiagnosticRecorder = recorder
+            diagnostics = persistentBootstrap.diagnostics
+            localDiagnosticRecorder = persistentBootstrap.localDiagnosticRecorder
+            if let recorder = persistentBootstrap.localDiagnosticRecorder {
                 metricKitDiagnosticSubscriber = MetricKitDiagnosticSubscriber(
                     recorder: recorder
                 )
                 recorder.startSession()
-            } catch {
-                let recorder = AppleOnlyDiagnosticRecorder()
-                diagnostics = recorder
-                localDiagnosticRecorder = nil
+            } else {
                 metricKitDiagnosticSubscriber = nil
-                recorder.record(.sessionStarted())
-                let fallbackOperation = recorder.startOperation(
-                    kind: .persistence
-                )
-                fallbackOperation.fail(
-                    DiagnosticFailureClassifier.classify(error)
-                )
             }
             syncDeviceIdentity = Self.loadOrCreateSyncDeviceIdentity(
                 databaseURL: configuredDatabaseURL,
@@ -935,10 +963,14 @@ final class NoonmarkStore: ObservableObject {
                 try loadOrSeed()
                 startupLoadOperation.succeed()
             } catch {
-                startupLoadOperation.fail(
-                    DiagnosticFailureClassifier.classify(error)
+                let diagnosticFailure = AppDiagnosticFailureMapping.map(error)
+                let incidentID = startupLoadOperation.fail(
+                    diagnosticFailure
                 )
-                throw error
+                throw RecordedStartupFailure(
+                    diagnosticFailure: diagnosticFailure,
+                    diagnosticIncidentID: incidentID
+                )
             }
         }
         recoverPendingZhulongApplication()

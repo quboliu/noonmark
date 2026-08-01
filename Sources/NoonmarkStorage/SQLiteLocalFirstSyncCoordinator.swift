@@ -67,6 +67,19 @@ public enum SQLiteLocalFirstSyncFailureReason:
     case localChangesPending
     case remoteChangesPending
     case transportOrStorage
+
+    public var diagnosticFailure: DiagnosticFailure {
+        let code = switch self {
+        case .baselineUnavailable: 1
+        case .baselineInvalid: 2
+        case .baselineNotUploaded: 3
+        case .localRecordsUnpreparable: 4
+        case .localChangesPending: 5
+        case .remoteChangesPending: 6
+        case .transportOrStorage: 7
+        }
+        return DiagnosticFailure(domain: .syncProtocol, code: code)
+    }
 }
 
 public struct SQLiteLocalFirstSyncResult: Codable, Equatable, Sendable {
@@ -460,7 +473,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
         else { return nil }
         return diagnosticOperation.failWithCorrelation(
             Self.diagnosticFailure(for: error),
-            detail: DiagnosticFailureClassifier.classify(error),
+            detail: Self.diagnosticFailureDetail(for: error),
             at: failedAt
         )
     }
@@ -486,16 +499,20 @@ public final class SQLiteLocalFirstSyncCoordinator {
     ) -> DiagnosticFailure {
         let reason = (error as? SQLiteLocalFirstSyncError)?.failureReason
             ?? .transportOrStorage
-        let code = switch reason {
-        case .baselineUnavailable: 1
-        case .baselineInvalid: 2
-        case .baselineNotUploaded: 3
-        case .localRecordsUnpreparable: 4
-        case .localChangesPending: 5
-        case .remoteChangesPending: 6
-        case .transportOrStorage: 7
+        return reason.diagnosticFailure
+    }
+
+    private static func diagnosticFailureDetail(
+        for error: Error
+    ) -> DiagnosticFailure {
+        if let provider = error as? any DiagnosticFailureProviding {
+            return provider.diagnosticFailure
         }
-        return DiagnosticFailure(domain: .syncProtocol, code: code)
+        let systemError = error as NSError
+        return DiagnosticSystemFailureMapper.map(
+            domain: systemError.domain,
+            code: systemError.code
+        )
     }
 
     private func retainingRemoteRecoveryEvidence(

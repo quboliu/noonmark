@@ -1483,7 +1483,7 @@ final class ZhulongWorkspaceStore: ObservableObject {
     ) {
         diagnostics?.record(
             .persistenceFailed(
-                failure: DiagnosticFailureClassifier.classify(error),
+                failure: AppDiagnosticFailureMapping.map(error),
                 incidentID: DiagnosticIncidentID()
             )
         )

@@ -41,6 +41,86 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         )
     }
 
+    public static func prepare(
+        rootURL: URL,
+        configuration: DiagnosticStorageConfiguration = .production,
+        sessionID: DiagnosticSessionID = DiagnosticSessionID()
+    ) async throws -> LocalDiagnosticRecorder {
+        try await prepare(
+            rootURL: rootURL,
+            configuration: configuration,
+            sessionID: sessionID,
+            currentAppIdentityObserver: {}
+        )
+    }
+
+    static func prepare(
+        rootURL: URL,
+        configuration: DiagnosticStorageConfiguration = .production,
+        sessionID: DiagnosticSessionID = DiagnosticSessionID(),
+        currentAppIdentityObserver: @escaping @Sendable () -> Void
+    ) async throws -> LocalDiagnosticRecorder {
+        try await prepare(
+            rootURL: rootURL,
+            appIdentityProvider: {
+                currentAppIdentityObserver()
+                return .current
+            },
+            configuration: configuration,
+            sessionID: sessionID,
+            initializationObserver: {}
+        )
+    }
+
+    public static func prepare(
+        rootURL: URL,
+        appIdentity: DiagnosticAppIdentity,
+        configuration: DiagnosticStorageConfiguration = .production,
+        sessionID: DiagnosticSessionID = DiagnosticSessionID()
+    ) async throws -> LocalDiagnosticRecorder {
+        try await prepare(
+            rootURL: rootURL,
+            appIdentityProvider: { appIdentity },
+            configuration: configuration,
+            sessionID: sessionID,
+            initializationObserver: {}
+        )
+    }
+
+    static func prepare(
+        rootURL: URL,
+        appIdentity: DiagnosticAppIdentity,
+        configuration: DiagnosticStorageConfiguration = .production,
+        sessionID: DiagnosticSessionID = DiagnosticSessionID(),
+        initializationObserver: @escaping @Sendable () -> Void
+    ) async throws -> LocalDiagnosticRecorder {
+        try await prepare(
+            rootURL: rootURL,
+            appIdentityProvider: { appIdentity },
+            configuration: configuration,
+            sessionID: sessionID,
+            initializationObserver: initializationObserver
+        )
+    }
+
+    private static func prepare(
+        rootURL: URL,
+        appIdentityProvider: @escaping @Sendable () -> DiagnosticAppIdentity,
+        configuration: DiagnosticStorageConfiguration,
+        sessionID: DiagnosticSessionID,
+        initializationObserver: @escaping @Sendable () -> Void
+    ) async throws -> LocalDiagnosticRecorder {
+        try await Task.detached(priority: .utility) {
+            initializationObserver()
+            return try LocalDiagnosticRecorder(
+                rootURL: rootURL,
+                appIdentity: appIdentityProvider(),
+                configuration: configuration,
+                sessionID: sessionID
+            )
+        }.value
+    }
+
     convenience init(
         rootURL: URL,
         appIdentity: DiagnosticAppIdentity,
@@ -364,6 +444,17 @@ public enum DiagnosticStorageError: Error, Equatable, Sendable {
     case invalidRoot
     case exportTooLarge
     case allocatedSizeUnavailable
+}
+
+extension DiagnosticStorageError: DiagnosticFailureProviding {
+    public var diagnosticFailure: DiagnosticFailure {
+        let code = switch self {
+        case .invalidRoot: 1
+        case .exportTooLarge: 2
+        case .allocatedSizeUnavailable: 3
+        }
+        return DiagnosticFailure(domain: .diagnostics, code: code)
+    }
 }
 
 private final class DiagnosticDiskStore {

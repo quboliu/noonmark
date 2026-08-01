@@ -4,6 +4,27 @@ import SQLite3
 import XCTest
 
 final class DiagnosticFailureMappingTests: XCTestCase {
+    func testLocalFirstSyncFailureReasonOwnsStableDiagnosticCodes() {
+        let expected: [
+            (SQLiteLocalFirstSyncFailureReason, Int)
+        ] = [
+            (.baselineUnavailable, 1),
+            (.baselineInvalid, 2),
+            (.baselineNotUploaded, 3),
+            (.localRecordsUnpreparable, 4),
+            (.localChangesPending, 5),
+            (.remoteChangesPending, 6),
+            (.transportOrStorage, 7)
+        ]
+
+        for (reason, code) in expected {
+            XCTAssertEqual(
+                reason.diagnosticFailure,
+                DiagnosticFailure(domain: .syncProtocol, code: code)
+            )
+        }
+    }
+
     func testRepositoryOpenFailurePreservesSQLitePrimaryCode() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "noonmark-sqlite-diagnostic-\(UUID().uuidString)",
@@ -30,18 +51,17 @@ final class DiagnosticFailureMappingTests: XCTestCase {
             }
             XCTAssertEqual(sqliteCode & 0xFF, SQLITE_CANTOPEN)
             XCTAssertEqual(
-                DiagnosticFailureClassifier.classify(error).code,
+                repositoryError.diagnosticFailure.code,
                 Int(sqliteCode)
             )
         }
     }
 
     func testSQLiteMessageDoesNotCrossTypedFailureMapping() {
-        let failure = DiagnosticFailureClassifier.classify(
-            SQLiteRepositoryError.openFailed(
-                "PRIVATE-TASK-TITLE-7Q9X /Users/private/noonmark.sqlite"
-            )
+        let failure = SQLiteRepositoryError.openFailed(
+            "PRIVATE-TASK-TITLE-7Q9X /Users/private/noonmark.sqlite"
         )
+        .diagnosticFailure
 
         XCTAssertEqual(
             failure,
@@ -51,12 +71,11 @@ final class DiagnosticFailureMappingTests: XCTestCase {
 
     func testSQLiteExtendedResultCodeSurvivesTypedFailureMapping() {
         let ioWriteCode = SQLITE_IOERR | (3 << 8)
-        let failure = DiagnosticFailureClassifier.classify(
-            SQLiteRepositoryError.stepFailed(
-                "PRIVATE-TASK-TITLE-7Q9X",
-                sqliteCode: ioWriteCode
-            )
+        let failure = SQLiteRepositoryError.stepFailed(
+            "PRIVATE-TASK-TITLE-7Q9X",
+            sqliteCode: ioWriteCode
         )
+        .diagnosticFailure
 
         XCTAssertEqual(
             failure,
@@ -69,21 +88,18 @@ final class DiagnosticFailureMappingTests: XCTestCase {
 
     func testTransientContentionUsesSQLiteBusyCode() {
         XCTAssertEqual(
-            DiagnosticFailureClassifier.classify(
-                SQLiteRepositoryError.transientContention
-            ),
+            SQLiteRepositoryError.transientContention.diagnosticFailure,
             DiagnosticFailure(domain: .sqlite, code: Int(SQLITE_BUSY))
         )
     }
 
     func testDataRootLeaseDropsPathButKeepsPOSIXCode() {
-        let failure = DiagnosticFailureClassifier.classify(
-            NoonmarkDataRootProcessLeaseError.posixFailure(
-                operation: "PRIVATE-TASK-TITLE-7Q9X",
-                code: EACCES,
-                path: "/Users/private/noonmark"
-            )
+        let failure = NoonmarkDataRootProcessLeaseError.posixFailure(
+            operation: "PRIVATE-TASK-TITLE-7Q9X",
+            code: EACCES,
+            path: "/Users/private/noonmark"
         )
+        .diagnosticFailure
 
         XCTAssertEqual(
             failure,

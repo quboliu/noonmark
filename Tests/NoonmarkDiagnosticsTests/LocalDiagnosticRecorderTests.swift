@@ -11,6 +11,63 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         temporaryURLs = []
     }
 
+    @MainActor
+    func testPreparationRunsRecorderInitializationOutsideMainThread() async throws {
+        let rootURL = temporaryDirectory(named: "async-preparation")
+        let observation = RecorderInitializationThreadObservation()
+
+        _ = try await LocalDiagnosticRecorder.prepare(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            initializationObserver: {
+                observation.record(isMainThread: Thread.isMainThread)
+            }
+        )
+
+        XCTAssertFalse(try XCTUnwrap(observation.wasMainThread))
+    }
+
+    @MainActor
+    func testDefaultIdentityResolutionRunsOutsideMainThread() async throws {
+        let rootURL = temporaryDirectory(named: "default-identity-preparation")
+        let observation = RecorderInitializationThreadObservation()
+
+        _ = try await LocalDiagnosticRecorder.prepare(
+            rootURL: rootURL,
+            currentAppIdentityObserver: {
+                observation.record(isMainThread: Thread.isMainThread)
+            }
+        )
+
+        XCTAssertFalse(try XCTUnwrap(observation.wasMainThread))
+    }
+
+    @MainActor
+    func testPreparationFailureStaysTypedAndRunsOutsideMainThread() async throws {
+        let rootURL = temporaryDirectory(named: "async-preparation-failure")
+        try Data("not-a-directory".utf8).write(to: rootURL)
+        let observation = RecorderInitializationThreadObservation()
+
+        do {
+            _ = try await LocalDiagnosticRecorder.prepare(
+                rootURL: rootURL,
+                appIdentity: .testFixture,
+                initializationObserver: {
+                    observation.record(isMainThread: Thread.isMainThread)
+                }
+            )
+            XCTFail("Expected recorder preparation to reject a file root")
+        } catch {
+            XCTAssertEqual(error as? DiagnosticStorageError, .invalidRoot)
+            XCTAssertEqual(
+                (error as? any DiagnosticFailureProviding)?
+                    .diagnosticFailure,
+                DiagnosticFailure(domain: .diagnostics, code: 1)
+            )
+        }
+        XCTAssertFalse(try XCTUnwrap(observation.wasMainThread))
+    }
+
     func testPersistentEvidenceStaysWithinAllocatedByteCapAndExportsKnownSchema() async throws {
         XCTAssertEqual(
             DiagnosticStorageConfiguration.production.maximumPersistentBytes,
@@ -1082,5 +1139,22 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
     private func temporaryFile(named name: String) -> URL {
         let directory = temporaryDirectory(named: "export")
         return directory.appendingPathComponent(name)
+    }
+}
+
+private final class RecorderInitializationThreadObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedWasMainThread: Bool?
+
+    var wasMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWasMainThread
+    }
+
+    func record(isMainThread: Bool) {
+        lock.lock()
+        storedWasMainThread = isMainThread
+        lock.unlock()
     }
 }

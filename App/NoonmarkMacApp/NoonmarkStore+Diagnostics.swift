@@ -79,7 +79,7 @@ extension NoonmarkStore {
                 showToast(copy.diagnosticsExportSucceeded)
             } catch {
                 let incidentID = operation.fail(
-                    DiagnosticFailureClassifier.classify(error)
+                    AppDiagnosticFailureMapping.map(error)
                 )
                 isDiagnosticActionRunning = false
                 presentDiagnosticActionFailure(
@@ -115,7 +115,7 @@ extension NoonmarkStore {
                 let incidentID = DiagnosticIncidentID()
                 diagnostics.record(
                     .persistenceFailed(
-                        failure: DiagnosticFailureClassifier.classify(error),
+                        failure: AppDiagnosticFailureMapping.map(error),
                         incidentID: incidentID
                     )
                 )
@@ -195,11 +195,11 @@ extension NoonmarkStore {
 
     func diagnosticFailure(for error: Error) -> DiagnosticFailure {
         if let persistenceError = error as? EnginePersistenceCommitError {
-            return DiagnosticFailureClassifier.classify(
+            return AppDiagnosticFailureMapping.map(
                 persistenceError.underlying
             )
         }
-        return DiagnosticFailureClassifier.classify(error)
+        return AppDiagnosticFailureMapping.map(error)
     }
 
     private var activeDiagnosticOperationID: DiagnosticOperationID? {

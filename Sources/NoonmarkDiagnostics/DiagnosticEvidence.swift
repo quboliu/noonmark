@@ -311,6 +311,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             category: operation.kind.category,
             severity: .error,
             operationID: operation.id,
+            incidentID: operation.incidentID,
             operationKind: operation.kind,
             endpoint: operation.endpoint,
             stage: operation.lastStage,

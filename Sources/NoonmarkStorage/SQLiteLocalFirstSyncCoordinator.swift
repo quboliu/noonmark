@@ -14,6 +14,7 @@ public enum SQLiteLocalFirstSyncError:
     case uploadMaterializationFailed(count: Int)
     case uploadQueueNotDrained
     case remoteChangesPending
+    case previousSessionInterrupted
 
     public var errorDescription: String? {
         switch self {
@@ -32,6 +33,8 @@ public enum SQLiteLocalFirstSyncError:
             "Local changes continued while synchronization was finishing."
         case .remoteChangesPending:
             "Remote changes continued while synchronization was finishing."
+        case .previousSessionInterrupted:
+            "Synchronization did not finish before the previous app session ended."
         }
     }
 
@@ -50,6 +53,8 @@ public enum SQLiteLocalFirstSyncError:
             .localChangesPending
         case .remoteChangesPending:
             .remoteChangesPending
+        case .previousSessionInterrupted:
+            .operationInterrupted
         }
     }
 }
@@ -67,6 +72,7 @@ public enum SQLiteLocalFirstSyncFailureReason:
     case localChangesPending
     case remoteChangesPending
     case transportOrStorage
+    case operationInterrupted
 
     public var diagnosticFailure: DiagnosticFailure {
         let code = switch self {
@@ -77,6 +83,7 @@ public enum SQLiteLocalFirstSyncFailureReason:
         case .localChangesPending: 5
         case .remoteChangesPending: 6
         case .transportOrStorage: 7
+        case .operationInterrupted: 8
         }
         return DiagnosticFailure(domain: .syncProtocol, code: code)
     }
@@ -761,6 +768,51 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 )
             )
         )
+    }
+
+    public static func persistInterruptedSyncFailureIfNewer(
+        at interruptedAt: Date,
+        diagnosticCorrelation: DiagnosticOperationCorrelation,
+        in repository: SQLiteSyncRepository
+    ) throws -> Bool {
+        let interruptedAt = persistedFailureTimestamp(interruptedAt)
+        if let metadata = try repository.metadata(
+            for: lastStatusMetadataKey
+        ) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let current = try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: metadata.value
+            )
+            let currentCorrelation: DiagnosticOperationCorrelation? =
+                if case let .failed(_, _, _, correlation) = current {
+                    correlation
+                } else {
+                    nil
+                }
+            guard currentCorrelation != diagnosticCorrelation else {
+                return false
+            }
+            guard current.updatedAt <= interruptedAt else {
+                return false
+            }
+            if current.updatedAt == interruptedAt {
+                // ISO-8601 metadata is persisted at second precision. A
+                // previous failure and the later interruption observed while
+                // restoring the next session can therefore decode to the same
+                // timestamp. Only another failed status is replaceable in
+                // that tie; a successful or idle status remains authoritative.
+                guard case .failed = current else { return false }
+            }
+        }
+        try persistFailure(
+            SQLiteLocalFirstSyncError.previousSessionInterrupted,
+            at: interruptedAt,
+            diagnosticCorrelation: diagnosticCorrelation,
+            in: repository
+        )
+        return true
     }
 
     public static func persistedFailureTimestamp(_ date: Date) -> Date {

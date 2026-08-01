@@ -152,6 +152,16 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             at: startedAt
         )
         operation.stage(.transportLockWait, at: startedAt.addingTimeInterval(5))
+        let incidentID = DiagnosticIncidentID()
+        recorder?.record(
+            .mutationRejected(
+                context: .task,
+                reason: .exclusiveOperationInProgress,
+                operationID: operation.id,
+                incidentID: incidentID
+            ),
+            at: startedAt.addingTimeInterval(10)
+        )
         await recorder?.flush()
         recorder = nil
 
@@ -169,9 +179,19 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             }
         )
         XCTAssertEqual(interruption.event.operationID, operation.id)
+        XCTAssertEqual(interruption.event.incidentID, incidentID)
         XCTAssertEqual(interruption.event.stage, .transportLockWait)
         XCTAssertNil(interruption.event.failure)
-        XCTAssertNil(interruption.event.incidentID)
+        let interruptedCapsule = try XCTUnwrap(
+            package.operationCapsules.last {
+                $0.operationID == operation.id
+                    && $0.outcome == .interrupted
+            }
+        )
+        XCTAssertEqual(interruptedCapsule.incidentID, incidentID)
+        let recoveredInterruption = await relaunched
+            .latestInterruptedOperation(kind: .localFirstSync)
+        XCTAssertEqual(recoveredInterruption, interruptedCapsule)
     }
 
     func testRelaunchRestoresExactPersistedSyncFailureCorrelation() async throws {

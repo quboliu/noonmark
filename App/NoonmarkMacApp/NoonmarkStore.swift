@@ -94,6 +94,7 @@ struct NoonmarkPersistentStoreBootstrap {
     let dataRootProcessLease: NoonmarkDataRootProcessLease
     let diagnostics: any DiagnosticRecording
     let localDiagnosticRecorder: LocalDiagnosticRecorder?
+    let interruptedLocalFirstSyncOperation: DiagnosticOperationCapsule?
 }
 
 @MainActor
@@ -864,11 +865,21 @@ final class NoonmarkStore: ObservableObject {
         let diagnosticBootstrap = await DiagnosticRecordingBootstrap.prepare(
             rootURL: diagnosticRootURL
         )
+        let interruptedLocalFirstSyncOperation: DiagnosticOperationCapsule?
+        if let recorder = diagnosticBootstrap.localRecorder {
+            recorder.startSession()
+            interruptedLocalFirstSyncOperation = await recorder
+                .latestInterruptedOperation(kind: .localFirstSync)
+        } else {
+            interruptedLocalFirstSyncOperation = nil
+        }
         return NoonmarkPersistentStoreBootstrap(
             databaseURL: databaseURL,
             dataRootProcessLease: dataRootProcessLease,
             diagnostics: diagnosticBootstrap.recorder,
-            localDiagnosticRecorder: diagnosticBootstrap.localRecorder
+            localDiagnosticRecorder: diagnosticBootstrap.localRecorder,
+            interruptedLocalFirstSyncOperation:
+            interruptedLocalFirstSyncOperation
         )
     }
 
@@ -947,7 +958,6 @@ final class NoonmarkStore: ObservableObject {
                 metricKitDiagnosticSubscriber = MetricKitDiagnosticSubscriber(
                     recorder: recorder
                 )
-                recorder.startSession()
             } else {
                 metricKitDiagnosticSubscriber = nil
             }
@@ -979,7 +989,10 @@ final class NoonmarkStore: ObservableObject {
             engine: engine
         )
         Theme.apply(engine.preferences.theme)
-        restoreLocalFirstSyncStatus()
+        restoreLocalFirstSyncStatus(
+            interruptedOperation: persistentBootstrap?
+                .interruptedLocalFirstSyncOperation
+        )
         restartLocalFirstSyncAutomation()
         restoreAutomaticClassificationWork()
         naturalDayObservation = dayContext.observe { [weak self] event in

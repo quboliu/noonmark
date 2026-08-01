@@ -699,12 +699,29 @@ extension NoonmarkStore {
         }
     }
 
-    func restoreLocalFirstSyncStatus() {
+    func restoreLocalFirstSyncStatus(
+        interruptedOperation: DiagnosticOperationCapsule? = nil
+    ) {
         guard let databaseURL else { return }
         do {
             let syncRepository = SQLiteSyncRepository(
                 databaseURL: databaseURL
             )
+            if let interruptedOperation,
+               interruptedOperation.kind == .localFirstSync,
+               interruptedOperation.outcome == .interrupted,
+               let incidentID = interruptedOperation.incidentID
+            {
+                _ = try SQLiteLocalFirstSyncCoordinator
+                    .persistInterruptedSyncFailureIfNewer(
+                        at: interruptedOperation.finishedAt,
+                        diagnosticCorrelation: DiagnosticOperationCorrelation(
+                            operationID: interruptedOperation.operationID,
+                            incidentID: incidentID
+                        ),
+                        in: syncRepository
+                    )
+            }
             localFirstSyncTimestamps =
                 try SQLiteLocalFirstSyncCoordinator.timestamps(
                     in: syncRepository

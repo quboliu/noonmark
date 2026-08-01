@@ -35,7 +35,7 @@
 ## 当前证据与发行边界
 
 - 测试数量不在本文固化；每个候选必须以当次命令输出、manifest、checksum 和 inventory 为准。快速契约至少覆盖 runtime profile isolation、诊断日志 guard、诊断隐私边界、E2E evidence contract 与 DMG evidence contract。
-- `scripts/test-e2e` 的真实 App 故障闭环会建立一次已持久化同步失败，再把第二次同步停在精确 lock-wait stage，拒绝一次任务修改，SIGKILL 精确进程，重启后从真实 Help 菜单导出，并扫描 8 MiB 上限与隐私哨兵。该样本验证采集能力，不是首次宿主机故障的复现或根因。
+- `scripts/test-e2e` 的真实 App 故障闭环先建立一笔旧的已持久化同步失败，作为重启后必须被当前事故替换的基线 canary；第二次同步停在精确 lock-wait stage 后拒绝一次任务修改并 SIGKILL 精确进程。重启后，当前 stalled operation 与 mutation incident 必须共同串起 stage、修改拒绝、previous-session interruption、SQLite 最新失败和 `persistedSyncFailureLoaded`，再从真实 Help 菜单导出并扫描 8 MiB 上限与隐私哨兵。该样本验证采集能力，不是首次宿主机故障的复现或根因。
 - `scripts/test-dmg-install` 不启动 production App。它先静态验证 mounted package，再派生并运行 `dmg-validation` App，完成真实 WindowServer、SQLite 写入、退出／重启、unified log 与 DiagnosticReports 门禁；runtime manifest 必须固定报告 `production_app_executed=false`。
 - 计划中的用户恢复路径由用户本人执行：保留已导出的 canonical JSON，删除自己的 production 同步目录，安装私有候选 DMG，再导入 JSON 继续使用。开发／测试工具不得代替用户读取、删除、备份或迁移这些 production 资料。
 - 若再次出现同类异常，用户需提供 `.noonmarkdiagnostics`、完整“关于晷迹”版本信息、诊断编号、发生时间与可见症状；若 macOS 同时生成 crash／hang `.ips`，再由用户主动附上。只有这些真实证据到达后，才能重新进入根因诊断与修复审批。

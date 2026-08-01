@@ -9829,7 +9829,7 @@ run_diagnostic_evidence_closure_probe() {
     ! "$mutation_incident_id" =~ ^[0-9A-F-]{36}$ ||
     "$failed_operation_id" == "$stalled_operation_id" ||
     "$failed_incident_id" == "$mutation_incident_id" ]]; then
-    echo "diagnostic closure state lost distinct exact correlations" >&2
+    echo "diagnostic closure lost distinct seed and current correlations" >&2
     return 1
   fi
 
@@ -9961,6 +9961,7 @@ run_diagnostic_evidence_closure_probe() {
       )] | length) == 1
       and ([.operationCapsules[] | select(
         .operationID.rawValue == $stalled_operation
+        and .incidentID.rawValue == $mutation_incident
         and .kind == "localFirstSync"
         and .lastStage == "transportLockWait"
         and .outcome == "interrupted"
@@ -9968,6 +9969,7 @@ run_diagnostic_evidence_closure_probe() {
       and ([.records[] | select(
         .event.code == "previousSessionInterrupted"
         and .event.operationID.rawValue == $stalled_operation
+        and .event.incidentID.rawValue == $mutation_incident
         and .event.stage == "transportLockWait"
       )] | length) == 1
       and ([.records[] | select(
@@ -9979,8 +9981,8 @@ run_diagnostic_evidence_closure_probe() {
       )] | length) == 1
       and ([.records[] | select(
         .event.code == "persistedSyncFailureLoaded"
-        and .event.operationID.rawValue == $failed_operation
-        and .event.incidentID.rawValue == $failed_incident
+        and .event.operationID.rawValue == $stalled_operation
+        and .event.incidentID.rawValue == $mutation_incident
       )] | length) >= 1
     ' "$export_path" >/dev/null; then
     echo "diagnostic export lost its exact cross-session evidence graph" >&2

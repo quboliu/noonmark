@@ -78,7 +78,7 @@ App 自动管理的诊断文件按 allocated bytes 计量，硬上限为 4 MiB�
 NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e
 ```
 
-该入口固定使用 `e2e` profile，依次持久化一次 typed 同步失败、让第二次同步停在外部 repository lock 的 `transportLockWait`、拒绝一次真实任务修改、SIGKILL 精确 App 进程、释放 lock、重启，再经真实 Help 菜单和 save panel 导出。导出后必须对账失败与中断两个不同 operation、两个 incident、mutation rejection、`previousSessionInterrupted`、`persistedSyncFailureLoaded`、4 MiB／8 MiB 容量及全部隐私哨兵。针对性 ONLY 模式方便复验该闭环，但不能替代 release 所需的完整 `scripts/test-e2e`。
+该入口固定使用 `e2e` profile，先持久化一次旧 typed 同步失败作为替换 canary，再让第二次同步停在外部 repository lock 的 `transportLockWait`、拒绝一次真实任务修改、SIGKILL 精确 App 进程、释放 lock、重启，并经真实 Help 菜单和 save panel 导出。导出后必须证明旧 canary 与本次事故身份不同，而本次事故的 lock-wait stage、mutation rejection、`previousSessionInterrupted`、最新 SQLite 持久失败和 `persistedSyncFailureLoaded` 全部使用同一个 operation／incident；同时对账 4 MiB／8 MiB 容量及全部隐私哨兵。针对性 ONLY 模式方便复验该闭环，但不能替代 release 所需的完整 `scripts/test-e2e`。
 
 这个故障注入矩阵证明诊断系统能保留和关联现场，不证明首次宿主机同步停滞由 repository lock、写入失败或进程终止造成。原故障根因仍未定位，也不得描述为已经修复；只有下一次真实用户诊断包到达后，才能据此检验根因假设。
 

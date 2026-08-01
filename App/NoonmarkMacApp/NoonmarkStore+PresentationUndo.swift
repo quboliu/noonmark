@@ -22,7 +22,7 @@ extension SQLiteLocalFirstSyncFailureReason {
             .localChangesPending
         case .remoteChangesPending:
             .remoteChangesPending
-        case .transportOrStorage:
+        case .transportOrStorage, .operationInterrupted:
             nil
         }
     }

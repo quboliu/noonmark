@@ -1581,6 +1581,157 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    func testNewerInterruptedOperationReplacesOlderPersistedFailureCorrelation()
+        throws
+    {
+        let databaseURL = makeDatabaseURL("interrupted-correlation")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let olderCorrelation = DiagnosticOperationCorrelation(
+            operationID: DiagnosticOperationID(),
+            incidentID: DiagnosticIncidentID()
+        )
+        try SQLiteLocalFirstSyncCoordinator.persistFailure(
+            FailingFetchSyncTransportError.unavailable,
+            at: now,
+            diagnosticCorrelation: olderCorrelation,
+            in: repository
+        )
+        let interruptedAt = now.addingTimeInterval(30.875)
+        let interruptedCorrelation = DiagnosticOperationCorrelation(
+            operationID: DiagnosticOperationID(),
+            incidentID: DiagnosticIncidentID()
+        )
+
+        XCTAssertTrue(
+            try SQLiteLocalFirstSyncCoordinator
+                .persistInterruptedSyncFailureIfNewer(
+                    at: interruptedAt,
+                    diagnosticCorrelation: interruptedCorrelation,
+                    in: repository
+                )
+        )
+
+        let metadata = try XCTUnwrap(
+            repository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: metadata.value
+            ),
+            .failed(
+                reason: .operationInterrupted,
+                message: SQLiteLocalFirstSyncError
+                    .previousSessionInterrupted.localizedDescription,
+                failedAt: now.addingTimeInterval(30),
+                diagnosticCorrelation: interruptedCorrelation
+            )
+        )
+    }
+
+    func testSameSecondInterruptedOperationReplacesDistinctPersistedFailure()
+        throws
+    {
+        let databaseURL = makeDatabaseURL("same-second-interruption")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let persistedAt = now.addingTimeInterval(30)
+        try SQLiteLocalFirstSyncCoordinator.persistFailure(
+            FailingFetchSyncTransportError.unavailable,
+            at: persistedAt,
+            diagnosticCorrelation: DiagnosticOperationCorrelation(
+                operationID: DiagnosticOperationID(),
+                incidentID: DiagnosticIncidentID()
+            ),
+            in: repository
+        )
+        let interruptedCorrelation = DiagnosticOperationCorrelation(
+            operationID: DiagnosticOperationID(),
+            incidentID: DiagnosticIncidentID()
+        )
+
+        XCTAssertTrue(
+            try SQLiteLocalFirstSyncCoordinator
+                .persistInterruptedSyncFailureIfNewer(
+                    at: persistedAt.addingTimeInterval(0.875),
+                    diagnosticCorrelation: interruptedCorrelation,
+                    in: repository
+                )
+        )
+
+        let metadata = try XCTUnwrap(
+            repository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: metadata.value
+            ),
+            .failed(
+                reason: .operationInterrupted,
+                message: SQLiteLocalFirstSyncError
+                    .previousSessionInterrupted.localizedDescription,
+                failedAt: persistedAt,
+                diagnosticCorrelation: interruptedCorrelation
+            )
+        )
+    }
+
+    func testSameSecondInterruptedOperationCannotReplaceSuccessfulSync()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("same-second-success")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let syncedAt = now.addingTimeInterval(30)
+        let result = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: InMemorySyncTransport()
+        ).sync(now: syncedAt)
+
+        XCTAssertFalse(
+            try SQLiteLocalFirstSyncCoordinator
+                .persistInterruptedSyncFailureIfNewer(
+                    at: syncedAt.addingTimeInterval(0.875),
+                    diagnosticCorrelation: DiagnosticOperationCorrelation(
+                        operationID: DiagnosticOperationID(),
+                        incidentID: DiagnosticIncidentID()
+                    ),
+                    in: repository
+                )
+        )
+
+        let metadata = try XCTUnwrap(
+            repository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(
+                SQLiteLocalFirstSyncStatus.self,
+                from: metadata.value
+            ),
+            .succeeded(result)
+        )
+    }
+
     func testPersistedFailureTimestampExactlyMatchesDiagnosticTerminalEvent()
         async throws
     {

@@ -253,16 +253,22 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
 
         try await waitUntil("restart evidence did not converge") {
             let package = try await recorder.snapshotPackage()
-            return hasRestartEvidence(
+            guard hasRestartEvidence(
                 package,
                 failedOperationID: failedOperationID,
                 failedIncidentID: failedIncidentID,
                 interruptedOperationID: interruptedOperationID,
                 rejectedIncidentID: rejectedIncidentID
-            )
+            ),
+                let persistedCorrelation = try persistedFailureCorrelation(
+                    store
+                )
+            else { return false }
+            return persistedCorrelation.operationID == interruptedOperationID
+                && persistedCorrelation.incidentID == rejectedIncidentID
                 && store.operationFailureNotice?.context == .sync
                 && store.operationFailureNotice?.diagnosticIncidentID
-                == failedIncidentID
+                == rejectedIncidentID
         }
         try requireAbsent(exportURL, description: "diagnostic export")
         guard AppViewTreeE2E.activateMainWindow() else {
@@ -375,6 +381,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         }
         let interruptedCapsule = package.operationCapsules.contains {
             $0.operationID == interruptedOperationID
+                && $0.incidentID == rejectedIncidentID
                 && $0.kind == .localFirstSync
                 && $0.endpoint == .localFolder
                 && $0.lastStage == .transportLockWait
@@ -383,6 +390,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         let interruptedEvent = package.records.contains {
             $0.event.code == .previousSessionInterrupted
                 && $0.event.operationID == interruptedOperationID
+                && $0.event.incidentID == rejectedIncidentID
                 && $0.event.operationKind == .localFirstSync
                 && $0.event.endpoint == .localFolder
                 && $0.event.stage == .transportLockWait
@@ -397,8 +405,8 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         }
         let restoredFailure = package.records.contains {
             $0.event.code == .persistedSyncFailureLoaded
-                && $0.event.operationID == failedOperationID
-                && $0.event.incidentID == failedIncidentID
+                && $0.event.operationID == interruptedOperationID
+                && $0.event.incidentID == rejectedIncidentID
         }
         return failedCapsule
             && interruptedCapsule

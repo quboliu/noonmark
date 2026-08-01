@@ -368,6 +368,7 @@ public struct DiagnosticStorageConfiguration: Equatable, Sendable {
 
 public struct DiagnosticActiveOperation: Codable, Equatable, Sendable {
     public let id: DiagnosticOperationID
+    public var incidentID: DiagnosticIncidentID?
     public let kind: DiagnosticOperationKind
     public let endpoint: DiagnosticEndpoint
     public let startedAt: Date

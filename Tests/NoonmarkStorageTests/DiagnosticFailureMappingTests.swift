@@ -14,7 +14,8 @@ final class DiagnosticFailureMappingTests: XCTestCase {
             (.localRecordsUnpreparable, 4),
             (.localChangesPending, 5),
             (.remoteChangesPending, 6),
-            (.transportOrStorage, 7)
+            (.transportOrStorage, 7),
+            (.operationInterrupted, 8)
         ]
 
         for (reason, code) in expected {

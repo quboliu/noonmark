@@ -9,6 +9,10 @@ public protocol DiagnosticRecording: Sendable {
         failure: DiagnosticFailure,
         failedAt: Date
     ) async -> DiagnosticOperationCorrelation?
+
+    func latestInterruptedOperation(
+        kind: DiagnosticOperationKind
+    ) async -> DiagnosticOperationCapsule?
 }
 
 public extension DiagnosticRecording {
@@ -20,6 +24,12 @@ public extension DiagnosticRecording {
         failure _: DiagnosticFailure,
         failedAt _: Date
     ) async -> DiagnosticOperationCorrelation? {
+        nil
+    }
+
+    func latestInterruptedOperation(
+        kind _: DiagnosticOperationKind
+    ) async -> DiagnosticOperationCapsule? {
         nil
     }
 

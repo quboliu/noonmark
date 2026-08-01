@@ -287,6 +287,21 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         }
     }
 
+    public func latestInterruptedOperation(
+        kind: DiagnosticOperationKind
+    ) async -> DiagnosticOperationCapsule? {
+        await flush()
+        return await withCheckedContinuation { continuation in
+            ioQueue.async { [self] in
+                continuation.resume(
+                    returning: diskStore.latestInterruptedOperation(
+                        kind: kind
+                    )
+                )
+            }
+        }
+    }
+
     public func preview() async throws -> DiagnosticExportPreview {
         let package = try await snapshotPackage()
         let data = try Self.exportEncoder.encode(package)
@@ -673,7 +688,7 @@ private final class DiagnosticDiskStore {
                 operationCapsules.append(
                     DiagnosticOperationCapsule(
                         operationID: operation.id,
-                        incidentID: nil,
+                        incidentID: operation.incidentID,
                         kind: operation.kind,
                         endpoint: operation.endpoint,
                         startedAt: operation.startedAt,
@@ -941,6 +956,24 @@ private final class DiagnosticDiskStore {
         )
     }
 
+    func latestInterruptedOperation(
+        kind: DiagnosticOperationKind
+    ) -> DiagnosticOperationCapsule? {
+        operationCapsules
+            .filter {
+                $0.kind == kind
+                    && $0.outcome == .interrupted
+                    && $0.incidentID != nil
+            }
+            .max {
+                if $0.finishedAt == $1.finishedAt {
+                    return $0.operationID.rawValue.uuidString
+                        < $1.operationID.rawValue.uuidString
+                }
+                return $0.finishedAt < $1.finishedAt
+            }
+    }
+
     func clear() throws {
         for entryName in try managedRootEntryNames() {
             try rootDirectory.removeEntryIfPresent(named: entryName)
@@ -1026,6 +1059,7 @@ private final class DiagnosticDiskStore {
             activeOperations.append(
                 DiagnosticActiveOperation(
                     id: operationID,
+                    incidentID: event.incidentID,
                     kind: kind,
                     endpoint: endpoint,
                     startedAt: timestamp,
@@ -1042,6 +1076,14 @@ private final class DiagnosticDiskStore {
             activeOperations[index].updatedAt = timestamp
             activeOperations[index].lastStage = event.stage
             activeOperations[index].lastProgress = event.progress
+        case .mutationRejected:
+            guard let incidentID = event.incidentID,
+                  let index = activeOperations.firstIndex(where: {
+                      $0.id == operationID
+                  })
+            else { return }
+            activeOperations[index].updatedAt = timestamp
+            activeOperations[index].incidentID = incidentID
         case .operationSucceeded, .operationFailed:
             let active = activeOperations.first { $0.id == operationID }
             activeOperations.removeAll { $0.id == operationID }

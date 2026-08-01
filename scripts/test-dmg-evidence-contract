@@ -182,7 +182,7 @@ set -euo pipefail
 printf '%s\n' "$*" >>"${FIXTURE_CODESIGN_LOG:?}"
 target="${@: -1}"
 case "$target" in
-  *NoonmarkMacAppE2E.app) identifier="app.noonmark.mac.e2e" ;;
+  *NoonmarkE2E.app) identifier="app.noonmark.mac.e2e" ;;
   *NoonmarkDMGValidation.app)
     identifier="app.noonmark.mac.dmg-validation"
     ;;
@@ -424,7 +424,7 @@ mkdir -p \
   "$fixture_root/artifacts/e2e-runtime" \
   "$fixture_root/artifacts/e2e-data-root-process-lease" \
   "$fixture_root/artifacts/dmg-install/diagnostics" \
-  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS" \
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app/Contents/MacOS" \
   "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS" \
   "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot" \
   "$fixture_root/artifacts/dmg-install/Applications" \
@@ -443,7 +443,7 @@ printf 'runtime_evidence_capture_started=fixture\n' \
   >"$fixture_root/artifacts/e2e-runtime/unified.log"
 cat >"$fixture_root/artifacts/e2e-runtime/runtime-manifest.txt" <<'EOF'
 process=NoonmarkMacAppE2E
-bundle=dist/NoonmarkMacAppE2E.app
+bundle=dist/NoonmarkE2E.app
 started_at=2026-07-17T00:00:00Z
 finished_at=2026-07-17T00:00:01Z
 suite_exit_status=0
@@ -473,8 +473,8 @@ for diagnostic in \
   : >"$fixture_root/artifacts/dmg-install/diagnostics/$diagnostic"
 done
 printf 'fixture-e2e-binary\n' \
-  >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
-cat >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/Info.plist" <<'PLIST'
+  >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+cat >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -482,10 +482,10 @@ cat >"$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Con
 </dict></plist>
 PLIST
 chmod +x \
-  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
 cp -R \
-  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app" \
-  "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot/NoonmarkMacAppE2E.app"
+  "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app" \
+  "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot/NoonmarkE2E.app"
 printf 'fixture-helper-binary\n' \
   >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
 cat >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/Info.plist" <<'PLIST'
@@ -751,7 +751,7 @@ app_stable_required=1"
 
 english_fixture_binary="$(
   shasum -a 256 \
-    "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkMacAppE2E.app/Contents/MacOS/NoonmarkMacAppE2E" |
+    "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E" |
     awk '{print $1}'
 )"
 helper_fixture_binary="$(

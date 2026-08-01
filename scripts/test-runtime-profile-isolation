@@ -444,6 +444,10 @@ require_literal "$repo_root/scripts/package-dmg" \
   'NOONMARK_PRODUCTION_BUILD_CONTEXT=package-dmg'
 require_literal "$repo_root/scripts/package-dmg" \
   'scripts/build-mac-app "$configuration" app'
+require_literal "$repo_root/scripts/test-dmg-install" \
+  'source scripts/runtime-profile-common'
+require_literal "$repo_root/scripts/test-dmg-install" \
+  'noonmark_runtime_profile_load dmg-validation'
 require_literal "$repo_root/Makefile" \
   $'build-app:\n\tscripts/build-mac-app debug development'
 require_literal "$repo_root/Makefile" \

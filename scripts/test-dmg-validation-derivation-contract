@@ -140,4 +140,65 @@ if [[ "$foreign_status" -eq 0 ]]; then
   exit 1
 fi
 
+existing_validation_app="$fixture_root/existing/NoonmarkDMGValidation.app"
+existing_evidence_fragment="$fixture_root/existing-derivation.fragment"
+mkdir -p "$existing_validation_app"
+printf 'preserve-existing-validation-bundle\n' \
+  >"$existing_validation_app/canary"
+set +e
+PATH="$fixture_root/bin:$PATH" \
+NOONMARK_CODESIGN_IDENTITY="ABCDEF0123456789ABCDEF0123456789ABCDEF01" \
+  bash "$repo_root/scripts/prepare-dmg-validation-app" \
+    "$source_app" \
+    "$existing_validation_app" \
+    "$existing_evidence_fragment" >/dev/null 2>&1
+existing_destination_status=$?
+set -e
+if [[ "$existing_destination_status" -eq 0 ]] ||
+  [[ "$(cat "$existing_validation_app/canary" 2>/dev/null || true)" != \
+    "preserve-existing-validation-bundle" ]] ||
+  [[ -e "$existing_evidence_fragment" ]]; then
+  echo "DMG validation derivation replaced an existing destination" >&2
+  exit 1
+fi
+
+fragment_validation_app="$fixture_root/fragment/NoonmarkDMGValidation.app"
+existing_fragment="$fixture_root/existing.fragment"
+printf 'preserve-existing-evidence-fragment\n' >"$existing_fragment"
+set +e
+PATH="$fixture_root/bin:$PATH" \
+NOONMARK_CODESIGN_IDENTITY="ABCDEF0123456789ABCDEF0123456789ABCDEF01" \
+  bash "$repo_root/scripts/prepare-dmg-validation-app" \
+    "$source_app" \
+    "$fragment_validation_app" \
+    "$existing_fragment" >/dev/null 2>&1
+existing_fragment_status=$?
+set -e
+if [[ "$existing_fragment_status" -eq 0 ]] ||
+  [[ "$(cat "$existing_fragment" 2>/dev/null || true)" != \
+    "preserve-existing-evidence-fragment" ]] ||
+  [[ -e "$fragment_validation_app" ]]; then
+  echo "DMG validation derivation replaced an existing evidence fragment" >&2
+  exit 1
+fi
+
+source_evidence_fragment="$source_app/Contents/derivation.fragment"
+source_evidence_validation_app="$fixture_root/source-evidence/NoonmarkDMGValidation.app"
+mkdir -p "$(dirname "$source_evidence_validation_app")"
+set +e
+PATH="$fixture_root/bin:$PATH" \
+NOONMARK_CODESIGN_IDENTITY="ABCDEF0123456789ABCDEF0123456789ABCDEF01" \
+  bash "$repo_root/scripts/prepare-dmg-validation-app" \
+    "$source_app" \
+    "$source_evidence_validation_app" \
+    "$source_evidence_fragment" >/dev/null 2>&1
+source_evidence_status=$?
+set -e
+if [[ "$source_evidence_status" -eq 0 ]] ||
+  [[ -e "$source_evidence_fragment" ]] ||
+  [[ -e "$source_evidence_validation_app" ]]; then
+  echo "DMG validation derivation wrote evidence inside its production source" >&2
+  exit 1
+fi
+
 echo "DMG validation derivation contract fixture passed"

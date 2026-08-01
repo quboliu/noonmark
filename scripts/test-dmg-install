@@ -13,6 +13,8 @@ source scripts/runtime-evidence
 source scripts/dmg-install-observer-common
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
+# shellcheck source=scripts/runtime-profile-common
+source scripts/runtime-profile-common
 
 dmg_path="${1:-dist/Noonmark.dmg}"
 package_manifest_path="${dmg_path}.manifest"
@@ -104,6 +106,21 @@ validation_source_linked_binary_sha256=""
 validation_source_linked_binary_sha256_scope=""
 validation_source_linked_binary_uuid_set=""
 validation_signed_binary_sha256=""
+
+noonmark_runtime_validate_all_profiles
+noonmark_runtime_profile_load dmg-validation
+if [[ "$NOONMARK_RUNTIME_PROFILE" != "dmg-validation" ||
+  "$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER" != "$validation_bundle_identifier" ||
+  "$NOONMARK_RUNTIME_PROCESS_NAME" != "$validation_executable_name" ||
+  "${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app" != "$validation_bundle_name" ||
+  "$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME" != \
+    "$validation_data_directory_name" ||
+  "$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME" != \
+    "$validation_icloud_repository" ||
+  "$NOONMARK_RUNTIME_RESETTABLE" != "1" ]]; then
+  echo "DMG validation runtime profile does not match the install harness" >&2
+  exit 1
+fi
 
 evidence_prepare_fresh_directory "$repo_root" "$work_dir"
 evidence_prepare_fresh_directory "$repo_root" "$helper_evidence_root"

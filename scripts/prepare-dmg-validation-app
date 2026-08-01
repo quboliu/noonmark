@@ -25,16 +25,21 @@ validation_executable_name="NoonmarkMacAppDMGValidation"
 production_plist="${production_app}/Contents/Info.plist"
 validation_plist="${validation_app}/Contents/Info.plist"
 validation_complete=0
+validation_created=0
+evidence_created=0
 evidence_content=""
 
 cleanup() {
   local status=$?
   [[ -z "$evidence_content" ]] || rm -f "$evidence_content"
   if [[ "$status" -ne 0 || "$validation_complete" -ne 1 ]]; then
-    if [[ "$(basename "$validation_app")" == "$validation_bundle_name" ]]; then
+    if [[ "$validation_created" -eq 1 &&
+      "$(basename "$validation_app")" == "$validation_bundle_name" ]]; then
       rm -rf "$validation_app"
     fi
-    rm -f "$evidence_fragment"
+    if [[ "$evidence_created" -eq 1 ]]; then
+      rm -f "$evidence_fragment"
+    fi
   fi
   exit "$status"
 }
@@ -44,14 +49,28 @@ if [[ "$(basename "$validation_app")" != "$validation_bundle_name" ||
   "$production_app" == "$validation_app" ||
   ! -d "$production_app" || -L "$production_app" ||
   ! -f "$production_plist" || -L "$production_plist" ||
-  -L "$validation_app" ]]; then
+  -e "$validation_app" || -L "$validation_app" ||
+  -e "$evidence_fragment" || -L "$evidence_fragment" ]]; then
   echo "DMG validation derivation received an unsafe source or destination" >&2
   exit 1
 fi
+production_parent="$(cd "$(dirname "$production_app")" && pwd -P)"
+production_app="${production_parent}/$(basename "$production_app")"
+production_plist="${production_app}/Contents/Info.plist"
 validation_parent="$(cd "$(dirname "$validation_app")" && pwd -P)"
 validation_app="${validation_parent}/${validation_bundle_name}"
 evidence_parent="$(cd "$(dirname "$evidence_fragment")" && pwd -P)"
 evidence_fragment="${evidence_parent}/$(basename "$evidence_fragment")"
+if [[ "$validation_app" == "$production_app" ||
+  "$validation_app" == "$production_app"/* ||
+  "$production_app" == "$validation_app"/* ||
+  "$evidence_fragment" == "$production_app" ||
+  "$evidence_fragment" == "$production_app"/* ||
+  "$evidence_fragment" == "$validation_app" ||
+  "$evidence_fragment" == "$validation_app"/* ]]; then
+  echo "DMG validation derivation paths overlap a protected bundle" >&2
+  exit 1
+fi
 
 actual_production_identifier="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$production_plist"
@@ -92,7 +111,7 @@ if [[ ! "$source_binary_sha256" =~ ^[0-9a-f]{64}$ ||
   exit 1
 fi
 
-rm -rf "$validation_app"
+validation_created=1
 ditto "$production_app" "$validation_app"
 validation_macos_dir="${validation_app}/Contents/MacOS"
 validation_executable="${validation_macos_dir}/${validation_executable_name}"
@@ -169,6 +188,7 @@ evidence_content="$(mktemp "${TMPDIR:-/tmp}/noonmark-dmg-derivation.XXXXXX")"
   printf 'validation_signed_binary_sha256=%s\n' "$signed_binary_sha256"
   printf 'validation_signed_binary_uuid_set=%s\n' "$signed_uuid_set"
 } >"$evidence_content"
+evidence_created=1
 evidence_write_fragment_atomically "$evidence_fragment" "$evidence_content"
 validation_complete=1
 printf '%s\n' "$validation_app"

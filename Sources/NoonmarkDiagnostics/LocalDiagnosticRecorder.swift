@@ -5,14 +5,14 @@ import Foundation
 public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
     public let sessionID: DiagnosticSessionID
 
-    private struct QueuedEvidence: Sendable {
+    private struct QueuedEvidence {
         let event: EvidenceEvent
         let timestamp: Date
         let estimatedBytes: Int
     }
 
     private let configuration: DiagnosticStorageConfiguration
-    private let appleLogger: AppleDiagnosticLogger
+    private let appleLogger: AppleDiagnosticLogger?
     private let ioQueue = DispatchQueue(
         label: "app.noonmark.diagnostics.writer",
         qos: .utility
@@ -25,15 +25,49 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
     private var pendingOversizedCount = 0
     private var drainScheduled = false
 
-    public init(
+    public convenience init(
         rootURL: URL,
         appIdentity: DiagnosticAppIdentity = .current,
         configuration: DiagnosticStorageConfiguration = .production,
         sessionID: DiagnosticSessionID = DiagnosticSessionID()
     ) throws {
+        try self.init(
+            rootURL: rootURL,
+            appIdentity: appIdentity,
+            configuration: configuration,
+            sessionID: sessionID,
+            appleLogger: AppleDiagnosticLogger()
+        )
+    }
+
+    convenience init(
+        rootURL: URL,
+        appIdentity: DiagnosticAppIdentity,
+        configuration: DiagnosticStorageConfiguration,
+        sessionID: DiagnosticSessionID = DiagnosticSessionID(),
+        unifiedLoggingEnabled: Bool
+    ) throws {
+        try self.init(
+            rootURL: rootURL,
+            appIdentity: appIdentity,
+            configuration: configuration,
+            sessionID: sessionID,
+            appleLogger: unifiedLoggingEnabled
+                ? AppleDiagnosticLogger()
+                : nil
+        )
+    }
+
+    private init(
+        rootURL: URL,
+        appIdentity: DiagnosticAppIdentity,
+        configuration: DiagnosticStorageConfiguration,
+        sessionID: DiagnosticSessionID,
+        appleLogger: AppleDiagnosticLogger?
+    ) throws {
         self.sessionID = sessionID
         self.configuration = configuration
-        appleLogger = AppleDiagnosticLogger()
+        self.appleLogger = appleLogger
         diskStore = try DiagnosticDiskStore(
             rootURL: rootURL,
             appIdentity: appIdentity,
@@ -42,17 +76,22 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
     }
 
     public func record(_ event: EvidenceEvent, at timestamp: Date) {
-        appleLogger.record(event)
-        let estimatedBytes = Self.estimatedEncodedBytes(for: event)
+        appleLogger?.record(event)
+        let estimatedBytes = configuration.maximumEventBytes
         var shouldSchedule = false
 
         bufferLock.lock()
-        if estimatedBytes > configuration.maximumEventBytes {
-            pendingOversizedCount += 1
-        } else if buffered.count >= configuration.maximumQueuedEvents
-            || bufferedBytes + estimatedBytes
-            > configuration.maximumQueuedBytes
+        if queueWouldOverflow(addingBytes: estimatedBytes),
+           event.isRetentionCritical,
+           let evictionIndex = buffered.firstIndex(where: {
+               $0.event.isRetentionCritical == false
+           })
         {
+            let evicted = buffered.remove(at: evictionIndex)
+            bufferedBytes -= evicted.estimatedBytes
+            pendingDroppedCount += 1
+        }
+        if queueWouldOverflow(addingBytes: estimatedBytes) {
             pendingDroppedCount += 1
         } else {
             buffered.append(
@@ -75,6 +114,12 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
                 drainBufferedEvidence()
             }
         }
+    }
+
+    private func queueWouldOverflow(addingBytes byteCount: Int) -> Bool {
+        buffered.count >= configuration.maximumQueuedEvents
+            || bufferedBytes + byteCount
+            > configuration.maximumQueuedBytes
     }
 
     public func startSession(at timestamp: Date = Date()) {
@@ -160,7 +205,7 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
     {
         let package = try await snapshotPackage()
         let data = try Self.exportEncoder.encode(package)
-        guard data.count <= 8 * 1_024 * 1_024 else {
+        guard data.count <= 8 * 1024 * 1024 else {
             throw DiagnosticStorageError.exportTooLarge
         }
         let parentURL = destinationURL.deletingLastPathComponent()
@@ -233,15 +278,27 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         }
     }
 
-    private static func estimatedEncodedBytes(for event: EvidenceEvent) -> Int {
-        ((try? JSONEncoder().encode(event).count) ?? Int.max) + 256
-    }
-
     private static let exportEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
+}
+
+private extension EvidenceEvent {
+    var isRetentionCritical: Bool {
+        switch code {
+        case .operationStage, .operationHeartbeat:
+            false
+        case .sessionStarted, .cleanShutdown,
+             .previousSessionInterrupted, .operationStarted,
+             .operationSucceeded, .operationFailed, .mutationRejected,
+             .persistenceFailed, .persistedSyncFailureLoaded,
+             .recordsDropped, .corruptRecordExcluded,
+             .oversizedEventDropped, .oversizedMetricPayloadDropped:
+            true
+        }
+    }
 }
 
 public enum DiagnosticStorageError: Error, Equatable, Sendable {
@@ -262,6 +319,7 @@ private final class DiagnosticDiskStore {
         var corruptRecordCount = 0
         var oversizedEventCount = 0
         var oversizedMetricPayloadCount = 0
+        var maximumObservedAllocatedBytes: Int64?
         var fileSinkDisabled = false
 
         init(segmentCount: Int) {
@@ -274,7 +332,8 @@ private final class DiagnosticDiskStore {
     private struct StoredMetricPayload: Codable {
         let receivedAt: Date
         let summary: MetricKitPayloadSummary
-        let rawJSON: Data?
+        let sanitizedJSON: Data?
+        let redactionVersion: Int
     }
 
     private let rootURL: URL
@@ -442,7 +501,24 @@ private final class DiagnosticDiskStore {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try pruneMetricPayloads(reserving: Int64(rawJSON.count))
+            let sanitizedJSON: Data?
+            if rawJSONWasDropped {
+                sanitizedJSON = nil
+            } else {
+                do {
+                    sanitizedJSON = try MetricKitJSONSanitizer.sanitize(
+                        rawJSON
+                    )
+                } catch {
+                    state.corruptRecordCount += 1
+                    try persistOne(
+                        .corruptRecordExcluded(count: 1),
+                        timestamp: receivedAt,
+                        sessionID: sessionID
+                    )
+                    sanitizedJSON = nil
+                }
+            }
             let normalizedSummary = MetricKitPayloadSummary(
                 kind: summary.kind,
                 intervalStart: summary.intervalStart,
@@ -456,9 +532,12 @@ private final class DiagnosticDiskStore {
             let stored = StoredMetricPayload(
                 receivedAt: receivedAt,
                 summary: normalizedSummary,
-                rawJSON: rawJSONWasDropped ? nil : rawJSON
+                sanitizedJSON: sanitizedJSON,
+                redactionVersion: MetricKitJSONSanitizer.redactionVersion
             )
             let data = try Self.encoder.encode(stored)
+            try pruneMetricPayloads(reserving: Int64(data.count))
+            try reserveCapacity(forAdditionalBytes: Int64(data.count))
             let url = metricsURL.appendingPathComponent(
                 "metric-\(UUID().uuidString).json"
             )
@@ -476,8 +555,13 @@ private final class DiagnosticDiskStore {
         let allocated = (try? allocatedBytes())
             ?? configuration.maximumPersistentBytes + 1
         let logical = (try? logicalBytes()) ?? 0
+        let maximumObserved = max(
+            state.maximumObservedAllocatedBytes ?? 0,
+            allocated
+        )
         return DiagnosticHealth(
             allocatedBytes: allocated,
+            maximumObservedAllocatedBytes: maximumObserved,
             logicalBytes: logical,
             recordCount: snapshot.records.count,
             oldestRecordAt: snapshot.records.map(\.timestamp).min(),
@@ -513,7 +597,8 @@ private final class DiagnosticDiskStore {
             return DiagnosticMetricAttachment(
                 receivedAt: stored.receivedAt,
                 summary: stored.summary,
-                rawJSON: stored.rawJSON
+                sanitizedJSON: stored.sanitizedJSON,
+                redactionVersion: stored.redactionVersion
             )
             }
         let records = snapshot.records.sorted {
@@ -537,6 +622,9 @@ private final class DiagnosticDiskStore {
             oversizedEventCount: health.oversizedEventCount,
             oversizedMetricPayloadCount:
             health.oversizedMetricPayloadCount,
+            maximumObservedAllocatedBytes:
+            health.maximumObservedAllocatedBytes,
+            redactionVersion: MetricKitJSONSanitizer.redactionVersion,
             collectionWasPartial: health.droppedRecordCount > 0
                 || health.corruptRecordCount > 0
                 || health.oversizedEventCount > 0
@@ -614,6 +702,7 @@ private final class DiagnosticDiskStore {
         try handle.write(contentsOf: data)
         try handle.synchronize()
         try handle.close()
+        try observeAllocatedBytes()
         if state.segmentRecordCounts[segment] == 0 {
             state.segmentFirstSequences[segment] = state.nextSequence
         }
@@ -661,7 +750,7 @@ private final class DiagnosticDiskStore {
             activeOperations.removeAll { $0.id == operationID }
             guard let kind = event.operationKind else { return }
             let duration = TimeInterval(event.durationMilliseconds ?? 0)
-                / 1_000
+                / 1000
             operationCapsules.append(
                 DiagnosticOperationCapsule(
                     operationID: operationID,
@@ -875,23 +964,83 @@ private final class DiagnosticDiskStore {
     }
 
     private func saveMetadata() throws {
-        try writeJSON(state, to: indexURL)
-        try writeJSON(
-            Array(activeOperations.suffix(8)),
+        try removeMetadataTemporaryFiles()
+        let activeData = try encodedMetadata(
+            Array(activeOperations.suffix(8))
+        )
+        let capsuleData = try encodedMetadata(
+            Array(operationCapsules.suffix(8))
+        )
+        var indexData = try encodedMetadata(state)
+        var reservedBytes: Int64 = 0
+        for _ in 0 ..< 3 {
+            let requiredBytes = try atomicMetadataBudget(
+                activeData: activeData,
+                capsuleData: capsuleData,
+                indexData: indexData
+            )
+            if requiredBytes > reservedBytes {
+                try reserveCapacity(forAdditionalBytes: requiredBytes)
+                reservedBytes = requiredBytes
+                indexData = try encodedMetadata(state)
+                continue
+            }
+            break
+        }
+        try writeDataAtomicallyPrepared(
+            activeData,
             to: activeOperationsURL
         )
-        try writeJSON(
-            Array(operationCapsules.suffix(8)),
+        try writeDataAtomicallyPrepared(
+            capsuleData,
             to: operationCapsulesURL
         )
+        indexData = try encodedMetadata(state)
+        guard roundedAllocation(Int64(indexData.count)) <= reservedBytes else {
+            throw DiagnosticStorageError.allocatedSizeUnavailable
+        }
+        try writeDataAtomicallyPrepared(indexData, to: indexURL)
     }
 
-    private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
+    private func atomicMetadataBudget(
+        activeData: Data,
+        capsuleData: Data,
+        indexData: Data
+    ) throws -> Int64 {
+        let replacements = [
+            (activeOperationsURL, activeData),
+            (operationCapsulesURL, capsuleData),
+            (indexURL, indexData)
+        ]
+        let allocations = replacements.map {
+            roundedAllocation(Int64($0.1.count))
+        }
+        let replacementGrowth = try zip(replacements, allocations)
+            .reduce(into: Int64(0)) { total, pair in
+                let existing = try allocatedBytes(of: pair.0.0)
+                let growth = max(0, pair.1 - existing)
+                let (sum, overflow) = total.addingReportingOverflow(growth)
+                guard overflow == false else {
+                    throw DiagnosticStorageError.allocatedSizeUnavailable
+                }
+                total = sum
+            }
+        let maximumTemporary = allocations.max() ?? 0
+        let (budget, overflow) = replacementGrowth.addingReportingOverflow(
+            maximumTemporary
+        )
+        guard overflow == false else {
+            throw DiagnosticStorageError.allocatedSizeUnavailable
+        }
+        return budget
+    }
+
+    private func encodedMetadata(_ value: some Encodable) throws -> Data {
         let data = try Self.encoder.encode(value)
-        guard data.count <= 128 * 1_024 else {
+        guard data.count <= 128 * 1024 else {
             throw DiagnosticStorageError.exportTooLarge
         }
-        try writeDataAtomically(data, to: url)
+        return data
     }
 
     private func writeDataAtomically(_ data: Data, to url: URL) throws {
@@ -901,10 +1050,22 @@ private final class DiagnosticDiskStore {
         if fileManager.fileExists(atPath: temporaryURL.path) {
             try fileManager.removeItem(at: temporaryURL)
         }
+        try reserveCapacity(forAdditionalBytes: Int64(data.count))
+        try writeDataAtomicallyPrepared(data, to: url)
+    }
+
+    private func writeDataAtomicallyPrepared(
+        _ data: Data,
+        to url: URL
+    ) throws {
+        let temporaryURL = rootURL.appendingPathComponent(
+            ".\(url.lastPathComponent).tmp"
+        )
         try writeData(data, to: temporaryURL)
         guard Darwin.rename(temporaryURL.path, url.path) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        try observeAllocatedBytes()
     }
 
     private func writeData(_ data: Data, to url: URL) throws {
@@ -916,6 +1077,32 @@ private final class DiagnosticDiskStore {
         let handle = try FileHandle(forWritingTo: url)
         try handle.synchronize()
         try handle.close()
+        do {
+            try observeAllocatedBytes()
+        } catch {
+            try? fileManager.removeItem(at: url)
+            throw error
+        }
+    }
+
+    private func removeMetadataTemporaryFiles() throws {
+        for url in metadataTemporaryURLs where fileManager.fileExists(
+            atPath: url.path
+        ) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    private func observeAllocatedBytes() throws {
+        let allocated = try allocatedBytes()
+        state.maximumObservedAllocatedBytes = max(
+            state.maximumObservedAllocatedBytes ?? 0,
+            allocated
+        )
+        guard allocated <= configuration.maximumPersistentBytes else {
+            state.fileSinkDisabled = true
+            throw DiagnosticStorageError.allocatedSizeUnavailable
+        }
     }
 
     private func allocatedBytes() throws -> Int64 {
@@ -931,6 +1118,20 @@ private final class DiagnosticDiskStore {
             }
             return total + Int64(size)
         }
+    }
+
+    private func allocatedBytes(of url: URL) throws -> Int64 {
+        guard fileManager.fileExists(atPath: url.path) else { return 0 }
+        let values = try url.resourceValues(forKeys: [
+            .totalFileAllocatedSizeKey,
+            .fileAllocatedSizeKey
+        ])
+        guard let size = values.totalFileAllocatedSize
+            ?? values.fileAllocatedSize
+        else {
+            throw DiagnosticStorageError.allocatedSizeUnavailable
+        }
+        return Int64(size)
     }
 
     private func logicalBytes() throws -> Int64 {
@@ -949,11 +1150,10 @@ private final class DiagnosticDiskStore {
 
     private func roundedAllocation(_ byteCount: Int64) -> Int64 {
         var information = statfs()
-        let blockSize: Int64
-        if statfs(rootURL.path, &information) == 0 {
-            blockSize = max(4_096, Int64(information.f_bsize))
+        let blockSize: Int64 = if statfs(rootURL.path, &information) == 0 {
+            max(4096, Int64(information.f_bsize))
         } else {
-            blockSize = 4_096
+            4096
         }
         return ((max(1, byteCount) + blockSize - 1) / blockSize)
             * blockSize
@@ -969,15 +1169,13 @@ private final class DiagnosticDiskStore {
     private func managedFileURLs() -> [URL] {
         [indexURL, activeOperationsURL, operationCapsulesURL]
             + (0 ..< configuration.eventSegmentCount).map(segmentURL)
-            + [
-                rootURL.appendingPathComponent(".index.json.tmp"),
-                rootURL.appendingPathComponent(
-                    ".active-operations.json.tmp"
-                ),
-                rootURL.appendingPathComponent(
-                    ".operation-capsules.json.tmp"
-                )
-            ]
+            + metadataTemporaryURLs
+    }
+
+    private var metadataTemporaryURLs: [URL] {
+        [indexURL, activeOperationsURL, operationCapsulesURL].map {
+            rootURL.appendingPathComponent(".\($0.lastPathComponent).tmp")
+        }
     }
 
     private func metricURLs() throws -> [URL] {

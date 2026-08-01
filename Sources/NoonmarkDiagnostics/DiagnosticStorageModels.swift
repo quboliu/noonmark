@@ -1,5 +1,10 @@
 import Foundation
 
+public enum DiagnosticSchemaVersion {
+    public static let evidence = RecordedEvidence.currentSchemaVersion
+    public static let metricRedaction = 1
+}
+
 public struct DiagnosticAppIdentity: Codable, Equatable, Sendable {
     public let version: String
     public let build: String
@@ -86,25 +91,25 @@ public struct DiagnosticStorageConfiguration: Equatable, Sendable {
     public let maximumQueuedBytes: Int
 
     public init(
-        maximumPersistentBytes: Int64 = 4 * 1_024 * 1_024,
+        maximumPersistentBytes: Int64 = 4 * 1024 * 1024,
         eventSegmentCount: Int = 4,
-        eventSegmentPayloadBytes: Int64 = 512 * 1_024,
-        maximumEventBytes: Int = 4 * 1_024,
-        metricCacheBytes: Int64 = 768 * 1_024,
-        maximumMetricPayloadBytes: Int = 256 * 1_024,
+        eventSegmentPayloadBytes: Int64 = 512 * 1024,
+        maximumEventBytes: Int = 4 * 1024,
+        metricCacheBytes: Int64 = 768 * 1024,
+        maximumMetricPayloadBytes: Int = 256 * 1024,
         retentionInterval: TimeInterval = 7 * 24 * 60 * 60,
         maximumQueuedEvents: Int = 256,
-        maximumQueuedBytes: Int = 256 * 1_024
+        maximumQueuedBytes: Int = 256 * 1024
     ) {
-        self.maximumPersistentBytes = max(32 * 1_024, maximumPersistentBytes)
+        self.maximumPersistentBytes = max(32 * 1024, maximumPersistentBytes)
         self.eventSegmentCount = max(1, min(16, eventSegmentCount))
-        self.eventSegmentPayloadBytes = max(4 * 1_024, eventSegmentPayloadBytes)
+        self.eventSegmentPayloadBytes = max(4 * 1024, eventSegmentPayloadBytes)
         self.maximumEventBytes = max(512, maximumEventBytes)
         self.metricCacheBytes = max(0, metricCacheBytes)
         self.maximumMetricPayloadBytes = max(0, maximumMetricPayloadBytes)
         self.retentionInterval = max(60, retentionInterval)
         self.maximumQueuedEvents = max(1, maximumQueuedEvents)
-        self.maximumQueuedBytes = max(1_024, maximumQueuedBytes)
+        self.maximumQueuedBytes = max(1024, maximumQueuedBytes)
     }
 
     public static let production = Self()
@@ -141,6 +146,7 @@ public struct DiagnosticOperationCapsule: Codable, Equatable, Sendable {
 
 public struct DiagnosticHealth: Codable, Equatable, Sendable {
     public let allocatedBytes: Int64
+    public let maximumObservedAllocatedBytes: Int64
     public let logicalBytes: Int64
     public let recordCount: Int
     public let oldestRecordAt: Date?
@@ -179,13 +185,16 @@ public struct DiagnosticExportManifest: Codable, Equatable, Sendable {
     public let corruptRecordCount: Int
     public let oversizedEventCount: Int
     public let oversizedMetricPayloadCount: Int
+    public let maximumObservedAllocatedBytes: Int64
+    public let redactionVersion: Int
     public let collectionWasPartial: Bool
 }
 
 public struct DiagnosticMetricAttachment: Codable, Equatable, Sendable {
     public let receivedAt: Date
     public let summary: MetricKitPayloadSummary
-    public let rawJSON: Data?
+    public let sanitizedJSON: Data?
+    public let redactionVersion: Int
 }
 
 public struct DiagnosticExportPackage: Codable, Equatable, Sendable {

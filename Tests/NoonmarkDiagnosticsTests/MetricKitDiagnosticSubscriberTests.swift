@@ -59,12 +59,12 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         XCTAssertEqual(summary.rawJSONByteCount, 0)
     }
 
-    func testCacheRetainsSafeSummaryAndExactRawJSON() async throws {
+    func testCacheRetainsSafeSummaryAndExactNumericJSON() async throws {
         let recorder = try makeRecorder(
             named: "raw",
             maximumMetricPayloadBytes: 1024
         )
-        let rawJSON = Data(#"{"metrics":[{"private":"opaque"}]}"#.utf8)
+        let rawJSON = Data(#"{"metrics":[{"count":7}]}"#.utf8)
         let summary = makeSummary(rawJSONByteCount: 1)
 
         recorder.cacheMetricKitPayload(
@@ -77,7 +77,8 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         let package = try await recorder.snapshotPackage()
         let attachment = try XCTUnwrap(package.metricAttachments.first)
         XCTAssertEqual(attachment.summary.rawJSONByteCount, rawJSON.count)
-        XCTAssertEqual(attachment.rawJSON, rawJSON)
+        XCTAssertEqual(attachment.sanitizedJSON, rawJSON)
+        XCTAssertEqual(attachment.redactionVersion, 1)
     }
 
     func testOversizedRawJSONIsDiscardedWholeButSummaryRemains() async throws {
@@ -98,8 +99,69 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         let package = try await recorder.snapshotPackage()
         let attachment = try XCTUnwrap(package.metricAttachments.first)
         XCTAssertEqual(attachment.summary, summary)
-        XCTAssertNil(attachment.rawJSON)
+        XCTAssertNil(attachment.sanitizedJSON)
         XCTAssertEqual(package.manifest.oversizedMetricPayloadCount, 1)
+    }
+
+    func testMetricJSONRedactsArbitraryStringsBeforeDiskAndExport() async throws {
+        let recorder = try makeRecorder(
+            named: "privacy",
+            maximumMetricPayloadBytes: 4096
+        )
+        let privateKey = "PRIVATE-TASK-TITLE-KEY-7Q9X"
+        let privateUUID = "00000000-0000-0000-0000-000000000099"
+        let canaries = [
+            "PRIVATE-TASK-TITLE-7Q9X",
+            "Bearer secret-access-token",
+            "/Users/private-user/Documents/Noonmark.sqlite",
+            "owner@example.invalid",
+            "https://example.invalid/sync?token=private",
+            privateKey,
+            privateUUID
+        ]
+        let rawJSON = try JSONSerialization.data(
+            withJSONObject: [
+                "message": canaries.joined(separator: " "),
+                privateKey: 42,
+                "userUUID": privateUUID,
+                "binaryName": "NoonmarkMacApp",
+                "binaryUUID": "00000000-0000-0000-0000-000000000001",
+                "sampleCount": 7
+            ],
+            options: [.sortedKeys]
+        )
+        let summary = makeSummary(rawJSONByteCount: rawJSON.count)
+
+        recorder.cacheMetricKitPayload(
+            summary,
+            rawJSON: rawJSON,
+            receivedAt: summary.intervalEnd
+        )
+        await recorder.flush()
+
+        let package = try await recorder.snapshotPackage()
+        let attachment = try XCTUnwrap(package.metricAttachments.first)
+        let sanitizedJSON = try XCTUnwrap(attachment.sanitizedJSON)
+        let exportedText = String(
+            decoding: try JSONEncoder().encode(package),
+            as: UTF8.self
+        )
+        let diskText = try diagnosticFileText(
+            in: recorderRoot(named: "privacy")
+        )
+        for canary in canaries {
+            XCTAssertFalse(String(decoding: sanitizedJSON, as: UTF8.self).contains(canary))
+            XCTAssertFalse(exportedText.contains(canary))
+            XCTAssertFalse(diskText.contains(canary))
+        }
+        XCTAssertTrue(
+            String(decoding: sanitizedJSON, as: UTF8.self)
+                .contains("NoonmarkMacApp")
+        )
+        XCTAssertTrue(
+            String(decoding: sanitizedJSON, as: UTF8.self)
+                .contains("00000000-0000-0000-0000-000000000001")
+        )
     }
 
     func testSubscriptionLifecycleIsIdempotent() throws {
@@ -154,8 +216,8 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         )
         let intervalStart = Date(timeIntervalSince1970: 1_800_000_000)
         let intervalEnd = intervalStart.addingTimeInterval(3600)
-        let metricJSON = Data(#"{"privateMetric":"opaque"}"#.utf8)
-        let diagnosticJSON = Data(#"{"privateDiagnostic":"opaque"}"#.utf8)
+        let metricJSON = Data(#"{"metricCount":1}"#.utf8)
+        let diagnosticJSON = Data(#"{"diagnosticCount":2}"#.utf8)
 
         subscriber.ingestMetricPayload(
             intervalStart: intervalStart,
@@ -193,7 +255,7 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         XCTAssertEqual(diagnostic.summary.hangCount, 2)
         XCTAssertEqual(diagnostic.summary.cpuExceptionCount, 3)
         XCTAssertEqual(diagnostic.summary.diskWriteExceptionCount, 4)
-        XCTAssertEqual(diagnostic.rawJSON, diagnosticJSON)
+        XCTAssertEqual(diagnostic.sanitizedJSON, diagnosticJSON)
         let metric = try XCTUnwrap(
             attachments.first { $0.summary.kind == .metric }
         )
@@ -201,18 +263,14 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         XCTAssertEqual(metric.summary.hangCount, 0)
         XCTAssertEqual(metric.summary.cpuExceptionCount, 0)
         XCTAssertEqual(metric.summary.diskWriteExceptionCount, 0)
-        XCTAssertEqual(metric.rawJSON, metricJSON)
+        XCTAssertEqual(metric.sanitizedJSON, metricJSON)
     }
 
     private func makeRecorder(
         named name: String,
         maximumMetricPayloadBytes: Int
     ) throws -> LocalDiagnosticRecorder {
-        let rootURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "noonmark-metrickit-\(name)-\(UUID().uuidString)",
-                isDirectory: true
-            )
+        let rootURL = recorderRoot(named: name)
         temporaryURLs.append(rootURL)
         return try LocalDiagnosticRecorder(
             rootURL: rootURL,
@@ -228,6 +286,34 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
                 maximumQueuedBytes: 8 * 1024
             )
         )
+    }
+
+    private func recorderRoot(named name: String) -> URL {
+        if let existing = temporaryURLs.first(where: {
+            $0.lastPathComponent.hasPrefix("noonmark-metrickit-\(name)-")
+        }) {
+            return existing
+        }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-metrickit-\(name)-\(UUID().uuidString)",
+                isDirectory: true
+            )
+    }
+
+    private func diagnosticFileText(in rootURL: URL) throws -> String {
+        let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        )
+        var data = Data()
+        while let url = enumerator?.nextObject() as? URL {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            if values.isRegularFile == true {
+                data.append(try Data(contentsOf: url))
+            }
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func makeSummary(rawJSONByteCount: Int) -> MetricKitPayloadSummary {

@@ -15,15 +15,15 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         let rootURL = temporaryDirectory(named: "bounded")
         let exportURL = temporaryFile(named: "bounded.noonmarkdiagnostics")
         let configuration = DiagnosticStorageConfiguration(
-            maximumPersistentBytes: 96 * 1_024,
+            maximumPersistentBytes: 96 * 1024,
             eventSegmentCount: 2,
-            eventSegmentPayloadBytes: 16 * 1_024,
-            maximumEventBytes: 2 * 1_024,
-            metricCacheBytes: 8 * 1_024,
-            maximumMetricPayloadBytes: 4 * 1_024,
+            eventSegmentPayloadBytes: 16 * 1024,
+            maximumEventBytes: 2 * 1024,
+            metricCacheBytes: 8 * 1024,
+            maximumMetricPayloadBytes: 4 * 1024,
             retentionInterval: 7 * 24 * 60 * 60,
             maximumQueuedEvents: 32,
-            maximumQueuedBytes: 32 * 1_024
+            maximumQueuedBytes: 32 * 1024
         )
         let recorder = try LocalDiagnosticRecorder(
             rootURL: rootURL,
@@ -43,7 +43,7 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
                 progress: DiagnosticProgress(
                     attempt: attempt,
                     recordCount: attempt * 10,
-                    byteCount: Int64(attempt * 1_024)
+                    byteCount: Int64(attempt * 1024)
                 )
             )
             operation.succeed()
@@ -62,7 +62,7 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(preview.allocatedBytes, health.allocatedBytes)
 
         let receipt = try await recorder.export(to: exportURL)
-        XCTAssertLessThanOrEqual(receipt.byteCount, 8 * 1_024 * 1_024)
+        XCTAssertLessThanOrEqual(receipt.byteCount, 8 * 1024 * 1024)
         XCTAssertFalse(receipt.sha256.isEmpty)
 
         let package = try JSONDecoder().decode(
@@ -177,6 +177,113 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
                 as: UTF8.self
             ).contains("corrupt-record")
         )
+    }
+
+    func testTinyMetricStormNeverCrossesAllocatedCapAtAnyWriteObservation() async throws {
+        let rootURL = temporaryDirectory(named: "metric-cap")
+        let maximumPersistentBytes: Int64 = 64 * 1024
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: DiagnosticStorageConfiguration(
+                maximumPersistentBytes: maximumPersistentBytes,
+                eventSegmentCount: 2,
+                eventSegmentPayloadBytes: 4 * 1024,
+                maximumEventBytes: 1024,
+                metricCacheBytes: 64 * 1024,
+                maximumMetricPayloadBytes: 1024,
+                maximumQueuedEvents: 16,
+                maximumQueuedBytes: 8 * 1024
+            )
+        )
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        recorder.startSession(at: start)
+
+        for index in 0 ..< 400 {
+            let json = Data("{\"sampleCount\":\(index)}".utf8)
+            recorder.cacheMetricKitPayload(
+                MetricKitPayloadSummary(
+                    kind: .diagnostic,
+                    intervalStart: start,
+                    intervalEnd: start.addingTimeInterval(1),
+                    crashCount: 0,
+                    hangCount: 1,
+                    cpuExceptionCount: 0,
+                    diskWriteExceptionCount: 0,
+                    rawJSONByteCount: json.count
+                ),
+                rawJSON: json,
+                receivedAt: start.addingTimeInterval(Double(index))
+            )
+        }
+        await recorder.flush()
+
+        let health = await recorder.health()
+        XCTAssertLessThanOrEqual(
+            health.maximumObservedAllocatedBytes,
+            maximumPersistentBytes
+        )
+        XCTAssertLessThanOrEqual(
+            health.allocatedBytes,
+            maximumPersistentBytes
+        )
+        XCTAssertGreaterThan(health.metricPayloadCount, 0)
+    }
+
+    func testMillionEventQueueStormRetainsOperationCapsuleAndReportsDrops() async throws {
+        let rootURL = temporaryDirectory(named: "queue-storm")
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: DiagnosticStorageConfiguration(
+                maximumPersistentBytes: 96 * 1024,
+                eventSegmentCount: 2,
+                eventSegmentPayloadBytes: 8 * 1024,
+                maximumEventBytes: 2 * 1024,
+                metricCacheBytes: 0,
+                maximumMetricPayloadBytes: 0,
+                maximumQueuedEvents: 4,
+                maximumQueuedBytes: 4 * 1024
+            ),
+            unifiedLoggingEnabled: false
+        )
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let finishedAt = startedAt.addingTimeInterval(60)
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: startedAt
+        )
+
+        for attempt in 0 ..< 1_000_000 {
+            operation.stage(
+                .coverageAndStability,
+                progress: DiagnosticProgress(attempt: attempt)
+            )
+        }
+        operation.succeed(at: finishedAt)
+        await recorder.flush()
+
+        let package = try await recorder.snapshotPackage()
+        let operationEvents = package.records.filter {
+            $0.event.operationID == operation.id
+        }
+        XCTAssertTrue(
+            operationEvents.contains {
+                $0.event.code == .operationSucceeded
+            }
+        )
+        let capsule = try XCTUnwrap(
+            package.operationCapsules.first {
+                $0.operationID == operation.id
+            }
+        )
+        XCTAssertEqual(capsule.startedAt, startedAt)
+        XCTAssertEqual(capsule.finishedAt, finishedAt)
+        XCTAssertEqual(capsule.endpoint, .iCloudDrive)
+        XCTAssertEqual(capsule.outcome, .succeeded)
+        XCTAssertGreaterThan(package.manifest.droppedRecordCount, 0)
+        XCTAssertTrue(package.manifest.collectionWasPartial)
     }
 
     private func temporaryDirectory(named name: String) -> URL {

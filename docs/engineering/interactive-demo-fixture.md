@@ -10,9 +10,9 @@ make run-demo-app
 
 该命令会：
 
-1. 构建专用 `dist/NoonmarkDemo.app`。它使用内部测试 bundle 身份，因此可以接收固定自然日与隔离数据库参数；生产 `Noonmark.app` 仍然拒绝这些参数。
-2. 重建仓库内固定数据根 `artifacts/interactive-demo/`，不会读取或修改默认用户数据库。
-3. 写入当前本机已经配置的 Provider 凭证，并执行 readiness；凭证只进入原有 Keychain 流程，不写入 fixture 或 manifest。
+1. 构建专用 `dist/NoonmarkDemo.app`。它固定使用 `demo` profile：bundle identifier 为 `app.noonmark.mac.demo`，Application Support 目录为 `noonmark-demo`，iCloud repository 为 `Noonmark-Demo/SyncRepository`；因此可以接收固定自然日与隔离数据库参数。production `app.noonmark.mac` 仍然拒绝这些参数。
+2. 只 reset `demo` profile，再重建仓库内固定数据根 `artifacts/interactive-demo/`。显式 fixture 写入该仓库目录，其余运行资源仍由 `demo` profile 固定拥有；命令不得启动 production 身份，也不得读取、定位、修改或 reset `noonmark` 与 `Noonmark/SyncRepository`。
+3. 写入当前本机已经配置的 Provider 凭证，并执行 readiness；凭证只进入 `app.noonmark.zhulong.provider.demo` Keychain service，不写入 fixture 或 manifest，也不读取 production Keychain service。
 4. 以 `2026-07-24`、`America/New_York` 和 `zh_Hans_SG` 启动真实 App。
 5. 由 `NoonmarkDemoSupport` 通过真实领域接口重放 365 天用户故事，再把完整 snapshot 写入 SQLite。
 6. 写入二十场真实加密烛龙会话，并回读 SQLite 与 sidecar 对账。
@@ -27,7 +27,7 @@ Demo App 运行后会按本机默认偏好注册全局 `⌃⇧N`。可以关闭�
 make test-demo-fixture
 ```
 
-该入口同样构建并运行真实 `.app`，但不会调用外部 Provider。它验证 fixture manifest、SQLite 文件和二十份加密 `.zhs` 会话，然后退出并焚毁临时数据根。
+该入口同样以 `demo` profile 构建并运行真实 `.app`，但不会调用外部 Provider。它验证 fixture manifest、SQLite 文件和二十份加密 `.zhs` 会话，然后退出并焚毁本轮临时数据根；整个入口不得借用 production 或 E2E 身份。
 
 ## 一年用户故事
 
@@ -100,5 +100,5 @@ manifest 记录语义计数而非随机 UUID，因此相同锚点可以跨运行
 
 - `NoonmarkDemoSupport` 是任务领域 fixture 的唯一事实源。不得在启动 shell、截图脚本或 UI 组件里另造一套任务数据。
 - 新功能若需要用户状态才能体验，必须在同一变更中更新用户故事、覆盖报告和测试断言。
-- 不追求把每个 destructive／管理员入口都塞入日常演示；“使用到每一个功能”在这里指普通用户可见的任务生命周期、页面投影、编辑能力和烛龙产物。导入、同步、故障注入等专用能力继续由各自 E2E／live 入口覆盖。
+- 不追求把每个 destructive／管理员入口都塞入日常演示；“使用到每一个功能”在这里指普通用户可见的任务生命周期、页面投影、编辑能力和烛龙产物。导入、同步、故障注入等专用能力继续由各自固定非生产 profile 的 E2E／live 入口覆盖，任何入口都不得借用或探测 production 数据范围。
 - `--ephemeral` 仍服务旧截图与局部 E2E，不得替代本基线。

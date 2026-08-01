@@ -12,7 +12,7 @@
 ## 当前仓库基线
 
 - 初始化日期：2026-07-05
-- 最新确认日期：2026-07-13
+- 最新确认日期：2026-08-01
 - 当前仓库已经初始化 Git，主分支为 `main`，并已关联 `origin/main`。
 - 当前技术栈为 Swift Package Manager 项目，`Package.swift` 使用 `swift-tools-version: 6.0`，目标平台为 macOS 14。
 - 当前源码模块：
@@ -20,6 +20,9 @@
   - `NoonmarkCore`：Day Todo、任务链、日轨迹、子任务、池化视图等核心领域引擎。
   - `NoonmarkAI`：当前烛龙使用的 provider、scope、prompt 与 local insight 基础设施。
   - `NoonmarkStorage`：SQLite schema 与领域持久化结构。
+  - `NoonmarkSync`：本地目录、iCloud Drive 与 CloudKit 同步边界。
+  - `NoonmarkDiagnostics`：有界强类型诊断、隐私过滤、跨重启关联与用户主动导出。
+  - `NoonmarkMacRuntime`：签名运行身份、数据 scope 与 Mac runtime 协调器。
   - `NoonmarkMacUIContract`：Mac UI 设计契约的代码化约束。
 - 当前测试模块：
   - `NoonmarkMacApp` 的真实 App E2E 脚本验证
@@ -29,7 +32,7 @@
   - `NoonmarkMacUIContractTests`
   - `NoonmarkSimulationTests`
 - 当前文档已包含产品范围、功能规格、烛龙、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
-- 当前已有可运行 Mac App target 和本地 DMG 打包脚本；尚未发现后端服务、容器部署配置或生产 deployed endpoint。验证应覆盖 Swift Package 的 build/test、真实 `.app` E2E 截图、持久化探针和 DMG 安装启动。
+- 当前已有可运行 Mac App target 和本地 DMG 打包脚本；尚未发现后端服务、容器部署配置或生产 deployed endpoint。验证应覆盖 Swift Package 的 build/test、隔离真实 `.app` E2E 截图、持久化探针、production DMG 静态门禁和受控派生的 `dmg-validation` 交互，不得在开发或测试中启动 production App。
 
 ## 当前开发入口
 
@@ -40,7 +43,7 @@
 - 基础命令：
   - `make build`
   - `make test`
-  - 若必须直接运行 `swift build` 或 `swift test`，必须先执行 `scripts/reset-dev-data`。
+  - build／package 是纯产物操作，不 reset 也不启动 App。若必须绕过仓库入口直接运行 `swift test`，先执行 `scripts/reset-dev-data audit`；不得无参数调用 reset，也不得传入 `production`。
 - 当前环境取证：
   - `swift build` 通过。
   - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
@@ -66,14 +69,32 @@
   - `scripts/package-dmg release`
   - `scripts/test-dmg-install dist/Noonmark.dmg`
 
-## 开发数据 clean cut（强制）
+## 运行身份与开发数据 clean cut（强制）
 
-- 晷迹尚未发布，最新提交和最新编译产物就是唯一版本；开发调试不迁移、不备份、不复用任何旧版本数据。
-- 每次产生新 commit 后，以及每次开始新编译前，都必须执行 `scripts/reset-dev-data`。仓库受控的 `make build`、`make test`、各层测试脚本、`scripts/build-mac-app`、`scripts/run-mac-app` 和 `scripts/check` 已强制执行；绕过这些入口直接运行 SwiftPM 命令时，由执行者先手动清理。
-- `scripts/reset-dev-data` 必须先终止 Noonmark 的开发 / E2E / Audit 进程，再整体删除固定的 `~/Library/Application Support/noonmark`，并清除对应 bundle 的 UserDefaults、cache 与窗口 saved state。范围包括 SQLite、WAL / SHM、`ZhulongSidecar`、本地同步仓库和任何旧备份目录；同时清除固定的 iCloud `Noonmark/SyncRepository` 与仅用于 sidecar 加密的生成 key，防止旧同步记录或旧密钥重新进入当前版本。
-- 清理必须 fail-closed：进程无法终止或目标路径不符合固定护栏时，不得继续删除或启动。不得增加保留旧库、自动迁移、复制备份或兼容旧 schema 的分支。
-- E2E 可以在单次套件内保留该套件自己创建的隔离数据库，以验证重启与持久化；下一次构建 / 套件必须重新生成当前版本 fixture，不得回读上一轮测试数据。
+- 晷迹目前只把 Apple Development 签名 DMG 私下提供给指定用户自行下载和安装，不进行公开分发。用户日常使用的 production 资料不是开发 fixture；任何 agent、开发命令、测试、E2E、Demo、Audit 或 DMG validation 都不得启动 production 身份，不得读取、定位、探测或 reset production 数据。
+- 签入 bundle 的 exact identifier 是数据权限来源。六个固定 profile 必须保持完全隔离：
+
+| Profile | Bundle identifier | Application Support 目录 | iCloud repository |
+| --- | --- | --- | --- |
+| `production` | `app.noonmark.mac` | `noonmark` | `Noonmark/SyncRepository` |
+| `development` | `app.noonmark.mac.development` | `noonmark-development` | `Noonmark-Development/SyncRepository` |
+| `e2e` | `app.noonmark.mac.e2e` | `noonmark-e2e` | `Noonmark-E2E/SyncRepository` |
+| `demo` | `app.noonmark.mac.demo` | `noonmark-demo` | `Noonmark-Demo/SyncRepository` |
+| `audit` | `app.noonmark.mac.audit` | `noonmark-audit` | `Noonmark-Audit/SyncRepository` |
+| `dmg-validation` | `app.noonmark.mac.dmg-validation` | `noonmark-dmg-validation` | `Noonmark-DMGValidation/SyncRepository` |
+
+- `scripts/reset-dev-data <profile>` 必须显式接收 `development`、`e2e`、`demo`、`audit` 或 `dmg-validation` 之一，只终止和删除所选 profile 拥有的 process、Application Support、iCloud 顶层根、UserDefaults、cache、saved state 与 sidecar key。缺参数、`production`、未知 profile、路径重叠、symlink 或进程无法确认终止时，必须在任何副作用前 fail-closed。
+- build 与 package 是纯产物操作，不执行 reset、不启动 App，也不读取任何运行资料。会运行 App 的开发、E2E、Demo、Audit 与 DMG validation 入口必须先 reset 自己的固定非生产 profile；不得以启动参数、环境变量或临时目录把 production 身份改造成测试身份。
+- 非生产数据采用 clean cut：不迁移、不备份、不复用旧 schema。E2E 可以在单次套件内保留本轮隔离数据库以验证重启与持久化；下一轮套件必须由相同 profile reset 后重建，不得回读上一轮 fixture。
 - Keychain 中的 Provider API 凭证属于开发者凭证，不是测试历史，clean cut 不得删除；不得扫描整个 Keychain、iCloud Drive 或 `$HOME`，也不得删除用户通过 NSSavePanel 自选路径导出的数据包。
+
+## 正式版诊断与 DMG 边界（强制）
+
+- 应用管理的本机诊断记录以 allocated bytes 计量，硬上限为 4 MiB、最长保留 7 天；用户主动保存的单个 `.noonmarkdiagnostics` 导出包硬上限为 8 MiB。诊断资料不自动上传，导出和发送都必须由用户主动决定。
+- 诊断 schema 不得记录任务正文、标签名、文件路径、同步端点字符串、iCloud／同步 payload、AI prompt／response、API Key、邮箱、IP、URL 或长 Base64；不得保存原始 `Error`、`localizedDescription`、`userInfo` 或自由文本业务日志。任何隐私哨兵命中均阻断发行。
+- 真实 App 故障闭环必须在 `e2e` profile 走完“同步失败／停滞 → transport lock wait → 任务修改被拒绝 → 非正常终止 → 重启 → Help 菜单导出”，并对账 operation／incident、previous-session interruption、持久化失败、4 MiB／8 MiB 容量和隐私哨兵。该闭环证明证据可采集，不等于已经定位或修复最初的同步故障。
+- production DMG 只做 checksum、只读挂载、strict code-sign、版本身份、Mach-O UUID、dSYM、binary SHA 与 source-linked SHA 静态门禁，并固定证明 `production_app_executed=false`。需要对该 package 做 WindowServer、SQLite、重启或 DiagnosticReports 动态验收时，只能运行从精确 production package 受控派生并重新签名的 `dmg-validation` App；诊断故障导出闭环则固定运行 `e2e` profile。
+- 当前发行物只允许稳定 Apple Development 签名的私有 DMG，由用户自行下载、安装和启动；不得创建公开 GitHub Release，不得宣称 Developer ID、notarization、staple、Gatekeeper 或公开分发已经完成。
 
 ## Agent skills
 
@@ -133,7 +154,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 ## 验证
 
 - 有 deployed endpoint 或可运行应用时，验证必须打真实 deployed endpoint 或真实应用入口，并走用户实际路径；禁止用模拟路径或手工补数据自欺。
-- 当前仓库已有真实 Mac App target；涉及 Mac UI 时必须使用真实 `.app` E2E 截图、真实交互路径、console / 运行日志和持久化探针等证据补齐。归档 HTML 原型不得作为 ground truth，也不得靠抬高阈值吸收产品演进；只有用户确认过的真实 App 截图才能建立视觉 regression reference。若当前环境未提供 frontend-verify skill，必须明确说明，并用等价自动化证据补齐。
+- 当前仓库已有真实 Mac App target；涉及 Mac UI 时必须使用对应非生产 profile 的真实 `.app` E2E 截图、真实交互路径、console / 运行日志和持久化探针等证据补齐。开发／测试不得以“真实路径”为由启动或读取 production；production 运行只属于用户明确发起的日常使用，不是 agent 验证入口。归档 HTML 原型不得作为 ground truth，也不得靠抬高阈值吸收产品演进；只有用户确认过的真实 App 截图才能建立视觉 regression reference。若当前环境未提供 frontend-verify skill，必须明确说明，并用等价自动化证据补齐。
 - 悬浮或 fixed UI 验收必须使用长滚动页面，短页面不能作为充分证据。
 - 隔离前端栈中，`NEXT_PUBLIC_API_URL` 必须烤进镜像；`curl` 后端 200 不等于浏览器实际走了那个后端。
 - 若存在容器化部署配置，每次改完代码后主动部署到隔离容器验证；若当前没有容器或部署入口，必须明确说明，并用当前最高强度的本地运行产物验证补齐。
@@ -143,7 +164,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 - 功能快速迭代期间，每轮交互验收统一使用 `make run-demo-app`，不得再把新用户空库、一次性手工灌数或 `--ephemeral` 截图 fixture 当成用户体验入口。
 - 演示基线必须由 `NoonmarkDemoSupport` 通过真实领域接口重放，并覆盖连续一年的中段用户状态。真实 `.app` 安装后必须再以 SQLite 与加密烛龙 sidecar 回读对账，失败时不得打开成“可体验”状态。
 - 新增或改变用户可见功能时，必须同步评估演示覆盖契约。若该功能需要状态或历史才能体验，应在同一改动中更新一年用户故事、机器可检查报告和 `docs/engineering/interactive-demo-fixture.md` 覆盖表；普通用户能力必须纳入跨季度重复使用计数。
-- 演示数据根固定隔离于仓库 `artifacts/interactive-demo/`，每次启动整体重建；不得写入或复用默认用户数据库。演示 bundle 只复用内部 E2E 参数能力，不得放宽生产 bundle 的参数边界。
+- 演示数据根固定隔离于仓库 `artifacts/interactive-demo/`，运行身份固定为 `demo`，每次启动整体重建；不得读取、写入或复用 production 数据库与 iCloud repository。演示 bundle 只复用内部 E2E 参数能力，不得放宽 production bundle 的参数边界。
 
 ## 测试三铁律
 

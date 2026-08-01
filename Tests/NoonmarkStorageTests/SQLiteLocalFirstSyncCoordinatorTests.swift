@@ -1,4 +1,5 @@
 @testable import NoonmarkCore
+import NoonmarkDiagnostics
 @testable import NoonmarkStorage
 import NoonmarkSync
 import XCTest
@@ -912,12 +913,14 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             )
         )
         let transport = InMemorySyncTransport()
+        let failureAt = now.addingTimeInterval(1)
 
         do {
             _ = try await SQLiteLocalFirstSyncCoordinator(
                 databaseURL: databaseURL,
-                transport: transport
-            ).sync(now: now.addingTimeInterval(1))
+                transport: transport,
+                failureClock: { failureAt }
+            ).sync(now: failureAt)
             XCTFail("损坏的完整基线不得被标记为同步成功")
         } catch {
             XCTAssertEqual(
@@ -945,7 +948,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 reason: .baselineInvalid,
                 message: SQLiteLocalFirstSyncError
                     .baselineManifestInvalid.localizedDescription,
-                failedAt: now.addingTimeInterval(1)
+                failedAt: failureAt
             )
         )
         XCTAssertNil(
@@ -979,12 +982,14 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 )
             )
         )
+        let failureAt = now.addingTimeInterval(1)
 
         do {
             _ = try await SQLiteLocalFirstSyncCoordinator(
                 databaseURL: databaseURL,
-                transport: InMemorySyncTransport()
-            ).sync(now: now.addingTimeInterval(1))
+                transport: InMemorySyncTransport(),
+                failureClock: { failureAt }
+            ).sync(now: failureAt)
             XCTFail("无法物化的本机记录不得被标记为同步成功")
         } catch {
             XCTAssertEqual(
@@ -1011,7 +1016,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 message: SQLiteLocalFirstSyncError
                     .uploadMaterializationFailed(count: 1)
                     .localizedDescription,
-                failedAt: now.addingTimeInterval(1)
+                failedAt: failureAt
             )
         )
         XCTAssertNil(
@@ -1532,9 +1537,11 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             databaseURL: databaseURL,
             transport: InMemorySyncTransport()
         ).sync(now: previousSyncAt)
+        let failureAt = now
         let coordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: databaseURL,
-            transport: FailingFetchSyncTransport()
+            transport: FailingFetchSyncTransport(),
+            failureClock: { failureAt }
         )
 
         do {
@@ -1559,10 +1566,10 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             .failed(
                 reason: .transportOrStorage,
                 message: FailingFetchSyncTransportError.unavailable.localizedDescription,
-                failedAt: now
+                failedAt: failureAt
             )
         )
-        XCTAssertEqual(metadata.updatedAt, now)
+        XCTAssertEqual(metadata.updatedAt, failureAt)
         XCTAssertEqual(
             try syncTimestamps(
                 in: SQLiteSyncRepository(databaseURL: databaseURL)
@@ -1572,6 +1579,188 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 lastEffectiveSyncedAt: nil
             )
         )
+    }
+
+    func testPersistedFailureTimestampExactlyMatchesDiagnosticTerminalEvent()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("failure-correlation-timestamp")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let syncStartedAt = now.addingTimeInterval(0.875)
+        let observedFailureAt = syncStartedAt.addingTimeInterval(90.5)
+        let persistedFailureAt = now.addingTimeInterval(91)
+        let operationStartedAt = syncStartedAt.addingTimeInterval(-5)
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: operationStartedAt
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: SlowFailingFetchSyncTransport(),
+            diagnosticOperation: operation,
+            completesDiagnosticOperationOnSuccess: true,
+            completesDiagnosticOperationOnFailure: true,
+            diagnosticHeartbeatIntervalNanoseconds: 30_000_000_000,
+            failureClock: { observedFailureAt }
+        )
+        let wallStartedAt = Date()
+
+        do {
+            _ = try await coordinator.sync(now: syncStartedAt)
+            XCTFail("致命传输失败必须向调用方抛出")
+        } catch {
+            XCTAssertEqual(
+                error as? SlowFailingFetchSyncTransport.Failure,
+                .unavailable
+            )
+        }
+        XCTAssertGreaterThanOrEqual(
+            Date().timeIntervalSince(wallStartedAt),
+            0.04
+        )
+
+        let metadata = try XCTUnwrap(
+            SQLiteSyncRepository(databaseURL: databaseURL).metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: metadata.value
+        )
+        guard case let .failed(_, _, failedAt) = status else {
+            return XCTFail("必须保存失败状态")
+        }
+        let terminal = try XCTUnwrap(
+            recorder.snapshot().last {
+                $0.event.code == .operationFailed
+            }
+        )
+
+        XCTAssertEqual(failedAt, persistedFailureAt)
+        XCTAssertEqual(metadata.updatedAt, persistedFailureAt)
+        XCTAssertEqual(terminal.timestamp, persistedFailureAt)
+        XCTAssertEqual(
+            terminal.event.durationMilliseconds,
+            Int64(
+                persistedFailureAt.timeIntervalSince(operationStartedAt)
+                    * 1000
+            )
+        )
+        XCTAssertEqual(
+            terminal.event.failure,
+            DiagnosticFailure(domain: .syncProtocol, code: 7)
+        )
+        XCTAssertEqual(
+            terminal.event.failureDetail,
+            DiagnosticFailure(domain: .unknown, code: 0)
+        )
+    }
+
+    func testLongSyncWithoutSafeProgressDoesNotEmitHeartbeat()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("diagnostic-heartbeat")
+        try SQLiteEngineRepository(databaseURL: databaseURL).save(
+            NoonmarkEngine().snapshot()
+        )
+        let syncStartedAt = Date()
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: syncStartedAt.addingTimeInterval(-31)
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: SlowFailingFetchSyncTransport(),
+            diagnosticOperation: operation,
+            completesDiagnosticOperationOnSuccess: false,
+            completesDiagnosticOperationOnFailure: false,
+            diagnosticHeartbeatIntervalNanoseconds: 5_000_000
+        )
+
+        do {
+            _ = try await coordinator.sync(now: syncStartedAt)
+            XCTFail("测试 transport 必须失败")
+        } catch {
+            XCTAssertEqual(
+                error as? SlowFailingFetchSyncTransport.Failure,
+                .unavailable
+            )
+        }
+
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let records = recorder.snapshot()
+        XCTAssertFalse(
+            records.contains { $0.event.code == .operationHeartbeat }
+        )
+        XCTAssertFalse(
+            records.contains { $0.event.code.isTerminal }
+        )
+        operation.fail(
+            DiagnosticFailure(domain: .syncProtocol, code: 7)
+        )
+    }
+
+    func testLongSyncEmitsHeartbeatForChangedSafeUploadProgressAndStops()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("diagnostic-progress-heartbeat")
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        for index in 1 ... 2 {
+            _ = try engine.createPoolTask(
+                title: "heartbeat task \(index)",
+                now: now.addingTimeInterval(Double(index))
+            )
+        }
+        try repository.save(
+            engine.snapshot(),
+            recordingChangesFor: SyncDeviceID("heartbeat-device"),
+            changedAt: now.addingTimeInterval(3)
+        )
+        let syncStartedAt = Date()
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: syncStartedAt.addingTimeInterval(-31)
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: SlowPushSyncTransport(),
+            diagnosticOperation: operation,
+            completesDiagnosticOperationOnSuccess: false,
+            completesDiagnosticOperationOnFailure: false,
+            diagnosticHeartbeatIntervalNanoseconds: 5_000_000
+        )
+
+        _ = try await coordinator.sync(limit: 1, now: syncStartedAt)
+        let heartbeatCountAfterReturn = recorder.snapshot().filter {
+            $0.event.code == .operationHeartbeat
+        }.count
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let records = recorder.snapshot()
+        let heartbeats = records.filter {
+            $0.event.code == .operationHeartbeat
+        }
+
+        XCTAssertEqual(heartbeatCountAfterReturn, 1)
+        XCTAssertEqual(heartbeats.count, heartbeatCountAfterReturn)
+        XCTAssertEqual(heartbeats.first?.event.stage, .upload)
+        XCTAssertGreaterThan(
+            heartbeats.first?.event.progress?.recordCount ?? 0,
+            0
+        )
+        XCTAssertFalse(records.contains { $0.event.code.isTerminal })
+        operation.succeed()
     }
 
     func testTwoSQLiteStoresConvergeConcurrentTaskNoteForksThroughSharedTransport() async throws {
@@ -2077,6 +2266,32 @@ private actor FailingFetchSyncTransport: SyncRecordTransport {
 
     func fetchAll() async throws -> [SyncRecord] {
         throw FailingFetchSyncTransportError.unavailable
+    }
+}
+
+private actor SlowFailingFetchSyncTransport: SyncRecordTransport {
+    enum Failure: Error, Equatable {
+        case unavailable
+    }
+
+    func push(_: [SyncRecord]) async throws {}
+
+    func fetchAll() async throws -> [SyncRecord] {
+        try await Task.sleep(nanoseconds: 50_000_000)
+        throw Failure.unavailable
+    }
+}
+
+private actor SlowPushSyncTransport: SyncRecordTransport {
+    private let backing = InMemorySyncTransport()
+
+    func push(_ records: [SyncRecord]) async throws {
+        try await Task.sleep(nanoseconds: 30_000_000)
+        try await backing.push(records)
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        try await backing.fetchAll()
     }
 }
 

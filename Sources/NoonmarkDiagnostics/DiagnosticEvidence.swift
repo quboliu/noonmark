@@ -28,6 +28,19 @@ public struct DiagnosticIncidentID: RawRepresentable, Codable, Hashable, Sendabl
     }
 }
 
+public struct DiagnosticOperationCorrelation: Equatable, Sendable {
+    public let operationID: DiagnosticOperationID
+    public let incidentID: DiagnosticIncidentID
+
+    public init(
+        operationID: DiagnosticOperationID,
+        incidentID: DiagnosticIncidentID
+    ) {
+        self.operationID = operationID
+        self.incidentID = incidentID
+    }
+}
+
 public enum DiagnosticCategory: String, Codable, CaseIterable, Sendable {
     case lifecycle
     case mutation
@@ -225,6 +238,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
     public let stage: DiagnosticOperationStage?
     public let progress: DiagnosticProgress?
     public let failure: DiagnosticFailure?
+    public let failureDetail: DiagnosticFailure?
     public let durationMilliseconds: Int64?
     public let mutationContext: DiagnosticMutationContext?
     public let mutationRejectionReason: DiagnosticMutationRejectionReason?
@@ -244,6 +258,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         stage: DiagnosticOperationStage? = nil,
         progress: DiagnosticProgress? = nil,
         failure: DiagnosticFailure? = nil,
+        failureDetail: DiagnosticFailure? = nil,
         durationMilliseconds: Int64? = nil,
         mutationContext: DiagnosticMutationContext? = nil,
         mutationRejectionReason: DiagnosticMutationRejectionReason? = nil,
@@ -262,6 +277,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         self.stage = stage
         self.progress = progress
         self.failure = failure
+        self.failureDetail = failureDetail
         self.durationMilliseconds = durationMilliseconds
         self.mutationContext = mutationContext
         self.mutationRejectionReason = mutationRejectionReason
@@ -384,6 +400,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         incidentID: DiagnosticIncidentID,
         kind: DiagnosticOperationKind,
         failure: DiagnosticFailure,
+        failureDetail: DiagnosticFailure? = nil,
         durationMilliseconds: Int64,
         stage: DiagnosticOperationStage?
     ) -> Self {
@@ -396,6 +413,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             operationKind: kind,
             stage: stage,
             failure: failure,
+            failureDetail: failureDetail,
             durationMilliseconds: max(0, durationMilliseconds)
         )
     }
@@ -461,12 +479,16 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
     }
 
     public static func persistedSyncFailureLoaded(
-        failure: DiagnosticFailure
+        failure: DiagnosticFailure,
+        operationID: DiagnosticOperationID? = nil,
+        incidentID: DiagnosticIncidentID? = nil
     ) -> Self {
         Self(
             code: .persistedSyncFailureLoaded,
             category: .sync,
             severity: .error,
+            operationID: operationID,
+            incidentID: incidentID,
             failure: failure
         )
     }

@@ -1,6 +1,6 @@
-@testable import NoonmarkStorage
-import NoonmarkDiagnostics
 import NoonmarkCore
+import NoonmarkDiagnostics
+@testable import NoonmarkStorage
 import NoonmarkSync
 import XCTest
 
@@ -93,8 +93,10 @@ final class SQLiteLocalFirstSyncDiagnosticsTests: XCTestCase {
         )
         XCTAssertEqual(terminal.code, .operationFailed)
         XCTAssertEqual(terminal.stage, .transportFetch)
-        XCTAssertEqual(terminal.failure?.domain, .unknown)
-        XCTAssertEqual(terminal.failure?.code, 0)
+        XCTAssertEqual(terminal.failure?.domain, .syncProtocol)
+        XCTAssertEqual(terminal.failure?.code, 7)
+        XCTAssertEqual(terminal.failureDetail?.domain, .unknown)
+        XCTAssertEqual(terminal.failureDetail?.code, 0)
         XCTAssertNotNil(terminal.incidentID)
     }
 

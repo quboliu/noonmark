@@ -157,13 +157,56 @@ public final class SQLiteLocalFirstSyncCoordinator {
     private let taskChangeAnalyzer: SQLiteSyncTaskChangeAnalyzer
     private let diagnosticOperation: DiagnosticOperation?
     private let completesDiagnosticOperationOnSuccess: Bool
+    private let completesDiagnosticOperationOnFailure: Bool
+    private let diagnosticHeartbeatIntervalNanoseconds: UInt64
+    private let failureClock: @Sendable () -> Date
     private let maximumFinalizationAttempts = 8
 
-    public init(
+    public convenience init(
         databaseURL: URL,
         transport: SyncRecordTransport,
         diagnosticOperation: DiagnosticOperation? = nil,
-        completesDiagnosticOperationOnSuccess: Bool = true
+        completesDiagnosticOperationOnSuccess: Bool = true,
+        completesDiagnosticOperationOnFailure: Bool = true
+    ) {
+        self.init(
+            databaseURL: databaseURL,
+            transport: transport,
+            diagnosticOperation: diagnosticOperation,
+            completesDiagnosticOperationOnSuccess:
+            completesDiagnosticOperationOnSuccess,
+            completesDiagnosticOperationOnFailure:
+            completesDiagnosticOperationOnFailure,
+            diagnosticHeartbeatIntervalNanoseconds: 30_000_000_000,
+            failureClock: { Date() }
+        )
+    }
+
+    convenience init(
+        databaseURL: URL,
+        transport: SyncRecordTransport,
+        diagnosticOperation: DiagnosticOperation? = nil,
+        failureClock: @escaping @Sendable () -> Date
+    ) {
+        self.init(
+            databaseURL: databaseURL,
+            transport: transport,
+            diagnosticOperation: diagnosticOperation,
+            completesDiagnosticOperationOnSuccess: true,
+            completesDiagnosticOperationOnFailure: true,
+            diagnosticHeartbeatIntervalNanoseconds: 30_000_000_000,
+            failureClock: failureClock
+        )
+    }
+
+    init(
+        databaseURL: URL,
+        transport: SyncRecordTransport,
+        diagnosticOperation: DiagnosticOperation?,
+        completesDiagnosticOperationOnSuccess: Bool,
+        completesDiagnosticOperationOnFailure: Bool,
+        diagnosticHeartbeatIntervalNanoseconds: UInt64,
+        failureClock: @escaping @Sendable () -> Date = { Date() }
     ) {
         uploadCoordinator = SQLiteSyncUploadCoordinator(databaseURL: databaseURL, transport: transport)
         downloadCoordinator = SQLiteSyncDownloadCoordinator(databaseURL: databaseURL, transport: transport)
@@ -173,10 +216,19 @@ public final class SQLiteLocalFirstSyncCoordinator {
         self.diagnosticOperation = diagnosticOperation
         self.completesDiagnosticOperationOnSuccess =
             completesDiagnosticOperationOnSuccess
+        self.completesDiagnosticOperationOnFailure =
+            completesDiagnosticOperationOnFailure
+        self.diagnosticHeartbeatIntervalNanoseconds = max(
+            1,
+            diagnosticHeartbeatIntervalNanoseconds
+        )
+        self.failureClock = failureClock
         taskChangeAnalyzer = SQLiteSyncTaskChangeAnalyzer()
     }
 
     public func sync(limit: Int = 100, now: Date = Date()) async throws -> SQLiteLocalFirstSyncResult {
+        let diagnosticHeartbeatTask = startDiagnosticHeartbeatTask()
+        defer { diagnosticHeartbeatTask?.cancel() }
         do {
             diagnosticOperation?.stage(.localLoad)
             let localBefore = try engineRepository.load().snapshot()
@@ -383,37 +435,58 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 "sync finalization loop must return or throw"
             )
         } catch {
-            diagnosticOperation?.fail(Self.diagnosticFailure(for: error))
+            let failedAt = Self.persistedFailureTimestamp(failureClock())
+            finishDiagnosticFailure(error, at: failedAt)
             try? Self.persistFailure(
                 error,
-                at: now,
+                at: failedAt,
                 in: syncRepository
             )
             throw error
         }
     }
 
+    private func finishDiagnosticFailure(
+        _ error: Error,
+        at failedAt: Date
+    ) {
+        guard completesDiagnosticOperationOnFailure else { return }
+        diagnosticOperation?.fail(
+            Self.diagnosticFailure(for: error),
+            detail: DiagnosticFailureClassifier.classify(error),
+            at: failedAt
+        )
+    }
+
+    private func startDiagnosticHeartbeatTask() -> Task<Void, Never>? {
+        guard let diagnosticOperation else { return nil }
+        let interval = diagnosticHeartbeatIntervalNanoseconds
+        return Task {
+            while Task.isCancelled == false {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+                guard Task.isCancelled == false else { return }
+                diagnosticOperation.heartbeat()
+            }
+        }
+    }
+
     private static func diagnosticFailure(
         for error: Error
     ) -> DiagnosticFailure {
-        guard let syncError = error as? SQLiteLocalFirstSyncError else {
-            return DiagnosticFailureClassifier.classify(error)
-        }
-        let code = switch syncError {
-        case .baselineDeviceIdentityUnavailable:
-            1
-        case .baselinePreparationFailed:
-            2
-        case .baselineManifestInvalid:
-            3
-        case .baselineUploadIncomplete:
-            4
-        case .uploadMaterializationFailed:
-            5
-        case .uploadQueueNotDrained:
-            6
-        case .remoteChangesPending:
-            7
+        let reason = (error as? SQLiteLocalFirstSyncError)?.failureReason
+            ?? .transportOrStorage
+        let code = switch reason {
+        case .baselineUnavailable: 1
+        case .baselineInvalid: 2
+        case .baselineNotUploaded: 3
+        case .localRecordsUnpreparable: 4
+        case .localChangesPending: 5
+        case .remoteChangesPending: 6
+        case .transportOrStorage: 7
         }
         return DiagnosticFailure(domain: .syncProtocol, code: code)
     }
@@ -503,6 +576,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
             result.pendingCount += batch.pendingCount
             result.uploadedCount += batch.uploadedCount
             result.failedCount += batch.failedCount
+            diagnosticOperation?.observeHeartbeatProgress(
+                DiagnosticProgress(
+                    recordCount: result.uploadedCount,
+                    pendingCount: batch.pendingCount
+                )
+            )
 
             if batch.pendingCount == 0 || batch.failedCount > 0 {
                 return result
@@ -643,6 +722,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
         at failedAt: Date,
         in repository: SQLiteSyncRepository
     ) throws {
+        let failedAt = persistedFailureTimestamp(failedAt)
         let reason =
             (error as? SQLiteLocalFirstSyncError)?.failureReason
                 ?? .transportOrStorage
@@ -654,6 +734,13 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     failedAt: failedAt
                 )
             )
+        )
+    }
+
+    public static func persistedFailureTimestamp(_ date: Date) -> Date {
+        Date(
+            timeIntervalSince1970: date.timeIntervalSince1970
+                .rounded(.down)
         )
     }
 

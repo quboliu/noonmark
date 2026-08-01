@@ -4,11 +4,23 @@ public protocol DiagnosticRecording: Sendable {
     var sessionID: DiagnosticSessionID { get }
 
     func record(_ event: EvidenceEvent, at timestamp: Date)
+
+    func persistedSyncFailureCorrelation(
+        failure: DiagnosticFailure,
+        failedAt: Date
+    ) async -> DiagnosticOperationCorrelation?
 }
 
 public extension DiagnosticRecording {
     func record(_ event: EvidenceEvent) {
         record(event, at: Date())
+    }
+
+    func persistedSyncFailureCorrelation(
+        failure _: DiagnosticFailure,
+        failedAt _: Date
+    ) async -> DiagnosticOperationCorrelation? {
+        nil
     }
 
     func startOperation(
@@ -67,12 +79,15 @@ public final class InMemoryDiagnosticRecorder: DiagnosticRecording, @unchecked S
 }
 
 public struct DiagnosticOperation: Sendable {
+    public static let minimumHeartbeatInterval: TimeInterval = 30
+
     public let id: DiagnosticOperationID
 
     private let recorder: any DiagnosticRecording
     private let kind: DiagnosticOperationKind
     private let startedAt: Date
     private let state: State
+    private let emissionLane: EmissionLane
 
     fileprivate init(
         recorder: any DiagnosticRecording,
@@ -85,6 +100,7 @@ public struct DiagnosticOperation: Sendable {
         self.kind = kind
         self.startedAt = startedAt
         state = State()
+        emissionLane = EmissionLane()
     }
 
     public func stage(
@@ -93,74 +109,98 @@ public struct DiagnosticOperation: Sendable {
         durationMilliseconds: Int64? = nil,
         at timestamp: Date = Date()
     ) {
-        guard state.move(to: stage) else { return }
-        recorder.record(
-            .operationStage(
-                id: id,
-                kind: kind,
-                stage: stage,
-                progress: progress,
-                durationMilliseconds: durationMilliseconds
-            ),
-            at: timestamp
-        )
+        emissionLane.perform {
+            guard state.move(to: stage, progress: progress) else { return }
+            recorder.record(
+                .operationStage(
+                    id: id,
+                    kind: kind,
+                    stage: stage,
+                    progress: progress,
+                    durationMilliseconds: durationMilliseconds
+                ),
+                at: timestamp
+            )
+        }
     }
 
     public func heartbeat(
-        stage: DiagnosticOperationStage,
-        progress: DiagnosticProgress? = nil,
         at timestamp: Date = Date()
     ) {
-        guard state.isActive else { return }
-        recorder.record(
-            .operationHeartbeat(
-                id: id,
-                kind: kind,
-                stage: stage,
-                progress: progress,
-                durationMilliseconds: elapsedMilliseconds(at: timestamp)
+        emissionLane.perform {
+            let durationMilliseconds = elapsedMilliseconds(at: timestamp)
+            guard durationMilliseconds >= Int64(
+                Self.minimumHeartbeatInterval * 1000
             ),
-            at: timestamp
-        )
+                let snapshot = state.heartbeatSnapshot(
+                    at: timestamp,
+                    minimumInterval: Self.minimumHeartbeatInterval
+                )
+            else { return }
+            recorder.record(
+                .operationHeartbeat(
+                    id: id,
+                    kind: kind,
+                    stage: snapshot.stage,
+                    progress: snapshot.progress,
+                    durationMilliseconds: durationMilliseconds
+                ),
+                at: timestamp
+            )
+        }
+    }
+
+    public func observeHeartbeatProgress(
+        _ progress: DiagnosticProgress
+    ) {
+        state.observeHeartbeatProgress(progress)
     }
 
     public func succeed(
         progress: DiagnosticProgress? = nil,
         at timestamp: Date = Date()
     ) {
-        guard state.finish(incidentID: nil) else { return }
-        recorder.record(
-            .operationSucceeded(
-                id: id,
-                kind: kind,
-                durationMilliseconds: elapsedMilliseconds(at: timestamp),
-                progress: progress
-            ),
-            at: timestamp
-        )
+        emissionLane.perform {
+            guard state.finish(incidentID: nil) else { return }
+            recorder.record(
+                .operationSucceeded(
+                    id: id,
+                    kind: kind,
+                    durationMilliseconds: elapsedMilliseconds(at: timestamp),
+                    progress: progress
+                ),
+                at: timestamp
+            )
+        }
     }
 
     @discardableResult
     public func fail(
         _ failure: DiagnosticFailure,
+        detail failureDetail: DiagnosticFailure? = nil,
         at timestamp: Date = Date()
     ) -> DiagnosticIncidentID {
-        let incidentID = DiagnosticIncidentID()
-        guard state.finish(incidentID: incidentID) else {
-            return state.incidentID ?? incidentID
+        emissionLane.perform {
+            let incidentID = DiagnosticIncidentID()
+            guard state.finish(incidentID: incidentID) else {
+                return state.incidentID ?? incidentID
+            }
+            recorder.record(
+                .operationFailed(
+                    id: id,
+                    incidentID: incidentID,
+                    kind: kind,
+                    failure: failure,
+                    failureDetail: failureDetail == failure
+                        ? nil
+                        : failureDetail,
+                    durationMilliseconds: elapsedMilliseconds(at: timestamp),
+                    stage: state.lastStage
+                ),
+                at: timestamp
+            )
+            return incidentID
         }
-        recorder.record(
-            .operationFailed(
-                id: id,
-                incidentID: incidentID,
-                kind: kind,
-                failure: failure,
-                durationMilliseconds: elapsedMilliseconds(at: timestamp),
-                stage: state.lastStage
-            ),
-            at: timestamp
-        )
-        return incidentID
     }
 
     private func elapsedMilliseconds(at timestamp: Date) -> Int64 {
@@ -172,17 +212,30 @@ public struct DiagnosticOperation: Sendable {
 }
 
 private extension DiagnosticOperation {
+    final class EmissionLane: @unchecked Sendable {
+        private let lock = NSLock()
+
+        func perform<Result>(_ body: () -> Result) -> Result {
+            lock.lock()
+            defer { lock.unlock() }
+            return body()
+        }
+    }
+
+    struct HeartbeatSnapshot: Equatable {
+        let stage: DiagnosticOperationStage
+        let progress: DiagnosticProgress?
+    }
+
     final class State: @unchecked Sendable {
         private let lock = NSLock()
         private var terminal = false
         private var storedLastStage: DiagnosticOperationStage?
+        private var storedLastProgress: DiagnosticProgress?
         private var storedIncidentID: DiagnosticIncidentID?
-
-        var isActive: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return terminal == false
-        }
+        private var heartbeatEvidenceSnapshot: HeartbeatSnapshot?
+        private var heartbeatProgressChanged = false
+        private var lastHeartbeatAt: Date?
 
         var lastStage: DiagnosticOperationStage? {
             lock.lock()
@@ -196,12 +249,66 @@ private extension DiagnosticOperation {
             return storedIncidentID
         }
 
-        func move(to stage: DiagnosticOperationStage) -> Bool {
+        func move(
+            to stage: DiagnosticOperationStage,
+            progress: DiagnosticProgress?
+        ) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard terminal == false else { return false }
             storedLastStage = stage
+            storedLastProgress = progress
+            heartbeatEvidenceSnapshot = HeartbeatSnapshot(
+                stage: stage,
+                progress: progress
+            )
+            heartbeatProgressChanged = false
             return true
+        }
+
+        func observeHeartbeatProgress(_ progress: DiagnosticProgress) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard terminal == false,
+                  let stage = storedLastStage
+            else { return }
+            storedLastProgress = progress
+            let snapshot = HeartbeatSnapshot(
+                stage: stage,
+                progress: progress
+            )
+            heartbeatProgressChanged = snapshot
+                != heartbeatEvidenceSnapshot
+        }
+
+        func heartbeatSnapshot(
+            at timestamp: Date,
+            minimumInterval: TimeInterval
+        ) -> HeartbeatSnapshot? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard terminal == false,
+                  let stage = storedLastStage,
+                  heartbeatProgressChanged
+            else { return nil }
+            if let lastHeartbeatAt,
+               timestamp.timeIntervalSince(lastHeartbeatAt)
+               < minimumInterval
+            {
+                return nil
+            }
+            let snapshot = HeartbeatSnapshot(
+                stage: stage,
+                progress: storedLastProgress
+            )
+            guard snapshot != heartbeatEvidenceSnapshot else {
+                heartbeatProgressChanged = false
+                return nil
+            }
+            heartbeatEvidenceSnapshot = snapshot
+            heartbeatProgressChanged = false
+            lastHeartbeatAt = timestamp
+            return snapshot
         }
 
         func finish(incidentID: DiagnosticIncidentID?) -> Bool {

@@ -169,6 +169,23 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         }
     }
 
+    public func persistedSyncFailureCorrelation(
+        failure: DiagnosticFailure,
+        failedAt: Date
+    ) async -> DiagnosticOperationCorrelation? {
+        await flush()
+        return await withCheckedContinuation { continuation in
+            ioQueue.async { [self] in
+                continuation.resume(
+                    returning: diskStore.persistedSyncFailureCorrelation(
+                        failure: failure,
+                        failedAt: failedAt
+                    )
+                )
+            }
+        }
+    }
+
     public func preview() async throws -> DiagnosticExportPreview {
         let package = try await snapshotPackage()
         let data = try Self.exportEncoder.encode(package)
@@ -643,6 +660,27 @@ private final class DiagnosticDiskStore {
             },
             operationCapsules: operationCapsules,
             metricAttachments: metrics
+        )
+    }
+
+    func persistedSyncFailureCorrelation(
+        failure: DiagnosticFailure,
+        failedAt: Date
+    ) -> DiagnosticOperationCorrelation? {
+        let matches = operationCapsules.filter { capsule in
+            capsule.kind == .localFirstSync
+                && capsule.outcome == .failed
+                && capsule.failure == failure
+                && capsule.finishedAt == failedAt
+                && capsule.incidentID != nil
+        }
+        guard matches.count == 1,
+              let match = matches.first,
+              let incidentID = match.incidentID
+        else { return nil }
+        return DiagnosticOperationCorrelation(
+            operationID: match.operationID,
+            incidentID: incidentID
         )
     }
 

@@ -113,6 +113,87 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertNil(interruption.event.incidentID)
     }
 
+    func testRelaunchRestoresExactPersistedSyncFailureCorrelation() async throws {
+        let rootURL = temporaryDirectory(named: "failure-correlation")
+        let failedAt = Date().addingTimeInterval(-30)
+        let failure = DiagnosticFailure(domain: .syncProtocol, code: 7)
+        var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        let operation = try XCTUnwrap(recorder).startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: failedAt.addingTimeInterval(-5)
+        )
+        operation.stage(
+            .transportFetch,
+            at: failedAt.addingTimeInterval(-4)
+        )
+        let incidentID = operation.fail(
+            failure,
+            detail: DiagnosticFailure(domain: .posix, code: 60),
+            at: failedAt
+        )
+        await recorder?.flush()
+        recorder = nil
+
+        let relaunched = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        let correlation = await relaunched
+            .persistedSyncFailureCorrelation(
+                failure: failure,
+                failedAt: failedAt
+            )
+
+        XCTAssertEqual(correlation?.operationID, operation.id)
+        XCTAssertEqual(correlation?.incidentID, incidentID)
+        let wrongTimestampCorrelation = await relaunched
+            .persistedSyncFailureCorrelation(
+                failure: failure,
+                failedAt: failedAt.addingTimeInterval(0.001)
+            )
+        XCTAssertNil(wrongTimestampCorrelation)
+        let wrongFailureCorrelation = await relaunched
+            .persistedSyncFailureCorrelation(
+                failure: DiagnosticFailure(
+                    domain: .syncProtocol,
+                    code: 6
+                ),
+                failedAt: failedAt
+            )
+        XCTAssertNil(wrongFailureCorrelation)
+    }
+
+    func testPersistedSyncFailureCorrelationRejectsAmbiguousExactMatches()
+        async throws
+    {
+        let rootURL = temporaryDirectory(named: "ambiguous-correlation")
+        let failedAt = Date().addingTimeInterval(-30)
+        let failure = DiagnosticFailure(domain: .syncProtocol, code: 7)
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        for _ in 0 ..< 2 {
+            recorder.startOperation(
+                kind: .localFirstSync,
+                endpoint: .iCloudDrive,
+                at: failedAt.addingTimeInterval(-5)
+            ).fail(failure, at: failedAt)
+        }
+        await recorder.flush()
+
+        let correlation = await recorder.persistedSyncFailureCorrelation(
+            failure: failure,
+            failedAt: failedAt
+        )
+
+        XCTAssertNil(correlation)
+    }
+
     func testExportIncludesActiveOperationMarkerForInProgressSync() async throws {
         let rootURL = temporaryDirectory(named: "active-sync")
         let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
@@ -293,7 +374,11 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
                 progress: DiagnosticProgress(attempt: attempt)
             )
         }
-        operation.succeed(at: finishedAt)
+        let incidentID = operation.fail(
+            DiagnosticFailure(domain: .syncProtocol, code: 7),
+            detail: DiagnosticFailure(domain: .posix, code: 60),
+            at: finishedAt
+        )
         await recorder.flush()
 
         let package = try await recorder.snapshotPackage()
@@ -302,7 +387,10 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         }
         XCTAssertTrue(
             operationEvents.contains {
-                $0.event.code == .operationSucceeded
+                $0.event.code == .operationFailed
+                    && $0.event.incidentID == incidentID
+                    && $0.event.failureDetail
+                    == DiagnosticFailure(domain: .posix, code: 60)
             }
         )
         let capsule = try XCTUnwrap(
@@ -313,7 +401,12 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(capsule.startedAt, startedAt)
         XCTAssertEqual(capsule.finishedAt, finishedAt)
         XCTAssertEqual(capsule.endpoint, .iCloudDrive)
-        XCTAssertEqual(capsule.outcome, .succeeded)
+        XCTAssertEqual(capsule.outcome, .failed)
+        XCTAssertEqual(capsule.incidentID, incidentID)
+        XCTAssertEqual(
+            capsule.failure,
+            DiagnosticFailure(domain: .syncProtocol, code: 7)
+        )
         XCTAssertGreaterThan(package.manifest.droppedRecordCount, 0)
         XCTAssertTrue(package.manifest.collectionWasPartial)
     }

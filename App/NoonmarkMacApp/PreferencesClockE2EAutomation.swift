@@ -3,6 +3,7 @@ import ApplicationServices
 import CryptoKit
 import Foundation
 import NoonmarkCore
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
@@ -754,6 +755,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         try await assertPreflightPersistenceFailureWarning(
             on: store
         )
+        try await assertPostSyncInstallFailureWarning(on: store)
         let engineBefore = store.engine.snapshot()
         let repository = SQLiteSyncRepository(databaseURL: databaseURL)
         let timestampsBefore = try SQLiteLocalFirstSyncCoordinator.timestamps(
@@ -815,6 +817,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             guard let notice = store.operationFailureNotice,
                   notice.context == .sync,
                   notice.message == expected,
+                  notice.diagnosticIncidentID != nil,
                   store.localFirstSyncMessage == expected,
                   let failureView = AppViewTreeE2E.view(
                       identifier: "settings.operation-failure"
@@ -967,6 +970,94 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
     }
 
+    private func assertPostSyncInstallFailureWarning(
+        on store: NoonmarkStore
+    ) async throws {
+        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "post-sync install failure probe did not start sync"
+            )
+        }
+        try store.armPersistenceFailureForE2E()
+        try await waitUntil(
+            "post-sync install failure was silently treated as success"
+        ) {
+            store.isLocalFirstSyncing == false
+        }
+
+        let expected = AppPresentation(
+            language: store.engine.preferences.language
+        ).failureMessage(for: .sync)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let failedStatus = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: requiredMetadata(
+                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                in: repository
+            ).value
+        )
+        guard case let .failed(reason, _, failedAt) = failedStatus,
+              reason == .transportOrStorage
+        else {
+            throw Failure.failed(
+                "post-sync install failure did not persist its typed status"
+            )
+        }
+        let correlation = await store.diagnostics
+            .persistedSyncFailureCorrelation(
+                failure: DiagnosticFailure(
+                    domain: .syncProtocol,
+                    code: 7
+                ),
+                failedAt: failedAt
+            )
+        guard let notice = store.operationFailureNotice,
+              notice.context == .sync,
+              notice.message == expected,
+              notice.diagnosticIncidentID == correlation?.incidentID,
+              store.localFirstSyncMessage == expected,
+              correlation != nil
+        else {
+            throw Failure.failed(
+                "post-sync install failure did not retain its incident and status"
+            )
+        }
+        try appendTrace(
+            "sync post-install status=failed warning=visible incident=retained"
+        )
+
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "post-sync install failure recovery did not start sync"
+            )
+        }
+        try await waitUntil(
+            "post-sync install failure recovery did not clear its warning"
+        ) {
+            store.isLocalFirstSyncing == false
+                && store.operationFailureNotice == nil
+        }
+        let recoveredStatus = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: requiredMetadata(
+                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                in: repository
+            ).value
+        )
+        guard case .succeeded = recoveredStatus else {
+            throw Failure.failed(
+                "post-sync install failure recovery did not persist success"
+            )
+        }
+        try appendTrace(
+            "sync post-install recovery=succeeded warning=cleared"
+        )
+    }
+
     private func verifyFailureRestart(
         on store: NoonmarkStore
     ) async throws {
@@ -1030,7 +1121,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 )
         )
         try appendTrace(
-            "sync restart status=failed warning=restored"
+            "sync restart status=failed warning=restored correlation=exact"
         )
 
         store.setLocalFirstSyncEnabled(false)

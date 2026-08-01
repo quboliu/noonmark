@@ -54,6 +54,12 @@ enum DiagnosticUnifiedLogMessage {
         append("stage", event.stage?.rawValue, to: &fields)
         append("error_domain", event.failure?.domain.rawValue, to: &fields)
         append("error_code", event.failure?.code, to: &fields)
+        append(
+            "detail_error_domain",
+            event.failureDetail?.domain.rawValue,
+            to: &fields
+        )
+        append("detail_error_code", event.failureDetail?.code, to: &fields)
         append("duration_ms", event.durationMilliseconds, to: &fields)
         append("attempt", event.progress?.attempt, to: &fields)
         append("records", event.progress?.recordCount, to: &fields)

@@ -83,7 +83,8 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
             at: Date(timeIntervalSince1970: 1_800_000_001)
         )
         operation.fail(
-            DiagnosticFailureClassifier.classify(sourceError),
+            DiagnosticFailure(domain: .syncProtocol, code: 7),
+            detail: DiagnosticFailureClassifier.classify(sourceError),
             at: Date(timeIntervalSince1970: 1_800_000_002)
         )
         await recorder.flush()
@@ -102,6 +103,10 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         }
         XCTAssertTrue(packageText.contains("\"domain\":\"cocoa\""))
         XCTAssertTrue(packageText.contains("\"code\":513"))
+        XCTAssertTrue(rendered.contains("error_domain=syncProtocol"))
+        XCTAssertTrue(rendered.contains("error_code=7"))
+        XCTAssertTrue(rendered.contains("detail_error_domain=cocoa"))
+        XCTAssertTrue(rendered.contains("detail_error_code=513"))
     }
 
     func testUnknownErrorDoesNotExposeThirdPartyDomainOrCode() {

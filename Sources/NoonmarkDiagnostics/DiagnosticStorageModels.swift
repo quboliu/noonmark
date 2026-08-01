@@ -406,6 +406,9 @@ public struct DiagnosticHealth: Codable, Equatable, Sendable {
     public let operationCapsuleCount: Int
     public let metricPayloadCount: Int
     public let droppedRecordCount: Int
+    public let droppedCriticalRecordCount: Int
+    public let compactedCriticalEvidenceCount: Int
+    public let evictedMetricPayloadCount: Int
     public let corruptRecordCount: Int
     public let oversizedEventCount: Int
     public let oversizedMetricPayloadCount: Int
@@ -435,6 +438,9 @@ public struct DiagnosticExportManifest: Codable, Equatable, Sendable {
     public let oldestRecordAt: Date?
     public let newestRecordAt: Date?
     public let droppedRecordCount: Int
+    public let droppedCriticalRecordCount: Int
+    public let compactedCriticalEvidenceCount: Int
+    public let evictedMetricPayloadCount: Int
     public let corruptRecordCount: Int
     public let oversizedEventCount: Int
     public let oversizedMetricPayloadCount: Int

@@ -12,6 +12,10 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
     }
 
     func testPersistentEvidenceStaysWithinAllocatedByteCapAndExportsKnownSchema() async throws {
+        XCTAssertEqual(
+            DiagnosticStorageConfiguration.production.maximumPersistentBytes,
+            4 * 1024 * 1024
+        )
         let rootURL = temporaryDirectory(named: "bounded")
         let exportURL = temporaryFile(named: "bounded.noonmarkdiagnostics")
         let configuration = DiagnosticStorageConfiguration(
@@ -411,6 +415,419 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertTrue(package.manifest.collectionWasPartial)
     }
 
+    func testSevenDayRetentionExpiresEveryDiagnosticMediumAndCounterWindow() async throws {
+        let rootURL = temporaryDirectory(named: "all-media-retention")
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let retentionInterval: TimeInterval = 7 * 24 * 60 * 60
+        let configuration = DiagnosticStorageConfiguration(
+            maximumPersistentBytes: 128 * 1024,
+            eventSegmentCount: 2,
+            eventSegmentPayloadBytes: 8 * 1024,
+            maximumEventBytes: 2 * 1024,
+            metricCacheBytes: 16 * 1024,
+            maximumMetricPayloadBytes: 256,
+            retentionInterval: retentionInterval,
+            maximumQueuedEvents: 16,
+            maximumQueuedBytes: 16 * 1024
+        )
+        var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { base }
+        )
+        recorder?.startSession(at: base)
+        let active = try XCTUnwrap(recorder).startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: base.addingTimeInterval(1)
+        )
+        active.stage(.transportFetch, at: base.addingTimeInterval(2))
+        let failed = try XCTUnwrap(recorder).startOperation(
+            kind: .persistence,
+            at: base.addingTimeInterval(3)
+        )
+        failed.fail(
+            DiagnosticFailure(domain: .posix, code: 28),
+            at: base.addingTimeInterval(4)
+        )
+        let metricJSON = Data(#"{"sampleCount":1}"#.utf8)
+        recorder?.cacheMetricKitPayload(
+            MetricKitPayloadSummary(
+                kind: .diagnostic,
+                intervalStart: base,
+                intervalEnd: base.addingTimeInterval(5),
+                crashCount: 1,
+                hangCount: 0,
+                cpuExceptionCount: 0,
+                diskWriteExceptionCount: 0,
+                rawJSONByteCount: metricJSON.count
+            ),
+            rawJSON: metricJSON,
+            receivedAt: base.addingTimeInterval(5)
+        )
+        let oversizedJSON = Data(repeating: 0x41, count: 257)
+        recorder?.cacheMetricKitPayload(
+            MetricKitPayloadSummary(
+                kind: .metric,
+                intervalStart: base,
+                intervalEnd: base.addingTimeInterval(6),
+                crashCount: 0,
+                hangCount: 0,
+                cpuExceptionCount: 0,
+                diskWriteExceptionCount: 0,
+                rawJSONByteCount: oversizedJSON.count
+            ),
+            rawJSON: oversizedJSON,
+            receivedAt: base.addingTimeInterval(6)
+        )
+        await recorder?.flush()
+
+        let initial = try await XCTUnwrap(recorder).snapshotPackage()
+        XCTAssertFalse(initial.records.isEmpty)
+        XCTAssertEqual(initial.activeOperations.map(\.id), [active.id])
+        XCTAssertEqual(initial.operationCapsules.map(\.operationID), [failed.id])
+        XCTAssertEqual(initial.metricAttachments.count, 2)
+        XCTAssertEqual(initial.manifest.oversizedMetricPayloadCount, 1)
+        recorder = nil
+
+        let abandonedAtomicWrite = rootURL.appendingPathComponent(
+            ".events-00.ndjson.tmp"
+        )
+        try Data(repeating: 0x41, count: 4 * 1024).write(
+            to: abandonedAtomicWrite
+        )
+
+        let expiredNow = base.addingTimeInterval(retentionInterval + 60)
+        var relaunched: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { expiredNow }
+        )
+        let expired: DiagnosticExportPackage
+        let health: DiagnosticHealth
+        do {
+            let activeRecorder = try XCTUnwrap(relaunched)
+            expired = try await activeRecorder.snapshotPackage()
+            health = await activeRecorder.health()
+        }
+
+        XCTAssertTrue(expired.records.isEmpty)
+        XCTAssertTrue(expired.activeOperations.isEmpty)
+        XCTAssertTrue(expired.operationCapsules.isEmpty)
+        XCTAssertTrue(expired.metricAttachments.isEmpty)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: abandonedAtomicWrite.path)
+        )
+        XCTAssertLessThanOrEqual(
+            health.allocatedBytes,
+            configuration.maximumPersistentBytes
+        )
+        XCTAssertLessThanOrEqual(
+            health.maximumObservedAllocatedBytes,
+            configuration.maximumPersistentBytes
+        )
+        relaunched = nil
+
+        let counterExpiryNow = base.addingTimeInterval(
+            retentionInterval + 24 * 60 * 60 + 60
+        )
+        let counterExpired = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { counterExpiryNow }
+        )
+        let finalPackage = try await counterExpired.snapshotPackage()
+        XCTAssertEqual(finalPackage.manifest.oversizedMetricPayloadCount, 0)
+    }
+
+    func testAllCriticalQueueAndDiskStormPreservesFailedOperationCapsuleAndReportsLoss() async throws {
+        let rootURL = temporaryDirectory(named: "all-critical-storm")
+        let maximumPersistentBytes: Int64 = 64 * 1024
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: DiagnosticStorageConfiguration(
+                maximumPersistentBytes: maximumPersistentBytes,
+                eventSegmentCount: 2,
+                eventSegmentPayloadBytes: 4 * 1024,
+                maximumEventBytes: 2 * 1024,
+                metricCacheBytes: 0,
+                maximumMetricPayloadBytes: 0,
+                maximumQueuedEvents: 4,
+                maximumQueuedBytes: 4 * 1024
+            ),
+            unifiedLoggingEnabled: false
+        )
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let noise = EvidenceEvent.mutationRejected(
+            context: .task,
+            reason: .domainRule,
+            operationID: nil,
+            incidentID: DiagnosticIncidentID()
+        )
+
+        for batch in 0 ..< 16 {
+            for offset in 0 ..< 8 {
+                recorder.record(
+                    noise,
+                    at: startedAt.addingTimeInterval(
+                        Double(batch * 8 + offset)
+                    )
+                )
+            }
+            await recorder.flush()
+        }
+
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: startedAt.addingTimeInterval(1000)
+        )
+        for _ in 0 ..< 20000 {
+            recorder.record(noise, at: startedAt.addingTimeInterval(1001))
+        }
+        let failure = DiagnosticFailure(domain: .posix, code: 28)
+        let incidentID = operation.fail(
+            failure,
+            at: startedAt.addingTimeInterval(1002)
+        )
+        for _ in 0 ..< 20000 {
+            recorder.record(noise, at: startedAt.addingTimeInterval(1003))
+        }
+        await recorder.flush()
+
+        for index in 0 ..< 16 {
+            let timestamp = startedAt.addingTimeInterval(Double(2000 + index))
+            let successful = recorder.startOperation(
+                kind: .persistence,
+                at: timestamp
+            )
+            successful.succeed(at: timestamp.addingTimeInterval(0.5))
+            await recorder.flush()
+        }
+
+        let package = try await recorder.snapshotPackage()
+        let health = await recorder.health()
+        let capsule = try XCTUnwrap(
+            package.operationCapsules.first {
+                $0.operationID == operation.id
+            }
+        )
+        XCTAssertEqual(capsule.incidentID, incidentID)
+        XCTAssertEqual(capsule.endpoint, .iCloudDrive)
+        XCTAssertEqual(capsule.startedAt, startedAt.addingTimeInterval(1000))
+        XCTAssertEqual(capsule.finishedAt, startedAt.addingTimeInterval(1002))
+        XCTAssertEqual(capsule.outcome, .failed)
+        XCTAssertEqual(capsule.failure, failure)
+        XCTAssertGreaterThan(package.manifest.droppedCriticalRecordCount, 0)
+        XCTAssertGreaterThan(
+            package.manifest.compactedCriticalEvidenceCount,
+            0
+        )
+        XCTAssertTrue(package.manifest.collectionWasPartial)
+        XCTAssertLessThanOrEqual(
+            health.maximumObservedAllocatedBytes,
+            maximumPersistentBytes
+        )
+        XCTAssertLessThanOrEqual(
+            health.allocatedBytes,
+            maximumPersistentBytes
+        )
+    }
+
+    func testRetentionKeepsRecordExactlyAtCutoffAndRemovesOneSecondOlderRecord() async throws {
+        let rootURL = temporaryDirectory(named: "record-cutoff")
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let retentionInterval: TimeInterval = 7 * 24 * 60 * 60
+        let configuration = DiagnosticStorageConfiguration(
+            retentionInterval: retentionInterval
+        )
+        var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { base }
+        )
+        recorder?.record(.sessionStarted(), at: base)
+        recorder?.record(
+            .cleanShutdown(),
+            at: base.addingTimeInterval(1)
+        )
+        await recorder?.flush()
+        recorder = nil
+
+        let boundaryNow = base.addingTimeInterval(retentionInterval + 1)
+        let relaunched = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { boundaryNow }
+        )
+        let package = try await relaunched.snapshotPackage()
+        let health = await relaunched.health()
+
+        XCTAssertEqual(package.records.count, 1)
+        XCTAssertEqual(package.records.first?.event.code, .cleanShutdown)
+        XCTAssertEqual(package.records.first?.timestamp, base.addingTimeInterval(1))
+        XCTAssertLessThanOrEqual(
+            health.maximumObservedAllocatedBytes,
+            configuration.maximumPersistentBytes
+        )
+        XCTAssertLessThanOrEqual(
+            health.allocatedBytes,
+            configuration.maximumPersistentBytes
+        )
+    }
+
+    func testLossLedgerExpiresOldDayWithoutErasingRecentPartialEvidence() async throws {
+        let rootURL = temporaryDirectory(named: "loss-ledger-window")
+        let day: TimeInterval = 24 * 60 * 60
+        let seed: TimeInterval = 1_800_000_000
+        let base = Date(
+            timeIntervalSince1970: seed
+                - seed.truncatingRemainder(dividingBy: day)
+        )
+        let configuration = DiagnosticStorageConfiguration(
+            maximumPersistentBytes: 128 * 1024,
+            eventSegmentCount: 2,
+            eventSegmentPayloadBytes: 8 * 1024,
+            maximumEventBytes: 2 * 1024,
+            metricCacheBytes: 16 * 1024,
+            maximumMetricPayloadBytes: 8,
+            retentionInterval: 7 * day,
+            maximumQueuedEvents: 16,
+            maximumQueuedBytes: 16 * 1024
+        )
+        let oversizedJSON = Data(repeating: 0x41, count: 9)
+
+        var oldRecorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { base }
+        )
+        cacheOversizedMetric(
+            on: try XCTUnwrap(oldRecorder),
+            rawJSON: oversizedJSON,
+            receivedAt: base
+        )
+        await oldRecorder?.flush()
+        oldRecorder = nil
+
+        let recentAt = base.addingTimeInterval(6 * day + day / 2)
+        var recentRecorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { recentAt }
+        )
+        cacheOversizedMetric(
+            on: try XCTUnwrap(recentRecorder),
+            rawJSON: oversizedJSON,
+            receivedAt: recentAt
+        )
+        await recentRecorder?.flush()
+        recentRecorder = nil
+
+        let finalNow = base.addingTimeInterval(8 * day)
+        let finalRecorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { finalNow }
+        )
+        let package = try await finalRecorder.snapshotPackage()
+
+        XCTAssertEqual(package.manifest.oversizedMetricPayloadCount, 1)
+        XCTAssertTrue(package.manifest.collectionWasPartial)
+        XCTAssertEqual(package.metricAttachments.count, 1)
+        XCTAssertEqual(package.metricAttachments.first?.receivedAt, recentAt)
+    }
+
+    func testLossLedgerDropsPartialCutoffDayAndFutureBucketsFailClosed() async throws {
+        let rootURL = temporaryDirectory(named: "loss-ledger-boundaries")
+        let day: TimeInterval = 24 * 60 * 60
+        let seed: TimeInterval = 1_800_000_000
+        let utcDayStart = Date(
+            timeIntervalSince1970: seed
+                - seed.truncatingRemainder(dividingBy: day)
+        )
+        let cutoff = utcDayStart.addingTimeInterval(day / 2)
+        let finalNow = cutoff.addingTimeInterval(7 * day)
+        let configuration = DiagnosticStorageConfiguration(
+            maximumPersistentBytes: 128 * 1024,
+            eventSegmentCount: 2,
+            eventSegmentPayloadBytes: 8 * 1024,
+            maximumEventBytes: 2 * 1024,
+            metricCacheBytes: 32 * 1024,
+            maximumMetricPayloadBytes: 8,
+            retentionInterval: 7 * day,
+            maximumQueuedEvents: 16,
+            maximumQueuedBytes: 16 * 1024
+        )
+        let oversizedJSON = Data(repeating: 0x41, count: 9)
+        let boundaryTimes = [
+            cutoff.addingTimeInterval(-1),
+            cutoff.addingTimeInterval(1),
+            utcDayStart.addingTimeInterval(day)
+        ]
+
+        var futureRecorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { finalNow.addingTimeInterval(day) }
+        )
+        cacheOversizedMetric(
+            on: try XCTUnwrap(futureRecorder),
+            rawJSON: oversizedJSON,
+            receivedAt: finalNow.addingTimeInterval(day)
+        )
+        await futureRecorder?.flush()
+        futureRecorder = nil
+
+        for timestamp in boundaryTimes {
+            var recorder: LocalDiagnosticRecorder? = try LocalDiagnosticRecorder(
+                rootURL: rootURL,
+                appIdentity: .testFixture,
+                configuration: configuration,
+                unifiedLoggingEnabled: false,
+                now: { timestamp }
+            )
+            cacheOversizedMetric(
+                on: try XCTUnwrap(recorder),
+                rawJSON: oversizedJSON,
+                receivedAt: timestamp
+            )
+            await recorder?.flush()
+            recorder = nil
+        }
+
+        let finalRecorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture,
+            configuration: configuration,
+            unifiedLoggingEnabled: false,
+            now: { finalNow }
+        )
+        let package = try await finalRecorder.snapshotPackage()
+
+        XCTAssertEqual(package.manifest.oversizedMetricPayloadCount, 1)
+        XCTAssertTrue(package.manifest.collectionWasPartial)
+    }
+
     private func temporaryDirectory(named name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -419,6 +836,27 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
             )
         temporaryURLs.append(url)
         return url
+    }
+
+    private func cacheOversizedMetric(
+        on recorder: LocalDiagnosticRecorder,
+        rawJSON: Data,
+        receivedAt: Date
+    ) {
+        recorder.cacheMetricKitPayload(
+            MetricKitPayloadSummary(
+                kind: .diagnostic,
+                intervalStart: receivedAt,
+                intervalEnd: receivedAt,
+                crashCount: 0,
+                hangCount: 0,
+                cpuExceptionCount: 0,
+                diskWriteExceptionCount: 0,
+                rawJSONByteCount: rawJSON.count
+            ),
+            rawJSON: rawJSON,
+            receivedAt: receivedAt
+        )
     }
 
     private func temporaryFile(named name: String) -> URL {

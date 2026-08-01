@@ -22,6 +22,7 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
     private var buffered: [QueuedEvidence] = []
     private var bufferedBytes = 0
     private var pendingDroppedCount = 0
+    private var pendingDroppedCriticalCount = 0
     private var pendingOversizedCount = 0
     private var drainScheduled = false
 
@@ -36,7 +37,8 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
             appIdentity: appIdentity,
             configuration: configuration,
             sessionID: sessionID,
-            appleLogger: AppleDiagnosticLogger()
+            appleLogger: AppleDiagnosticLogger(),
+            now: { Date() }
         )
     }
 
@@ -45,7 +47,8 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         appIdentity: DiagnosticAppIdentity,
         configuration: DiagnosticStorageConfiguration,
         sessionID: DiagnosticSessionID = DiagnosticSessionID(),
-        unifiedLoggingEnabled: Bool
+        unifiedLoggingEnabled: Bool,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) throws {
         try self.init(
             rootURL: rootURL,
@@ -54,7 +57,8 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
             sessionID: sessionID,
             appleLogger: unifiedLoggingEnabled
                 ? AppleDiagnosticLogger()
-                : nil
+                : nil,
+            now: now
         )
     }
 
@@ -63,7 +67,8 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         appIdentity: DiagnosticAppIdentity,
         configuration: DiagnosticStorageConfiguration,
         sessionID: DiagnosticSessionID,
-        appleLogger: AppleDiagnosticLogger?
+        appleLogger: AppleDiagnosticLogger?,
+        now: @escaping @Sendable () -> Date
     ) throws {
         self.sessionID = sessionID
         self.configuration = configuration
@@ -71,7 +76,8 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         diskStore = try DiagnosticDiskStore(
             rootURL: rootURL,
             appIdentity: appIdentity,
-            configuration: configuration
+            configuration: configuration,
+            now: now
         )
     }
 
@@ -82,17 +88,14 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
 
         bufferLock.lock()
         if queueWouldOverflow(addingBytes: estimatedBytes),
-           event.isRetentionCritical,
-           let evictionIndex = buffered.firstIndex(where: {
-               $0.event.isRetentionCritical == false
-           })
+           let evictionIndex = queueEvictionIndex(for: event)
         {
             let evicted = buffered.remove(at: evictionIndex)
             bufferedBytes -= evicted.estimatedBytes
-            pendingDroppedCount += 1
+            registerQueueDrop(of: evicted.event)
         }
         if queueWouldOverflow(addingBytes: estimatedBytes) {
-            pendingDroppedCount += 1
+            registerQueueDrop(of: event)
         } else {
             buffered.append(
                 QueuedEvidence(
@@ -120,6 +123,25 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         buffered.count >= configuration.maximumQueuedEvents
             || bufferedBytes + byteCount
             > configuration.maximumQueuedBytes
+    }
+
+    private func queueEvictionIndex(for incoming: EvidenceEvent) -> Int? {
+        let incomingPriority = incoming.retentionPriority
+        return buffered.indices
+            .filter {
+                buffered[$0].event.retentionPriority < incomingPriority
+            }
+            .min {
+                buffered[$0].event.retentionPriority
+                    < buffered[$1].event.retentionPriority
+            }
+    }
+
+    private func registerQueueDrop(of event: EvidenceEvent) {
+        pendingDroppedCount += 1
+        if event.isRetentionCritical {
+            pendingDroppedCriticalCount += 1
+        }
     }
 
     public func startSession(at timestamp: Date = Date()) {
@@ -267,11 +289,13 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         while true {
             let batch: [QueuedEvidence]
             let droppedCount: Int
+            let droppedCriticalCount: Int
             let oversizedCount: Int
 
             bufferLock.lock()
             guard buffered.isEmpty == false
                 || pendingDroppedCount > 0
+                || pendingDroppedCriticalCount > 0
                 || pendingOversizedCount > 0
             else {
                 drainScheduled = false
@@ -280,10 +304,12 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
             }
             batch = buffered
             droppedCount = pendingDroppedCount
+            droppedCriticalCount = pendingDroppedCriticalCount
             oversizedCount = pendingOversizedCount
             buffered = []
             bufferedBytes = 0
             pendingDroppedCount = 0
+            pendingDroppedCriticalCount = 0
             pendingOversizedCount = 0
             bufferLock.unlock()
 
@@ -291,6 +317,7 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
                 batch.map { ($0.event, $0.timestamp) },
                 sessionID: sessionID,
                 droppedCount: droppedCount,
+                droppedCriticalCount: droppedCriticalCount,
                 oversizedCount: oversizedCount
             )
         }
@@ -304,6 +331,19 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
 }
 
 private extension EvidenceEvent {
+    var retentionPriority: Int {
+        switch code {
+        case .operationFailed, .previousSessionInterrupted:
+            4
+        case .operationSucceeded:
+            3
+        case .operationStarted:
+            2
+        default:
+            isRetentionCritical ? 1 : 0
+        }
+    }
+
     var isRetentionCritical: Bool {
         switch code {
         case .operationStage, .operationHeartbeat:
@@ -328,6 +368,105 @@ public enum DiagnosticStorageError: Error, Equatable, Sendable {
 }
 
 private final class DiagnosticDiskStore {
+    private struct LossCounts: Codable {
+        var droppedRecordCount = 0
+        var droppedCriticalRecordCount = 0
+        var compactedCriticalEvidenceCount = 0
+        var evictedMetricPayloadCount = 0
+        var corruptRecordCount = 0
+        var oversizedEventCount = 0
+        var oversizedMetricPayloadCount = 0
+        var maximumObservedAllocatedBytes: Int64 = 0
+
+        var isEmpty: Bool {
+            droppedRecordCount == 0
+                && droppedCriticalRecordCount == 0
+                && compactedCriticalEvidenceCount == 0
+                && evictedMetricPayloadCount == 0
+                && corruptRecordCount == 0
+                && oversizedEventCount == 0
+                && oversizedMetricPayloadCount == 0
+                && maximumObservedAllocatedBytes == 0
+        }
+
+        mutating func add(_ other: Self) {
+            droppedRecordCount = Self.saturatingSum(
+                droppedRecordCount,
+                other.droppedRecordCount
+            )
+            droppedCriticalRecordCount = Self.saturatingSum(
+                droppedCriticalRecordCount,
+                other.droppedCriticalRecordCount
+            )
+            compactedCriticalEvidenceCount = Self.saturatingSum(
+                compactedCriticalEvidenceCount,
+                other.compactedCriticalEvidenceCount
+            )
+            evictedMetricPayloadCount = Self.saturatingSum(
+                evictedMetricPayloadCount,
+                other.evictedMetricPayloadCount
+            )
+            corruptRecordCount = Self.saturatingSum(
+                corruptRecordCount,
+                other.corruptRecordCount
+            )
+            oversizedEventCount = Self.saturatingSum(
+                oversizedEventCount,
+                other.oversizedEventCount
+            )
+            oversizedMetricPayloadCount = Self.saturatingSum(
+                oversizedMetricPayloadCount,
+                other.oversizedMetricPayloadCount
+            )
+            maximumObservedAllocatedBytes = max(
+                maximumObservedAllocatedBytes,
+                other.maximumObservedAllocatedBytes
+            )
+        }
+
+        mutating func normalize() {
+            droppedRecordCount = max(0, droppedRecordCount)
+            droppedCriticalRecordCount = max(0, droppedCriticalRecordCount)
+            compactedCriticalEvidenceCount = max(
+                0,
+                compactedCriticalEvidenceCount
+            )
+            evictedMetricPayloadCount = max(0, evictedMetricPayloadCount)
+            corruptRecordCount = max(0, corruptRecordCount)
+            oversizedEventCount = max(0, oversizedEventCount)
+            oversizedMetricPayloadCount = max(
+                0,
+                oversizedMetricPayloadCount
+            )
+            maximumObservedAllocatedBytes = max(
+                0,
+                maximumObservedAllocatedBytes
+            )
+        }
+
+        private static func saturatingSum(_ lhs: Int, _ rhs: Int) -> Int {
+            let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+            return overflow ? Int.max : max(0, sum)
+        }
+    }
+
+    private struct LossBucket: Codable {
+        let utcDayStart: Date
+        var firstOccurredAt: Date?
+        var lastOccurredAt: Date?
+        var counts: LossCounts
+    }
+
+    private enum LossKind {
+        case droppedRecord
+        case droppedCriticalRecord
+        case compactedCriticalEvidence
+        case evictedMetricPayload
+        case corruptRecord
+        case oversizedEvent
+        case oversizedMetricPayload
+    }
+
     private struct PersistentState: Codable {
         var schemaVersion = RecordedEvidence.currentSchemaVersion
         var currentSegment = 0
@@ -335,10 +474,14 @@ private final class DiagnosticDiskStore {
         var segmentPayloadBytes: [Int64]
         var segmentRecordCounts: [Int]
         var segmentFirstSequences: [UInt64]
-        var droppedRecordCount = 0
-        var corruptRecordCount = 0
-        var oversizedEventCount = 0
-        var oversizedMetricPayloadCount = 0
+        var droppedRecordCount: Int?
+        var corruptRecordCount: Int?
+        var oversizedEventCount: Int?
+        var oversizedMetricPayloadCount: Int?
+        var droppedCriticalRecordCount: Int?
+        var compactedCriticalEvidenceCount: Int?
+        var evictedMetricPayloadCount: Int?
+        var lossBuckets: [LossBucket]?
         var maximumObservedAllocatedBytes: Int64?
         var fileSinkDisabled = false
 
@@ -360,6 +503,7 @@ private final class DiagnosticDiskStore {
     private let appIdentity: DiagnosticAppIdentity
     private let configuration: DiagnosticStorageConfiguration
     private let fileManager: FileManager
+    private let now: @Sendable () -> Date
     private var state: PersistentState
     private var activeOperations: [DiagnosticActiveOperation]
     private var operationCapsules: [DiagnosticOperationCapsule]
@@ -368,7 +512,8 @@ private final class DiagnosticDiskStore {
         rootURL: URL,
         appIdentity: DiagnosticAppIdentity,
         configuration: DiagnosticStorageConfiguration,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) throws {
         guard rootURL.isFileURL,
               rootURL.standardizedFileURL.path != "/"
@@ -379,6 +524,7 @@ private final class DiagnosticDiskStore {
         self.appIdentity = appIdentity
         self.configuration = configuration
         self.fileManager = fileManager
+        self.now = now
         try fileManager.createDirectory(
             at: self.rootURL,
             withIntermediateDirectories: true,
@@ -411,14 +557,22 @@ private final class DiagnosticDiskStore {
             ),
             fileManager: fileManager
         ) ?? []
+        try removeAtomicTemporaryFiles()
+        let initializationTime = now()
+        let legacyEvidenceTime = min(
+            (try? modificationDate(of: indexURL)) ?? initializationTime,
+            initializationTime
+        )
+        migrateLegacyLossCounters(at: legacyEvidenceTime)
         try rebuildStateFromSegments()
-        try pruneExpiredRecords(now: Date())
+        try pruneExpiredEvidence(now: initializationTime)
         try saveMetadata()
         try enforcePersistentCap()
     }
 
     func startSession(sessionID: DiagnosticSessionID, timestamp: Date) {
         do {
+            try pruneExpiredEvidence(now: now())
             let interrupted = activeOperations
             activeOperations = []
             for operation in interrupted {
@@ -459,22 +613,27 @@ private final class DiagnosticDiskStore {
         _ events: [(EvidenceEvent, Date)],
         sessionID: DiagnosticSessionID,
         droppedCount: Int,
+        droppedCriticalCount: Int,
         oversizedCount: Int
     ) {
         do {
-            state.droppedRecordCount += droppedCount
-            state.oversizedEventCount += oversizedCount
+            incrementLoss(.droppedRecord, by: droppedCount)
+            incrementLoss(
+                .droppedCriticalRecord,
+                by: droppedCriticalCount
+            )
+            incrementLoss(.oversizedEvent, by: oversizedCount)
             if droppedCount > 0 {
                 try persistOne(
                     .recordsDropped(count: droppedCount),
-                    timestamp: Date(),
+                    timestamp: now(),
                     sessionID: sessionID
                 )
             }
             if oversizedCount > 0 {
                 try persistOne(
                     .oversizedEventDropped(byteCount: Int64(oversizedCount)),
-                    timestamp: Date(),
+                    timestamp: now(),
                     sessionID: sessionID
                 )
             }
@@ -485,7 +644,7 @@ private final class DiagnosticDiskStore {
                     sessionID: sessionID
                 )
             }
-            try pruneExpiredRecords(now: Date())
+            try pruneExpiredEvidence(now: now())
             try saveMetadata()
             try enforcePersistentCap()
         } catch {
@@ -500,10 +659,11 @@ private final class DiagnosticDiskStore {
         sessionID: DiagnosticSessionID
     ) {
         do {
+            try pruneExpiredEvidence(now: now())
             let rawJSONWasDropped = rawJSON.count
                 > configuration.maximumMetricPayloadBytes
             if rawJSONWasDropped {
-                state.oversizedMetricPayloadCount += 1
+                incrementLoss(.oversizedMetricPayload, by: 1)
                 try persistOne(
                     .oversizedMetricPayloadDropped(
                         byteCount: Int64(rawJSON.count)
@@ -530,7 +690,7 @@ private final class DiagnosticDiskStore {
                         rawJSON
                     )
                 } catch {
-                    state.corruptRecordCount += 1
+                    incrementLoss(.corruptRecord, by: 1)
                     try persistOne(
                         .corruptRecordExcluded(count: 1),
                         timestamp: receivedAt,
@@ -570,13 +730,21 @@ private final class DiagnosticDiskStore {
     }
 
     func health() -> DiagnosticHealth {
+        do {
+            try pruneExpiredEvidence(now: now())
+            try saveMetadata()
+            try enforcePersistentCap()
+        } catch {
+            state.fileSinkDisabled = true
+        }
         let snapshot = readRecords()
         let metricCount = (try? metricURLs().count) ?? 0
         let allocated = (try? allocatedBytes())
             ?? configuration.maximumPersistentBytes + 1
         let logical = (try? logicalBytes()) ?? 0
+        let lossCounts = currentLossCounts
         let maximumObserved = max(
-            state.maximumObservedAllocatedBytes ?? 0,
+            lossCounts.maximumObservedAllocatedBytes,
             allocated
         )
         return DiagnosticHealth(
@@ -589,20 +757,29 @@ private final class DiagnosticDiskStore {
             activeOperationCount: activeOperations.count,
             operationCapsuleCount: operationCapsules.count,
             metricPayloadCount: metricCount,
-            droppedRecordCount: state.droppedRecordCount,
-            corruptRecordCount: state.corruptRecordCount
+            droppedRecordCount: lossCounts.droppedRecordCount,
+            droppedCriticalRecordCount:
+            lossCounts.droppedCriticalRecordCount,
+            compactedCriticalEvidenceCount:
+            lossCounts.compactedCriticalEvidenceCount,
+            evictedMetricPayloadCount:
+            lossCounts.evictedMetricPayloadCount,
+            corruptRecordCount: lossCounts.corruptRecordCount
                 + snapshot.corruptCount,
-            oversizedEventCount: state.oversizedEventCount,
+            oversizedEventCount: lossCounts.oversizedEventCount,
             oversizedMetricPayloadCount:
-            state.oversizedMetricPayloadCount,
+            lossCounts.oversizedMetricPayloadCount,
             fileSinkDisabled: state.fileSinkDisabled
         )
     }
 
     func snapshotPackage() throws -> DiagnosticExportPackage {
+        try pruneExpiredEvidence(now: now())
+        try saveMetadata()
+        try enforcePersistentCap()
         let snapshot = readRecords()
         if snapshot.corruptCount > 0 {
-            state.corruptRecordCount += snapshot.corruptCount
+            incrementLoss(.corruptRecord, by: snapshot.corruptCount)
             try? saveMetadata()
         }
         let metrics: [DiagnosticMetricAttachment] = try metricURLs()
@@ -630,7 +807,7 @@ private final class DiagnosticDiskStore {
         let health = health()
         let manifest = DiagnosticExportManifest(
             schemaVersion: RecordedEvidence.currentSchemaVersion,
-            generatedAt: Date(),
+            generatedAt: now(),
             appIdentity: appIdentity,
             recordCount: records.count,
             activeOperationCount: activeOperations.count,
@@ -639,6 +816,12 @@ private final class DiagnosticDiskStore {
             oldestRecordAt: records.map(\.timestamp).min(),
             newestRecordAt: records.map(\.timestamp).max(),
             droppedRecordCount: health.droppedRecordCount,
+            droppedCriticalRecordCount:
+            health.droppedCriticalRecordCount,
+            compactedCriticalEvidenceCount:
+            health.compactedCriticalEvidenceCount,
+            evictedMetricPayloadCount:
+            health.evictedMetricPayloadCount,
             corruptRecordCount: health.corruptRecordCount,
             oversizedEventCount: health.oversizedEventCount,
             oversizedMetricPayloadCount:
@@ -647,6 +830,9 @@ private final class DiagnosticDiskStore {
             health.maximumObservedAllocatedBytes,
             redactionVersion: MetricKitJSONSanitizer.redactionVersion,
             collectionWasPartial: health.droppedRecordCount > 0
+                || health.droppedCriticalRecordCount > 0
+                || health.compactedCriticalEvidenceCount > 0
+                || health.evictedMetricPayloadCount > 0
                 || health.corruptRecordCount > 0
                 || health.oversizedEventCount > 0
                 || health.oversizedMetricPayloadCount > 0
@@ -723,7 +909,7 @@ private final class DiagnosticDiskStore {
         var data = try Self.encoder.encode(record)
         data.append(0x0A)
         guard data.count <= configuration.maximumEventBytes else {
-            state.oversizedEventCount += 1
+            incrementLoss(.oversizedEvent, by: 1)
             return
         }
         if state.segmentPayloadBytes[state.currentSegment]
@@ -778,11 +964,7 @@ private final class DiagnosticDiskStore {
                     lastProgress: nil
                 )
             )
-            if activeOperations.count > 8 {
-                activeOperations.removeFirst(
-                    activeOperations.count - 8
-                )
-            }
+            trimActiveOperations()
         case .operationStage, .operationHeartbeat:
             guard let index = activeOperations.firstIndex(where: {
                 $0.id == operationID
@@ -801,7 +983,7 @@ private final class DiagnosticDiskStore {
                     operationID: operationID,
                     incidentID: event.incidentID,
                     kind: kind,
-                    endpoint: active?.endpoint ?? .none,
+                    endpoint: event.endpoint ?? active?.endpoint ?? .none,
                     startedAt: active?.startedAt
                         ?? timestamp.addingTimeInterval(-duration),
                     finishedAt: timestamp,
@@ -820,21 +1002,56 @@ private final class DiagnosticDiskStore {
     }
 
     private func trimCapsules() {
-        if operationCapsules.count > 8 {
-            operationCapsules.removeFirst(operationCapsules.count - 8)
+        while operationCapsules.count > 8 {
+            let removalIndex = operationCapsules.indices.min { lhs, rhs in
+                let left = capsuleRetentionPriority(
+                    operationCapsules[lhs].outcome
+                )
+                let right = capsuleRetentionPriority(
+                    operationCapsules[rhs].outcome
+                )
+                if left == right {
+                    return operationCapsules[lhs].finishedAt
+                        < operationCapsules[rhs].finishedAt
+                }
+                return left < right
+            } ?? operationCapsules.startIndex
+            operationCapsules.remove(at: removalIndex)
+            incrementCompactedCriticalEvidence(by: 1)
+        }
+    }
+
+    private func trimActiveOperations() {
+        while activeOperations.count > 8 {
+            let removalIndex = activeOperations.indices.min {
+                activeOperations[$0].updatedAt
+                    < activeOperations[$1].updatedAt
+            } ?? activeOperations.startIndex
+            activeOperations.remove(at: removalIndex)
+            incrementCompactedCriticalEvidence(by: 1)
+        }
+    }
+
+    private func capsuleRetentionPriority(
+        _ outcome: DiagnosticOperationOutcome
+    ) -> Int {
+        switch outcome {
+        case .succeeded:
+            0
+        case .interrupted:
+            1
+        case .failed:
+            2
         }
     }
 
     private func rotateSegment() throws {
         state.currentSegment = (state.currentSegment + 1)
             % configuration.eventSegmentCount
-        let target = segmentURL(state.currentSegment)
-        if fileManager.fileExists(atPath: target.path) {
-            try fileManager.removeItem(at: target)
-        }
-        state.segmentPayloadBytes[state.currentSegment] = 0
-        state.segmentRecordCounts[state.currentSegment] = 0
-        state.segmentFirstSequences[state.currentSegment] = 0
+        try discardSegment(
+            state.currentSegment,
+            countAsCapacityEviction: true
+        )
     }
 
     private func reserveCapacity(forAdditionalBytes byteCount: Int64) throws {
@@ -877,14 +1094,48 @@ private final class DiagnosticDiskStore {
         }) else {
             return false
         }
-        let url = segmentURL(oldest)
+        try discardSegment(oldest, countAsCapacityEviction: true)
+        return true
+    }
+
+    private func discardSegment(
+        _ index: Int,
+        countAsCapacityEviction: Bool
+    ) throws {
+        let url = segmentURL(index)
         if fileManager.fileExists(atPath: url.path) {
+            if countAsCapacityEviction {
+                let lines = try Data(contentsOf: url).split(separator: 0x0A)
+                var discardedCount = 0
+                var discardedCriticalCount = 0
+                var corruptCount = 0
+                for line in lines {
+                    guard let record = try? Self.decoder.decode(
+                        RecordedEvidence.self,
+                        from: Data(line)
+                    ), record.schemaVersion
+                        == RecordedEvidence.currentSchemaVersion
+                    else {
+                        corruptCount += 1
+                        continue
+                    }
+                    discardedCount += 1
+                    if record.event.isRetentionCritical {
+                        discardedCriticalCount += 1
+                    }
+                }
+                incrementLoss(.droppedRecord, by: discardedCount)
+                incrementLoss(
+                    .droppedCriticalRecord,
+                    by: discardedCriticalCount
+                )
+                incrementLoss(.corruptRecord, by: corruptCount)
+            }
             try fileManager.removeItem(at: url)
         }
-        state.segmentPayloadBytes[oldest] = 0
-        state.segmentRecordCounts[oldest] = 0
-        state.segmentFirstSequences[oldest] = 0
-        return true
+        state.segmentPayloadBytes[index] = 0
+        state.segmentRecordCounts[index] = 0
+        state.segmentFirstSequences[index] = 0
     }
 
     private func removeOldestMetricPayload() throws -> Bool {
@@ -895,7 +1146,12 @@ private final class DiagnosticDiskStore {
             return false
         }
         try fileManager.removeItem(at: oldest)
+        incrementLoss(.evictedMetricPayload, by: 1)
         return true
+    }
+
+    private func incrementCompactedCriticalEvidence(by count: Int) {
+        incrementLoss(.compactedCriticalEvidence, by: count)
     }
 
     private func pruneMetricPayloads(reserving byteCount: Int64) throws {
@@ -927,7 +1183,7 @@ private final class DiagnosticDiskStore {
                 data.append(0x0A)
                 return data
             }
-            state.corruptRecordCount += corruptCount
+            incrementLoss(.corruptRecord, by: corruptCount)
             guard retained.count != allLines.count else { continue }
             if retained.isEmpty {
                 try fileManager.removeItem(at: url)
@@ -948,6 +1204,200 @@ private final class DiagnosticDiskStore {
                 state.segmentFirstSequences[index] =
                     records.map(\.sequence).min() ?? 0
             }
+        }
+    }
+
+    private func pruneExpiredEvidence(now: Date) throws {
+        let cutoff = now.addingTimeInterval(-configuration.retentionInterval)
+        pruneLossBuckets(cutoff: cutoff, now: now)
+
+        try pruneExpiredRecords(now: now)
+        for url in try metricURLs() {
+            guard let stored = Self.loadJSON(
+                StoredMetricPayload.self,
+                from: url,
+                fileManager: fileManager
+            ) else {
+                continue
+            }
+            if stored.receivedAt < cutoff {
+                try fileManager.removeItem(at: url)
+            }
+        }
+        activeOperations.removeAll { $0.updatedAt < cutoff }
+        operationCapsules.removeAll { $0.finishedAt < cutoff }
+        trimActiveOperations()
+        trimCapsules()
+    }
+
+    private func migrateLegacyLossCounters(at timestamp: Date) {
+        let legacy = LossCounts(
+            droppedRecordCount: state.droppedRecordCount ?? 0,
+            droppedCriticalRecordCount:
+            state.droppedCriticalRecordCount ?? 0,
+            compactedCriticalEvidenceCount:
+            state.compactedCriticalEvidenceCount ?? 0,
+            evictedMetricPayloadCount:
+            state.evictedMetricPayloadCount ?? 0,
+            corruptRecordCount: state.corruptRecordCount ?? 0,
+            oversizedEventCount: state.oversizedEventCount ?? 0,
+            oversizedMetricPayloadCount:
+            state.oversizedMetricPayloadCount ?? 0,
+            maximumObservedAllocatedBytes:
+            state.maximumObservedAllocatedBytes ?? 0
+        )
+        state.droppedRecordCount = nil
+        state.droppedCriticalRecordCount = nil
+        state.compactedCriticalEvidenceCount = nil
+        state.evictedMetricPayloadCount = nil
+        state.corruptRecordCount = nil
+        state.oversizedEventCount = nil
+        state.oversizedMetricPayloadCount = nil
+        state.maximumObservedAllocatedBytes = nil
+        guard legacy.isEmpty == false else { return }
+        mergeLossCounts(legacy, at: timestamp)
+    }
+
+    private func incrementLoss(_ kind: LossKind, by count: Int) {
+        guard count > 0 else { return }
+        var increment = LossCounts()
+        switch kind {
+        case .droppedRecord:
+            increment.droppedRecordCount = count
+        case .droppedCriticalRecord:
+            increment.droppedCriticalRecordCount = count
+        case .compactedCriticalEvidence:
+            increment.compactedCriticalEvidenceCount = count
+        case .evictedMetricPayload:
+            increment.evictedMetricPayloadCount = count
+        case .corruptRecord:
+            increment.corruptRecordCount = count
+        case .oversizedEvent:
+            increment.oversizedEventCount = count
+        case .oversizedMetricPayload:
+            increment.oversizedMetricPayloadCount = count
+        }
+        mergeLossCounts(increment, at: now())
+    }
+
+    private func recordMaximumObservedAllocatedBytes(_ byteCount: Int64) {
+        guard byteCount > 0 else { return }
+        var observation = LossCounts()
+        observation.maximumObservedAllocatedBytes = byteCount
+        mergeLossCounts(observation, at: now())
+    }
+
+    private func mergeLossCounts(_ counts: LossCounts, at timestamp: Date) {
+        let cutoff = timestamp.addingTimeInterval(
+            -configuration.retentionInterval
+        )
+        pruneLossBuckets(cutoff: cutoff, now: timestamp)
+        let dayStart = Self.utcCalendar.startOfDay(for: timestamp)
+        var normalizedCounts = counts
+        normalizedCounts.normalize()
+        var buckets = state.lossBuckets ?? []
+        if let index = buckets.firstIndex(where: {
+            $0.utcDayStart == dayStart
+        }) {
+            buckets[index].counts.add(normalizedCounts)
+            buckets[index].firstOccurredAt = min(
+                buckets[index].firstOccurredAt ?? timestamp,
+                timestamp
+            )
+            buckets[index].lastOccurredAt = max(
+                buckets[index].lastOccurredAt ?? timestamp,
+                timestamp
+            )
+        } else {
+            buckets.append(
+                LossBucket(
+                    utcDayStart: dayStart,
+                    firstOccurredAt: timestamp,
+                    lastOccurredAt: timestamp,
+                    counts: normalizedCounts
+                )
+            )
+        }
+        buckets.sort { $0.utcDayStart < $1.utcDayStart }
+        if buckets.count > 8 {
+            buckets.removeFirst(buckets.count - 8)
+        }
+        state.lossBuckets = buckets
+    }
+
+    private func pruneLossBuckets(cutoff: Date, now: Date) {
+        let cutoffDayStart = Self.utcCalendar.startOfDay(for: cutoff)
+        let oldestRetainedDay: Date = if cutoff == cutoffDayStart {
+            cutoffDayStart
+        } else {
+            Self.utcCalendar.date(
+                byAdding: .day,
+                value: 1,
+                to: cutoffDayStart
+            ) ?? cutoffDayStart.addingTimeInterval(24 * 60 * 60)
+        }
+        let newestRetainedDay = Self.utcCalendar.startOfDay(for: now)
+        let normalizedBuckets = (state.lossBuckets ?? []).compactMap {
+            bucket -> LossBucket? in
+            var counts = bucket.counts
+            counts.normalize()
+            let dayStart = Self.utcCalendar.startOfDay(
+                for: bucket.utcDayStart
+            )
+            let nextDay = Self.utcCalendar.date(
+                byAdding: .day,
+                value: 1,
+                to: dayStart
+            ) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+            let firstOccurredAt = bucket.firstOccurredAt ?? dayStart
+            let lastOccurredAt = bucket.lastOccurredAt ?? firstOccurredAt
+            guard firstOccurredAt >= dayStart,
+                  lastOccurredAt >= firstOccurredAt,
+                  lastOccurredAt < nextDay,
+                  lastOccurredAt <= now
+            else {
+                return nil
+            }
+            return LossBucket(
+                utcDayStart: dayStart,
+                firstOccurredAt: firstOccurredAt,
+                lastOccurredAt: lastOccurredAt,
+                counts: counts
+            )
+        }
+        var byDay: [Date: LossBucket] = [:]
+        for bucket in normalizedBuckets {
+            if var existing = byDay[bucket.utcDayStart] {
+                existing.counts.add(bucket.counts)
+                existing.firstOccurredAt = min(
+                    existing.firstOccurredAt ?? bucket.utcDayStart,
+                    bucket.firstOccurredAt ?? bucket.utcDayStart
+                )
+                existing.lastOccurredAt = max(
+                    existing.lastOccurredAt ?? bucket.utcDayStart,
+                    bucket.lastOccurredAt ?? bucket.utcDayStart
+                )
+                byDay[bucket.utcDayStart] = existing
+            } else {
+                byDay[bucket.utcDayStart] = bucket
+            }
+        }
+        var buckets = Array(byDay.values)
+        buckets.removeAll {
+            $0.utcDayStart < oldestRetainedDay
+                || $0.utcDayStart > newestRetainedDay
+        }
+        if buckets.count > 8 {
+            buckets = Array(buckets.sorted {
+                $0.utcDayStart < $1.utcDayStart
+            }.suffix(8))
+        }
+        state.lossBuckets = buckets
+    }
+
+    private var currentLossCounts: LossCounts {
+        (state.lossBuckets ?? []).reduce(into: LossCounts()) {
+            $0.add($1.counts)
         }
     }
 
@@ -984,7 +1434,7 @@ private final class DiagnosticDiskStore {
         records: [RecordedEvidence],
         corruptCount: Int
     ) {
-        let cutoff = Date().addingTimeInterval(
+        let cutoff = now().addingTimeInterval(
             -configuration.retentionInterval
         )
         var byEventID: [UUID: RecordedEvidence] = [:]
@@ -1009,7 +1459,7 @@ private final class DiagnosticDiskStore {
     }
 
     private func saveMetadata() throws {
-        try removeMetadataTemporaryFiles()
+        try removeAtomicTemporaryFiles()
         let activeData = try encodedMetadata(
             Array(activeOperations.suffix(8))
         )
@@ -1130,8 +1580,8 @@ private final class DiagnosticDiskStore {
         }
     }
 
-    private func removeMetadataTemporaryFiles() throws {
-        for url in metadataTemporaryURLs where fileManager.fileExists(
+    private func removeAtomicTemporaryFiles() throws {
+        for url in atomicTemporaryURLs where fileManager.fileExists(
             atPath: url.path
         ) {
             try fileManager.removeItem(at: url)
@@ -1140,10 +1590,7 @@ private final class DiagnosticDiskStore {
 
     private func observeAllocatedBytes() throws {
         let allocated = try allocatedBytes()
-        state.maximumObservedAllocatedBytes = max(
-            state.maximumObservedAllocatedBytes ?? 0,
-            allocated
-        )
+        recordMaximumObservedAllocatedBytes(allocated)
         guard allocated <= configuration.maximumPersistentBytes else {
             state.fileSinkDisabled = true
             throw DiagnosticStorageError.allocatedSizeUnavailable
@@ -1214,11 +1661,13 @@ private final class DiagnosticDiskStore {
     private func managedFileURLs() -> [URL] {
         [indexURL, activeOperationsURL, operationCapsulesURL]
             + (0 ..< configuration.eventSegmentCount).map(segmentURL)
-            + metadataTemporaryURLs
+            + atomicTemporaryURLs
     }
 
-    private var metadataTemporaryURLs: [URL] {
-        [indexURL, activeOperationsURL, operationCapsulesURL].map {
+    private var atomicTemporaryURLs: [URL] {
+        let targets = [indexURL, activeOperationsURL, operationCapsulesURL]
+            + (0 ..< configuration.eventSegmentCount).map(segmentURL)
+        return targets.map {
             rootURL.appendingPathComponent(".\($0.lastPathComponent).tmp")
         }
     }
@@ -1299,4 +1748,10 @@ private final class DiagnosticDiskStore {
     }()
 
     private static let decoder = JSONDecoder()
+
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar
+    }()
 }

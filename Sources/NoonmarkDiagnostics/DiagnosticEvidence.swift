@@ -381,6 +381,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
     public static func operationSucceeded(
         id: DiagnosticOperationID,
         kind: DiagnosticOperationKind,
+        endpoint: DiagnosticEndpoint,
         durationMilliseconds: Int64,
         progress: DiagnosticProgress?
     ) -> Self {
@@ -390,6 +391,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             severity: .notice,
             operationID: id,
             operationKind: kind,
+            endpoint: endpoint,
             progress: progress,
             durationMilliseconds: max(0, durationMilliseconds)
         )
@@ -399,6 +401,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
         id: DiagnosticOperationID,
         incidentID: DiagnosticIncidentID,
         kind: DiagnosticOperationKind,
+        endpoint: DiagnosticEndpoint,
         failure: DiagnosticFailure,
         failureDetail: DiagnosticFailure? = nil,
         durationMilliseconds: Int64,
@@ -411,6 +414,7 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             operationID: id,
             incidentID: incidentID,
             operationKind: kind,
+            endpoint: endpoint,
             stage: stage,
             failure: failure,
             failureDetail: failureDetail,

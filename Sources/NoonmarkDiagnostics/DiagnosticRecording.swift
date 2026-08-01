@@ -41,6 +41,7 @@ public extension DiagnosticRecording {
             recorder: self,
             id: operationID,
             kind: kind,
+            endpoint: endpoint,
             startedAt: startedAt
         )
     }
@@ -85,6 +86,7 @@ public struct DiagnosticOperation: Sendable {
 
     private let recorder: any DiagnosticRecording
     private let kind: DiagnosticOperationKind
+    private let endpoint: DiagnosticEndpoint
     private let startedAt: Date
     private let state: State
     private let emissionLane: EmissionLane
@@ -93,11 +95,13 @@ public struct DiagnosticOperation: Sendable {
         recorder: any DiagnosticRecording,
         id: DiagnosticOperationID,
         kind: DiagnosticOperationKind,
+        endpoint: DiagnosticEndpoint,
         startedAt: Date
     ) {
         self.recorder = recorder
         self.id = id
         self.kind = kind
+        self.endpoint = endpoint
         self.startedAt = startedAt
         state = State()
         emissionLane = EmissionLane()
@@ -166,6 +170,7 @@ public struct DiagnosticOperation: Sendable {
                 .operationSucceeded(
                     id: id,
                     kind: kind,
+                    endpoint: endpoint,
                     durationMilliseconds: elapsedMilliseconds(at: timestamp),
                     progress: progress
                 ),
@@ -190,6 +195,7 @@ public struct DiagnosticOperation: Sendable {
                     id: id,
                     incidentID: incidentID,
                     kind: kind,
+                    endpoint: endpoint,
                     failure: failure,
                     failureDetail: failureDetail == failure
                         ? nil

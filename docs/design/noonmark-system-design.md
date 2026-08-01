@@ -1571,7 +1571,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 - 没有 SQLCipher 或 Todo 主库应用层加密；
 - 普通数据包不是加密备份；
 - 同步不是只有用户持钥才能解密的端到端协议；
-- 没有生产 crash／metric 后端，也没有完整用户诊断包的保留与脱敏策略；
+- 没有集中式 crash／metric 后端；正式版只提供用户主动导出的有界本机诊断包，完整 `.ips` 仍由用户在 Console 中显式选择；
 - 没有对恶意 Provider 的可信执行保证；Provider 输出始终按不可信数据处理。
 
 ---
@@ -1591,11 +1591,15 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 ### 15.2 可观测性
 
-当前拥有的是开发、验收和本机故障取证能力，不是生产 SaaS 式 observability。它覆盖：
+当前拥有的是开发、验收和正式版本机故障取证能力，不是生产 SaaS 式 observability。它覆盖：
 
 - Provider 状态与失败类别；
 - automatic classification job 和 circuit 状态；
-- sync pending、conflict 和结果；
+- sync operation 的阶段、安全进度、pending、conflict、结果与跨重启恢复；
+- mutation rejection、持久化错误与白名单底层数字错误码；
+- 不超过 4 MiB、最长 7 天的强类型本机证据环，以及用户预览、导出和清除；
+- 经固定 schema 二次脱敏的有界 MetricKit 补充资料；
+- Version、Build、Commit、UTC Build Date、Mach-O UUID、binary SHA、dSYM 与 DMG manifest 对账；
 - sidecar 恢复；
 - E2E unified log；
 - SQLite probe；
@@ -1610,7 +1614,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 - 完整 Provider 原始响应；
 - sidecar 明文。
 
-当前没有集中式 crash reporting、metric、distributed trace、告警或服务端 dashboard；也没有正式定义本机日志保留周期和用户诊断导出格式。因为应用没有后端，这不会阻断核心 Todo，但会限制真实发布后的问题发现与跨用户聚合分析。
+当前没有集中式 crash reporting、remote metric、distributed trace、告警或服务端 dashboard；诊断资料不会自动上传。应用已经正式定义本机证据的 7 天保留、4 MiB 硬上限、固定导出 schema 与用户主动同意边界，但没有后端仍会限制主动发现问题和跨用户聚合分析。完整边界见 ADR 0042。
 
 ### 15.3 恢复原则
 
@@ -1946,7 +1950,7 @@ SQLite 与 sidecar 的 application journal 已实现可恢复提交，但协议�
 | Todo／同步／导出无应用层 E2E 加密 | 确定 | 高（特定威胁模型） | OS 权限、Apple 账号、sidecar 单独加密 | 完成产品隐私披露；若目标要求用户持钥，再设计密钥与恢复协议 | 取决于承诺 |
 | Store 和手写 SQLite bus factor | 中 | 中 | 模块测试、真实 E2E、源码索引 | 深化用例 Module，补 migration/runbook，避免继续把规则放进 Store | 否 |
 | 跨存储 crash phase 回归 | 低至中 | 高 | journal、digest、CAS、阶段测试 | 保持进程退出／fault injection matrix 为 release gate | 是 |
-| 无生产遥测 | 高 | 中 | 本机日志和 evidence | 发布前定义脱敏 crash report、用户同意和诊断导出 | 视发布范围 |
+| 无集中式远程遥测 | 高 | 中 | 有界强类型本机 evidence、MetricKit 补充、用户主动导出与版本／符号证据 | 根据真实支持量评估带明确同意的 crash backend；本轮不自动上传 | 视发布范围 |
 
 ---
 

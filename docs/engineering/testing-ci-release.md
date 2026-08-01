@@ -45,7 +45,9 @@ Neon 的可借鉴点：
 
 `scripts/test-e2e`、两套腾讯输入法真实矩阵和 `scripts/test-dmg-install` 会自行强制稳定签名，不接受 ad-hoc 身份。这些 build 入口共用同一解析器，优先使用调用方显式传入的 `NOONMARK_CODESIGN_IDENTITY`；未显式传入时，只会自动选择当前 Keychain 中唯一有效的 `Apple Development` 身份。零个候选时给出一次性 Xcode 创建路径，多个候选时 fail-closed 并要求显式选择，绝不猜测 Team。解析器只把证书 fingerprint 留在当前进程内，不写入仓库或日志，私钥始终留在 Keychain。
 
-本机只有一个开发身份时，用户只需在 `Xcode > Settings... > Accounts > Team > Manage Certificates...` 创建一次 `Apple Development` 证书，不需要在每次命令前设置环境变量。测试 App 固定使用 `app.noonmark.mac.e2e`，DMG helper 固定使用 `app.noonmark.test.dmg-install-harness`；稳定签名门禁同时拒绝含 `cdhash` 的 designated requirement。首次改用稳定签名后，需要把 `dist/NoonmarkMacAppE2E.app` 和 `artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app` 最后加入一次 `System Settings > Privacy & Security > Accessibility`。后续只要 Team、签名类别和 bundle identifier 不变，正常重编译不得再依赖重复授权。
+本机只有一个开发身份时，用户只需在 `Xcode > Settings... > Accounts > Team > Manage Certificates...` 创建一次 `Apple Development` 证书，不需要在每次命令前设置环境变量。测试 App 固定使用 `app.noonmark.mac.e2e`；DMG 交互验收 App 固定使用 `app.noonmark.mac.dmg-validation`，DMG helper 固定使用 `app.noonmark.test.dmg-install-harness`。稳定签名门禁同时拒绝含 `cdhash` 的 designated requirement。首次改用稳定签名后，需要把相应 E2E／DMG validation App 与 `artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app` 最后加入一次 `System Settings > Privacy & Security > Accessibility`。后续只要 Team、签名类别和 bundle identifier 不变，正常重编译不得再依赖重复授权。
+
+正式 `Noonmark.dmg` 在当前宿主账户只接受静态验收：checksum、只读挂载、Applications shortcut、`Info.plist` 版本／Commit／Build Date、strict code signature、最终 executable SHA、Mach-O UUID、同 UUID dSYM 与 source-linked SHA。脚本不得启动 `app.noonmark.mac`，不得读取、建立或清理正式 `noonmark`／`Noonmark/SyncRepository` 数据。`scripts/test-dmg-install` 会从已经通过上述核验的 mounted production App 复制 executable，受控地只改变 bundle／executable 名称与签名，生成 `app.noonmark.mac.dmg-validation`；随后仅在 `noonmark-dmg-validation` 与 `Noonmark-DMGValidation/SyncRepository` scope 做 WindowServer 交互、SQLite 重启回读、日志与 DiagnosticReports 验收。runtime manifest 必须记录 DMG／package SHA、派生前 executable SHA、签名前 executable SHA、UUID／dSYM／release identity、允许的派生差异，并固定写明 `production_app_executed=false`；不得把 validation 结果描述成正式 bundle 已运行。
 
 CI／开发签名发行验收 runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。该身份只服务真实 UI 与安装路径验收，不构成公开分发签名。
 
@@ -173,10 +175,10 @@ Nightly：
 - 用 release 优化配置打包 `.app`，但产物只代表开发签名安装验收，不代表可公开分发。
 - 保留与主 executable UUID 集完全匹配的 dSYM，并以 package／install manifest、SHA 与双层 inventory 绑定；dSYM 不进入用户 DMG。
 - 校验 DMG／zip checksum、挂载内容、严格 code signature、canonical icon、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
-- 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
+- 正式 DMG 只做 checksum、只读挂载、签名、metadata、UUID／dSYM 与 source-linked SHA 静态门禁；不得在当前账户启动正式 bundle。交互路径由 mounted production App 受控派生并重新签名为 `app.noonmark.mac.dmg-validation`，再由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账隔离持久化。
 - Actions artifact 固定命名为 `development-signed-not-for-distribution`，并包含 `NOT-FOR-DISTRIBUTION.txt`；workflow 不得创建、修改或上传 GitHub Release。
 
-公开发行：
+公开发行（当前不在本轮目标内）：
 
 - 当前 fail-closed 阻断。Apple 官方要求站外分发使用 `Developer ID Application`，并在公证前启用 Hardened Runtime、secure timestamp；Apple Development、ad-hoc 或本地开发证书不能替代。
 - 后续必须建立独立 distribution identity／notary keychain profile，完成 `notarytool submit --wait`、`stapler staple`／`validate` 和 Gatekeeper `spctl` 验收，再通过受保护 environment 与人工批准开放 GitHub Release 写权限。

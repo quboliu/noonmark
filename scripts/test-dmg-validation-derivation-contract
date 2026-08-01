@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd -P)"
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-derivation.XXXXXX")"
+trap 'rm -rf "$fixture_root"' EXIT
+
+source_app="$fixture_root/Noonmark.app"
+validation_app="$fixture_root/NoonmarkDMGValidation.app"
+evidence_fragment="$fixture_root/derivation.fragment"
+mkdir -p "$source_app/Contents/MacOS" "$fixture_root/bin"
+printf 'fixture-production-signed-binary\n' \
+  >"$source_app/Contents/MacOS/NoonmarkMacApp"
+chmod +x "$source_app/Contents/MacOS/NoonmarkMacApp"
+linked_sha256="$(printf 'fixture-linked-binary\n' | shasum -a 256 | awk '{print $1}')"
+cat >"$source_app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleDisplayName</key><string>Noonmark</string>
+<key>CFBundleExecutable</key><string>NoonmarkMacApp</string>
+<key>CFBundleIdentifier</key><string>app.noonmark.mac</string>
+<key>CFBundleName</key><string>Noonmark</string>
+<key>NoonmarkBinarySHA256</key><string>$linked_sha256</string>
+<key>NoonmarkBinarySHA256Scope</key><string>linked-before-bundle-signing</string>
+<key>NoonmarkBinaryUUID</key><string>arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE</string>
+</dict></plist>
+PLIST
+
+cat >"$fixture_root/bin/security" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "find-identity -v -p codesigning" ]]
+printf '  1) ABCDEF0123456789ABCDEF0123456789ABCDEF01 "Apple Development: Fixture"\n'
+SCRIPT
+cat >"$fixture_root/bin/dwarfdump" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--uuid" && -f "$2" ]]
+printf 'UUID: AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE (arm64) %s\n' "$2"
+SCRIPT
+cat >"$fixture_root/bin/xcrun" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]
+printf '%s\n' "$fixture_root/bin/dwarfdump"
+SCRIPT
+cat >"$fixture_root/bin/codesign" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+target="${@: -1}"
+case " $* " in
+  *" --force --sign "*)
+    executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$target/Contents/Info.plist")"
+    printf 'fixture-validation-signature\n' >>"$target/Contents/MacOS/$executable"
+    ;;
+  *" --verify --deep --strict "*) ;;
+  *" --display --requirements - "*)
+    identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$target/Contents/Info.plist")"
+    printf 'designated => identifier "%s" and anchor apple generic\n' "$identifier"
+    ;;
+  *)
+    echo "unexpected fixture codesign invocation: $*" >&2
+    exit 97
+    ;;
+esac
+SCRIPT
+chmod +x "$fixture_root/bin/"*
+
+source_sha256_before="$(
+  shasum -a 256 "$source_app/Contents/MacOS/NoonmarkMacApp" | awk '{print $1}'
+)"
+PATH="$fixture_root/bin:$PATH" \
+NOONMARK_CODESIGN_IDENTITY="ABCDEF0123456789ABCDEF0123456789ABCDEF01" \
+  bash "$repo_root/scripts/prepare-dmg-validation-app" \
+    "$source_app" \
+    "$validation_app" \
+    "$evidence_fragment" >/dev/null
+source_sha256_after="$(
+  shasum -a 256 "$source_app/Contents/MacOS/NoonmarkMacApp" | awk '{print $1}'
+)"
+validation_sha256="$(
+  shasum -a 256 \
+    "$validation_app/Contents/MacOS/NoonmarkMacAppDMGValidation" |
+    awk '{print $1}'
+)"
+
+read_evidence() {
+  awk -F= -v key="$1" '$1 == key { print substr($0, length(key) + 2) }' \
+    "$evidence_fragment"
+}
+
+if [[ "$source_sha256_before" != "$source_sha256_after" ]] ||
+  [[ "$(read_evidence validation_derivation_source_binary_sha256)" != \
+    "$source_sha256_before" ]] ||
+  [[ "$(read_evidence validation_derivation_pre_sign_binary_sha256)" != \
+    "$source_sha256_before" ]] ||
+  [[ "$validation_sha256" == "$source_sha256_before" ]] ||
+  [[ "$(read_evidence validation_signed_binary_sha256)" != \
+    "$validation_sha256" ]] ||
+  [[ "$(read_evidence validation_derivation_allowed_delta)" != \
+    "bundle-identifier,executable-name,bundle-name,display-name,code-signature" ]] ||
+  [[ "$(read_evidence validation_derivation_pre_sign_uuid_set)" != \
+    "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE" ]] ||
+  [[ "$(read_evidence validation_signed_binary_uuid_set)" != \
+    "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE" ]] ||
+  [[ "$(read_evidence validation_source_linked_binary_sha256)" != \
+    "$linked_sha256" ]] ||
+  [[ "$(read_evidence validation_source_linked_binary_sha256_scope)" != \
+    "linked-before-bundle-signing" ]] ||
+  [[ "$(read_evidence validation_source_linked_binary_uuid_set)" != \
+    "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE" ]] ||
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+    "$validation_app/Contents/Info.plist")" != \
+    "app.noonmark.mac.dmg-validation" ]] ||
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+    "$validation_app/Contents/Info.plist")" != \
+    "NoonmarkMacAppDMGValidation" ]]; then
+  echo "DMG validation derivation did not preserve its exact source binding" >&2
+  exit 1
+fi
+
+cp -R "$source_app" "$fixture_root/Foreign.app"
+/usr/libexec/PlistBuddy \
+  -c 'Set :CFBundleIdentifier app.noonmark.mac.e2e' \
+  "$fixture_root/Foreign.app/Contents/Info.plist"
+mkdir -p "$fixture_root/rejected"
+set +e
+PATH="$fixture_root/bin:$PATH" \
+NOONMARK_CODESIGN_IDENTITY="ABCDEF0123456789ABCDEF0123456789ABCDEF01" \
+  bash "$repo_root/scripts/prepare-dmg-validation-app" \
+    "$fixture_root/Foreign.app" \
+    "$fixture_root/rejected/NoonmarkDMGValidation.app" \
+    "$fixture_root/rejected.fragment" >/dev/null 2>&1
+foreign_status=$?
+set -e
+if [[ "$foreign_status" -eq 0 ]]; then
+  echo "DMG validation derivation accepted a non-production source identity" >&2
+  exit 1
+fi
+
+echo "DMG validation derivation contract fixture passed"

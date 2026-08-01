@@ -27,15 +27,17 @@ helper_executable_name="NoonmarkDMGInstallHarness"
 helper_executable="${helper_app}/Contents/MacOS/${helper_executable_name}"
 helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
 production_bundle_identifier="app.noonmark.mac"
-task_title="dmgproductiontask"
+validation_bundle_identifier="app.noonmark.mac.dmg-validation"
+validation_bundle_name="NoonmarkDMGValidation.app"
+validation_executable_name="NoonmarkMacAppDMGValidation"
+validation_data_directory_name="noonmark-dmg-validation"
+validation_icloud_repository="Noonmark-DMGValidation/SyncRepository"
+task_title="dmgvalidationtask"
 database_path=""
-redirected_database_path="${work_dir}/forbidden-redirect.sqlite"
 screenshot_path="${work_dir}/installed-day.png"
 window_metadata_path="${work_dir}/installed-day-window.txt"
 initial_launch_log="${work_dir}/initial-launch.log"
 initial_console_log="${work_dir}/initial-console.log"
-forbidden_automation_result="${work_dir}/forbidden-automation-result.txt"
-forbidden_automation_state="${work_dir}/forbidden-automation-state.json"
 permission_ledger="${work_dir}/permission-preflight-ledger.tsv"
 permission_log="${work_dir}/permission-preflight.log"
 permission_console_log="${work_dir}/permission-preflight-console.log"
@@ -68,6 +70,7 @@ source_end_fragment="${work_dir}/source-end.fragment"
 mounted_app_fragment="${work_dir}/mounted-app.fragment"
 installed_app_fragment="${work_dir}/installed-app.fragment"
 installed_app_end_fragment="${work_dir}/installed-app-end.fragment"
+validation_derivation_fragment="${work_dir}/dmg-validation-derivation.fragment"
 helper_fragment="${work_dir}/helper.fragment"
 helper_end_fragment="${work_dir}/helper-end.fragment"
 evidence_run_id=""
@@ -93,6 +96,14 @@ release_binary_path=""
 release_dsym_path=""
 release_dsym_inventory_path=""
 release_identity_provenance_path=""
+validation_derivation_source_binary_sha256=""
+validation_derivation_pre_sign_binary_sha256=""
+validation_derivation_pre_sign_uuid_set=""
+validation_derivation_allowed_delta=""
+validation_source_linked_binary_sha256=""
+validation_source_linked_binary_sha256_scope=""
+validation_source_linked_binary_uuid_set=""
+validation_signed_binary_sha256=""
 
 evidence_prepare_fresh_directory "$repo_root" "$work_dir"
 evidence_prepare_fresh_directory "$repo_root" "$helper_evidence_root"
@@ -817,6 +828,7 @@ cleanup() {
         "$release_identity_provenance_path" \
         "$helper_app" \
         "$install_dir" \
+        "$validation_derivation_fragment" \
         "$screenshot_path" \
         "$window_metadata_path" \
         "$initial_launch_log" \
@@ -882,12 +894,32 @@ cleanup() {
       "package_release_identity_binary_sha256_scope" \
       "package_release_identity_provenance_path" \
       "package_release_identity_provenance_sha256" \
+      "production_bundle_identifier" \
+      "production_mounted_executable" \
+      "production_app_executed" \
+      "validation_bundle_identifier" \
+      "validation_executable" \
+      "validation_data_directory_name" \
+      "validation_icloud_repository" \
+      "validation_derivation_allowed_delta" \
+      "validation_derivation_source_binary_sha256" \
+      "validation_derivation_pre_sign_binary_sha256" \
+      "validation_derivation_pre_sign_uuid_set" \
+      "validation_source_linked_binary_sha256" \
+      "validation_source_linked_binary_sha256_scope" \
+      "validation_source_linked_binary_uuid_set" \
+      "validation_signed_binary_sha256" \
+      "validation_signed_binary_uuid_set" \
+      "validation_derivation_fragment_sha256" \
+      "validation_app_executed" \
       "release_symbols_unchanged" \
       "release_identity_provenance_unchanged" \
       "artifact_inventory_sha256" \
       "source_tree_unchanged" \
       "installed_app_binary_unchanged" \
+      "installed_app_signature_unchanged" \
       "helper_binary_unchanged" \
+      "helper_signature_unchanged" \
       "diagnostic_diff_status"; then
       final_status=1
     fi
@@ -1006,9 +1038,9 @@ run_verified_app_action() {
     return 1
   fi
 
-  NOONMARK_DMG_APP_PID="$pid" \
+    NOONMARK_DMG_APP_PID="$pid" \
     NOONMARK_DMG_APP_PATH="$installed_app" \
-    NOONMARK_DMG_BUNDLE_ID="$production_bundle_identifier" \
+    NOONMARK_DMG_BUNDLE_ID="$validation_bundle_identifier" \
     NOONMARK_DMG_APP_ACTION="$action" \
     swift -e '
 import AppKit
@@ -1038,7 +1070,7 @@ guard actual == expected else {
     exit(1)
 }
 if action == "terminate", app.terminate() == false {
-    fputs("verified production app rejected its termination request\n", stderr)
+    fputs("verified validation app rejected its termination request\n", stderr)
     exit(1)
 }
 '
@@ -1527,7 +1559,7 @@ guard let year = components.year,
       let month = components.month,
       let day = components.day
 else {
-    fputs("unable to resolve the production natural day\n", stderr)
+    fputs("unable to resolve the validation natural day\n", stderr)
     exit(1)
 }
 let formatter = DateFormatter()
@@ -1666,7 +1698,7 @@ run_permission_preflight() {
     "$last_helper_observer_log" \
     "$permission_console_log"
   if [[ -e "$database_path" ]]; then
-    echo "permission preflight unexpectedly created production persistence: $database_path" >&2
+    echo "permission preflight unexpectedly created validation persistence: $database_path" >&2
     return 1
   fi
 }
@@ -1707,7 +1739,7 @@ capture_window_evidence() {
   {
     printf 'phase=%s\n' "$phase"
     printf 'pid=%s\n' "$pid"
-    printf 'bundle_identifier=%s\n' "$production_bundle_identifier"
+    printf 'bundle_identifier=%s\n' "$validation_bundle_identifier"
     printf 'bundle_path=%s\n' "$installed_app"
     printf 'executable_path=%s\n' "$installed_executable"
     printf 'window_id=%s\n' "$window_id"
@@ -1724,9 +1756,9 @@ capture_window_evidence() {
   CAPTURED_WINDOW_HEIGHT="$height"
 }
 
-PRODUCTION_PHASE_DAY=""
+VALIDATION_PHASE_DAY=""
 
-run_production_helper_phase() {
+run_validation_helper_phase() {
   local mode="$1"
   local ledger_path
   local launch_log_path
@@ -1745,7 +1777,7 @@ run_production_helper_phase() {
       console_log_path="$exercise_console_log"
       phase_screenshot_path="$exercise_screenshot_path"
       phase_window_metadata_path="$exercise_window_metadata_path"
-      phase_label="production exercise"
+      phase_label="dmg-validation exercise"
       ;;
     restart)
       ledger_path="$restart_ledger"
@@ -1754,10 +1786,10 @@ run_production_helper_phase() {
       console_log_path="$restart_console_log"
       phase_screenshot_path="$restart_screenshot_path"
       phase_window_metadata_path="$restart_window_metadata_path"
-      phase_label="production restart"
+      phase_label="dmg-validation restart"
       ;;
     *)
-      echo "unsupported production helper phase: $mode" >&2
+      echo "unsupported validation helper phase: $mode" >&2
       return 1
       ;;
   esac
@@ -1778,7 +1810,7 @@ run_production_helper_phase() {
     "$phase_screenshot_path" \
     "$phase_window_metadata_path" \
     "$phase_label"
-  PRODUCTION_PHASE_DAY="$CAPTURED_WINDOW_DAY"
+  VALIDATION_PHASE_DAY="$CAPTURED_WINDOW_DAY"
 
   run_helper \
     "$mode" \
@@ -1859,7 +1891,7 @@ capture_task_snapshot() {
     echo "refusing to query an invalid natural day: $expected_day" >&2
     return 1
   fi
-  assert_database_integrity "installed production task"
+  assert_database_integrity "DMG validation task"
 
   counts="$(sqlite3 -separator $'\t' "$database_path" "
     SELECT
@@ -1887,7 +1919,7 @@ capture_task_snapshot() {
   if [[ "$title_count" -ne 1 || "$matching_count" -ne 1 ||
     "$chains" -ne 1 || "$definitions" -ne 1 || "$traces" -ne 1 ||
     "$days" -ne 1 || "$preferences" -ne 1 ]]; then
-    echo "invalid installed production task counts: title=$title_count matching=$matching_count chains=$chains definitions=$definitions traces=$traces days=$days preferences=$preferences" >&2
+    echo "invalid DMG validation task counts: title=$title_count matching=$matching_count chains=$chains definitions=$definitions traces=$traces days=$days preferences=$preferences" >&2
     return 1
   fi
 
@@ -1912,7 +1944,7 @@ capture_task_snapshot() {
       AND definition.superseded_by_definition_id IS NULL;
   ")"
   if [[ -z "$identity_line" || "$identity_line" == *$'\n'* ]]; then
-    echo "installed production task did not resolve to one identity row" >&2
+    echo "DMG validation task did not resolve to one identity row" >&2
     return 1
   fi
   IFS=$'\t' read -r \
@@ -1922,7 +1954,7 @@ capture_task_snapshot() {
     "$actual_day" != "$expected_day" || "$trace_status" != "pending" ||
     "$chain_state" != "active" || ! "$definition_sequence" =~ ^[0-9]+$ ||
     "$definition_title" != "$task_title" ]]; then
-    echo "installed production task identity was invalid: $identity_line" >&2
+    echo "DMG validation task identity was invalid: $identity_line" >&2
     return 1
   fi
 
@@ -1983,7 +2015,7 @@ capture_task_snapshot() {
       AND definition.superseded_by_definition_id IS NULL;
   ")"
   if [[ -z "$row_json" || "$row_json" == *$'\n'* ]]; then
-    echo "installed production task full-row snapshot was invalid" >&2
+    echo "DMG validation task full-row snapshot was invalid" >&2
     return 1
   fi
 
@@ -2005,12 +2037,13 @@ guard let base = FileManager.default.urls(
     exit(1)
 }
 print(base
-    .appendingPathComponent("noonmark", isDirectory: true)
+    .appendingPathComponent("noonmark-dmg-validation", isDirectory: true)
     .appendingPathComponent("Noonmark.sqlite")
     .path)
 ')"
-if [[ "$database_path" != */Library/Application\ Support/noonmark/Noonmark.sqlite ]]; then
-  echo "refusing to inspect an unexpected production database path: $database_path" >&2
+if [[ "$database_path" != \
+  */Library/Application\ Support/noonmark-dmg-validation/Noonmark.sqlite ]]; then
+  echo "refusing to inspect an unexpected DMG validation database path: $database_path" >&2
   exit 1
 fi
 
@@ -2099,7 +2132,7 @@ mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-install.XXXXXX")"
 mount_cleanup_armed=1
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
 source_app="${mountpoint}/${app_short_name}.app"
-installed_app="${install_dir}/${app_short_name}.app"
+installed_app="${install_dir}/${validation_bundle_name}"
 
 if [[ ! -d "$source_app" ]]; then
   echo "DMG missing app bundle: $source_app" >&2
@@ -2113,38 +2146,88 @@ evidence_require_bundle_snapshots_equal \
   "mounted_app" \
   "packaged and mounted App"
 
-ditto "$source_app" "$installed_app"
+bash scripts/prepare-dmg-validation-app \
+  "$source_app" \
+  "$installed_app" \
+  "$validation_derivation_fragment" >/dev/null
+validation_derivation_allowed_delta="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_derivation_allowed_delta
+)"
+validation_derivation_source_binary_sha256="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_derivation_source_binary_sha256
+)"
+validation_derivation_pre_sign_binary_sha256="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_derivation_pre_sign_binary_sha256
+)"
+validation_derivation_pre_sign_uuid_set="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_derivation_pre_sign_uuid_set
+)"
+validation_source_linked_binary_sha256="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_source_linked_binary_sha256
+)"
+validation_source_linked_binary_sha256_scope="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_source_linked_binary_sha256_scope
+)"
+validation_source_linked_binary_uuid_set="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_source_linked_binary_uuid_set
+)"
+validation_signed_binary_sha256="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_signed_binary_sha256
+)"
+validation_signed_binary_uuid_set="$(
+  evidence_read "$validation_derivation_fragment" \
+    validation_signed_binary_uuid_set
+)"
 info_plist="${installed_app}/Contents/Info.plist"
 if [[ ! -f "$info_plist" ]]; then
-  echo "installed app is missing Info.plist: $info_plist" >&2
+  echo "derived validation App is missing Info.plist: $info_plist" >&2
   exit 1
 fi
 
 executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
 bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
-if [[ "$bundle_identifier" != "$production_bundle_identifier" ]]; then
-  echo "installed app has an unexpected production bundle identifier: $bundle_identifier" >&2
+if [[ "$bundle_identifier" != "$validation_bundle_identifier" ||
+  "$executable_name" != "$validation_executable_name" ]]; then
+  echo "derived validation App has an unexpected runtime identity: bundle=$bundle_identifier executable=$executable_name" >&2
   exit 1
 fi
 installed_executable="${installed_app}/Contents/MacOS/${executable_name}"
 if [[ ! -x "$installed_executable" ]]; then
-  echo "installed app binary is not executable: $installed_executable" >&2
+  echo "validation App binary is not executable: $installed_executable" >&2
   exit 1
 fi
 scripts/verify-mac-app-metadata "$installed_app"
 evidence_capture_bundle "$installed_app" 1 "installed_app" "$installed_app_fragment"
-evidence_require_bundle_snapshots_equal \
-  "$package_manifest_path" \
-  "app" \
-  "$installed_app_fragment" \
-  "installed_app" \
-  "packaged and installed App"
-evidence_require_bundle_snapshots_equal \
-  "$mounted_app_fragment" \
-  "mounted_app" \
-  "$installed_app_fragment" \
-  "installed_app" \
-  "mounted and installed App"
+package_binary_sha256="$(
+  evidence_read "$package_manifest_path" "app_binary_sha256"
+)"
+package_binary_uuid_set="$(
+  evidence_read "$package_manifest_path" "release_symbols_binary_uuid_set"
+)"
+if [[ "$validation_derivation_source_binary_sha256" != \
+    "$package_binary_sha256" ||
+  "$validation_derivation_pre_sign_uuid_set" != "$package_binary_uuid_set" ||
+  "$validation_signed_binary_uuid_set" != "$package_binary_uuid_set" ||
+  "$validation_signed_binary_sha256" != \
+    "$(evidence_read "$installed_app_fragment" installed_app_binary_sha256)" ||
+  "$validation_source_linked_binary_sha256" != \
+    "$(evidence_read "$package_manifest_path" release_identity_binary_sha256)" ||
+  "$validation_source_linked_binary_sha256_scope" != \
+    "linked-before-bundle-signing" ||
+  "$validation_source_linked_binary_uuid_set" != "$package_binary_uuid_set" ||
+  "$validation_derivation_allowed_delta" != \
+    "bundle-identifier,executable-name,bundle-name,display-name,code-signature" ]]; then
+  echo "derived validation App is not bound to the mounted production binary and release identity" >&2
+  exit 1
+fi
 require_installed_identity_value \
   release_identity_version CFBundleShortVersionString
 require_installed_identity_value release_identity_build CFBundleVersion
@@ -2238,8 +2321,67 @@ evidence_append \
   "$production_bundle_identifier"
 evidence_append \
   "$runtime_manifest_path" \
-  "production_executable" \
+  "production_mounted_executable" \
+  "${source_app}/Contents/MacOS/NoonmarkMacApp"
+evidence_append \
+  "$runtime_manifest_path" \
+  "production_app_executed" "false"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_bundle_identifier" \
+  "$validation_bundle_identifier"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_executable" \
   "$installed_executable"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_data_directory_name" \
+  "$validation_data_directory_name"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_icloud_repository" \
+  "$validation_icloud_repository"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_derivation_allowed_delta" \
+  "$validation_derivation_allowed_delta"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_derivation_source_binary_sha256" \
+  "$validation_derivation_source_binary_sha256"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_derivation_pre_sign_binary_sha256" \
+  "$validation_derivation_pre_sign_binary_sha256"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_derivation_pre_sign_uuid_set" \
+  "$validation_derivation_pre_sign_uuid_set"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_source_linked_binary_sha256" \
+  "$validation_source_linked_binary_sha256"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_source_linked_binary_sha256_scope" \
+  "$validation_source_linked_binary_sha256_scope"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_source_linked_binary_uuid_set" \
+  "$validation_source_linked_binary_uuid_set"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_signed_binary_sha256" \
+  "$validation_signed_binary_sha256"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_signed_binary_uuid_set" \
+  "$validation_signed_binary_uuid_set"
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_derivation_fragment_sha256" \
+  "$(shasum -a 256 "$validation_derivation_fragment" | awk '{print $1}')"
 evidence_append \
   "$runtime_manifest_path" \
   "helper_process" \
@@ -2251,29 +2393,16 @@ evidence_append \
 evidence_append "$runtime_manifest_path" "helper_bundle" "$helper_app"
 runtime_manifest_started=1
 
-run_permission_preflight
-
-scripts/reset-dev-data
+scripts/reset-dev-data dmg-validation
 if [[ -e "$database_path" ]]; then
-  echo "reset-dev-data left production persistence before the negative canary: $database_path" >&2
+  echo "dmg-validation reset left persistence before permission preflight: $database_path" >&2
   exit 1
 fi
+run_permission_preflight
 
-rm -f \
-  "$redirected_database_path" \
-  "${redirected_database_path}-wal" \
-  "${redirected_database_path}-shm" \
-  "$forbidden_automation_result" \
-  "$forbidden_automation_state"
 : >"$initial_launch_log"
 start_runtime_capture "$initial_console_log"
-/usr/bin/open -n "$installed_app" --args \
-  --data-url "$redirected_database_path" \
-  --page settings \
-  --e2e-native-command-surface-exercise \
-  --e2e-native-command-state-url "$forbidden_automation_state" \
-  --e2e-native-command-result-url "$forbidden_automation_result" \
-  >"$initial_launch_log" 2>&1
+/usr/bin/open -n "$installed_app" >"$initial_launch_log" 2>&1
 
 installed_pid="$(wait_for_installed_pid)"
 verify_installed_process_identity "$installed_pid"
@@ -2282,35 +2411,27 @@ capture_window_evidence \
   "$installed_pid" \
   "$screenshot_path" \
   "$window_metadata_path" \
-  "negative-canary"
+  "dmg-validation initial"
 window_id="$CAPTURED_WINDOW_ID"
 initial_day="$CAPTURED_WINDOW_DAY"
 expected_window_title="$CAPTURED_WINDOW_TITLE"
 width="$CAPTURED_WINDOW_WIDTH"
 height="$CAPTURED_WINDOW_HEIGHT"
-if [[ -e "$redirected_database_path" || -e "$forbidden_automation_result" ||
-  -e "$forbidden_automation_state" ]]; then
-  echo "production DMG accepted an internal launch argument" >&2
-  ls -l \
-    "$redirected_database_path" \
-    "$forbidden_automation_result" \
-    "$forbidden_automation_state" \
-    2>/dev/null >&2 || true
-  exit 1
-fi
-
 request_verified_app_termination "$installed_pid"
 active_app_pid=""
 runtime_evidence_stop_console_capture
 runtime_evidence_assert_clean_logs \
-  "installed negative canary" \
+  "DMG validation initial launch" \
   "$initial_launch_log" \
   "$initial_console_log"
 assert_blank_persistence
+evidence_append \
+  "$runtime_manifest_path" \
+  "validation_app_executed" "true"
 
-scripts/reset-dev-data
+scripts/reset-dev-data dmg-validation
 if [[ -e "$database_path" ]]; then
-  echo "reset-dev-data left negative-canary persistence before production exercise: $database_path" >&2
+  echo "dmg-validation reset left initial persistence before exercise: $database_path" >&2
   exit 1
 fi
 
@@ -2319,12 +2440,12 @@ rm -f \
   "$task_snapshot_before_path" \
   "$task_snapshot_after_path"
 
-run_production_helper_phase exercise
-exercise_day="$PRODUCTION_PHASE_DAY"
+run_validation_helper_phase exercise
+exercise_day="$VALIDATION_PHASE_DAY"
 
 IFS='|' read -r current_day_after_exercise _ < <(current_day_metadata)
 if [[ "$current_day_after_exercise" != "$exercise_day" ]]; then
-  echo "natural day crossed while creating the production task: window=$exercise_day current=$current_day_after_exercise" >&2
+  echo "natural day crossed while creating the validation task: window=$exercise_day current=$current_day_after_exercise" >&2
   exit 1
 fi
 capture_task_snapshot "$exercise_day" "$task_snapshot_before_path"
@@ -2333,8 +2454,8 @@ capture_task_snapshot "$exercise_day" "$task_snapshot_before_path"
   printf '%s\n' "$TASK_IDENTITY_LINE"
 } >"$task_identity_path"
 
-run_production_helper_phase restart
-restart_day="$PRODUCTION_PHASE_DAY"
+run_validation_helper_phase restart
+restart_day="$VALIDATION_PHASE_DAY"
 if [[ "$restart_day" != "$exercise_day" ]]; then
   echo "natural day crossed before the persistence restart check: created=$exercise_day restart=$restart_day" >&2
   exit 1
@@ -2342,7 +2463,7 @@ fi
 
 capture_task_snapshot "$exercise_day" "$task_snapshot_after_path"
 if ! cmp -s "$task_snapshot_before_path" "$task_snapshot_after_path"; then
-  echo "installed production task identity changed across a no-argument restart" >&2
+  echo "DMG validation task identity changed across a no-argument restart" >&2
   echo "before restart:" >&2
   cat "$task_snapshot_before_path" >&2
   echo "after restart:" >&2
@@ -2350,13 +2471,13 @@ if ! cmp -s "$task_snapshot_before_path" "$task_snapshot_after_path"; then
   exit 1
 fi
 
-echo "DMG install smoke: $installed_app"
-echo "Installed dynamic main window: $expected_window_title (natural_day=$initial_day)"
-echo "Installed app screenshot: $screenshot_path (${width}x${height})"
-echo "Installed release ignored internal data, page, and E2E launch arguments"
-echo "Installed production Settings and Quick Entry used real WindowServer input: $exercise_ledger"
-echo "Installed production task persisted as pending/active/current: $task_identity_path"
-echo "Installed production restart exposed the same task through AX: $restart_ledger"
-echo "Installed production joined-row identity remained byte-for-byte stable: $task_snapshot_after_path"
-echo "Installed app and helper unified logs are clean: $exercise_console_log, $restart_console_log"
-echo "Installed runtime diagnostics are guarded: $runtime_manifest_path"
+echo "Production DMG static evidence verified without execution: $source_app"
+echo "Derived DMG validation App: $installed_app"
+echo "Validation dynamic main window: $expected_window_title (natural_day=$initial_day)"
+echo "Validation App screenshot: $screenshot_path (${width}x${height})"
+echo "Validation Settings and Quick Entry used real WindowServer input: $exercise_ledger"
+echo "Validation task persisted as pending/active/current: $task_identity_path"
+echo "Validation restart exposed the same task through AX: $restart_ledger"
+echo "Validation joined-row identity remained byte-for-byte stable: $task_snapshot_after_path"
+echo "Validation App and helper unified logs are clean: $exercise_console_log, $restart_console_log"
+echo "Validation runtime diagnostics are guarded: $runtime_manifest_path"

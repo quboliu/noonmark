@@ -1,7 +1,7 @@
 import ApplicationServices
 import Foundation
 
-/// Read-only Accessibility view of the production process. This type exposes
+/// Read-only Accessibility view of the validation process. This type exposes
 /// no AX action or value-mutation API by design.
 final class AXTarget {
     struct Match {
@@ -39,7 +39,7 @@ final class AXTarget {
     }
 
     func waitUntilFrontmost() throws {
-        _ = try wait(description: "the production app to be AX-frontmost") {
+        _ = try wait(description: "the validation app to be AX-frontmost") {
             boolean(application, kAXFrontmostAttribute as String) == true
                 ? true
                 : nil
@@ -48,7 +48,7 @@ final class AXTarget {
 
     func menuBar() throws -> AXUIElement {
         guard let menuBar = element(application, kAXMenuBarAttribute as String) else {
-            throw Failure.waitTimedOut("the production app menu bar")
+            throw Failure.waitTimedOut("the validation app menu bar")
         }
         return menuBar
     }

@@ -338,14 +338,14 @@ require_install_window_metadata() {
   fi
 
   arguments_detail="$(awk -F $'\t' '$3 == "arguments" { print $4 }' "$ledger")"
-  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/Noonmark\.app)$ ]]; then
+  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
     echo "DMG install $mode ledger cannot be bound to window metadata" >&2
     return 1
   fi
   ledger_pid="${BASH_REMATCH[1]}"
   ledger_app_path="${BASH_REMATCH[2]}"
   metadata_pid="$(evidence_read "$path" pid)"
-  if [[ "$(evidence_read "$path" phase)" != "production $mode" ]] ||
+  if [[ "$(evidence_read "$path" phase)" != "dmg-validation $mode" ]] ||
     [[ "$metadata_pid" != "$ledger_pid" ]] ||
     [[ "$(evidence_read "$path" bundle_identifier)" != "$expected_bundle_identifier" ]] ||
     [[ "$ledger_app_path" != "$expected_bundle_path" ]] ||
@@ -427,7 +427,7 @@ require_install_process_log() {
   fi
 
   process_pids="$(
-    sed -nE 's/.*NoonmarkMacApp\[([0-9]+):[^]]*\].*/\1/p' "$path" |
+    sed -nE 's/.*NoonmarkMacAppDMGValidation\[([0-9]+):[^]]*\].*/\1/p' "$path" |
       sort -u | paste -sd, -
   )"
   if [[ "$process_pids" != "$expected_pid" ]]; then
@@ -464,7 +464,7 @@ require_install_process_log() {
   fi
   process_days="$(
     sed -nE \
-      "s/^([0-9]{4}-[0-9]{2}-[0-9]{2}) .*NoonmarkMacApp\\[$expected_pid:.*/\\1/p" \
+      "s/^([0-9]{4}-[0-9]{2}-[0-9]{2}) .*NoonmarkMacAppDMGValidation\\[$expected_pid:.*/\\1/p" \
       "$path" | sort -u | paste -sd, -
   )"
   if [[ "$process_days" != "$expected_natural_day" ]]; then
@@ -473,7 +473,7 @@ require_install_process_log() {
   fi
   process_line="$(
     grep -m 1 -E \
-      "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[.]?[0-9]* .*NoonmarkMacApp\\[$expected_pid:" \
+      "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[.]?[0-9]* .*NoonmarkMacAppDMGValidation\\[$expected_pid:" \
       "$path" || true
   )"
   process_day="${process_line%% *}"
@@ -515,7 +515,7 @@ require_install_task_identity() {
         valid += (NF == 8 && $1 != "" && $2 != "" && $3 != "" &&
           $4 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ &&
           $5 == "pending" && $6 == "active" && $7 ~ /^[0-9]+$/ &&
-          $8 == "dmgproductiontask")
+          $8 == "dmgvalidationtask")
       }
       END { exit !(NR == 2 && valid == 2) }
     ' "$path"; then
@@ -593,13 +593,13 @@ require_install_ledger_semantics() {
     return 0
   fi
 
-  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/Noonmark\.app)$ ]]; then
+  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
     echo "DMG install $mode ledger has an invalid installed App arguments proof" >&2
     return 1
   fi
   app_path="${BASH_REMATCH[2]}"
   if [[ "$(awk -F $'\t' '$3 == "target" { print $4 }' "$path")" != \
-    "bundle=app.noonmark.mac path=$app_path frontmost=true windows=1" ]]; then
+    "bundle=app.noonmark.mac.dmg-validation path=$app_path frontmost=true windows=1" ]]; then
     echo "DMG install $mode ledger has an invalid target proof" >&2
     return 1
   fi
@@ -622,7 +622,7 @@ require_install_ledger_semantics() {
     settings_window_detail="$(
       awk -F $'\t' '$3 == "settings-window" { print $4 }' "$path"
     )"
-    title_visible_pattern='^title=dmgproductiontask visibleAXMatches=[1-9][0-9]*$'
+    title_visible_pattern='^title=dmgvalidationtask visibleAXMatches=[1-9][0-9]*$'
     if [[ "$(awk -F $'\t' '$3 == "settings-menu" { print $4 }' "$path")" != \
       "title=设置… shortcut=Command-," ]] ||
       ! require_settings_window_geometry "$settings_window_detail" ||
@@ -631,7 +631,7 @@ require_install_ledger_semantics() {
       [[ "$(awk -F $'\t' '$3 == "quick-entry-menu" { print $4 }' "$path")" != \
         "title=快速记录… shortcut=Command-n" ]] ||
       [[ "$(awk -F $'\t' '$3 == "quick-entry-input" { print $4 }' "$path")" != \
-        "value=dmgproductiontask source=cghidEventTap" ]] ||
+        "value=dmgvalidationtask source=cghidEventTap" ]] ||
       [[ "$(awk -F $'\t' '$3 == "quick-entry-add" { print $4 }' "$path")" != \
         "panel dismissed after real click" ]] ||
       [[ ! "$(awk -F $'\t' '$3 == "exercise-title-visible" { print $4 }' "$path")" =~ $title_visible_pattern ]]; then
@@ -639,7 +639,7 @@ require_install_ledger_semantics() {
       return 1
     fi
   elif [[ ! "$(awk -F $'\t' '$3 == "restart-title-visible" { print $4 }' "$path")" =~ \
-    ^title=dmgproductiontask[[:space:]]visibleAXMatches=[1-9][0-9]*$ ]]; then
+    ^title=dmgvalidationtask[[:space:]]visibleAXMatches=[1-9][0-9]*$ ]]; then
     echo "DMG install restart ledger has an invalid persisted-title proof" >&2
     return 1
   fi
@@ -658,7 +658,7 @@ require_install_task_snapshot() {
         valid += (NF == 8 && $1 != "" && $2 != "" && $3 != "" &&
           $4 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ &&
           $5 == "pending" && $6 == "active" && $7 ~ /^[0-9]+$/ &&
-          $8 == "dmgproductiontask")
+          $8 == "dmgvalidationtask")
       }
       NR == 3 {
         valid += ($0 ~ /^joined_row=\{"trace":\{/ &&
@@ -753,6 +753,14 @@ if [[ "$scope" == "full" ]]; then
     "suite=dmg-install" \
     "configuration=release" \
     "source_tree_unchanged=true" \
+    "production_bundle_identifier=app.noonmark.mac" \
+    "production_app_executed=false" \
+    "validation_bundle_identifier=app.noonmark.mac.dmg-validation" \
+    "validation_data_directory_name=noonmark-dmg-validation" \
+    "validation_icloud_repository=Noonmark-DMGValidation/SyncRepository" \
+    "validation_derivation_allowed_delta=bundle-identifier,executable-name,bundle-name,display-name,code-signature" \
+    "validation_source_linked_binary_sha256_scope=linked-before-bundle-signing" \
+    "validation_app_executed=true" \
     "installed_app_binary_unchanged=true" \
     "installed_app_signature_unchanged=true" \
     "helper_binary_unchanged=true" \
@@ -1164,12 +1172,48 @@ require_bundle_evidence_equal \
   "$install_manifest" \
   mounted_app \
   "package and mounted App"
-require_bundle_evidence_equal \
+require_equal_manifest_value \
   "$package_manifest" \
-  app \
+  app_binary_sha256 \
   "$install_manifest" \
-  installed_app \
-  "package and installed App"
+  validation_derivation_source_binary_sha256 \
+  "production and validation derivation source binary"
+require_equal_manifest_value \
+  "$install_manifest" \
+  validation_derivation_source_binary_sha256 \
+  "$install_manifest" \
+  validation_derivation_pre_sign_binary_sha256 \
+  "validation pre-sign executable bytes"
+require_equal_manifest_value \
+  "$package_manifest" \
+  release_symbols_binary_uuid_set \
+  "$install_manifest" \
+  validation_derivation_pre_sign_uuid_set \
+  "validation pre-sign Mach-O UUID set"
+require_equal_manifest_value \
+  "$package_manifest" \
+  release_identity_binary_sha256 \
+  "$install_manifest" \
+  validation_source_linked_binary_sha256 \
+  "validation source-linked executable SHA"
+require_equal_manifest_value \
+  "$package_manifest" \
+  release_identity_binary_uuid_set \
+  "$install_manifest" \
+  validation_source_linked_binary_uuid_set \
+  "validation source-linked Mach-O UUID set"
+require_equal_manifest_value \
+  "$package_manifest" \
+  release_symbols_binary_uuid_set \
+  "$install_manifest" \
+  validation_signed_binary_uuid_set \
+  "validation signed Mach-O UUID set"
+require_equal_manifest_value \
+  "$install_manifest" \
+  installed_app_binary_sha256 \
+  "$install_manifest" \
+  validation_signed_binary_sha256 \
+  "validation signed executable SHA"
 
 release_binary_relative="$(
   evidence_read "$package_manifest" release_symbols_binary_path
@@ -1266,6 +1310,29 @@ require_file_sha256 \
   artifact_inventory_sha256 \
   "$install_inventory" \
   "install artifact inventory"
+validation_derivation_fragment="$repo_root/artifacts/dmg-install/dmg-validation-derivation.fragment"
+require_file_sha256 \
+  "$install_manifest" \
+  validation_derivation_fragment_sha256 \
+  "$validation_derivation_fragment" \
+  "validation derivation fragment"
+for derivation_key in \
+  validation_derivation_allowed_delta \
+  validation_derivation_source_binary_sha256 \
+  validation_derivation_pre_sign_binary_sha256 \
+  validation_derivation_pre_sign_uuid_set \
+  validation_source_linked_binary_sha256 \
+  validation_source_linked_binary_sha256_scope \
+  validation_source_linked_binary_uuid_set \
+  validation_signed_binary_sha256 \
+  validation_signed_binary_uuid_set; do
+  require_equal_manifest_value \
+    "$install_manifest" \
+    "$derivation_key" \
+    "$validation_derivation_fragment" \
+    "$derivation_key" \
+    "validation derivation fragment $derivation_key"
+done
 evidence_verify_inventory "$repo_root" "$install_inventory"
 evidence_require_inventory_paths \
   "$repo_root" \
@@ -1277,7 +1344,8 @@ evidence_require_inventory_paths \
   "$repo_root/$release_dsym_dwarf_relative" \
   "$repo_root/$release_dsym_inventory_relative" \
   "$repo_root/$release_identity_provenance_relative" \
-  "$repo_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+  "$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation" \
+  "$validation_derivation_fragment" \
   "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
   "$repo_root/artifacts/dmg-install/installed-day.png" \
   "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
@@ -1319,15 +1387,15 @@ require_install_ledger_semantics \
   restart \
   "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
   "arguments,process,exit-observer,permissions,target,main-window,restart-title-visible,quit-menu,quit,complete"
-installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/Noonmark.app"
-installed_executable_path="$(evidence_read "$install_manifest" production_executable)"
-production_bundle_identifier="$(
-  evidence_read "$install_manifest" production_bundle_identifier
+installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
+installed_executable_path="$(evidence_read "$install_manifest" validation_executable)"
+validation_bundle_identifier="$(
+  evidence_read "$install_manifest" validation_bundle_identifier
 )"
 if [[ "$installed_executable_path" != \
-    "$installed_bundle_path/Contents/MacOS/NoonmarkMacApp" ]] ||
-  [[ "$production_bundle_identifier" != "app.noonmark.mac" ]]; then
-  echo "install manifest does not identify the archived production App" >&2
+    "$installed_bundle_path/Contents/MacOS/NoonmarkMacAppDMGValidation" ]] ||
+  [[ "$validation_bundle_identifier" != "app.noonmark.mac.dmg-validation" ]]; then
+  echo "install manifest does not identify the archived validation App" >&2
   exit 1
 fi
 exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
@@ -1339,7 +1407,7 @@ require_install_window_metadata \
   "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
-  "$production_bundle_identifier"
+  "$validation_bundle_identifier"
 require_install_window_metadata \
   restart \
   "$restart_window_metadata" \
@@ -1347,7 +1415,7 @@ require_install_window_metadata \
   "$repo_root/artifacts/dmg-install/installed-restart.png" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
-  "$production_bundle_identifier"
+  "$validation_bundle_identifier"
 exercise_natural_day="$(evidence_read "$exercise_window_metadata" natural_day)"
 restart_natural_day="$(evidence_read "$restart_window_metadata" natural_day)"
 require_install_process_log \
@@ -1356,7 +1424,7 @@ require_install_process_log \
   "$(evidence_read "$exercise_window_metadata" pid)" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
-  "$production_bundle_identifier" \
+  "$validation_bundle_identifier" \
   "$exercise_natural_day" \
   "$(evidence_read "$install_manifest" started_at)" \
   "$(evidence_read "$install_manifest" finished_at)"
@@ -1366,7 +1434,7 @@ require_install_process_log \
   "$(evidence_read "$restart_window_metadata" pid)" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
-  "$production_bundle_identifier" \
+  "$validation_bundle_identifier" \
   "$restart_natural_day" \
   "$(evidence_read "$install_manifest" started_at)" \
   "$(evidence_read "$install_manifest" finished_at)"
@@ -1402,8 +1470,8 @@ require_preserved_bundle \
 require_preserved_bundle \
   "$install_manifest" \
   installed_app \
-  "$repo_root/artifacts/dmg-install/Applications/Noonmark.app" \
-  "installed App"
+  "$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" \
+  "validation App"
 require_preserved_bundle \
   "$install_manifest" \
   helper \
@@ -1466,22 +1534,10 @@ require_equal_manifest_value \
   "mounted App binary"
 require_equal_manifest_value \
   "$package_manifest" \
-  "app_binary_sha256" \
-  "$install_manifest" \
-  "installed_app_binary_sha256" \
-  "installed App binary"
-require_equal_manifest_value \
-  "$package_manifest" \
   "app_designated_requirement_sha256" \
   "$install_manifest" \
   "mounted_app_designated_requirement_sha256" \
   "mounted App designated requirement"
-require_equal_manifest_value \
-  "$package_manifest" \
-  "app_designated_requirement_sha256" \
-  "$install_manifest" \
-  "installed_app_designated_requirement_sha256" \
-  "installed App designated requirement"
 require_equal_manifest_value \
   "$package_manifest" \
   "dmg_sha256" \

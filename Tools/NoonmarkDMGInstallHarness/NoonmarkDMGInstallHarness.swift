@@ -5,7 +5,8 @@ import Foundation
 
 @main
 enum NoonmarkDMGInstallHarness {
-    private static let expectedProductionBundleIdentifier = "app.noonmark.mac"
+    private static let expectedDMGValidationBundleIdentifier =
+        "app.noonmark.mac.dmg-validation"
     private static let expectedE2EBundleIdentifier = "app.noonmark.mac.e2e"
 
     enum Mode: String {
@@ -253,9 +254,9 @@ enum NoonmarkDMGInstallHarness {
             case let .invalidArguments(reason):
                 "Invalid harness arguments: \(reason)"
             case let .targetIdentity(reason):
-                "Production target identity failed: \(reason)"
+                "Validation target identity failed: \(reason)"
             case let .contract(reason):
-                "Production UI contract failed: \(reason)"
+                "Validation UI contract failed: \(reason)"
             }
         }
     }
@@ -314,7 +315,7 @@ enum NoonmarkDMGInstallHarness {
             )
             switch configuration.mode {
             case .preflight:
-                throw HarnessFailure.contract("preflight reached the production runner")
+                throw HarnessFailure.contract("preflight reached the validation runner")
             case .exercise:
                 try runner.exercise()
             case .restart:
@@ -399,7 +400,7 @@ enum NoonmarkDMGInstallHarness {
         case .e2eInspect, .e2eMenuCommand:
             expectedE2EBundleIdentifier
         case .preflight, .exercise, .restart:
-            expectedProductionBundleIdentifier
+            expectedDMGValidationBundleIdentifier
         }
         guard let running = NSRunningApplication(
             processIdentifier: configuration.pid
@@ -1267,7 +1268,7 @@ private final class Runner {
             return frame.width >= 960 && frame.height >= 720
         }) else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "no production main window with a usable native window role"
+                "no validation main window with a usable native window role"
             )
         }
         try ledger?.pass("main-window", "native AXWindow is visible")
@@ -1295,7 +1296,7 @@ private final class Runner {
         }
         guard preexistingWindows.contains(where: { CFEqual($0, settingsWindow) }) == false else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "Settings reused a preexisting production window"
+                "Settings reused a preexisting validation window"
             )
         }
         let settingsFrame = try target.requiredFrame(
@@ -1427,7 +1428,7 @@ private final class Runner {
 
     private func assertTaskTitleVisible(step: String) throws {
         let matchCount: Int = try target.wait(
-            description: "persisted task title in the production AX tree"
+            description: "persisted task title in the validation AX tree"
         ) {
             let count = target.windows().reduce(into: 0) { count, window in
                 count += target.descendants(of: window).filter { match in
@@ -1461,7 +1462,7 @@ private final class Runner {
             frame: target.requiredFrame(quitItem, description: "Quit menu item")
         )
         let pid = configuration.pid
-        _ = try target.wait(seconds: 12, description: "production app to terminate") {
+        _ = try target.wait(seconds: 12, description: "validation app to terminate") {
             kill(pid, 0) == -1 && errno == ESRCH ? true : nil
         }
         try ledger?.pass("quit", "terminated via real App menu click")

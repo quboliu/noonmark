@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd -P)"
+cd "$repo_root"
+
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+# shellcheck source=scripts/codesign-common
+source scripts/codesign-common
+
+if [[ $# -ne 3 ]]; then
+  echo "usage: $0 PRODUCTION_APP VALIDATION_APP EVIDENCE_FRAGMENT" >&2
+  exit 2
+fi
+
+production_app="$1"
+validation_app="$2"
+evidence_fragment="$3"
+production_bundle_identifier="app.noonmark.mac"
+validation_bundle_identifier="app.noonmark.mac.dmg-validation"
+validation_bundle_name="NoonmarkDMGValidation.app"
+validation_executable_name="NoonmarkMacAppDMGValidation"
+production_plist="${production_app}/Contents/Info.plist"
+validation_plist="${validation_app}/Contents/Info.plist"
+validation_complete=0
+evidence_content=""
+
+cleanup() {
+  local status=$?
+  [[ -z "$evidence_content" ]] || rm -f "$evidence_content"
+  if [[ "$status" -ne 0 || "$validation_complete" -ne 1 ]]; then
+    if [[ "$(basename "$validation_app")" == "$validation_bundle_name" ]]; then
+      rm -rf "$validation_app"
+    fi
+    rm -f "$evidence_fragment"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+if [[ "$(basename "$validation_app")" != "$validation_bundle_name" ||
+  "$production_app" == "$validation_app" ||
+  ! -d "$production_app" || -L "$production_app" ||
+  ! -f "$production_plist" || -L "$production_plist" ||
+  -L "$validation_app" ]]; then
+  echo "DMG validation derivation received an unsafe source or destination" >&2
+  exit 1
+fi
+validation_parent="$(cd "$(dirname "$validation_app")" && pwd -P)"
+validation_app="${validation_parent}/${validation_bundle_name}"
+evidence_parent="$(cd "$(dirname "$evidence_fragment")" && pwd -P)"
+evidence_fragment="${evidence_parent}/$(basename "$evidence_fragment")"
+
+actual_production_identifier="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$production_plist"
+)"
+production_executable_name="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$production_plist"
+)"
+production_executable="${production_app}/Contents/MacOS/${production_executable_name}"
+if [[ "$actual_production_identifier" != "$production_bundle_identifier" ||
+  "$production_executable_name" != "NoonmarkMacApp" ||
+  ! -x "$production_executable" || -L "$production_executable" ]]; then
+  echo "mounted production App is not a safe derivation source" >&2
+  exit 1
+fi
+codesign --verify --deep --strict "$production_app"
+noonmark_verify_stable_designated_requirement \
+  "$production_app" \
+  "$production_bundle_identifier"
+
+source_binary_sha256="$(
+  shasum -a 256 "$production_executable" | awk '{print $1}'
+)"
+source_uuid_set="$(evidence_release_uuid_set "$production_executable")"
+source_linked_binary_sha256="$(
+  plutil -extract NoonmarkBinarySHA256 raw -o - "$production_plist"
+)"
+source_linked_binary_sha256_scope="$(
+  plutil -extract NoonmarkBinarySHA256Scope raw -o - "$production_plist"
+)"
+source_linked_binary_uuid_set="$(
+  plutil -extract NoonmarkBinaryUUID raw -o - "$production_plist"
+)"
+if [[ ! "$source_binary_sha256" =~ ^[0-9a-f]{64}$ ||
+  ! "$source_linked_binary_sha256" =~ ^[0-9a-f]{64}$ ||
+  "$source_linked_binary_sha256_scope" != "linked-before-bundle-signing" ||
+  "$source_linked_binary_uuid_set" != "$source_uuid_set" ]]; then
+  echo "production App has inconsistent executable identity metadata" >&2
+  exit 1
+fi
+
+rm -rf "$validation_app"
+ditto "$production_app" "$validation_app"
+validation_macos_dir="${validation_app}/Contents/MacOS"
+validation_executable="${validation_macos_dir}/${validation_executable_name}"
+rm -rf "${validation_app}/Contents/_CodeSignature"
+mv \
+  "${validation_macos_dir}/${production_executable_name}" \
+  "$validation_executable"
+/usr/libexec/PlistBuddy \
+  -c "Set :CFBundleIdentifier ${validation_bundle_identifier}" \
+  "$validation_plist"
+/usr/libexec/PlistBuddy \
+  -c "Set :CFBundleExecutable ${validation_executable_name}" \
+  "$validation_plist"
+/usr/libexec/PlistBuddy \
+  -c 'Set :CFBundleName NoonmarkDMGValidation' \
+  "$validation_plist"
+/usr/libexec/PlistBuddy \
+  -c 'Set :CFBundleDisplayName Noonmark DMG Validation' \
+  "$validation_plist"
+
+pre_sign_binary_sha256="$(
+  shasum -a 256 "$validation_executable" | awk '{print $1}'
+)"
+pre_sign_uuid_set="$(evidence_release_uuid_set "$validation_executable")"
+source_binary_sha256_after="$(
+  shasum -a 256 "$production_executable" | awk '{print $1}'
+)"
+if [[ "$pre_sign_binary_sha256" != "$source_binary_sha256" ||
+  "$pre_sign_uuid_set" != "$source_uuid_set" ||
+  "$source_binary_sha256_after" != "$source_binary_sha256" ]]; then
+  echo "validation derivation changed source or pre-sign executable bytes" >&2
+  exit 1
+fi
+
+noonmark_resolve_codesign_identity \
+  "${NOONMARK_CODESIGN_IDENTITY:-}" \
+  1
+codesign --force \
+  --sign "$NOONMARK_RESOLVED_CODESIGN_IDENTITY" \
+  "$validation_app" >/dev/null
+codesign --verify --deep --strict "$validation_app"
+noonmark_verify_stable_designated_requirement \
+  "$validation_app" \
+  "$validation_bundle_identifier"
+
+signed_binary_sha256="$(
+  shasum -a 256 "$validation_executable" | awk '{print $1}'
+)"
+signed_uuid_set="$(evidence_release_uuid_set "$validation_executable")"
+if [[ "$signed_uuid_set" != "$source_uuid_set" ||
+  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$validation_plist")" != \
+    "$validation_bundle_identifier" ||
+  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$validation_plist")" != \
+    "$validation_executable_name" ]]; then
+  echo "signed validation App lost its controlled derivation identity" >&2
+  exit 1
+fi
+
+evidence_content="$(mktemp "${TMPDIR:-/tmp}/noonmark-dmg-derivation.XXXXXX")"
+{
+  printf 'validation_derivation_allowed_delta=%s\n' \
+    'bundle-identifier,executable-name,bundle-name,display-name,code-signature'
+  printf 'validation_derivation_source_binary_sha256=%s\n' \
+    "$source_binary_sha256"
+  printf 'validation_derivation_pre_sign_binary_sha256=%s\n' \
+    "$pre_sign_binary_sha256"
+  printf 'validation_derivation_pre_sign_uuid_set=%s\n' "$pre_sign_uuid_set"
+  printf 'validation_source_linked_binary_sha256=%s\n' \
+    "$source_linked_binary_sha256"
+  printf 'validation_source_linked_binary_sha256_scope=%s\n' \
+    "$source_linked_binary_sha256_scope"
+  printf 'validation_source_linked_binary_uuid_set=%s\n' \
+    "$source_linked_binary_uuid_set"
+  printf 'validation_signed_binary_sha256=%s\n' "$signed_binary_sha256"
+  printf 'validation_signed_binary_uuid_set=%s\n' "$signed_uuid_set"
+} >"$evidence_content"
+evidence_write_fragment_atomically "$evidence_fragment" "$evidence_content"
+validation_complete=1
+printf '%s\n' "$validation_app"

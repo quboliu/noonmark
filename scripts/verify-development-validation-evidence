@@ -745,7 +745,9 @@ if [[ "$scope" == "full" ]]; then
     "configuration=release" \
     "source_tree_unchanged=true" \
     "app_binary_unchanged=true" \
-    "app_signature_unchanged=true"
+    "app_signature_unchanged=true" \
+    "release_symbols_uuid_match=true" \
+    "release_identity_binary_sha256_scope=linked-before-bundle-signing"
   evidence_require_manifest \
     "$install_manifest" \
     "suite=dmg-install" \
@@ -755,6 +757,8 @@ if [[ "$scope" == "full" ]]; then
     "installed_app_signature_unchanged=true" \
     "helper_binary_unchanged=true" \
     "helper_signature_unchanged=true" \
+    "release_symbols_unchanged=true" \
+    "release_identity_provenance_unchanged=true" \
     "diagnostic_diff_status=clean"
 fi
 
@@ -1167,6 +1171,96 @@ require_bundle_evidence_equal \
   installed_app \
   "package and installed App"
 
+release_binary_relative="$(
+  evidence_read "$package_manifest" release_symbols_binary_path
+)"
+release_dsym_relative="$(
+  evidence_read "$package_manifest" release_symbols_dsym_bundle_path
+)"
+release_dsym_dwarf_relative="$(
+  evidence_read "$package_manifest" release_symbols_dsym_dwarf_path
+)"
+release_dsym_inventory_relative="$(
+  evidence_read "$package_manifest" release_symbols_dsym_inventory_path
+)"
+release_identity_provenance_relative="$(
+  evidence_read "$package_manifest" release_identity_provenance_path
+)"
+evidence_verify_release_symbols \
+  "$repo_root" \
+  "$repo_root/$release_binary_relative" \
+  "$repo_root/$release_dsym_relative" \
+  "$package_manifest" \
+  "release_symbols" \
+  "$repo_root/$release_dsym_inventory_relative"
+evidence_verify_release_identity_provenance \
+  "$repo_root" \
+  "$repo_root/$release_identity_provenance_relative" \
+  "$package_manifest" \
+  release_identity
+require_equal_manifest_value \
+  "$package_manifest" \
+  source_head_commit \
+  "$package_manifest" \
+  release_identity_git_commit \
+  "embedded release Git commit"
+require_equal_manifest_value \
+  "$package_manifest" \
+  release_symbols_binary_uuid_set \
+  "$package_manifest" \
+  release_identity_binary_uuid_set \
+  "embedded release Mach-O UUID set"
+expected_release_architecture="$(
+  evidence_release_architecture_description \
+    "$(evidence_read "$package_manifest" release_symbols_binary_uuid_set)"
+)"
+if [[ "$(evidence_read "$package_manifest" release_identity_architecture)" != \
+  "$expected_release_architecture" ]]; then
+  echo "release identity architecture disagrees with its Mach-O UUID set" >&2
+  exit 1
+fi
+release_build_date="$(
+  evidence_read "$package_manifest" release_identity_build_date
+)"
+if [[ "$release_build_date" < "$(evidence_read "$package_manifest" started_at)" ||
+  "$release_build_date" > "$(evidence_read "$package_manifest" finished_at)" ]]; then
+  echo "release identity build date is outside package evidence collection" >&2
+  exit 1
+fi
+for release_symbol_suffix in \
+  binary_sha256 \
+  binary_uuid_set \
+  dsym_dwarf_sha256 \
+  dsym_uuid_set \
+  dsym_inventory_sha256; do
+  require_equal_manifest_value \
+    "$package_manifest" \
+    "release_symbols_${release_symbol_suffix}" \
+    "$install_manifest" \
+    "package_release_symbols_${release_symbol_suffix}" \
+    "release symbol ${release_symbol_suffix}"
+done
+for release_identity_suffix in \
+  version \
+  build \
+  git_commit \
+  build_date \
+  runtime \
+  minimum_os_version \
+  architecture \
+  binary_uuid_set \
+  binary_sha256 \
+  binary_sha256_scope \
+  provenance_path \
+  provenance_sha256; do
+  require_equal_manifest_value \
+    "$package_manifest" \
+    "release_identity_${release_identity_suffix}" \
+    "$install_manifest" \
+    "package_release_identity_${release_identity_suffix}" \
+    "release identity ${release_identity_suffix}"
+done
+
 require_file_sha256 \
   "$install_manifest" \
   artifact_inventory_sha256 \
@@ -1179,6 +1273,10 @@ evidence_require_inventory_paths \
   "$repo_root/dist/Noonmark.dmg" \
   "$repo_root/dist/Noonmark.dmg.sha256" \
   "$repo_root/dist/Noonmark.dmg.manifest" \
+  "$repo_root/dist/Noonmark.dmg.inventory.sha256" \
+  "$repo_root/$release_dsym_dwarf_relative" \
+  "$repo_root/$release_dsym_inventory_relative" \
+  "$repo_root/$release_identity_provenance_relative" \
   "$repo_root/artifacts/dmg-install/Applications/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
   "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
   "$repo_root/artifacts/dmg-install/installed-day.png" \
@@ -1341,7 +1439,10 @@ evidence_require_inventory_paths \
   "$package_inventory" \
   "$repo_root/dist/Noonmark.dmg" \
   "$repo_root/dist/Noonmark.dmg.sha256" \
-  "$repo_root/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp"
+  "$repo_root/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+  "$repo_root/$release_dsym_dwarf_relative" \
+  "$repo_root/$release_dsym_inventory_relative" \
+  "$repo_root/$release_identity_provenance_relative"
 if ! (cd "$repo_root" && shasum -a 256 -c "${dmg_path}.sha256" >/dev/null); then
   echo "packaged DMG does not match its checksum file" >&2
   exit 1

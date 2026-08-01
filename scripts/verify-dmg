@@ -10,6 +10,7 @@ source scripts/evidence-common
 
 dmg_path="${1:-dist/Noonmark.dmg}"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
+evidence_validate_artifact_basename "$app_short_name" "App short name"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg.XXXXXX")"
 package_manifest_path="${dmg_path}.manifest"
 package_inventory_path="${dmg_path}.inventory.sha256"
@@ -34,6 +35,20 @@ require_equal_manifest_value() {
   if [[ -z "$package_value" || -z "$mounted_value" ||
     "$package_value" != "$mounted_value" ]]; then
     echo "mounted app does not match package manifest for $label" >&2
+    return 1
+  fi
+}
+
+require_mounted_identity_value() {
+  local manifest_key="$1"
+  local plist_key="$2"
+  local expected
+  local actual
+
+  expected="$(evidence_read "$package_manifest_path" "$manifest_key")"
+  actual="$(plutil -extract "$plist_key" raw -o - "$plist_path")"
+  if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+    echo "mounted app identity does not match package manifest for $plist_key" >&2
     return 1
   fi
 }
@@ -68,7 +83,37 @@ evidence_require_manifest \
   "app_signature_unchanged=true" \
   "app_codesign_deep_strict=1" \
   "app_stable_required=1" \
+  "release_symbols_uuid_match=true" \
+  "release_identity_binary_sha256_scope=linked-before-bundle-signing" \
   "suite_exit_status=0"
+
+release_binary_relative="$(
+  evidence_read "$package_manifest_path" release_symbols_binary_path
+)"
+release_dsym_relative="$(
+  evidence_read "$package_manifest_path" release_symbols_dsym_bundle_path
+)"
+release_dsym_dwarf_relative="$(
+  evidence_read "$package_manifest_path" release_symbols_dsym_dwarf_path
+)"
+release_dsym_inventory_relative="$(
+  evidence_read "$package_manifest_path" release_symbols_dsym_inventory_path
+)"
+release_identity_provenance_relative="$(
+  evidence_read "$package_manifest_path" release_identity_provenance_path
+)"
+evidence_verify_release_symbols \
+  "$repo_root" \
+  "$repo_root/$release_binary_relative" \
+  "$repo_root/$release_dsym_relative" \
+  "$package_manifest_path" \
+  "release_symbols" \
+  "$repo_root/$release_dsym_inventory_relative"
+evidence_verify_release_identity_provenance \
+  "$repo_root" \
+  "$repo_root/$release_identity_provenance_relative" \
+  "$package_manifest_path" \
+  release_identity
 
 actual_dmg_sha256="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
 expected_dmg_sha256="$(evidence_read "$package_manifest_path" "dmg_sha256")"
@@ -99,6 +144,14 @@ if [[ -z "$expected_inventory_sha256" ||
   echo "package artifact inventory does not match its manifest" >&2
   exit 1
 fi
+evidence_verify_inventory "$repo_root" "$package_inventory_path"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$package_inventory_path" \
+  "$release_binary_relative" \
+  "$release_dsym_dwarf_relative" \
+  "$release_dsym_inventory_relative" \
+  "$release_identity_provenance_relative"
 
 hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
 
@@ -125,6 +178,31 @@ scripts/test-app-icon-bundle "$app_path"
 scripts/verify-mac-app-metadata "$app_path"
 codesign --verify --deep --strict "$app_path"
 evidence_capture_bundle "$app_path" 1 "mounted_app" "$mounted_app_fragment"
+
+mounted_binary_uuid_set="$(evidence_release_uuid_set "$binary_path")"
+expected_binary_uuid_set="$(
+  evidence_read "$package_manifest_path" release_symbols_binary_uuid_set
+)"
+if [[ "$mounted_binary_uuid_set" != "$expected_binary_uuid_set" ]]; then
+  echo "mounted app Mach-O UUIDs do not match the release dSYM" >&2
+  exit 1
+fi
+require_mounted_identity_value \
+  release_identity_version CFBundleShortVersionString
+require_mounted_identity_value release_identity_build CFBundleVersion
+require_mounted_identity_value release_identity_git_commit NoonmarkGitCommit
+require_mounted_identity_value release_identity_build_date NoonmarkBuildDate
+require_mounted_identity_value release_identity_runtime NoonmarkRuntime
+require_mounted_identity_value \
+  release_identity_minimum_os_version NoonmarkMinimumOSVersion
+require_mounted_identity_value \
+  release_identity_architecture NoonmarkBuildArchitecture
+require_mounted_identity_value \
+  release_identity_binary_uuid_set NoonmarkBinaryUUID
+require_mounted_identity_value \
+  release_identity_binary_sha256 NoonmarkBinarySHA256
+require_mounted_identity_value \
+  release_identity_binary_sha256_scope NoonmarkBinarySHA256Scope
 
 require_equal_manifest_value \
   "app_binary_sha256" \

@@ -16,7 +16,9 @@ source scripts/evidence-common
 
 dmg_path="${1:-dist/Noonmark.dmg}"
 package_manifest_path="${dmg_path}.manifest"
+package_inventory_path="${dmg_path}.inventory.sha256"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
+evidence_validate_artifact_basename "$app_short_name" "App short name"
 work_dir="${repo_root}/artifacts/dmg-install"
 install_dir="${work_dir}/Applications"
 helper_evidence_root="${repo_root}/artifacts/dmg-install-harness"
@@ -87,6 +89,10 @@ last_helper_exit_result=""
 diagnostic_baselines_ready=0
 runtime_manifest_started=0
 mount_cleanup_armed=0
+release_binary_path=""
+release_dsym_path=""
+release_dsym_inventory_path=""
+release_identity_provenance_path=""
 
 evidence_prepare_fresh_directory "$repo_root" "$work_dir"
 evidence_prepare_fresh_directory "$repo_root" "$helper_evidence_root"
@@ -134,6 +140,20 @@ require_equal_evidence_value() {
   if [[ -z "$left_value" || -z "$right_value" ||
     "$left_value" != "$right_value" ]]; then
     echo "DMG install evidence disagreed for $label" >&2
+    return 1
+  fi
+}
+
+require_installed_identity_value() {
+  local manifest_key="$1"
+  local plist_key="$2"
+  local expected
+  local actual
+
+  expected="$(evidence_read "$package_manifest_path" "$manifest_key")"
+  actual="$(plutil -extract "$plist_key" raw -o - "$info_plist")"
+  if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+    echo "installed App identity disagreed for $plist_key" >&2
     return 1
   fi
 }
@@ -756,6 +776,34 @@ cleanup() {
       "$runtime_manifest_path" \
       "diagnostic_diff_status" \
       "$diagnostic_status"
+    release_symbols_unchanged=true
+    if ! evidence_verify_release_symbols \
+      "$repo_root" \
+      "$release_binary_path" \
+      "$release_dsym_path" \
+      "$package_manifest_path" \
+      "release_symbols" \
+      "$release_dsym_inventory_path"; then
+      release_symbols_unchanged=false
+      final_status=1
+    fi
+    evidence_append \
+      "$runtime_manifest_path" \
+      "release_symbols_unchanged" \
+      "$release_symbols_unchanged"
+    release_identity_provenance_unchanged=true
+    if ! evidence_verify_release_identity_provenance \
+      "$repo_root" \
+      "$release_identity_provenance_path" \
+      "$package_manifest_path" \
+      release_identity; then
+      release_identity_provenance_unchanged=false
+      final_status=1
+    fi
+    evidence_append \
+      "$runtime_manifest_path" \
+      "release_identity_provenance_unchanged" \
+      "$release_identity_provenance_unchanged"
     if [[ "$final_status" -eq 0 ]]; then
       if evidence_inventory \
         "$repo_root" \
@@ -763,6 +811,10 @@ cleanup() {
         "$dmg_path" \
         "${dmg_path}.sha256" \
         "$package_manifest_path" \
+        "$package_inventory_path" \
+        "$release_dsym_path" \
+        "$release_dsym_inventory_path" \
+        "$release_identity_provenance_path" \
         "$helper_app" \
         "$install_dir" \
         "$screenshot_path" \
@@ -813,6 +865,25 @@ cleanup() {
       "helper_end_binary_sha256" \
       "dmg_sha256" \
       "package_manifest_sha256" \
+      "package_release_symbols_binary_sha256" \
+      "package_release_symbols_binary_uuid_set" \
+      "package_release_symbols_dsym_dwarf_sha256" \
+      "package_release_symbols_dsym_uuid_set" \
+      "package_release_symbols_dsym_inventory_sha256" \
+      "package_release_identity_version" \
+      "package_release_identity_build" \
+      "package_release_identity_git_commit" \
+      "package_release_identity_build_date" \
+      "package_release_identity_runtime" \
+      "package_release_identity_minimum_os_version" \
+      "package_release_identity_architecture" \
+      "package_release_identity_binary_uuid_set" \
+      "package_release_identity_binary_sha256" \
+      "package_release_identity_binary_sha256_scope" \
+      "package_release_identity_provenance_path" \
+      "package_release_identity_provenance_sha256" \
+      "release_symbols_unchanged" \
+      "release_identity_provenance_unchanged" \
       "artifact_inventory_sha256" \
       "source_tree_unchanged" \
       "installed_app_binary_unchanged" \
@@ -1971,6 +2042,31 @@ if [[ -n "${NOONMARK_EVIDENCE_RUN_ID:-}" &&
 fi
 evidence_run_id="$package_run_id"
 
+release_binary_path="${repo_root}/$(
+  evidence_read "$package_manifest_path" release_symbols_binary_path
+)"
+release_dsym_path="${repo_root}/$(
+  evidence_read "$package_manifest_path" release_symbols_dsym_bundle_path
+)"
+release_dsym_inventory_path="${repo_root}/$(
+  evidence_read "$package_manifest_path" release_symbols_dsym_inventory_path
+)"
+release_identity_provenance_path="${repo_root}/$(
+  evidence_read "$package_manifest_path" release_identity_provenance_path
+)"
+evidence_verify_release_symbols \
+  "$repo_root" \
+  "$release_binary_path" \
+  "$release_dsym_path" \
+  "$package_manifest_path" \
+  "release_symbols" \
+  "$release_dsym_inventory_path"
+evidence_verify_release_identity_provenance \
+  "$repo_root" \
+  "$release_identity_provenance_path" \
+  "$package_manifest_path" \
+  release_identity
+
 rm -rf "$work_dir" "$helper_evidence_root"
 rm -f "$artifact_inventory_path"
 mkdir -p "$install_dir"
@@ -2049,6 +2145,24 @@ evidence_require_bundle_snapshots_equal \
   "$installed_app_fragment" \
   "installed_app" \
   "mounted and installed App"
+require_installed_identity_value \
+  release_identity_version CFBundleShortVersionString
+require_installed_identity_value release_identity_build CFBundleVersion
+require_installed_identity_value \
+  release_identity_git_commit NoonmarkGitCommit
+require_installed_identity_value \
+  release_identity_build_date NoonmarkBuildDate
+require_installed_identity_value release_identity_runtime NoonmarkRuntime
+require_installed_identity_value \
+  release_identity_minimum_os_version NoonmarkMinimumOSVersion
+require_installed_identity_value \
+  release_identity_architecture NoonmarkBuildArchitecture
+require_installed_identity_value \
+  release_identity_binary_uuid_set NoonmarkBinaryUUID
+require_installed_identity_value \
+  release_identity_binary_sha256 NoonmarkBinarySHA256
+require_installed_identity_value \
+  release_identity_binary_sha256_scope NoonmarkBinarySHA256Scope
 
 runtime_evidence_snapshot_diagnostics \
   "$executable_name" \
@@ -2081,6 +2195,43 @@ evidence_append \
   "$runtime_manifest_path" \
   "package_app_binary_sha256" \
   "$(evidence_read "$package_manifest_path" "app_binary_sha256")"
+for release_symbol_suffix in \
+  binary_sha256 \
+  binary_uuid_set \
+  dsym_dwarf_sha256 \
+  dsym_uuid_set \
+  dsym_inventory_sha256; do
+  evidence_append \
+    "$runtime_manifest_path" \
+    "package_release_symbols_${release_symbol_suffix}" \
+    "$(
+      evidence_read \
+        "$package_manifest_path" \
+        "release_symbols_${release_symbol_suffix}"
+    )"
+done
+for release_identity_suffix in \
+  version \
+  build \
+  git_commit \
+  build_date \
+  runtime \
+  minimum_os_version \
+  architecture \
+  binary_uuid_set \
+  binary_sha256 \
+  binary_sha256_scope \
+  provenance_path \
+  provenance_sha256; do
+  evidence_append \
+    "$runtime_manifest_path" \
+    "package_release_identity_${release_identity_suffix}" \
+    "$(
+      evidence_read \
+        "$package_manifest_path" \
+        "release_identity_${release_identity_suffix}"
+    )"
+done
 evidence_append \
   "$runtime_manifest_path" \
   "production_bundle_identifier" \

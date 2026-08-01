@@ -14,6 +14,17 @@ evidence_validate_value() {
   [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]]
 }
 
+evidence_validate_artifact_basename() {
+  local value="$1"
+  local label="${2:-artifact}"
+
+  if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,63}$ ||
+    "$value" == "." || "$value" == ".." ]]; then
+    echo "$label must be a safe ASCII basename" >&2
+    return 1
+  fi
+}
+
 evidence_expected_english_oracles() {
   local scenario="$1"
   local base="screenshot_vision_ocr_no_han"
@@ -290,6 +301,584 @@ evidence_capture_bundle() {
     return 1
   fi
   rm -f "$content"
+}
+
+evidence_release_dwarf_path() {
+  local binary_path="$1"
+  local dsym_bundle="$2"
+  local dwarf_directory="${dsym_bundle}/Contents/Resources/DWARF"
+  local candidate
+  local resolved=""
+  local count=0
+  local candidates
+
+  if [[ ! -f "$binary_path" || -L "$binary_path" ||
+    ! -d "$dsym_bundle" || -L "$dsym_bundle" ||
+    ! -d "$dwarf_directory" || -L "$dwarf_directory" ]]; then
+    echo "release binary or dSYM bundle is missing or unsafe" >&2
+    return 1
+  fi
+  candidates="$(mktemp "${TMPDIR:-/tmp}/noonmark-dwarf-candidates.XXXXXX")" ||
+    return 1
+  if ! find "$dwarf_directory" \
+    -mindepth 1 \
+    -maxdepth 1 \
+    -type f \
+    -print0 >"$candidates"; then
+    rm -f "$candidates"
+    echo "release dSYM DWARF directory could not be scanned" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' candidate; do
+    resolved="$candidate"
+    count=$((count + 1))
+  done <"$candidates"
+  rm -f "$candidates"
+  if [[ "$count" -ne 1 || -z "$resolved" || -L "$resolved" ||
+    "$(basename "$resolved")" != "$(basename "$binary_path")" ]]; then
+    echo "release dSYM must contain exactly the matching main DWARF file" >&2
+    return 1
+  fi
+  printf '%s\n' "$resolved"
+}
+
+evidence_release_uuid_set() {
+  local artifact_path="$1"
+  local dwarfdump_bin
+  local output
+  local rows
+  local sorted_rows
+  local canonical_uuid_set
+  local line
+  local arch
+  local uuid
+  local line_count=0
+  local uuid_line_regex='^UUID: ([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}) \(([A-Za-z0-9_.-]+)\) .+$'
+
+  if [[ ! -f "$artifact_path" || -L "$artifact_path" ]]; then
+    echo "release UUID input is missing or unsafe: $artifact_path" >&2
+    return 1
+  fi
+  dwarfdump_bin="$(xcrun --find dwarfdump)" || return 1
+  if [[ "$dwarfdump_bin" != /* || ! -x "$dwarfdump_bin" ]]; then
+    echo "release UUID inspection requires an absolute executable dwarfdump" >&2
+    return 1
+  fi
+
+  output="$(mktemp "${TMPDIR:-/tmp}/noonmark-dwarfdump.XXXXXX")" ||
+    return 1
+  rows="$(mktemp "${TMPDIR:-/tmp}/noonmark-dwarfdump-rows.XXXXXX")" || {
+    rm -f "$output"
+    return 1
+  }
+  sorted_rows="$(mktemp "${TMPDIR:-/tmp}/noonmark-dwarfdump-sorted.XXXXXX")" || {
+    rm -f "$output" "$rows"
+    return 1
+  }
+  if ! "$dwarfdump_bin" --uuid "$artifact_path" >"$output"; then
+    rm -f "$output" "$rows" "$sorted_rows"
+    echo "dwarfdump could not inspect release UUIDs: $artifact_path" >&2
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_count=$((line_count + 1))
+    if [[ ! "$line" =~ $uuid_line_regex ]]; then
+      rm -f "$output" "$rows" "$sorted_rows"
+      echo "dwarfdump emitted an unrecognized UUID row" >&2
+      return 1
+    fi
+    uuid="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')"
+    arch="${BASH_REMATCH[2]}"
+    printf '%s:%s\n' "$arch" "$uuid" >>"$rows"
+  done <"$output"
+  rm -f "$output"
+  if [[ "$line_count" -eq 0 ]] || ! awk -F: '
+    NF != 2 || seen_arch[$1]++ || seen_uuid[$2]++ { exit 1 }
+  ' "$rows"; then
+    rm -f "$rows" "$sorted_rows"
+    echo "release UUID evidence is empty or duplicated" >&2
+    return 1
+  fi
+  if ! LC_ALL=C sort "$rows" >"$sorted_rows"; then
+    rm -f "$rows" "$sorted_rows"
+    echo "release UUID rows could not be sorted canonically" >&2
+    return 1
+  fi
+  canonical_uuid_set="$(paste -sd, "$sorted_rows")" || {
+    rm -f "$rows" "$sorted_rows"
+    return 1
+  }
+  rm -f "$rows" "$sorted_rows"
+  if [[ -z "$canonical_uuid_set" || "$canonical_uuid_set" == *$'\n'* ||
+    "$canonical_uuid_set" == *$'\r'* ]]; then
+    return 1
+  fi
+  printf '%s\n' "$canonical_uuid_set"
+}
+
+evidence_release_architecture_description() {
+  local uuid_set="$1"
+  local entry
+  local architecture
+  local uuid
+  local count=0
+  local arm_count=0
+  local x86_count=0
+  local -a entries
+
+  if [[ -z "$uuid_set" || "$uuid_set" == *$'\n'* ||
+    "$uuid_set" == *$'\r'* ]]; then
+    return 1
+  fi
+  IFS=, read -r -a entries <<<"$uuid_set"
+  for entry in "${entries[@]}"; do
+    architecture="${entry%%:*}"
+    uuid="${entry#*:}"
+    if [[ "$architecture" == "$entry" ||
+      ! "$uuid" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+      return 1
+    fi
+    case "$architecture" in
+      arm64 | arm64e) arm_count=$((arm_count + 1)) ;;
+      x86_64) x86_count=$((x86_count + 1)) ;;
+      *) return 1 ;;
+    esac
+    count=$((count + 1))
+  done
+  if [[ "$count" -eq 1 && "$arm_count" -eq 1 ]]; then
+    printf 'arm64\n'
+  elif [[ "$count" -eq 1 && "$x86_count" -eq 1 ]]; then
+    printf 'x86_64\n'
+  elif [[ "$count" -eq 2 && "$arm_count" -eq 1 &&
+    "$x86_count" -eq 1 ]]; then
+    printf 'Universal\n'
+  else
+    return 1
+  fi
+}
+
+evidence_require_release_symbol_pair() {
+  local binary_path="$1"
+  local dsym_bundle="$2"
+  local dwarf_path
+  local binary_uuid_set
+  local dsym_uuid_set
+
+  dwarf_path="$(evidence_release_dwarf_path "$binary_path" "$dsym_bundle")" ||
+    return 1
+  binary_uuid_set="$(evidence_release_uuid_set "$binary_path")" || return 1
+  dsym_uuid_set="$(evidence_release_uuid_set "$dwarf_path")" || return 1
+  if [[ "$binary_uuid_set" != "$dsym_uuid_set" ]]; then
+    echo "release binary and dSYM UUID sets do not match" >&2
+    return 1
+  fi
+}
+
+evidence_release_repo_relative_path() {
+  local repo_root="$1"
+  local requested_path="$2"
+  local expected_kind="$3"
+  local repo_absolute
+  local requested_absolute
+  local parent_absolute
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  if [[ -z "$requested_path" || "$requested_path" == *$'\n'* ||
+    "$requested_path" == *$'\r'* ]]; then
+    return 1
+  fi
+  if [[ "$requested_path" == /* ]]; then
+    requested_absolute="$requested_path"
+  else
+    requested_absolute="$repo_absolute/$requested_path"
+  fi
+  if [[ -L "$requested_absolute" ]]; then
+    return 1
+  fi
+  case "$expected_kind" in
+    file) [[ -f "$requested_absolute" ]] || return 1 ;;
+    directory) [[ -d "$requested_absolute" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  parent_absolute="$(cd "$(dirname "$requested_absolute")" && pwd -P)" ||
+    return 1
+  requested_absolute="$parent_absolute/$(basename "$requested_absolute")"
+  if [[ "$requested_absolute" != "$repo_absolute/"* ]]; then
+    echo "release symbol evidence path escapes the repository" >&2
+    return 1
+  fi
+  printf '%s\n' "${requested_absolute#"$repo_absolute"/}"
+}
+
+evidence_require_exact_keys() {
+  local document="$1"
+  shift
+  local expected_count="$#"
+  local actual_count
+  local key
+
+  if [[ ! -f "$document" || -L "$document" || "$expected_count" -eq 0 ]] ||
+    ! awk -F= '
+      NF < 2 || $1 !~ /^[a-zA-Z][a-zA-Z0-9_]*$/ ||
+        length(substr($0, index($0, "=") + 1)) == 0 || seen[$1]++ {
+        invalid = 1
+      }
+      END { exit invalid ? 1 : 0 }
+    ' "$document"; then
+    echo "evidence document has invalid or duplicate keys" >&2
+    return 1
+  fi
+  actual_count="$(wc -l <"$document" | tr -d '[:space:]')" || return 1
+  if [[ "$actual_count" != "$expected_count" ]]; then
+    echo "evidence document has an unexpected key set" >&2
+    return 1
+  fi
+  for key in "$@"; do
+    evidence_read "$document" "$key" >/dev/null || {
+      echo "evidence document lacks required key: $key" >&2
+      return 1
+    }
+  done
+}
+
+evidence_verify_release_identity_provenance() {
+  local repo_root="$1"
+  local provenance_path="$2"
+  local manifest="$3"
+  local manifest_prefix="$4"
+  local provenance_relative
+  local actual_sha256
+  local suffix
+  local provenance_value
+  local manifest_value
+
+  if ! evidence_validate_key "$manifest_prefix" || [[ ! -f "$manifest" ]]; then
+    return 1
+  fi
+  provenance_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$provenance_path" file
+  )" || return 1
+  actual_sha256="$(shasum -a 256 "$provenance_path" | awk '{print $1}')" ||
+    return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${manifest_prefix}_provenance_path" "$provenance_relative" ||
+    return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${manifest_prefix}_provenance_sha256" "$actual_sha256" ||
+    return 1
+  evidence_require_exact_keys \
+    "$provenance_path" \
+    release_build_identity_schema_version \
+    release_build_identity_version \
+    release_build_identity_build \
+    release_build_identity_git_commit \
+    release_build_identity_build_date \
+    release_build_identity_runtime \
+    release_build_identity_minimum_os_version \
+    release_build_identity_architecture \
+    release_build_identity_binary_uuid_set \
+    release_build_identity_binary_sha256 \
+    release_build_identity_binary_sha256_scope || return 1
+  if [[ "$(
+    evidence_read "$provenance_path" release_build_identity_schema_version
+  )" != "1" ]]; then
+    echo "release build identity provenance has an unsupported schema" >&2
+    return 1
+  fi
+  for suffix in \
+    version \
+    build \
+    git_commit \
+    build_date \
+    runtime \
+    minimum_os_version \
+    architecture \
+    binary_uuid_set \
+    binary_sha256 \
+    binary_sha256_scope; do
+    provenance_value="$(
+      evidence_read "$provenance_path" "release_build_identity_${suffix}"
+    )" || return 1
+    manifest_value="$(
+      evidence_read "$manifest" "${manifest_prefix}_${suffix}"
+    )" || return 1
+    if [[ "$provenance_value" != "$manifest_value" ]]; then
+      echo "release build identity provenance disagrees for $suffix" >&2
+      return 1
+    fi
+  done
+}
+
+evidence_capture_release_dsym_inventory() {
+  local repo_root="$1"
+  local dsym_bundle="$2"
+  local output="$3"
+  local repo_absolute
+  local dsym_relative
+  local dsym_absolute
+  local candidates
+  local unsorted
+  local sorted
+  local path
+  local relative
+  local digest
+  local size
+  local kind
+
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  dsym_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$dsym_bundle" directory
+  )" || return 1
+  dsym_absolute="$repo_absolute/$dsym_relative"
+  candidates="$(mktemp "${TMPDIR:-/tmp}/noonmark-dsym-tree.XXXXXX")" ||
+    return 1
+  unsorted="$(mktemp "${TMPDIR:-/tmp}/noonmark-dsym-inventory.XXXXXX")" || {
+    rm -f "$candidates"
+    return 1
+  }
+  sorted="$(mktemp "${TMPDIR:-/tmp}/noonmark-dsym-inventory-sorted.XXXXXX")" || {
+    rm -f "$candidates" "$unsorted"
+    return 1
+  }
+  if ! find "$dsym_absolute" -print0 >"$candidates"; then
+    rm -f "$candidates" "$unsorted" "$sorted"
+    echo "release dSYM tree could not be scanned" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    relative="${path#"$repo_absolute"/}"
+    if [[ "$relative" == "$path" || -z "$relative" ||
+      "$relative" == *$'\n'* || "$relative" == *$'\r'* ||
+      "$relative" == *$'\t'* || -L "$path" ]]; then
+      rm -f "$candidates" "$unsorted" "$sorted"
+      echo "release dSYM contains an unsafe path" >&2
+      return 1
+    fi
+    if [[ -d "$path" ]]; then
+      kind="D"
+      digest="-"
+      size=0
+    elif [[ -f "$path" ]]; then
+      kind="F"
+      digest="$(shasum -a 256 "$path" | awk '{print $1}')" || {
+        rm -f "$candidates" "$unsorted" "$sorted"
+        return 1
+      }
+      size="$(stat -f '%z' "$path")" || {
+        rm -f "$candidates" "$unsorted" "$sorted"
+        return 1
+      }
+    else
+      rm -f "$candidates" "$unsorted" "$sorted"
+      echo "release dSYM contains an unsupported filesystem entry" >&2
+      return 1
+    fi
+    printf '%s\t%s\t%s\t%s\n' \
+      "$kind" "$digest" "$size" "$relative" >>"$unsorted"
+  done <"$candidates"
+  rm -f "$candidates"
+  if [[ ! -s "$unsorted" ]] ||
+    ! LC_ALL=C sort -t $'\t' -k4,4 "$unsorted" >"$sorted"; then
+    rm -f "$unsorted" "$sorted"
+    echo "release dSYM inventory could not be sorted" >&2
+    return 1
+  fi
+  rm -f "$unsorted"
+  if ! evidence_write_fragment_atomically "$output" "$sorted"; then
+    rm -f "$sorted"
+    return 1
+  fi
+  rm -f "$sorted"
+}
+
+evidence_capture_release_symbols() {
+  local repo_root="$1"
+  local binary_path="$2"
+  local dsym_bundle="$3"
+  local prefix="$4"
+  local output="$5"
+  local inventory="$6"
+  local dwarf_path
+  local binary_uuid_set
+  local dsym_uuid_set
+  local binary_relative
+  local dsym_relative
+  local dwarf_relative
+  local inventory_absolute
+  local inventory_relative
+  local repo_absolute
+  local dsym_absolute
+  local content
+
+  if ! evidence_validate_key "$prefix"; then
+    echo "invalid release symbol evidence prefix: $prefix" >&2
+    return 1
+  fi
+  evidence_require_release_symbol_pair "$binary_path" "$dsym_bundle" ||
+    return 1
+  dwarf_path="$(evidence_release_dwarf_path "$binary_path" "$dsym_bundle")" ||
+    return 1
+  binary_uuid_set="$(evidence_release_uuid_set "$binary_path")" || return 1
+  dsym_uuid_set="$(evidence_release_uuid_set "$dwarf_path")" || return 1
+  binary_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$binary_path" file
+  )" || return 1
+  dsym_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$dsym_bundle" directory
+  )" || return 1
+  dwarf_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$dwarf_path" file
+  )" || return 1
+  inventory_absolute="$(evidence_guard_repo_path "$repo_root" "$inventory")" ||
+    return 1
+  repo_absolute="$(evidence_absolute_repo_root "$repo_root")" || return 1
+  dsym_absolute="$repo_absolute/$dsym_relative"
+  if [[ "$inventory_absolute" == "$dsym_absolute" ||
+    "$inventory_absolute" == "$dsym_absolute/"* ]]; then
+    echo "release dSYM inventory cannot be stored inside the dSYM" >&2
+    return 1
+  fi
+  evidence_capture_release_dsym_inventory \
+    "$repo_root" "$dsym_bundle" "$inventory_absolute" ||
+    return 1
+  inventory_relative="$(
+    evidence_release_repo_relative_path \
+      "$repo_root" "$inventory_absolute" file
+  )" || return 1
+
+  content="$(mktemp "${TMPDIR:-/tmp}/noonmark-release-symbols.XXXXXX")" ||
+    return 1
+  {
+    printf '%s_binary_path=%s\n' "$prefix" "$binary_relative"
+    printf '%s_binary_sha256=%s\n' \
+      "$prefix" "$(shasum -a 256 "$binary_path" | awk '{print $1}')"
+    printf '%s_binary_uuid_set=%s\n' "$prefix" "$binary_uuid_set"
+    printf '%s_dsym_bundle_path=%s\n' "$prefix" "$dsym_relative"
+    printf '%s_dsym_dwarf_path=%s\n' "$prefix" "$dwarf_relative"
+    printf '%s_dsym_dwarf_sha256=%s\n' \
+      "$prefix" "$(shasum -a 256 "$dwarf_path" | awk '{print $1}')"
+    printf '%s_dsym_uuid_set=%s\n' "$prefix" "$dsym_uuid_set"
+    printf '%s_dsym_inventory_path=%s\n' "$prefix" "$inventory_relative"
+    printf '%s_dsym_inventory_sha256=%s\n' \
+      "$prefix" "$(shasum -a 256 "$inventory_absolute" | awk '{print $1}')"
+    printf '%s_uuid_match=true\n' "$prefix"
+  } >"$content"
+  if ! evidence_write_fragment_atomically "$output" "$content"; then
+    rm -f "$content"
+    return 1
+  fi
+  rm -f "$content"
+}
+
+evidence_require_release_symbol_value() {
+  local manifest="$1"
+  local key="$2"
+  local actual="$3"
+  local expected
+
+  expected="$(evidence_read "$manifest" "$key")" || {
+    echo "release symbol manifest is missing $key" >&2
+    return 1
+  }
+  if [[ "$expected" != "$actual" ]]; then
+    echo "release symbol manifest disagrees for $key" >&2
+    return 1
+  fi
+}
+
+evidence_verify_release_symbols() {
+  local repo_root="$1"
+  local binary_path="$2"
+  local dsym_bundle="$3"
+  local manifest="$4"
+  local prefix="$5"
+  local inventory="$6"
+  local dwarf_path
+  local binary_relative
+  local dsym_relative
+  local dwarf_relative
+  local inventory_relative
+  local binary_sha256
+  local dwarf_sha256
+  local binary_uuid_set
+  local dsym_uuid_set
+  local inventory_sha256
+  local current_inventory
+
+  if ! evidence_validate_key "$prefix" || [[ ! -f "$manifest" ]]; then
+    return 1
+  fi
+  evidence_require_release_symbol_pair "$binary_path" "$dsym_bundle" ||
+    return 1
+  dwarf_path="$(evidence_release_dwarf_path "$binary_path" "$dsym_bundle")" ||
+    return 1
+  binary_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$binary_path" file
+  )" || return 1
+  dsym_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$dsym_bundle" directory
+  )" || return 1
+  dwarf_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$dwarf_path" file
+  )" || return 1
+  inventory_relative="$(
+    evidence_release_repo_relative_path "$repo_root" "$inventory" file
+  )" || return 1
+  binary_sha256="$(shasum -a 256 "$binary_path" | awk '{print $1}')" ||
+    return 1
+  dwarf_sha256="$(shasum -a 256 "$dwarf_path" | awk '{print $1}')" ||
+    return 1
+  binary_uuid_set="$(evidence_release_uuid_set "$binary_path")" || return 1
+  dsym_uuid_set="$(evidence_release_uuid_set "$dwarf_path")" || return 1
+  inventory_sha256="$(shasum -a 256 "$inventory" | awk '{print $1}')" ||
+    return 1
+
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_binary_path" "$binary_relative" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_binary_sha256" "$binary_sha256" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_binary_uuid_set" "$binary_uuid_set" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_bundle_path" "$dsym_relative" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_dwarf_path" "$dwarf_relative" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_dwarf_sha256" "$dwarf_sha256" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_uuid_set" "$dsym_uuid_set" || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_inventory_path" "$inventory_relative" ||
+    return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_dsym_inventory_sha256" "$inventory_sha256" ||
+    return 1
+  evidence_require_release_symbol_value \
+    "$manifest" "${prefix}_uuid_match" true || return 1
+  evidence_require_release_symbol_value \
+    "$manifest" app_binary_sha256 "$binary_sha256" || return 1
+  if [[ "$binary_uuid_set" != "$dsym_uuid_set" ]]; then
+    return 1
+  fi
+
+  if ! awk -F '\t' -v expected="$dwarf_relative" '
+    $1 == "F" && $4 == expected { count += 1 }
+    END { exit count == 1 ? 0 : 1 }
+  ' "$inventory"; then
+    echo "release dSYM inventory omits its main DWARF file" >&2
+    return 1
+  fi
+  current_inventory="$(
+    mktemp "${TMPDIR:-/tmp}/noonmark-current-dsym-inventory.XXXXXX"
+  )" || return 1
+  if ! evidence_capture_release_dsym_inventory \
+    "$repo_root" "$dsym_bundle" "$current_inventory" ||
+    ! cmp -s "$inventory" "$current_inventory"; then
+    rm -f "$current_inventory"
+    echo "release dSYM directory does not match its exact inventory" >&2
+    return 1
+  fi
+  rm -f "$current_inventory"
 }
 
 evidence_atomic_append_file() {

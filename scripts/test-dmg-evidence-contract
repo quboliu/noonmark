@@ -26,6 +26,9 @@ set -euo pipefail
 
 for stale_path in \
   dist/Noonmark.app \
+  dist/Noonmark.app.dSYM \
+  dist/Noonmark.app.dSYM.inventory.sha256 \
+  dist/Noonmark.app.release-build-identity \
   dist/Noonmark.dmg \
   dist/Noonmark.dmg.sha256 \
   dist/Noonmark.dmg.inventory.sha256; do
@@ -45,9 +48,31 @@ if [[ "${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-}" != "1" ]]; then
   exit 92
 fi
 mkdir -p dist/Noonmark.app/Contents/MacOS
+mkdir -p dist/Noonmark.app.dSYM/Contents/Resources/DWARF
 printf 'fixture-production-binary\n' >dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
 chmod +x dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp
+printf 'fixture-production-dwarf\n' \
+  >dist/Noonmark.app.dSYM/Contents/Resources/DWARF/NoonmarkMacApp
 printf '<plist/>\n' >dist/Noonmark.app/Contents/Info.plist
+release_build_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+release_git_commit="$(git rev-parse --verify HEAD)"
+release_linked_sha256="$(
+  shasum -a 256 dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp |
+    awk '{print $1}'
+)"
+cat >dist/Noonmark.app.release-build-identity <<IDENTITY
+release_build_identity_schema_version=1
+release_build_identity_version=0.1.0
+release_build_identity_build=1
+release_build_identity_git_commit=$release_git_commit
+release_build_identity_build_date=$release_build_date
+release_build_identity_runtime=Swift-native
+release_build_identity_minimum_os_version=14.0
+release_build_identity_architecture=arm64
+release_build_identity_binary_uuid_set=arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE
+release_build_identity_binary_sha256=$release_linked_sha256
+release_build_identity_binary_sha256_scope=linked-before-bundle-signing
+IDENTITY
 SCRIPT
 chmod +x "$fixture_root/scripts/build-mac-app"
 
@@ -150,11 +175,52 @@ chmod +x "$fixture_root/bin/codesign"
 cat >"$fixture_root/bin/plutil" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == "-extract" && "$2" == "CFBundleExecutable" ]]; then
-  case "${@: -1}" in
-    *NoonmarkMacAppE2E.app/*) echo "NoonmarkMacAppE2E" ;;
-    *NoonmarkDMGInstallHarness.app/*) echo "NoonmarkDMGInstallHarness" ;;
-    *) echo "NoonmarkMacApp" ;;
+if [[ "$1" == "-extract" ]]; then
+  case "$2" in
+    CFBundleExecutable)
+      case "${@: -1}" in
+        *NoonmarkMacAppE2E.app/*) echo "NoonmarkMacAppE2E" ;;
+        *NoonmarkDMGInstallHarness.app/*) echo "NoonmarkDMGInstallHarness" ;;
+        *) echo "NoonmarkMacApp" ;;
+      esac
+      ;;
+    CFBundleShortVersionString)
+      echo "0.1.0"
+      ;;
+    CFBundleVersion)
+      echo "1"
+      ;;
+    LSMinimumSystemVersion | NoonmarkMinimumOSVersion)
+      echo "14.0"
+      ;;
+    NoonmarkGitCommit)
+      awk -F= '$1 == "release_build_identity_git_commit" { print $2 }' \
+        dist/Noonmark.app.release-build-identity
+      ;;
+    NoonmarkBuildDate)
+      awk -F= '$1 == "release_build_identity_build_date" { print $2 }' \
+        dist/Noonmark.app.release-build-identity
+      ;;
+    NoonmarkRuntime)
+      echo "Swift-native"
+      ;;
+    NoonmarkBuildArchitecture)
+      echo "arm64"
+      ;;
+    NoonmarkBinaryUUID)
+      echo "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+      ;;
+    NoonmarkBinarySHA256)
+      awk -F= '$1 == "release_build_identity_binary_sha256" { print $2 }' \
+        dist/Noonmark.app.release-build-identity
+      ;;
+    NoonmarkBinarySHA256Scope)
+      echo "linked-before-bundle-signing"
+      ;;
+    *)
+      echo "unexpected fixture plutil key: $2" >&2
+      exit 95
+      ;;
   esac
   exit 0
 fi
@@ -162,6 +228,22 @@ echo "unexpected fixture plutil invocation: $*" >&2
 exit 95
 SCRIPT
 chmod +x "$fixture_root/bin/plutil"
+
+cat >"$fixture_root/bin/dwarfdump" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--uuid" && -f "$2" ]]
+printf 'UUID: AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE (arm64) %s\n' "$2"
+SCRIPT
+chmod +x "$fixture_root/bin/dwarfdump"
+
+cat >"$fixture_root/bin/xcrun" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]
+printf '%s\n' "$fixture_root/bin/dwarfdump"
+SCRIPT
+chmod +x "$fixture_root/bin/xcrun"
 
 for verifier in test-app-icon-bundle verify-mac-app-metadata; do
   cat >"$fixture_root/scripts/$verifier" <<'SCRIPT'
@@ -220,6 +302,14 @@ for requirement in \
   "app_codesign_team_identifier=FIXTURETEAM" \
   "app_codesign_deep_strict=1" \
   "app_stable_required=1" \
+  "release_symbols_uuid_match=true" \
+  "release_identity_version=0.1.0" \
+  "release_identity_build=1" \
+  "release_identity_runtime=Swift-native" \
+  "release_identity_minimum_os_version=14.0" \
+  "release_identity_architecture=arm64" \
+  "release_identity_binary_sha256_scope=linked-before-bundle-signing" \
+  "release_identity_provenance_path=dist/Noonmark.app.release-build-identity" \
   "suite_exit_status=0"; do
   if ! grep -Fqx "$requirement" "$fixture_root/dist/Noonmark.dmg.manifest"; then
     echo "package manifest is missing $requirement" >&2
@@ -231,6 +321,18 @@ if ! grep -Eq '^source_worktree_tree_oid=[0-9a-f]{40}$' \
   "$fixture_root/dist/Noonmark.dmg.manifest"; then
   echo "package manifest lacks the exact Git worktree tree OID" >&2
   cat "$fixture_root/dist/Noonmark.dmg.manifest" >&2
+  exit 1
+fi
+if ! grep -Eq '^release_identity_git_commit=[0-9a-f]{40}$' \
+  "$fixture_root/dist/Noonmark.dmg.manifest" ||
+  ! grep -Eq '^release_identity_build_date=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"; then
+  echo "package manifest lacks exact release commit or build date identity" >&2
+  exit 1
+fi
+if ! grep -Eq '^release_identity_provenance_sha256=[0-9a-f]{64}$' \
+  "$fixture_root/dist/Noonmark.dmg.manifest"; then
+  echo "package manifest lacks exact release identity provenance" >&2
   exit 1
 fi
 
@@ -264,6 +366,51 @@ fi
 mv \
   "$fixture_root/dist/Noonmark.dmg.manifest.valid" \
   "$fixture_root/dist/Noonmark.dmg.manifest"
+
+mv \
+  "$fixture_root/dist/Noonmark.app.dSYM" \
+  "$fixture_root/dist/Noonmark.app.dSYM.missing"
+set +e
+(
+  cd "$fixture_root"
+  FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log" \
+    PATH="$fixture_root/bin:$PATH" \
+    scripts/verify-dmg dist/Noonmark.dmg
+) >"$fixture_root/verify-missing-dsym.stdout" \
+  2>"$fixture_root/verify-missing-dsym.stderr"
+missing_dsym_status=$?
+set -e
+mv \
+  "$fixture_root/dist/Noonmark.app.dSYM.missing" \
+  "$fixture_root/dist/Noonmark.app.dSYM"
+if [[ "$missing_dsym_status" -eq 0 ]]; then
+  echo "verify-dmg accepted a missing release dSYM" >&2
+  exit 1
+fi
+
+cp \
+  "$fixture_root/dist/Noonmark.app.release-build-identity" \
+  "$fixture_root/dist/Noonmark.app.release-build-identity.valid"
+sed -i '' \
+  's/^release_build_identity_binary_sha256=.*/release_build_identity_binary_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' \
+  "$fixture_root/dist/Noonmark.app.release-build-identity"
+set +e
+(
+  cd "$fixture_root"
+  FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log" \
+    PATH="$fixture_root/bin:$PATH" \
+    scripts/verify-dmg dist/Noonmark.dmg
+) >"$fixture_root/verify-tampered-build-identity.stdout" \
+  2>"$fixture_root/verify-tampered-build-identity.stderr"
+tampered_build_identity_status=$?
+set -e
+mv \
+  "$fixture_root/dist/Noonmark.app.release-build-identity.valid" \
+  "$fixture_root/dist/Noonmark.app.release-build-identity"
+if [[ "$tampered_build_identity_status" -eq 0 ]]; then
+  echo "verify-dmg accepted tampered release build identity provenance" >&2
+  exit 1
+fi
 
 export FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log"
 export PATH="$fixture_root/bin:$PATH"
@@ -461,6 +608,74 @@ dmg_checksum_sha256="$(
   awk -F= '$1 == "dmg_checksum_sha256" { print $2 }' \
     "$fixture_root/dist/Noonmark.dmg.manifest"
 )"
+release_symbols_binary_sha256="$(
+  awk -F= '$1 == "release_symbols_binary_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_symbols_binary_uuid_set="$(
+  awk -F= '$1 == "release_symbols_binary_uuid_set" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_symbols_dsym_dwarf_sha256="$(
+  awk -F= '$1 == "release_symbols_dsym_dwarf_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_symbols_dsym_uuid_set="$(
+  awk -F= '$1 == "release_symbols_dsym_uuid_set" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_symbols_dsym_inventory_sha256="$(
+  awk -F= '$1 == "release_symbols_dsym_inventory_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_version="$(
+  awk -F= '$1 == "release_identity_version" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_build="$(
+  awk -F= '$1 == "release_identity_build" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_git_commit="$(
+  awk -F= '$1 == "release_identity_git_commit" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_build_date="$(
+  awk -F= '$1 == "release_identity_build_date" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_runtime="$(
+  awk -F= '$1 == "release_identity_runtime" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_minimum_os_version="$(
+  awk -F= '$1 == "release_identity_minimum_os_version" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_architecture="$(
+  awk -F= '$1 == "release_identity_architecture" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_binary_uuid_set="$(
+  awk -F= '$1 == "release_identity_binary_uuid_set" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_binary_sha256="$(
+  awk -F= '$1 == "release_identity_binary_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_binary_sha256_scope="$(
+  awk -F= '$1 == "release_identity_binary_sha256_scope" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_provenance_path="$(
+  awk -F= '$1 == "release_identity_provenance_path" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
+release_identity_provenance_sha256="$(
+  awk -F= '$1 == "release_identity_provenance_sha256" { print $2 }' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"
+)"
 package_manifest_sha256="$(
   shasum -a 256 "$fixture_root/dist/Noonmark.dmg.manifest" | awk '{print $1}'
 )"
@@ -626,6 +841,10 @@ windowserver_input_cleanup_result_sha256="$(
     dist/Noonmark.dmg \
     dist/Noonmark.dmg.sha256 \
     dist/Noonmark.dmg.manifest \
+    dist/Noonmark.dmg.inventory.sha256 \
+    dist/Noonmark.app.dSYM \
+    dist/Noonmark.app.dSYM.inventory.sha256 \
+    dist/Noonmark.app.release-build-identity \
     artifacts/dmg-install-harness \
     artifacts/dmg-install
 )
@@ -832,8 +1051,27 @@ installed_app_binary_unchanged=true
 installed_app_signature_unchanged=true
 helper_binary_unchanged=true
 helper_signature_unchanged=true
+release_symbols_unchanged=true
+release_identity_provenance_unchanged=true
 artifact_inventory_sha256=$install_inventory_sha256
 package_app_binary_sha256=$app_binary_sha256
+package_release_symbols_binary_sha256=$release_symbols_binary_sha256
+package_release_symbols_binary_uuid_set=$release_symbols_binary_uuid_set
+package_release_symbols_dsym_dwarf_sha256=$release_symbols_dsym_dwarf_sha256
+package_release_symbols_dsym_uuid_set=$release_symbols_dsym_uuid_set
+package_release_symbols_dsym_inventory_sha256=$release_symbols_dsym_inventory_sha256
+package_release_identity_version=$release_identity_version
+package_release_identity_build=$release_identity_build
+package_release_identity_git_commit=$release_identity_git_commit
+package_release_identity_build_date=$release_identity_build_date
+package_release_identity_runtime=$release_identity_runtime
+package_release_identity_minimum_os_version=$release_identity_minimum_os_version
+package_release_identity_architecture=$release_identity_architecture
+package_release_identity_binary_uuid_set=$release_identity_binary_uuid_set
+package_release_identity_binary_sha256=$release_identity_binary_sha256
+package_release_identity_binary_sha256_scope=$release_identity_binary_sha256_scope
+package_release_identity_provenance_path=$release_identity_provenance_path
+package_release_identity_provenance_sha256=$release_identity_provenance_sha256
 dmg_sha256=$dmg_sha256
 dmg_checksum_sha256=$dmg_checksum_sha256
 package_manifest_sha256=$package_manifest_sha256
@@ -1717,6 +1955,21 @@ require_literal "$repo_root/scripts/test-dmg-install" "helper_diagnostic_final="
 require_literal "$repo_root/scripts/test-dmg-install" "app_diagnostic_diff="
 require_literal "$repo_root/scripts/test-dmg-install" "helper_diagnostic_diff="
 require_literal "$repo_root/scripts/test-dmg-install" "dmg_sha256"
+require_literal "$repo_root/scripts/build-mac-app" 'xcrun --find dsymutil'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkGitCommit</key>'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBuildDate</key>'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBuildArchitecture</key>'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBinaryUUID</key>'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBinarySHA256</key>'
+require_literal "$repo_root/scripts/build-mac-app" '<key>NoonmarkBinarySHA256Scope</key>'
+require_literal "$repo_root/scripts/build-mac-app" \
+  'release_build_identity_schema_version=1'
+require_literal "$repo_root/scripts/package-dmg" 'evidence_capture_release_symbols'
+require_literal "$repo_root/scripts/package-dmg" \
+  'evidence_validate_artifact_basename "$app_bundle_name"'
+require_literal "$repo_root/scripts/verify-dmg" 'evidence_verify_release_symbols'
+require_literal "$repo_root/scripts/test-dmg-install" 'release_symbols_unchanged'
+require_literal "$repo_root/.github/workflows/release.yml" 'dist/Noonmark.app.dSYM'
 require_order \
   "$repo_root/scripts/test-dmg-install" \
   'rm -rf "$work_dir" "$helper_evidence_root"' \

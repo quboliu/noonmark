@@ -12,14 +12,21 @@ configuration="${1:-release}"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 app_bundle_name="${NOONMARK_APP_BUNDLE_NAME:-$app_short_name}"
 volume_name="${NOONMARK_DMG_VOLUME_NAME:-晷迹}"
+evidence_validate_artifact_basename "$app_short_name" "App short name"
+evidence_validate_artifact_basename "$app_bundle_name" "App bundle name"
 dist_dir="dist"
 app_path="${dist_dir}/${app_bundle_name}.app"
+app_binary_path="${app_path}/Contents/MacOS/NoonmarkMacApp"
+release_dsym_path="${app_path}.dSYM"
+release_dsym_inventory_path="${app_path}.dSYM.inventory.sha256"
+release_build_identity_path="${app_path}.release-build-identity"
 dmg_root="${dist_dir}/dmg-root"
 dmg_path="${dist_dir}/Noonmark.dmg"
 package_manifest_path="${dmg_path}.manifest"
 package_inventory_path="${dmg_path}.inventory.sha256"
 source_fragment=""
 app_fragment=""
+release_symbols_fragment=""
 source_end_fragment=""
 app_end_fragment=""
 package_complete=0
@@ -42,15 +49,18 @@ cleanup() {
 
   [[ -z "$source_fragment" ]] || rm -f "$source_fragment"
   [[ -z "$app_fragment" ]] || rm -f "$app_fragment"
+  [[ -z "$release_symbols_fragment" ]] || rm -f "$release_symbols_fragment"
   [[ -z "$source_end_fragment" ]] || rm -f "$source_end_fragment"
   [[ -z "$app_end_fragment" ]] || rm -f "$app_end_fragment"
   rm -rf "$dmg_root"
   if [[ "$original_status" -ne 0 || "$package_complete" -ne 1 ]]; then
-    rm -rf "$app_path" "$dmg_path"
+    rm -rf "$app_path" "$release_dsym_path" "$dmg_path"
     rm -f \
       "${dmg_path}.sha256" \
       "$package_manifest_path" \
-      "$package_inventory_path"
+      "$package_inventory_path" \
+      "$release_dsym_inventory_path" \
+      "$release_build_identity_path"
   fi
 }
 trap cleanup EXIT
@@ -60,14 +70,19 @@ trap cleanup EXIT
 # cannot accidentally weaken the release-validation artifact.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
-rm -rf "$app_path" "$dmg_root" "$dmg_path"
+rm -rf "$app_path" "$release_dsym_path" "$dmg_root" "$dmg_path"
 rm -f \
   "${dmg_path}.sha256" \
   "$package_manifest_path" \
-  "$package_inventory_path"
+  "$package_inventory_path" \
+  "$release_dsym_inventory_path" \
+  "$release_build_identity_path"
 
 source_fragment="$(mktemp "${TMPDIR:-/tmp}/noonmark-package-source.XXXXXX")"
 app_fragment="$(mktemp "${TMPDIR:-/tmp}/noonmark-package-app.XXXXXX")"
+release_symbols_fragment="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-package-release-symbols.XXXXXX"
+)"
 source_end_fragment="$(
   mktemp "${TMPDIR:-/tmp}/noonmark-package-source-end.XXXXXX"
 )"
@@ -86,6 +101,127 @@ mkdir -p "$dmg_root"
 
 evidence_capture_bundle "$app_path" 1 "app" "$app_fragment"
 evidence_append_snapshot "$package_manifest_path" "$app_fragment"
+evidence_capture_release_symbols \
+  "$repo_root" \
+  "$app_binary_path" \
+  "$release_dsym_path" \
+  "release_symbols" \
+  "$release_symbols_fragment" \
+  "$release_dsym_inventory_path"
+evidence_append_snapshot "$package_manifest_path" "$release_symbols_fragment"
+identity_plist="${app_path}/Contents/Info.plist"
+release_identity_version="$(
+  plutil -extract CFBundleShortVersionString raw -o - "$identity_plist"
+)"
+release_identity_build="$(
+  plutil -extract CFBundleVersion raw -o - "$identity_plist"
+)"
+release_identity_git_commit="$(
+  plutil -extract NoonmarkGitCommit raw -o - "$identity_plist"
+)"
+release_identity_build_date="$(
+  plutil -extract NoonmarkBuildDate raw -o - "$identity_plist"
+)"
+release_identity_runtime="$(
+  plutil -extract NoonmarkRuntime raw -o - "$identity_plist"
+)"
+release_identity_minimum_os_version="$(
+  plutil -extract NoonmarkMinimumOSVersion raw -o - "$identity_plist"
+)"
+release_identity_architecture="$(
+  plutil -extract NoonmarkBuildArchitecture raw -o - "$identity_plist"
+)"
+embedded_binary_uuid_set="$(
+  plutil -extract NoonmarkBinaryUUID raw -o - "$identity_plist"
+)"
+embedded_linked_binary_sha256="$(
+  plutil -extract NoonmarkBinarySHA256 raw -o - "$identity_plist"
+)"
+embedded_binary_sha256_scope="$(
+  plutil -extract NoonmarkBinarySHA256Scope raw -o - "$identity_plist"
+)"
+expected_source_commit="$(evidence_read "$source_fragment" source_head_commit)"
+expected_architecture="$(
+  evidence_release_architecture_description \
+    "$(evidence_read "$release_symbols_fragment" release_symbols_binary_uuid_set)"
+)"
+plist_minimum_os_version="$(
+  plutil -extract LSMinimumSystemVersion raw -o - "$identity_plist"
+)"
+if [[ ! "$release_identity_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
+  ! "$release_identity_build" =~ ^[0-9]+(\.[0-9]+){0,2}$ ||
+  "$release_identity_git_commit" != "$expected_source_commit" ||
+  ! "$release_identity_build_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ||
+  "$release_identity_runtime" != "Swift-native" ||
+  "$release_identity_minimum_os_version" != "$plist_minimum_os_version" ||
+  "$release_identity_architecture" != "$expected_architecture" ||
+  "$embedded_binary_uuid_set" != \
+    "$(evidence_read "$release_symbols_fragment" release_symbols_binary_uuid_set)" ||
+  ! "$embedded_linked_binary_sha256" =~ ^[0-9a-f]{64}$ ||
+  "$embedded_binary_sha256_scope" != "linked-before-bundle-signing" ]]; then
+  echo "release App Info.plist identity does not match its verified symbols" >&2
+  exit 1
+fi
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_version" \
+  "$release_identity_version"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_build" \
+  "$release_identity_build"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_git_commit" \
+  "$release_identity_git_commit"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_build_date" \
+  "$release_identity_build_date"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_runtime" \
+  "$release_identity_runtime"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_minimum_os_version" \
+  "$release_identity_minimum_os_version"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_architecture" \
+  "$release_identity_architecture"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_binary_uuid_set" \
+  "$embedded_binary_uuid_set"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_binary_sha256" \
+  "$embedded_linked_binary_sha256"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_binary_sha256_scope" \
+  "$embedded_binary_sha256_scope"
+release_identity_provenance_relative="$(
+  evidence_release_repo_relative_path \
+    "$repo_root" "$release_build_identity_path" file
+)"
+release_identity_provenance_sha256="$(
+  shasum -a 256 "$release_build_identity_path" | awk '{print $1}'
+)"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_provenance_path" \
+  "$release_identity_provenance_relative"
+evidence_append \
+  "$package_manifest_path" \
+  "release_identity_provenance_sha256" \
+  "$release_identity_provenance_sha256"
+evidence_verify_release_identity_provenance \
+  "$repo_root" \
+  "$release_build_identity_path" \
+  "$package_manifest_path" \
+  release_identity
 
 ditto "$app_path" "${dmg_root}/${app_short_name}.app"
 ln -s /Applications "${dmg_root}/Applications"
@@ -110,6 +246,9 @@ evidence_inventory \
   "$repo_root" \
   "$package_inventory_path" \
   "$app_path" \
+  "$release_dsym_path" \
+  "$release_dsym_inventory_path" \
+  "$release_build_identity_path" \
   "$dmg_path" \
   "${dmg_path}.sha256"
 inventory_sha256="$(
@@ -142,6 +281,24 @@ evidence_finish_manifest \
   0 \
   "source_worktree_tree_oid" \
   "app_binary_sha256" \
+  "release_symbols_binary_sha256" \
+  "release_symbols_binary_uuid_set" \
+  "release_symbols_dsym_dwarf_sha256" \
+  "release_symbols_dsym_uuid_set" \
+  "release_symbols_dsym_inventory_sha256" \
+  "release_symbols_uuid_match" \
+  "release_identity_version" \
+  "release_identity_build" \
+  "release_identity_git_commit" \
+  "release_identity_build_date" \
+  "release_identity_runtime" \
+  "release_identity_minimum_os_version" \
+  "release_identity_architecture" \
+  "release_identity_binary_uuid_set" \
+  "release_identity_binary_sha256" \
+  "release_identity_binary_sha256_scope" \
+  "release_identity_provenance_path" \
+  "release_identity_provenance_sha256" \
   "app_codesign_identifier" \
   "app_codesign_identity_sha256" \
   "app_codesign_team_identifier" \
@@ -154,6 +311,13 @@ evidence_finish_manifest \
   "dmg_sha256" \
   "dmg_checksum_sha256" \
   "artifact_inventory_sha256"
+evidence_verify_release_symbols \
+  "$repo_root" \
+  "$app_binary_path" \
+  "$release_dsym_path" \
+  "$package_manifest_path" \
+  "release_symbols" \
+  "$release_dsym_inventory_path"
 scripts/verify-dmg "$dmg_path" >/dev/null
 package_complete=1
 echo "$dmg_path"

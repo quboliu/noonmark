@@ -51,6 +51,19 @@ jobs:
           scripts/verify-dmg dist/Noonmark.dmg
           scripts/test-dmg-install dist/Noonmark.dmg
           scripts/verify-development-validation-evidence --scope full
+          source scripts/evidence-common
+          evidence_verify_release_symbols \
+            "$PWD" \
+            "$PWD/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+            "$PWD/dist/Noonmark.app.dSYM" \
+            "$PWD/dist/Noonmark.dmg.manifest" \
+            release_symbols \
+            "$PWD/dist/Noonmark.app.dSYM.inventory.sha256"
+          evidence_verify_release_identity_provenance \
+            "$PWD" \
+            "$PWD/dist/Noonmark.app.release-build-identity" \
+            "$PWD/dist/Noonmark.dmg.manifest" \
+            release_identity
           ditto -c -k --keepParent dist/Noonmark.app dist/Noonmark.app.zip
           shasum -a 256 dist/Noonmark.app.zip > dist/Noonmark.app.zip.sha256
           shasum -a 256 -c dist/Noonmark.app.zip.sha256

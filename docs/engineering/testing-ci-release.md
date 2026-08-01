@@ -49,6 +49,43 @@ Neon 的可借鉴点：
 
 CI／开发签名发行验收 runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。该身份只服务真实 UI 与安装路径验收，不构成公开分发签名。
 
+## 正式版符号与崩溃证据
+
+`scripts/build-mac-app release app` 必须在 bundle 签名前对最终链接产物执行 `dsymutil`，生成并保留 `dist/Noonmark.app.dSYM`；签名前后都以完整 architecture／UUID 集合验证 dSYM 与主 executable 匹配。dSYM 是开发者发布证据，不进入用户安装 DMG。任何缺失、额外目录成员、SHA 漂移或 UUID 集不完全相等都会阻断 package、DMG 验证、安装证据闭环和 release workflow。
+
+每个 App build 的 `Info.plist` 都包含一组供诊断导出与 About 页直接读取的非敏感身份字段；release package 会逐字段回读并 fail-closed 对账：
+
+- `CFBundleShortVersionString`／`CFBundleVersion`：默认 `0.1.0`／`1`，正式流水线可分别以 `NOONMARK_MARKETING_VERSION`／`NOONMARK_BUILD_NUMBER` 注入，且必须符合 Apple 数字版本格式。
+- `NoonmarkGitCommit`：build 时 `HEAD` 的完整 40 位 Git SHA。
+- `NoonmarkBuildDate`：build 时的 UTC ISO 8601 秒级时间，例如 `2026-07-31T12:34:56Z`。
+- `NoonmarkRuntime`：当前固定为 `Swift-native`；`NoonmarkMinimumOSVersion` 与 `LSMinimumSystemVersion` 必须一致。诊断中的实际 OS 版本仍由运行时 `ProcessInfo` 取得，不能用最低系统版本冒充。
+- `NoonmarkBuildArchitecture`：只允许 `Universal`、`arm64` 或 `x86_64`，并从真实 Mach-O architecture／UUID 集派生，不读取 runner 名称猜测。
+- `NoonmarkBinaryUUID`：`architecture:UUID` 的 canonical、排序后集合；目前单架构形如 `arm64:AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE`。
+- `NoonmarkBinarySHA256`：bundle 签名前最终链接 executable 的 SHA-256；`NoonmarkBinarySHA256Scope` 固定为 `linked-before-bundle-signing`。
+
+最终签名会改变 executable bytes，因此签名后 executable SHA 无法无循环地自嵌入同一个签名 bundle。`dist/Noonmark.app.release-build-identity` 在签名前原子记录内嵌字段的同源值；package 必须逐字段对账，并以 `release_identity_provenance_path`／`release_identity_provenance_sha256` 将该 sidecar 纳入外部证据。外部 `dist/Noonmark.dmg.manifest` 的 `release_symbols_binary_sha256` 才是最终签名 executable SHA，不能用内嵌 linked SHA 冒充；`release_identity_*` 字段绑定 App 内嵌 Version／Build／Commit／Date／Runtime／minimum OS／architecture／UUID／linked SHA 与 scope，同一 manifest 还绑定 dSYM DWARF SHA／UUID 集、dSYM 路径、精确目录树 inventory 及 inventory SHA。该 dSYM inventory 同时记录普通文件和目录，因此增加空目录也会阻断，符号 bundle 内的 symlink 或特殊文件同样被拒绝。`dist/Noonmark.dmg.inventory.sha256` 再把 App binary、release identity sidecar、dSYM DWARF 与 dSYM inventory 纳入 package artifact 集。验证入口必须在 Bash 中执行：
+
+```bash
+/bin/bash <<'BASH'
+set -euo pipefail
+source scripts/evidence-common
+evidence_verify_release_symbols \
+  "$PWD" \
+  "$PWD/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+  "$PWD/dist/Noonmark.app.dSYM" \
+  "$PWD/dist/Noonmark.dmg.manifest" \
+  release_symbols \
+  "$PWD/dist/Noonmark.app.dSYM.inventory.sha256"
+evidence_verify_release_identity_provenance \
+  "$PWD" \
+  "$PWD/dist/Noonmark.app.release-build-identity" \
+  "$PWD/dist/Noonmark.dmg.manifest" \
+  release_identity
+BASH
+```
+
+纯 fixture contract 只证明缺失、UUID 错配和目录漂移会被拒绝，不是 crash evidence，也不得生成伪 `.ips` 冒充真实崩溃。公开发行仍有一项显式人工门禁：从经 Developer ID、公证且由 DMG 真实安装的候选 App 触发受控崩溃，保留 macOS 实际写出的 `.ips`；将其中 Noonmark Binary Images UUID 与 release manifest／dSYM 对账，再用该 dSYM 完成符号化并确认出现可读 Noonmark frame。必须一并归档原始 `.ips`、符号化输出、package manifest 与 dSYM inventory。当前自动化不会主动让真实安装 App 崩溃，因此未完成人工步骤时不得声称具备真实 `.ips` 符号化证据，也不得开放公开发行。
+
 ## 命令
 
 ```bash
@@ -132,6 +169,7 @@ Nightly：
 - 重新跑 `scripts/check`。
 - 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e` 和两套腾讯拼音矩阵，确认真实 Mac app 启动、输入性能与退出 durability 仍可用。
 - 用 release 优化配置打包 `.app`，但产物只代表开发签名安装验收，不代表可公开分发。
+- 保留与主 executable UUID 集完全匹配的 dSYM，并以 package／install manifest、SHA 与双层 inventory 绑定；dSYM 不进入用户 DMG。
 - 校验 DMG／zip checksum、挂载内容、严格 code signature、canonical icon、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
 - 挂载 DMG 后复制 `.app` 到临时 Applications 目录，由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账验证持久化。
 - Actions artifact 固定命名为 `development-signed-not-for-distribution`，并包含 `NOT-FOR-DISTRIBUTION.txt`；workflow 不得创建、修改或上传 GitHub Release。
@@ -140,6 +178,7 @@ Nightly：
 
 - 当前 fail-closed 阻断。Apple 官方要求站外分发使用 `Developer ID Application`，并在公证前启用 Hardened Runtime、secure timestamp；Apple Development、ad-hoc 或本地开发证书不能替代。
 - 后续必须建立独立 distribution identity／notary keychain profile，完成 `notarytool submit --wait`、`stapler staple`／`validate` 和 Gatekeeper `spctl` 验收，再通过受保护 environment 与人工批准开放 GitHub Release 写权限。
+- 同一候选还必须完成上一节的真实 `.ips` 采集、UUID 对账与 dSYM 符号化人工门禁；纯 fixture 或模拟 crash report 不能替代。
 - 正式发行 workflow 不得回退到 `NOONMARK_UI_CODESIGN_IDENTITY`，也不得把开发签名 artifact 改名后上传。
 
 ## 当前本地取证

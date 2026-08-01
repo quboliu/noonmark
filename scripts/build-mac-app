@@ -3,10 +3,25 @@ set -euo pipefail
 
 source scripts/app-icon-common
 source scripts/codesign-common
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
 
 configuration="${1:-debug}"
 profile="${2:-app}"
 product="NoonmarkMacApp"
+marketing_version="${NOONMARK_MARKETING_VERSION:-0.1.0}"
+build_number="${NOONMARK_BUILD_NUMBER:-1}"
+minimum_os_version="14.0"
+runtime_description="Swift-native"
+
+if [[ ! "$marketing_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "NOONMARK_MARKETING_VERSION must contain three numeric components" >&2
+  exit 1
+fi
+if [[ ! "$build_number" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+  echo "NOONMARK_BUILD_NUMBER must contain one to three numeric components" >&2
+  exit 1
+fi
 
 case "$profile" in
   app)
@@ -39,6 +54,9 @@ bundle_dir="dist/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
+release_dsym_path="${bundle_dir}.dSYM"
+release_dsym_inventory_path="${bundle_dir}.dSYM.inventory.sha256"
+release_build_identity_path="${bundle_dir}.release-build-identity"
 cloudkit_container_id="${NOONMARK_CLOUDKIT_CONTAINER_ID:-}"
 cloudkit_environment="${NOONMARK_CLOUDKIT_ENVIRONMENT:-}"
 codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
@@ -46,12 +64,21 @@ require_stable_ui_signing="${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-0}"
 provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
 cloudkit_signing_enabled=0
 stable_codesigning_enabled=0
+release_symbols_enabled=0
+linked_binary_sha256=""
+linked_binary_uuid_set=""
+build_architecture=""
+build_git_commit=""
+build_date=""
 decoded_profile=""
 claimed_entitlements=""
+release_build_identity_content=""
 
 cleanup() {
   [[ -z "$decoded_profile" ]] || rm -f "$decoded_profile"
   [[ -z "$claimed_entitlements" ]] || rm -f "$claimed_entitlements"
+  [[ -z "$release_build_identity_content" ]] ||
+    rm -f "$release_build_identity_content"
 }
 trap cleanup EXIT
 
@@ -161,8 +188,11 @@ scripts/test-app-icon
 scripts/reset-dev-data
 swift build -c "$configuration" --product "$product"
 
-rm -rf "$bundle_dir"
-rm -f "dist/NoonmarkCloudKit.entitlements"
+rm -rf "$bundle_dir" "$release_dsym_path"
+rm -f \
+  "dist/NoonmarkCloudKit.entitlements" \
+  "$release_dsym_inventory_path" \
+  "$release_build_identity_path"
 mkdir -p "$macos_dir" "$resources_dir"
 
 binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
@@ -172,6 +202,39 @@ fi
 
 cp "$binary_path" "${macos_dir}/${executable_name}"
 chmod +x "${macos_dir}/${executable_name}"
+
+linked_binary_sha256="$(
+  shasum -a 256 "${macos_dir}/${executable_name}" | awk '{print $1}'
+)"
+linked_binary_uuid_set="$(
+  evidence_release_uuid_set "${macos_dir}/${executable_name}"
+)"
+build_architecture="$(
+  evidence_release_architecture_description "$linked_binary_uuid_set"
+)"
+build_git_commit="$(git rev-parse --verify HEAD)"
+build_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+if [[ ! "$linked_binary_sha256" =~ ^[0-9a-f]{64}$ ||
+  ! "$build_git_commit" =~ ^[0-9a-f]{40}$ ||
+  ! "$build_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  echo "build identity could not be captured exactly" >&2
+  exit 1
+fi
+
+if [[ "$configuration" == "release" && "$profile" == "app" ]]; then
+  dsymutil_bin="$(xcrun --find dsymutil)"
+  if [[ "$dsymutil_bin" != /* || ! -x "$dsymutil_bin" ]]; then
+    echo "release build requires an absolute executable dsymutil" >&2
+    exit 1
+  fi
+  "$dsymutil_bin" \
+    "${macos_dir}/${executable_name}" \
+    -o "$release_dsym_path"
+  evidence_require_release_symbol_pair \
+    "${macos_dir}/${executable_name}" \
+    "$release_dsym_path"
+  release_symbols_enabled=1
+fi
 
 cp "$app_icon_icns_path" "${resources_dir}/${app_icon_bundle_icon_name}.icns"
 
@@ -197,11 +260,27 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${marketing_version}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${build_number}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
+  <string>${minimum_os_version}</string>
+  <key>NoonmarkGitCommit</key>
+  <string>${build_git_commit}</string>
+  <key>NoonmarkBuildDate</key>
+  <string>${build_date}</string>
+  <key>NoonmarkRuntime</key>
+  <string>${runtime_description}</string>
+  <key>NoonmarkMinimumOSVersion</key>
+  <string>${minimum_os_version}</string>
+  <key>NoonmarkBuildArchitecture</key>
+  <string>${build_architecture}</string>
+  <key>NoonmarkBinaryUUID</key>
+  <string>${linked_binary_uuid_set}</string>
+  <key>NoonmarkBinarySHA256</key>
+  <string>${linked_binary_sha256}</string>
+  <key>NoonmarkBinarySHA256Scope</key>
+  <string>linked-before-bundle-signing</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>
@@ -222,6 +301,34 @@ cat > "${contents_dir}/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ "$release_symbols_enabled" -eq 1 ]]; then
+  release_build_identity_content="$(
+    mktemp "${TMPDIR:-/tmp}/noonmark-release-build-identity.XXXXXX"
+  )"
+  {
+    printf 'release_build_identity_schema_version=1\n'
+    printf 'release_build_identity_version=%s\n' "$marketing_version"
+    printf 'release_build_identity_build=%s\n' "$build_number"
+    printf 'release_build_identity_git_commit=%s\n' "$build_git_commit"
+    printf 'release_build_identity_build_date=%s\n' "$build_date"
+    printf 'release_build_identity_runtime=%s\n' "$runtime_description"
+    printf 'release_build_identity_minimum_os_version=%s\n' \
+      "$minimum_os_version"
+    printf 'release_build_identity_architecture=%s\n' "$build_architecture"
+    printf 'release_build_identity_binary_uuid_set=%s\n' \
+      "$linked_binary_uuid_set"
+    printf 'release_build_identity_binary_sha256=%s\n' \
+      "$linked_binary_sha256"
+    printf '%s\n' \
+      'release_build_identity_binary_sha256_scope=linked-before-bundle-signing'
+  } >"$release_build_identity_content"
+  evidence_write_fragment_atomically \
+    "$release_build_identity_path" \
+    "$release_build_identity_content"
+  rm -f "$release_build_identity_content"
+  release_build_identity_content=""
+fi
 
 if [[ "$cloudkit_signing_enabled" -eq 1 ]]; then
   /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "${contents_dir}/Info.plist"
@@ -296,6 +403,19 @@ elif [[ "$stable_codesigning_enabled" -eq 1 ]]; then
   codesign --force --sign "$codesign_identity" "$bundle_dir" >/dev/null
 else
   codesign --force --sign - "$bundle_dir" >/dev/null
+fi
+
+signed_binary_uuid_set="$(
+  evidence_release_uuid_set "${macos_dir}/${executable_name}"
+)"
+if [[ "$signed_binary_uuid_set" != "$linked_binary_uuid_set" ]]; then
+  echo "bundle signing changed the build identity Mach-O UUID set" >&2
+  exit 1
+fi
+if [[ "$release_symbols_enabled" -eq 1 ]]; then
+  evidence_require_release_symbol_pair \
+    "${macos_dir}/${executable_name}" \
+    "$release_dsym_path"
 fi
 
 if [[ "$require_stable_ui_signing" == "1" ]]; then

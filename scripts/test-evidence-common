@@ -13,6 +13,15 @@ fail() {
   exit 1
 }
 
+evidence_validate_artifact_basename "Noonmark Debug" "fixture artifact"
+for unsafe_artifact_name in '' '.' '..' '../escape' 'nested/name'; do
+  if evidence_validate_artifact_basename \
+    "$unsafe_artifact_name" \
+    "fixture artifact" >/dev/null 2>&1; then
+    fail "artifact basename guard accepted: $unsafe_artifact_name"
+  fi
+done
+
 git_fixture="$fixture/repository"
 mkdir -p "$git_fixture"
 git -C "$git_fixture" init -q
@@ -278,6 +287,156 @@ if evidence_finish_manifest "$resigned_manifest" 0 \
   app_binary_sha256 app_end_binary_sha256 >/dev/null 2>&1; then
   fail "manifest accepted a signature replacement with an unchanged binary"
 fi
+
+release_binary="$git_fixture/artifacts/release/Noonmark.app/Contents/MacOS/NoonmarkMacApp"
+release_dsym="$git_fixture/artifacts/release/Noonmark.app.dSYM"
+release_dwarf="${release_dsym}/Contents/Resources/DWARF/NoonmarkMacApp"
+release_symbols_fragment="$fresh_root/release-symbols.fragment"
+release_symbols_inventory="$git_fixture/artifacts/release/Noonmark.app.dSYM.inventory.sha256"
+release_symbols_manifest="$fresh_root/release-symbols.manifest"
+release_tool_dir="$fixture/release-tools"
+fixture_dwarfdump="$release_tool_dir/dwarfdump"
+mkdir -p "$release_tool_dir"
+mkdir -p "$(dirname "$release_binary")" "$(dirname "$release_dwarf")"
+printf 'arch=arm64\nuuid=AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE\n' \
+  >"$release_binary"
+printf 'arch=arm64\nuuid=AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE\n' \
+  >"$release_dwarf"
+cat >"$fixture_dwarfdump" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--uuid" && -f "$2" ]]
+arch="$(sed -n 's/^arch=//p' "$2")"
+uuid="$(sed -n 's/^uuid=//p' "$2")"
+[[ -n "$arch" && -n "$uuid" ]]
+printf 'UUID: %s (%s) %s\n' "$uuid" "$arch" "$2"
+SCRIPT
+chmod +x "$fixture_dwarfdump"
+cat >"$release_tool_dir/xcrun" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\$1" == "--find" && "\$2" == "dwarfdump" ]]
+printf '%s\n' "$fixture_dwarfdump"
+SCRIPT
+chmod +x "$release_tool_dir/xcrun"
+
+[[ "$(evidence_release_architecture_description \
+  'arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE')" == "arm64" ]] ||
+  fail "release identity did not normalize an arm64 architecture"
+[[ "$(evidence_release_architecture_description \
+  'x86_64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE')" == "x86_64" ]] ||
+  fail "release identity did not preserve an x86_64 architecture"
+[[ "$(evidence_release_architecture_description \
+  'arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE,x86_64:FFFFFFFF-1111-4222-8333-444444444444')" == "Universal" ]] ||
+  fail "release identity did not recognize a Universal architecture"
+
+PATH="$release_tool_dir:$PATH" \
+  evidence_capture_release_symbols \
+  "$git_fixture" \
+  "$release_binary" \
+  "$release_dsym" \
+  release_symbols \
+  "$release_symbols_fragment" \
+  "$release_symbols_inventory"
+evidence_begin_manifest \
+  "$release_symbols_manifest" fixture run-4 release full
+evidence_append \
+  "$release_symbols_manifest" \
+  app_binary_sha256 \
+  "$(shasum -a 256 "$release_binary" | awk '{print $1}')"
+evidence_append_snapshot \
+  "$release_symbols_manifest" \
+  "$release_symbols_fragment"
+evidence_finish_manifest \
+  "$release_symbols_manifest" \
+  0 \
+  release_symbols_binary_uuid_set \
+  release_symbols_dsym_uuid_set \
+  release_symbols_dsym_inventory_sha256
+PATH="$release_tool_dir:$PATH" \
+  evidence_verify_release_symbols \
+  "$git_fixture" \
+  "$release_binary" \
+  "$release_dsym" \
+  "$release_symbols_manifest" \
+  release_symbols \
+  "$release_symbols_inventory"
+
+cat >"$release_tool_dir/sort" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 73
+SCRIPT
+chmod +x "$release_tool_dir/sort"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_release_uuid_set "$release_binary" >/dev/null 2>&1; then
+  fail "release UUID evidence hid a canonical-sort failure"
+fi
+rm -f "$release_tool_dir/sort"
+
+cat >"$release_tool_dir/find" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$1/NoonmarkMacApp"
+exit 74
+SCRIPT
+chmod +x "$release_tool_dir/find"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_release_dwarf_path \
+  "$release_binary" \
+  "$release_dsym" >/dev/null 2>&1; then
+  fail "release dSYM evidence hid a directory-scan failure"
+fi
+rm -f "$release_tool_dir/find"
+
+mv "$release_dsym" "${release_dsym}.missing"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_verify_release_symbols \
+  "$git_fixture" \
+  "$release_binary" \
+  "$release_dsym" \
+  "$release_symbols_manifest" \
+  release_symbols \
+  "$release_symbols_inventory" >/dev/null 2>&1; then
+  fail "release symbol evidence accepted a missing dSYM"
+fi
+mv "${release_dsym}.missing" "$release_dsym"
+
+printf 'arch=arm64\nuuid=FFFFFFFF-1111-4222-8333-444444444444\n' \
+  >"$release_dwarf"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_require_release_symbol_pair \
+  "$release_binary" \
+  "$release_dsym" >/dev/null 2>&1; then
+  fail "release symbol evidence accepted a mismatched dSYM UUID"
+fi
+printf 'arch=arm64\nuuid=AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE\n' \
+  >"$release_dwarf"
+
+printf 'unexpected directory member\n' >"$(dirname "$release_dwarf")/unexpected.txt"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_verify_release_symbols \
+  "$git_fixture" \
+  "$release_binary" \
+  "$release_dsym" \
+  "$release_symbols_manifest" \
+  release_symbols \
+  "$release_symbols_inventory" >/dev/null 2>&1; then
+  fail "release symbol evidence accepted dSYM directory drift"
+fi
+rm -f "$(dirname "$release_dwarf")/unexpected.txt"
+
+mkdir "$(dirname "$release_dwarf")/unexpected-empty-directory"
+if PATH="$release_tool_dir:$PATH" \
+  evidence_verify_release_symbols \
+  "$git_fixture" \
+  "$release_binary" \
+  "$release_dsym" \
+  "$release_symbols_manifest" \
+  release_symbols \
+  "$release_symbols_inventory" >/dev/null 2>&1; then
+  fail "release symbol evidence accepted an added empty dSYM directory"
+fi
+rmdir "$(dirname "$release_dwarf")/unexpected-empty-directory"
 
 app="$fixture/AdHoc.app"
 mkdir -p "$app/Contents/MacOS"

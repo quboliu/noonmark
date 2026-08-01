@@ -99,6 +99,17 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         )
     }
 
+    func testDomainOwnedTypedFailureMappingTakesPrecedenceWithoutText() {
+        let failure = DiagnosticFailureClassifier.classify(
+            SafeMappedFailure.privatePayload("PRIVATE-TASK-TITLE-7Q9X")
+        )
+
+        XCTAssertEqual(
+            failure,
+            DiagnosticFailure(domain: .syncProtocol, code: 701)
+        )
+    }
+
     private func diagnosticFileText(in rootURL: URL) throws -> String {
         let urls = try FileManager.default.contentsOfDirectory(
             at: rootURL,
@@ -119,5 +130,13 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
             )
         temporaryURLs.append(url)
         return url
+    }
+}
+
+private enum SafeMappedFailure: Error, DiagnosticFailureProviding {
+    case privatePayload(String)
+
+    var diagnosticFailure: DiagnosticFailure {
+        DiagnosticFailure(domain: .syncProtocol, code: 701)
     }
 }

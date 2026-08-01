@@ -1,7 +1,14 @@
 import Foundation
 
+public protocol DiagnosticFailureProviding: Error {
+    var diagnosticFailure: DiagnosticFailure { get }
+}
+
 public enum DiagnosticFailureClassifier {
     public static func classify(_ error: Error) -> DiagnosticFailure {
+        if let provider = error as? any DiagnosticFailureProviding {
+            return provider.diagnosticFailure
+        }
         var visited: Set<ObjectIdentifier> = []
         return classify(error as NSError, depth: 0, visited: &visited)
     }

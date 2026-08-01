@@ -207,6 +207,9 @@ fi
 
 cp "$binary_path" "${macos_dir}/${executable_name}"
 chmod +x "${macos_dir}/${executable_name}"
+scripts/verify-window-lookup-boundary \
+  production-binary \
+  "${macos_dir}/${executable_name}"
 
 linked_binary_sha256="$(
   shasum -a 256 "${macos_dir}/${executable_name}" | awk '{print $1}'

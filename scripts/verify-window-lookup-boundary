@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+private_symbol="_AXUIElementGetWindow"
+exact_window_symbol="_CGWindowListCreateDescriptionFromArray"
+enumerating_window_symbol="_CGWindowList""CopyWindowInfo"
+
+usage() {
+  echo "usage: scripts/verify-window-lookup-boundary <production-binary|helper-binary|dmg-staging-root> <path>" >&2
+  exit 1
+}
+
+require_regular_executable() {
+  local path="$1"
+  if [[ ! -f "$path" || -L "$path" || ! -x "$path" ]]; then
+    echo "window lookup boundary requires a regular executable: $path" >&2
+    exit 1
+  fi
+}
+
+undefined_symbols() {
+  local path="$1"
+  local output
+  if ! output="$(/usr/bin/nm -u "$path" 2>&1)"; then
+    echo "could not inspect undefined symbols in $path" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$output"
+}
+
+contains_private_symbol() {
+  local path="$1"
+  local grep_result=0
+  LC_ALL=C /usr/bin/grep -aFq "$private_symbol" "$path" || grep_result=$?
+  case "$grep_result" in
+    0)
+      return 0
+      ;;
+    1)
+      return 1
+      ;;
+    *)
+      echo "could not scan private SPI bytes in $path" >&2
+      exit 1
+      ;;
+  esac
+}
+
+verify_production_binary() {
+  local path="$1"
+  local symbols
+  require_regular_executable "$path"
+  symbols="$(undefined_symbols "$path")"
+
+  if /usr/bin/grep -Fq "$private_symbol" <<<"$symbols"; then
+    echo "production App directly links private SPI $private_symbol" >&2
+    exit 1
+  fi
+  if contains_private_symbol "$path"; then
+    echo "production App contains private SPI resolver literal $private_symbol" >&2
+    exit 1
+  fi
+  if /usr/bin/grep -Fq "$enumerating_window_symbol" <<<"$symbols"; then
+    echo "production App links the forbidden WindowServer enumeration API" >&2
+    exit 1
+  fi
+  if ! /usr/bin/grep -Fq "$exact_window_symbol" <<<"$symbols"; then
+    echo "production App lacks exact-ID WindowServer description lookup" >&2
+    exit 1
+  fi
+}
+
+verify_helper_binary() {
+  local path="$1"
+  local symbols
+  require_regular_executable "$path"
+  symbols="$(undefined_symbols "$path")"
+
+  if /usr/bin/grep -Fq "$private_symbol" <<<"$symbols"; then
+    echo "DMG helper directly links private SPI $private_symbol" >&2
+    exit 1
+  fi
+  if ! contains_private_symbol "$path"; then
+    echo "DMG helper has no dynamic private SPI resolver literal" >&2
+    exit 1
+  fi
+  if ! /usr/bin/grep -Eq '(^|[[:space:]])_dlsym$' <<<"$symbols"; then
+    echo "DMG helper does not resolve its private SPI dynamically" >&2
+    exit 1
+  fi
+  if /usr/bin/grep -Fq "$enumerating_window_symbol" <<<"$symbols"; then
+    echo "DMG helper links the forbidden WindowServer enumeration API" >&2
+    exit 1
+  fi
+  if ! /usr/bin/grep -Fq "$exact_window_symbol" <<<"$symbols"; then
+    echo "DMG helper lacks exact-ID WindowServer description lookup" >&2
+    exit 1
+  fi
+}
+
+verify_dmg_staging_root() {
+  local root="$1"
+  local applications_link="$root/Applications"
+  local app="$root/Noonmark.app"
+  local app_binary="$app/Contents/MacOS/NoonmarkMacApp"
+  local entry
+  local -a entries=()
+
+  if [[ ! -d "$root" || -L "$root" ]]; then
+    echo "DMG staging root must be a real directory: $root" >&2
+    exit 1
+  fi
+  if ! /usr/bin/find -P "$root" -mindepth 1 -maxdepth 1 -print \
+    >/dev/null; then
+    echo "DMG staging entries could not be enumerated" >&2
+    exit 1
+  fi
+  while IFS= read -r -d '' entry; do
+    entries+=("$entry")
+  done < <(/usr/bin/find -P "$root" -mindepth 1 -maxdepth 1 -print0)
+  if [[ "${#entries[@]}" -ne 2 || ! -d "$app" || -L "$app" ]]; then
+    echo "DMG staging must contain only Noonmark.app and Applications" >&2
+    exit 1
+  fi
+  if [[ ! -L "$applications_link" \
+    || "$(/usr/bin/readlink "$applications_link")" != "/Applications" ]]; then
+    echo "DMG staging Applications entry must target /Applications" >&2
+    exit 1
+  fi
+  for entry in "${entries[@]}"; do
+    if [[ "$entry" != "$app" && "$entry" != "$applications_link" ]]; then
+      echo "unexpected DMG staging entry: $entry" >&2
+      exit 1
+    fi
+  done
+  if /usr/bin/find -P "$root" -name '*NoonmarkDMGInstallHarness*' -print -quit \
+    | /usr/bin/grep -q .; then
+    echo "DMG staging contains the install harness" >&2
+    exit 1
+  fi
+  verify_production_binary "$app_binary"
+  if ! /usr/bin/find -P "$app" -type f -print >/dev/null; then
+    echo "DMG App contents could not be enumerated" >&2
+    exit 1
+  fi
+  while IFS= read -r -d '' entry; do
+    if contains_private_symbol "$entry"; then
+      echo "DMG staging contains private SPI material: $entry" >&2
+      exit 1
+    fi
+  done < <(/usr/bin/find -P "$app" -type f -print0)
+}
+
+[[ "$#" -eq 2 ]] || usage
+mode="$1"
+path="$2"
+
+case "$mode" in
+  production-binary)
+    verify_production_binary "$path"
+    ;;
+  helper-binary)
+    verify_helper_binary "$path"
+    ;;
+  dmg-staging-root)
+    verify_dmg_staging_root "$path"
+    ;;
+  *)
+    usage
+    ;;
+esac

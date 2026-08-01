@@ -44,10 +44,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "NoonmarkDMGInstallHarness",
-            path: "Tools/NoonmarkDMGInstallHarness",
-            linkerSettings: [
-                .linkedLibrary("sqlite3")
-            ]
+            dependencies: [
+                "NoonmarkDiagnostics",
+                "NoonmarkMacE2ESupport",
+                "NoonmarkMacRuntime"
+            ],
+            path: "Tools/NoonmarkDMGInstallHarness"
         ),
         .executableTarget(
             name: "NoonmarkAIProviderLiveSmoke",
@@ -146,6 +148,13 @@ let package = Package(
         .testTarget(
             name: "NoonmarkMacE2ESupportTests",
             dependencies: ["NoonmarkMacE2ESupport"]
+        ),
+        .testTarget(
+            name: "NoonmarkDMGInstallHarnessTests",
+            dependencies: ["NoonmarkDMGInstallHarness"],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .testTarget(
             name: "NoonmarkDemoSupportTests",

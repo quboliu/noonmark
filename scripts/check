@@ -47,6 +47,9 @@ run_check_suite() {
   scripts/reset-dev-data audit
   swift build
 
+  echo "==> Window lookup binary boundary"
+  scripts/test-window-lookup-boundary
+
   echo "==> Unit tests"
   scripts/test-unit
 

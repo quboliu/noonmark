@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Darwin
 import Foundation
+import NoonmarkMacE2ESupport
 
 @main
 enum NoonmarkDMGInstallHarness {
@@ -249,7 +250,7 @@ enum NoonmarkDMGInstallHarness {
                             + "--repository-lock, --export-path and --sentinels"
                     )
                 }
-                return Self(
+                let configuration = Self(
                     mode: mode,
                     pid: parsedPID,
                     appPath: appPath,
@@ -269,6 +270,8 @@ enum NoonmarkDMGInstallHarness {
                     exportPath: exportPath,
                     sentinelsPath: sentinelsPath
                 )
+                try DiagnosticExportScopeContract.validate(configuration)
+                return configuration
             }
             guard
                   values.count == 7,
@@ -323,14 +326,7 @@ enum NoonmarkDMGInstallHarness {
         }
 
         private static func isAbsoluteSingleLinePath(_ path: String) -> Bool {
-            guard path.hasPrefix("/"),
-                  path.unicodeScalars.allSatisfy({
-                      CharacterSet.controlCharacters.contains($0) == false
-                  })
-            else {
-                return false
-            }
-            return URL(fileURLWithPath: path).standardizedFileURL.path == path
+            (try? CanonicalAbsolutePath(path))?.string == path
         }
     }
 
@@ -352,12 +348,27 @@ enum NoonmarkDMGInstallHarness {
     }
 
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if SQLiteByteRangeLockHolder.isChildInvocation(arguments) {
+            SQLiteByteRangeLockHolder.runSpawnedChild(arguments)
+        }
         var ledger: HarnessLedger?
         do {
-            let configuration = try Configuration.parse(
-                Array(CommandLine.arguments.dropFirst())
-            )
-            ledger = try HarnessLedger(path: configuration.ledgerPath)
+            let configuration = try Configuration.parse(arguments)
+            let diagnosticScope: PinnedDiagnosticExportScope? =
+                if configuration.mode == .diagnosticExport {
+                    try DiagnosticExportScopeContract.pin(configuration)
+                } else {
+                    nil
+                }
+            if let diagnosticScope {
+                ledger = try HarnessLedger(
+                    directory: diagnosticScope.controlDirectory,
+                    fileName: diagnosticScope.ledgerFileName
+                )
+            } else {
+                ledger = try HarnessLedger(path: configuration.ledgerPath)
+            }
             try ledger?.pass(
                 "arguments",
                 configuration.argumentDetail
@@ -375,7 +386,8 @@ enum NoonmarkDMGInstallHarness {
             }
             try waitForExitObserver(
                 configuration: configuration,
-                helperPID: helperPID
+                helperPID: helperPID,
+                diagnosticScope: diagnosticScope
             )
             try ledger?.pass(
                 "exit-observer",
@@ -401,42 +413,16 @@ enum NoonmarkDMGInstallHarness {
                 configuration: configuration,
                 target: target,
                 input: input,
-                ledger: ledger
+                ledger: ledger,
+                diagnosticScope: diagnosticScope
             )
-            switch configuration.mode {
-            case .preflight:
-                throw HarnessFailure.contract("preflight reached the validation runner")
-            case .exercise:
-                try runner.exercise()
-            case .restart:
-                try runner.verifyRestart()
-            case .e2eInspect:
-                try runner.inspectE2EAccessibility()
-            case .e2eMenuCommand:
-                try runner.performE2EMenuCommand()
-                try CompletionArtifact.publish(
-                    configuration: configuration,
-                    helperPID: helperPID
-                )
-                try ledger?.pass(
-                    "completion",
-                    "path=\(configuration.completionPath) atomic=true "
-                        + "exact=true lines=7"
-                )
-            case .diagnosticExport:
-                let locks = try DiagnosticExportLocks(
-                    databasePath: configuration.databasePath,
-                    repositoryLockPath: configuration.repositoryLockPath
-                )
-                try locks.proveContention(step: "before-export", ledger: ledger)
-                try runner.performDiagnosticExport()
-                try locks.proveContention(step: "after-export", ledger: ledger)
-                try DiagnosticExportPackageProbe.verify(
-                    exportPath: configuration.exportPath,
-                    sentinelsPath: configuration.sentinelsPath,
-                    ledger: ledger
-                )
-            }
+            try runConfiguredMode(
+                configuration: configuration,
+                helperPID: helperPID,
+                runner: runner,
+                ledger: ledger,
+                diagnosticScope: diagnosticScope
+            )
             try ledger?.pass("complete", "mode=\(configuration.mode.rawValue)")
             exit(EXIT_SUCCESS)
         } catch {
@@ -447,19 +433,110 @@ enum NoonmarkDMGInstallHarness {
         }
     }
 
+    private static func runConfiguredMode(
+        configuration: Configuration,
+        helperPID: pid_t,
+        runner: Runner,
+        ledger: HarnessLedger?,
+        diagnosticScope: PinnedDiagnosticExportScope?
+    ) throws {
+        switch configuration.mode {
+        case .preflight:
+            throw HarnessFailure.contract("preflight reached the validation runner")
+        case .exercise:
+            try runner.exercise()
+        case .restart:
+            try runner.verifyRestart()
+        case .e2eInspect:
+            try runner.inspectE2EAccessibility()
+        case .e2eMenuCommand:
+            try runner.performE2EMenuCommand()
+            try CompletionArtifact.publish(
+                configuration: configuration,
+                helperPID: helperPID
+            )
+            try ledger?.pass(
+                "completion",
+                "path=\(configuration.completionPath) atomic=true "
+                    + "exact=true lines=7"
+            )
+        case .diagnosticExport:
+            try runDiagnosticExport(
+                configuration: configuration,
+                runner: runner,
+                ledger: ledger,
+                scope: diagnosticScope
+            )
+        }
+    }
+
+    private static func runDiagnosticExport(
+        configuration: Configuration,
+        runner: Runner,
+        ledger: HarnessLedger?,
+        scope: PinnedDiagnosticExportScope?
+    ) throws {
+        guard let scope else {
+            throw HarnessFailure.contract(
+                "diagnostic-export scope was not pinned"
+            )
+        }
+        let locks = try DiagnosticExportLocks(
+            scope: scope,
+            targetPID: configuration.pid
+        )
+        try locks.proveContention(step: "before-export", ledger: ledger)
+        try runner.performDiagnosticExport()
+        try locks.proveContention(step: "after-export", ledger: ledger)
+        try DiagnosticExportPackageProbe.verify(
+            scope: scope,
+            ledger: ledger
+        )
+        try locks.release(ledger: ledger)
+    }
+
     private static func waitForExitObserver(
         configuration: Configuration,
-        helperPID: pid_t
+        helperPID: pid_t,
+        diagnosticScope: PinnedDiagnosticExportScope?
     ) throws {
-        let gateURL = URL(fileURLWithPath: configuration.startGatePath)
         let expected = "mode=\(configuration.mode.rawValue)\n"
             + "helper_pid=\(helperPID)\n"
             + "launch_token=\(configuration.launchToken)\n"
             + "observer=EVFILT_PROC+NOTE_EXITSTATUS\n"
+        let diagnosticGate: (
+            reader: DiagnosticExportFileReader,
+            path: String
+        )? = try diagnosticScope.map { scope in
+            (
+                reader: scope.controlReader(),
+                path: try scope.controlDirectory.path
+                    .appending(scope.startGateFileName)
+                    .string
+            )
+        }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(30))
 
         repeat {
+            if let diagnosticGate {
+                if let data = try diagnosticGate.reader.readIfPresent(
+                    atPath: diagnosticGate.path,
+                    maximumByteCount: 4 * 1024,
+                    requireOwnerOnlyPermissions: false
+                ) {
+                    guard String(data: data, encoding: .utf8) == expected else {
+                        throw HarnessFailure.contract(
+                            "exit observer gate did not match this helper process"
+                        )
+                    }
+                    return
+                }
+                usleep(25000)
+                continue
+            }
+
+            let gateURL = URL(fileURLWithPath: configuration.startGatePath)
             var status = stat()
             if lstat(configuration.startGatePath, &status) == 0 {
                 guard status.st_mode & S_IFMT == S_IFREG else {
@@ -926,17 +1003,20 @@ private final class Runner {
     private let target: AXTarget
     private let input: WindowServerInputDriver
     private let ledger: HarnessLedger?
+    private let diagnosticScope: PinnedDiagnosticExportScope?
 
     init(
         configuration: NoonmarkDMGInstallHarness.Configuration,
         target: AXTarget,
         input: WindowServerInputDriver,
-        ledger: HarnessLedger?
+        ledger: HarnessLedger?,
+        diagnosticScope: PinnedDiagnosticExportScope?
     ) {
         self.configuration = configuration
         self.target = target
         self.input = input
         self.ledger = ledger
+        self.diagnosticScope = diagnosticScope
     }
 
     func exercise() throws {
@@ -1153,10 +1233,16 @@ private final class Runner {
                 "Help was not a separate minimum-size window: frame=\(helpFrame)"
             )
         }
+        guard let helpWindowNumber = target.windowNumber(helpWindow) else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "the exact AX Help window exposed no WindowServer identity"
+            )
+        }
         let helpCGWindow: (number: CGWindowID, title: String?) = try target.wait(
             description: "the exact onscreen CG Help window"
         ) {
             try onscreenCGWindow(
+                windowNumber: helpWindowNumber,
                 frame: helpFrame,
                 title: configuration.menuItemTitle
             )
@@ -1172,9 +1258,14 @@ private final class Runner {
     }
 
     func performDiagnosticExport() throws {
+        guard let diagnosticScope else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic export runner has no pinned scope"
+            )
+        }
         let correlated = try correlatedE2EWindow(requireFocused: true)
         let exportURL = URL(fileURLWithPath: configuration.exportPath)
-        try requireDiagnosticExportDestination(exportURL)
+        try requireDiagnosticExportDestination(scope: diagnosticScope)
         try ledger?.pass(
             "diagnostic-window",
             "window_number=\(configuration.windowNumber) "
@@ -1355,7 +1446,10 @@ private final class Runner {
             seconds: 15,
             description: "diagnostic export file and success toast"
         ) {
-            guard FileManager.default.fileExists(atPath: exportURL.path) else {
+            guard try diagnosticScope.artifactDirectory.openExistingFileIfPresent(
+                named: diagnosticScope.exportFileName,
+                writable: false
+            ) != nil else {
                 return nil
             }
             let successToast = target.windows().flatMap {
@@ -1377,22 +1471,18 @@ private final class Runner {
         )
     }
 
-    private func requireDiagnosticExportDestination(_ url: URL) throws {
-        var status = stat()
-        let result = lstat(url.path, &status)
-        guard result == -1, errno == ENOENT else {
+    private func requireDiagnosticExportDestination(
+        scope: PinnedDiagnosticExportScope
+    ) throws {
+        guard try scope.artifactDirectory.openExistingFileIfPresent(
+            named: scope.exportFileName,
+            writable: false
+        ) == nil else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
                 "diagnostic export destination already exists"
             )
         }
-        var parentStatus = stat()
-        guard lstat(url.deletingLastPathComponent().path, &parentStatus) == 0,
-              parentStatus.st_mode & S_IFMT == S_IFDIR
-        else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "diagnostic export parent is not a real directory"
-            )
-        }
+        try scope.artifactDirectory.validatePathBinding()
     }
 
     private func uniqueDiagnosticWindow(
@@ -1607,85 +1697,45 @@ private final class Runner {
     }
 
     private func onscreenCGWindow(
+        windowNumber: CGWindowID,
         frame: CGRect,
         title: String
     ) throws -> (number: CGWindowID, title: String?)? {
-        guard let records = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "onscreen CG window list was unavailable"
-            )
+        guard let snapshot = ScopedWindowServerLookup.snapshot(
+            windowNumber: windowNumber
+        ),
+            snapshot.ownerProcessID == configuration.pid,
+            snapshot.title == nil || snapshot.title == title,
+            snapshot.layer == 0,
+            snapshot.isOnscreen,
+            let alpha = snapshot.alpha,
+            alpha > 0,
+            snapshot.frame == frame
+        else {
+            return nil
         }
-        var candidates: [(number: CGWindowID, title: String?)] = []
-        for record in records {
-            let ownerPID = (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
-            let number = (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value
-            let recordTitle = record[kCGWindowName as String] as? String
-            let layer = (record[kCGWindowLayer as String] as? NSNumber)?.intValue
-            let isOnscreen = (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue
-            let alpha = (record[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
-            guard ownerPID == configuration.pid,
-                  let number,
-                  recordTitle == nil || recordTitle == title,
-                  layer == 0,
-                  isOnscreen == true,
-                  let alpha,
-                  alpha > 0,
-                  let bounds = record[kCGWindowBounds as String] as? [String: Any],
-                  let x = (bounds["X"] as? NSNumber)?.doubleValue,
-                  let y = (bounds["Y"] as? NSNumber)?.doubleValue,
-                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-                  let height = (bounds["Height"] as? NSNumber)?.doubleValue,
-                  CGRect(x: x, y: y, width: width, height: height) == frame
-            else {
-                continue
-            }
-            candidates.append((number: number, title: recordTitle))
-        }
-        guard candidates.count <= 1 else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "Help AX frame correlated with duplicate CG windows: count=\(candidates.count)"
-            )
-        }
-        return candidates.first
+        return (number: snapshot.windowNumber, title: snapshot.title)
     }
 
     private func exactCGWindow() throws -> (frame: CGRect, title: String?) {
-        guard let records = CGWindowListCopyWindowInfo(
-            [.optionIncludingWindow],
-            configuration.windowNumber
-        ) as? [[String: Any]], records.count == 1
-        else {
+        guard let snapshot = ScopedWindowServerLookup.snapshot(
+            windowNumber: configuration.windowNumber
+        ) else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
                 "CGWindowNumber \(configuration.windowNumber) did not resolve exactly once"
             )
         }
-        let record = records[0]
-        let ownerPID = (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
-        let windowNumber = (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value
-        let title = record[kCGWindowName as String] as? String
-        let layer = (record[kCGWindowLayer as String] as? NSNumber)?.intValue
-        let isOnscreen = (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue
-        let alpha = (record[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
-        guard let bounds = record[kCGWindowBounds as String] as? [String: Any],
-              let x = (bounds["X"] as? NSNumber)?.doubleValue,
-              let y = (bounds["Y"] as? NSNumber)?.doubleValue,
-              let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-              let height = (bounds["Height"] as? NSNumber)?.doubleValue
-        else {
+        guard let frame = snapshot.frame else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
                 "CGWindowNumber \(configuration.windowNumber) has no complete bounds"
             )
         }
-        let frame = CGRect(x: x, y: y, width: width, height: height)
-        guard ownerPID == configuration.pid,
-              windowNumber == configuration.windowNumber,
-              title == nil || title == configuration.windowTitle,
-              layer == 0,
-              isOnscreen == true,
-              let alpha,
+        guard snapshot.ownerProcessID == configuration.pid,
+              snapshot.windowNumber == configuration.windowNumber,
+              snapshot.title == nil || snapshot.title == configuration.windowTitle,
+              snapshot.layer == 0,
+              snapshot.isOnscreen,
+              let alpha = snapshot.alpha,
               alpha > 0,
               frame.isNull == false,
               frame.isInfinite == false,
@@ -1694,15 +1744,16 @@ private final class Runner {
         else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
                 "CG window identity mismatch "
-                    + "pid=\(ownerPID.map { String($0) } ?? "nil") "
-                    + "number=\(windowNumber.map { String($0) } ?? "nil") "
-                    + "title=\(title ?? "nil") "
-                    + "layer=\(layer.map { String($0) } ?? "nil") "
-                    + "onscreen=\(isOnscreen.map { String($0) } ?? "nil") "
-                    + "alpha=\(alpha.map { String($0) } ?? "nil") frame=\(frame)"
+                    + "pid=\(snapshot.ownerProcessID.map { String($0) } ?? "nil") "
+                    + "number=\(snapshot.windowNumber) "
+                    + "title=\(snapshot.title ?? "nil") "
+                    + "layer=\(snapshot.layer.map { String($0) } ?? "nil") "
+                    + "onscreen=\(snapshot.isOnscreen) "
+                    + "alpha=\(snapshot.alpha.map { String($0) } ?? "nil") "
+                    + "frame=\(frame)"
             )
         }
-        return (frame: frame, title: title)
+        return (frame: frame, title: snapshot.title)
     }
 
     private func assertMainWindow() throws {

@@ -1,9 +1,35 @@
 import ApplicationServices
+import Darwin
 import Foundation
+
+typealias AXWindowNumberResolver = (
+    AXUIElement,
+    UnsafeMutablePointer<CGWindowID>
+) -> AXError
+
+private enum AXWindowNumberSPI {
+    private typealias Function = @convention(c) (
+        AXUIElement,
+        UnsafeMutablePointer<CGWindowID>
+    ) -> AXError
+
+    static func resolver() -> AXWindowNumberResolver? {
+        let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let symbol = dlsym(defaultHandle, "_AXUIElementGetWindow") else {
+            return nil
+        }
+        let function = unsafeBitCast(symbol, to: Function.self)
+        return { element, output in
+            function(element, output)
+        }
+    }
+}
 
 /// Read-only Accessibility view of the validation process. This type exposes
 /// no AX action or value-mutation API by design.
 final class AXTarget {
+    typealias WindowNumberResolver = AXWindowNumberResolver
+
     struct Match {
         let element: AXUIElement
         let role: String
@@ -210,6 +236,29 @@ final class AXTarget {
 
     func boolean(_ target: AXUIElement, _ attribute: String) -> Bool? {
         (value(target, attribute) as? NSNumber)?.boolValue
+    }
+
+    func windowNumber(
+        _ target: AXUIElement
+    ) -> CGWindowID? {
+        windowNumber(
+            target,
+            resolver: AXWindowNumberSPI.resolver()
+        )
+    }
+
+    func windowNumber(
+        _ target: AXUIElement,
+        resolver: WindowNumberResolver?
+    ) -> CGWindowID? {
+        var windowNumber = kCGNullWindowID
+        guard let resolver,
+              resolver(target, &windowNumber) == .success,
+              windowNumber != kCGNullWindowID
+        else {
+            return nil
+        }
+        return windowNumber
     }
 
     func element(_ target: AXUIElement, _ attribute: String) -> AXUIElement? {

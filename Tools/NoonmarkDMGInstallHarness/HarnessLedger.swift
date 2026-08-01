@@ -1,6 +1,9 @@
+import Darwin
 import Foundation
 
 final class HarnessLedger {
+    private static let maximumBoundLedgerBytes: off_t = 4 * 1024 * 1024
+
     enum Failure: LocalizedError {
         case cannotCreateParent(URL)
         case cannotOpen(URL)
@@ -16,6 +19,8 @@ final class HarnessLedger {
     }
 
     private let handle: FileHandle
+    private let boundFile: DescriptorBoundFile?
+    private let closesHandle: Bool
     private let formatter = ISO8601DateFormatter()
 
     init(path: String) throws {
@@ -39,10 +44,55 @@ final class HarnessLedger {
         }
         try handle.seekToEnd()
         self.handle = handle
+        boundFile = nil
+        closesHandle = true
+    }
+
+    init(
+        directory: DescriptorBoundDirectory,
+        fileName: String
+    ) throws {
+        let opened = try directory.createOrOpenFile(
+            named: fileName,
+            mode: mode_t(S_IRUSR | S_IWUSR)
+        )
+        let file = opened.file
+        let initialIdentity = try file.identity()
+        if opened.created {
+            guard initialIdentity.st_size == 0 else {
+                throw DescriptorBoundDirectory.contract(
+                    "new descriptor-bound ledger is not empty"
+                )
+            }
+            guard fchmod(
+                file.descriptor,
+                mode_t(S_IRUSR | S_IWUSR)
+            ) == 0 else {
+                throw DescriptorBoundDirectory.posixFailure(
+                    "set new descriptor-bound ledger permissions",
+                    code: errno
+                )
+            }
+        }
+        let identity = try file.identity()
+        try Self.validateBoundLedger(identity)
+        try file.validateNameStillBound(to: identity)
+        try directory.validatePathBinding()
+
+        let handle = FileHandle(
+            fileDescriptor: file.descriptor,
+            closeOnDealloc: false
+        )
+        try handle.seekToEnd()
+        self.handle = handle
+        boundFile = file
+        closesHandle = false
     }
 
     deinit {
-        try? handle.close()
+        if closesHandle {
+            try? handle.close()
+        }
     }
 
     func pass(_ step: String, _ detail: String) throws {
@@ -58,9 +108,51 @@ final class HarnessLedger {
         let cleanDetail = Self.singleLine(detail)
         let line = "\(formatter.string(from: Date()))\t\(status)\t\(cleanStep)\t\(cleanDetail)\n"
         let data = Data(line.utf8)
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
+        if let boundFile {
+            let before = try boundFile.identity()
+            try Self.validateBoundLedger(before)
+            guard before.st_size <= Self.maximumBoundLedgerBytes - off_t(data.count)
+            else {
+                throw DescriptorBoundDirectory.contract(
+                    "descriptor-bound ledger reached its four-megabyte cap"
+                )
+            }
+            try boundFile.validateNameStillBound(to: before)
+            let end = try handle.seekToEnd()
+            guard end == UInt64(before.st_size) else {
+                throw DescriptorBoundDirectory.contract(
+                    "descriptor-bound ledger changed before append"
+                )
+            }
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            let after = try boundFile.identity()
+            try Self.validateBoundLedger(after)
+            guard DescriptorBoundFile.sameObject(before, after),
+                  after.st_size == before.st_size + off_t(data.count)
+            else {
+                throw DescriptorBoundDirectory.contract(
+                    "descriptor-bound ledger changed during append"
+                )
+            }
+            try boundFile.validateNameStillBound(to: after)
+        } else {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+        }
         FileHandle.standardOutput.write(data)
+    }
+
+    private static func validateBoundLedger(_ status: stat) throws {
+        guard status.st_size >= 0,
+              status.st_size <= maximumBoundLedgerBytes,
+              status.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)
+              == (S_IRUSR | S_IWUSR)
+        else {
+            throw DescriptorBoundDirectory.contract(
+                "descriptor-bound ledger is not a bounded owner-only file"
+            )
+        }
     }
 
     private static func singleLine(_ value: String) -> String {

@@ -230,6 +230,7 @@ evidence_verify_release_identity_provenance \
 
 ditto "$app_path" "${dmg_root}/${app_short_name}.app"
 ln -s /Applications "${dmg_root}/Applications"
+scripts/verify-window-lookup-boundary dmg-staging-root "$dmg_root"
 
 hdiutil create \
   -volname "$volume_name" \

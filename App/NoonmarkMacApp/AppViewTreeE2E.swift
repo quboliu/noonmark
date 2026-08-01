@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import NoonmarkMacE2ESupport
 
 /// In-process query and pointer surface for real-App E2E runs.
 ///
@@ -790,19 +791,18 @@ enum AppViewTreeE2E {
     }
 
     private static func isWindowServerMapped(_ window: NSWindow) -> Bool {
-        guard window.windowNumber > 0,
-              let windows = CGWindowListCopyWindowInfo(
-                  [.optionOnScreenOnly],
-                  kCGNullWindowID
-              ) as? [[String: Any]]
+        guard let windowNumber = CGWindowID(exactly: window.windowNumber),
+              windowNumber > 0,
+              let snapshot = ScopedWindowServerLookup.snapshot(
+                  windowNumber: windowNumber
+              )
         else {
             return false
         }
         let processID = ProcessInfo.processInfo.processIdentifier
-        return windows.contains { description in
-            description[kCGWindowNumber as String] as? Int == window.windowNumber
-                && description[kCGWindowOwnerPID as String] as? Int32 == processID
-        }
+        return snapshot.windowNumber == windowNumber
+            && snapshot.ownerProcessID == processID
+            && snapshot.isOnscreen
     }
 
     private static func currentMainWindow() -> NSWindow? {

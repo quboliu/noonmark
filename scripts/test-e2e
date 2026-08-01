@@ -9473,6 +9473,7 @@ run_diagnostic_export_helper() {
     ! awk -F $'\t' \
       -v pid="$helper_pid" \
       -v token="$token" \
+      -v target_pid="$target_pid" \
       -v app="$target_app_path" '
         BEGIN {
           expected[1] = "arguments"
@@ -9487,16 +9488,18 @@ run_diagnostic_export_helper() {
           expected[10] = "diagnostic-export-ui"
           expected[11] = "diagnostic-locks-after-export"
           expected[12] = "diagnostic-package"
-          expected[13] = "complete"
+          expected[13] = "diagnostic-lock-holder-exit"
+          expected[14] = "complete"
         }
         NF != 4 || $2 != "PASS" || $3 != expected[NR] { exit 1 }
         NR == 2 && $4 != "mode=diagnostic-export helper_pid=" pid " launch_token=" token { exit 1 }
         NR == 5 && index($4, "bundle=app.noonmark.mac.e2e path=" app " frontmost=true windows=") != 1 { exit 1 }
-        NR == 6 && $4 != "sqlite_writer=busy repository_flock=would-block held=true" { exit 1 }
-        NR == 11 && $4 != "sqlite_writer=busy repository_flock=would-block held=true" { exit 1 }
+        (NR == 6 || NR == 11) && $4 !~ /^sqlite_writer=busy repository_flock=would-block held=true target_vnodes=bound target_pid=[1-9][0-9]* main_dev=[0-9]+ main_ino=[0-9]+ shm_dev=[0-9]+ shm_ino=[0-9]+$/ { exit 1 }
+        (NR == 6 || NR == 11) && index($4, "target_pid=" target_pid " ") == 0 { exit 1 }
         NR == 12 && index($4, "schema=1 bytes=") != 1 { exit 1 }
-        NR == 13 && $4 != "mode=diagnostic-export" { exit 1 }
-        END { exit !(NR == 13) }
+        NR == 13 && $4 !~ /^lock_holder=posix_spawn child_pid=[1-9][0-9]* token=[0-9A-F-]{36} main_dev=[0-9]+ main_ino=[0-9]+ shm_dev=[0-9]+ shm_ino=[0-9]+ normal_exit=true exit_code=0$/ { exit 1 }
+        NR == 14 && $4 != "mode=diagnostic-export" { exit 1 }
+        END { exit !(NR == 14) }
       ' "$ledger_path"; then
     echo "diagnostic export Helper evidence was incomplete or out of order" >&2
     dump_native_command_helper_evidence \

@@ -551,7 +551,14 @@ private final class DiagnosticDiskStore {
             named: "operation-capsules.json",
             in: rootDirectory
         ) ?? []
-        metricsDirectory = nil
+        metricsDirectory = try rootDirectory.openChildDirectory(
+            named: metricsDirectoryName,
+            createIfMissing: true,
+            permissions: 0o700
+        )
+        guard metricsDirectory != nil else {
+            throw DiagnosticStorageError.invalidRoot
+        }
         try removeAtomicTemporaryFiles()
         let initializationTime = now()
         let legacyEvidenceTime = min(
@@ -875,8 +882,14 @@ private final class DiagnosticDiskStore {
     ) throws {
         updateOperationState(for: event, timestamp: timestamp)
         guard state.fileSinkDisabled == false else { return }
+        let sequence = state.nextSequence
+        let (nextSequence, overflow) = sequence.addingReportingOverflow(1)
+        guard overflow == false else {
+            state.fileSinkDisabled = true
+            return
+        }
         let record = RecordedEvidence(
-            sequence: state.nextSequence,
+            sequence: sequence,
             timestamp: timestamp,
             sessionID: sessionID,
             event: event
@@ -901,11 +914,11 @@ private final class DiagnosticDiskStore {
         )
         try observeAllocatedBytes()
         if state.segmentRecordCounts[segment] == 0 {
-            state.segmentFirstSequences[segment] = state.nextSequence
+            state.segmentFirstSequences[segment] = sequence
         }
         state.segmentPayloadBytes[segment] += Int64(data.count)
         state.segmentRecordCounts[segment] += 1
-        state.nextSequence += 1
+        state.nextSequence = nextSequence
     }
 
     private func updateOperationState(
@@ -1082,8 +1095,7 @@ private final class DiagnosticDiskStore {
                     guard let record = try? Self.decoder.decode(
                         RecordedEvidence.self,
                         from: Data(line)
-                    ), record.schemaVersion
-                        == RecordedEvidence.currentSchemaVersion
+                    ), Self.isValidPersistedRecord(record)
                     else {
                         corruptCount += 1
                         continue
@@ -1220,7 +1232,7 @@ private final class DiagnosticDiskStore {
                 guard let record = try? Self.decoder.decode(
                     RecordedEvidence.self,
                     from: Data(line)
-                ), record.schemaVersion == RecordedEvidence.currentSchemaVersion
+                ), Self.isValidPersistedRecord(record)
                 else {
                     corruptCount += 1
                     return nil
@@ -1462,10 +1474,13 @@ private final class DiagnosticDiskStore {
                 maximumByteCount: configuration.maximumPersistentBytes
             )
             let records = data.split(separator: 0x0A).compactMap {
-                try? Self.decoder.decode(
+                line -> RecordedEvidence? in
+                guard let record = try? Self.decoder.decode(
                     RecordedEvidence.self,
-                    from: Data($0)
-                )
+                    from: Data(line)
+                ), Self.isValidPersistedRecord(record)
+                else { return nil }
+                return record
             }
             state.segmentPayloadBytes[index] = Int64(data.count)
             state.segmentRecordCounts[index] = records.count
@@ -1476,7 +1491,16 @@ private final class DiagnosticDiskStore {
                 records.map(\.sequence).max() ?? 0
             )
         }
-        state.nextSequence = max(state.nextSequence, maximumSequence + 1)
+        let (rebuiltNextSequence, overflow) = maximumSequence
+            .addingReportingOverflow(1)
+        guard overflow == false else {
+            state.fileSinkDisabled = true
+            return
+        }
+        state.nextSequence = max(state.nextSequence, rebuiltNextSequence)
+        if state.nextSequence == .max {
+            state.fileSinkDisabled = true
+        }
     }
 
     private func readRecords() -> (
@@ -1497,7 +1521,7 @@ private final class DiagnosticDiskStore {
                 guard let record = try? Self.decoder.decode(
                     RecordedEvidence.self,
                     from: Data(line)
-                ), record.schemaVersion == RecordedEvidence.currentSchemaVersion
+                ), Self.isValidPersistedRecord(record)
                 else {
                     corruptCount += 1
                     continue
@@ -1876,7 +1900,21 @@ private final class DiagnosticDiskStore {
         else {
             return PersistentState(segmentCount: segmentCount)
         }
-        return state
+        var normalizedState = state
+        if normalizedState.nextSequence == 0
+            || normalizedState.nextSequence == .max
+        {
+            normalizedState.fileSinkDisabled = true
+        }
+        return normalizedState
+    }
+
+    private static func isValidPersistedRecord(
+        _ record: RecordedEvidence
+    ) -> Bool {
+        record.schemaVersion == RecordedEvidence.currentSchemaVersion
+            && record.sequence > 0
+            && record.sequence < .max
     }
 
     private static let encoder: JSONEncoder = {

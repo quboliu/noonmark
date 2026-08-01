@@ -374,53 +374,86 @@ final class MetricKitExportEnvelopeTests: XCTestCase {
             withIntermediateDirectories: true
         )
         let canaryURL = externalURL.appendingPathComponent(
-            "metric-external-canary.json"
+            "metric-\(UUID().uuidString).json"
         )
-        let canary = Data("PRIVATE-EXTERNAL-METRICS-CANARY".utf8)
-        try canary.write(to: canaryURL)
+        let canary = "PRIVATE-EXTERNAL-METRICS-\(UUID().uuidString)"
+        let sanitizedJSON = try JSONSerialization.data(
+            withJSONObject: ["binaryName": canary],
+            options: [.sortedKeys]
+        )
+        try JSONEncoder().encode(
+            MetricKitStoredPayload(
+                receivedAt: metricExportFixtureNow,
+                summary: makeSummary(kind: .metric),
+                sanitizedJSON: sanitizedJSON,
+                redactionVersion: MetricKitJSONSanitizer.redactionVersion
+            )
+        ).write(to: canaryURL)
         try FileManager.default.setAttributes(
             [.modificationDate: metricExportFixtureNow],
             ofItemAtPath: canaryURL.path
         )
+        let canaryFingerprint = try DiagnosticFileFingerprint(at: canaryURL)
         let metricsURL = rootURL.appendingPathComponent(
             "metrics",
             isDirectory: true
         )
-        func installMetricsSymlink() throws {
-            try FileManager.default.createSymbolicLink(
-                at: metricsURL,
-                withDestinationURL: externalURL
+        let displacedMetricsURL = rootURL.appendingPathComponent(
+            "displaced-symlink-metrics",
+            isDirectory: true
+        )
+        try FileManager.default.moveItem(
+            at: metricsURL,
+            to: displacedMetricsURL
+        )
+        try FileManager.default.createSymbolicLink(
+            at: metricsURL,
+            withDestinationURL: externalURL
+        )
+        func assertExternalCanaryUnchanged() throws {
+            try XCTAssertDiagnosticFileUnchanged(
+                at: canaryURL,
+                from: canaryFingerprint
             )
         }
-        func assertExternalCanaryUnchanged() throws {
-            XCTAssertEqual(try Data(contentsOf: canaryURL), canary)
-        }
 
-        try installMetricsSymlink()
         let snapshot = try await recorder.snapshotPackage()
         XCTAssertTrue(snapshot.metricAttachments.isEmpty)
-        XCTAssertEqual(snapshot.manifest.corruptRecordCount, 1)
-        XCTAssertTrue(snapshot.manifest.collectionWasPartial)
+        XCTAssertEqual(snapshot.manifest.corruptRecordCount, 0)
+        XCTAssertFalse(snapshot.manifest.collectionWasPartial)
+        XCTAssertFalse(package(snapshot, containsSanitizedMetricToken: canary))
         try assertExternalCanaryUnchanged()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: metricsURL.path))
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(
+                atPath: metricsURL.path
+            ),
+            externalURL.path
+        )
 
-        try installMetricsSymlink()
         _ = try await recorder.preview()
         try assertExternalCanaryUnchanged()
 
-        try installMetricsSymlink()
         let exportURL = rootURL.deletingLastPathComponent()
             .appendingPathComponent(
                 "metrics-directory-symlink.noonmarkdiagnostics"
             )
         temporaryURLs.append(exportURL)
         _ = try await recorder.export(to: exportURL)
+        let exported = try JSONDecoder().decode(
+            DiagnosticExportPackage.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertFalse(package(exported, containsSanitizedMetricToken: canary))
         try assertExternalCanaryUnchanged()
 
-        try installMetricsSymlink()
         try await recorder.clear()
         try assertExternalCanaryUnchanged()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: metricsURL.path))
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(
+                atPath: metricsURL.path
+            ),
+            externalURL.path
+        )
     }
 
     func testRuntimeMetricsDirectoryReplacementNeverRedirectsManagedIO() async throws {

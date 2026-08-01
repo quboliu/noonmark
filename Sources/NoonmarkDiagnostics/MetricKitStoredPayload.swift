@@ -150,27 +150,29 @@ enum MetricKitExportEnvelopeReader {
         now: Date,
         identityCapturedHook: (() throws -> Void)?
     ) -> (data: Data?, evidenceTimestamp: Date) {
-        let information = try? directory.entryInformation(named: entryName)
-        let evidenceTimestamp = information?.modificationDate ?? now
-        guard isValidMetricEntryName(entryName),
-              information?.isRegularFile == true
-        else {
-            return (nil, evidenceTimestamp)
+        guard isValidMetricEntryName(entryName) else {
+            return (
+                nil,
+                (try? directory.entryModificationDateWithoutOpening(
+                    named: entryName
+                )) ?? now
+            )
         }
         do {
-            try identityCapturedHook?()
+            let verified = try directory.readVerifiedFile(
+                named: entryName,
+                maximumByteCount: maximumByteCount,
+                identityCapturedHook: identityCapturedHook
+            )
+            return (verified.data, verified.information.modificationDate)
         } catch {
-            return (nil, evidenceTimestamp)
+            return (
+                nil,
+                (try? directory.entryModificationDateWithoutOpening(
+                    named: entryName
+                )) ?? now
+            )
         }
-        guard
-              let data = try? directory.readFile(
-                  named: entryName,
-                  maximumByteCount: maximumByteCount
-              )
-        else {
-            return (nil, evidenceTimestamp)
-        }
-        return (data, evidenceTimestamp)
     }
 
     private static func isValidMetricEntryName(_ name: String) -> Bool {

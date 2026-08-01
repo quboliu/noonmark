@@ -13,6 +13,11 @@ final class DiagnosticOwnedDirectory {
         }
     }
 
+    struct VerifiedFile {
+        let data: Data
+        let information: EntryInformation
+    }
+
     let descriptor: Int32
 
     private init(descriptor: Int32) throws {
@@ -65,8 +70,9 @@ final class DiagnosticOwnedDirectory {
             throw DiagnosticStorageError.invalidRoot
         }
         guard fchmod(descriptor, permissions) == 0 else {
+            let error = currentPOSIXError()
             Darwin.close(descriptor)
-            throw currentPOSIXError()
+            throw error
         }
         return try DiagnosticOwnedDirectory(descriptor: descriptor)
     }
@@ -95,8 +101,9 @@ final class DiagnosticOwnedDirectory {
             throw DiagnosticStorageError.invalidRoot
         }
         guard fchmod(childDescriptor, permissions) == 0 else {
+            let error = Self.currentPOSIXError()
             Darwin.close(childDescriptor)
-            throw Self.currentPOSIXError()
+            throw error
         }
         return try DiagnosticOwnedDirectory(descriptor: childDescriptor)
     }
@@ -159,7 +166,30 @@ final class DiagnosticOwnedDirectory {
         named name: String,
         maximumByteCount: Int64
     ) throws -> Data {
+        try readVerifiedFile(
+            named: name,
+            maximumByteCount: maximumByteCount
+        ).data
+    }
+
+    func readVerifiedFile(
+        named name: String,
+        maximumByteCount: Int64,
+        identityCapturedHook: (() throws -> Void)? = nil
+    ) throws -> VerifiedFile {
         try Self.validateEntryName(name)
+        var capturedInformation = stat()
+        guard fstatat(
+            descriptor,
+            name,
+            &capturedInformation,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0,
+            Self.isOwnedRegularFile(capturedInformation)
+        else {
+            throw DiagnosticStorageError.invalidRoot
+        }
+        try identityCapturedHook?()
         let fileDescriptor = openat(
             descriptor,
             name,
@@ -167,15 +197,63 @@ final class DiagnosticOwnedDirectory {
         )
         guard fileDescriptor >= 0 else { throw Self.currentPOSIXError() }
         defer { Darwin.close(fileDescriptor) }
-        var information = stat()
-        let limit = Int(min(max(0, maximumByteCount), Int64(Int.max - 1)))
-        guard fstat(fileDescriptor, &information) == 0,
-              Self.isOwnedRegularFile(information),
-              information.st_size >= 0,
-              information.st_size <= maximumByteCount
+        var openedInformation = stat()
+        guard fstat(fileDescriptor, &openedInformation) == 0,
+              Self.isOwnedRegularFile(openedInformation),
+              openedInformation.st_dev == capturedInformation.st_dev,
+              openedInformation.st_ino == capturedInformation.st_ino
+        else {
+            throw DiagnosticStorageError.invalidRoot
+        }
+        guard openedInformation.st_size >= 0,
+              openedInformation.st_size <= maximumByteCount
         else {
             throw DiagnosticStorageError.exportTooLarge
         }
+        let allocatedByteCount = try Self.allocatedByteCount(
+            of: fileDescriptor
+        )
+        let data = try Self.readBoundedData(
+            from: fileDescriptor,
+            knownInformation: openedInformation,
+            maximumByteCount: maximumByteCount
+        )
+        return VerifiedFile(
+            data: data,
+            information: EntryInformation(
+                mode: openedInformation.st_mode,
+                logicalByteCount: Int64(openedInformation.st_size),
+                allocatedByteCount: allocatedByteCount,
+                modificationDate: Self.date(
+                    from: openedInformation.st_mtimespec
+                )
+            )
+        )
+    }
+
+    func entryModificationDateWithoutOpening(named name: String) throws
+        -> Date?
+    {
+        try Self.validateEntryName(name)
+        var information = stat()
+        guard fstatat(
+            descriptor,
+            name,
+            &information,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0 else {
+            if errno == ENOENT { return nil }
+            throw Self.currentPOSIXError()
+        }
+        return Self.date(from: information.st_mtimespec)
+    }
+
+    private static func readBoundedData(
+        from fileDescriptor: Int32,
+        knownInformation information: stat,
+        maximumByteCount: Int64
+    ) throws -> Data {
+        let limit = Int(min(max(0, maximumByteCount), Int64(Int.max - 1)))
         var data = Data()
         data.reserveCapacity(min(Int(information.st_size), limit))
         var buffer = [UInt8](repeating: 0, count: min(64 * 1024, limit + 1))
@@ -255,8 +333,9 @@ final class DiagnosticOwnedDirectory {
             throw Self.currentPOSIXError()
         }
         guard let stream = fdopendir(enumerationDescriptor) else {
+            let error = Self.currentPOSIXError()
             Darwin.close(enumerationDescriptor)
-            throw Self.currentPOSIXError()
+            throw error
         }
         defer { closedir(stream) }
         var names: [String] = []
@@ -278,9 +357,7 @@ final class DiagnosticOwnedDirectory {
     }
 
     func synchronize() throws {
-        guard fsync(descriptor) == 0 else {
-            throw Self.currentPOSIXError()
-        }
+        try Self.synchronizeDescriptor(descriptor)
     }
 
     func fileSystemBlockSize() -> Int64? {
@@ -342,9 +419,7 @@ final class DiagnosticOwnedDirectory {
     private static func writeAll(_ data: Data, to descriptor: Int32) throws {
         try data.withUnsafeBytes { bytes in
             guard let baseAddress = bytes.baseAddress else {
-                guard fsync(descriptor) == 0 else {
-                    throw currentPOSIXError()
-                }
+                try synchronizeDescriptor(descriptor)
                 return
             }
             var written = 0
@@ -361,9 +436,14 @@ final class DiagnosticOwnedDirectory {
                 guard count > 0 else { throw POSIXError(.EIO) }
                 written += count
             }
-            guard fsync(descriptor) == 0 else {
-                throw currentPOSIXError()
-            }
+            try synchronizeDescriptor(descriptor)
+        }
+    }
+
+    private static func synchronizeDescriptor(_ descriptor: Int32) throws {
+        while fsync(descriptor) != 0 {
+            if errno == EINTR { continue }
+            throw currentPOSIXError()
         }
     }
 

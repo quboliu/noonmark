@@ -66,6 +66,7 @@ jobs:
           name: development-signed-not-for-distribution
           path: |
             dist
+            dist/Noonmark.app.dSYM
             artifacts/audit-final
             artifacts/e2e*
             artifacts/dmg-install*

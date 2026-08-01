@@ -51,7 +51,9 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
             throw SQLiteRepositoryError.executeFailed(
                 "SQLite store termination checkpoint failed in "
                     + "\"PRAGMA wal_checkpoint(TRUNCATE)\": "
-                    + lastError(walAnchor)
+                    + lastError(walAnchor),
+                sqliteCode: sqliteDiagnosticCode(walAnchor)
+                    ?? checkpointResult
             )
         }
 
@@ -59,7 +61,8 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
         guard closeResult == SQLITE_OK else {
             throw SQLiteRepositoryError.executeFailed(
                 "SQLite store termination WAL anchor close failed: "
-                    + lastError(walAnchor)
+                    + lastError(walAnchor),
+                sqliteCode: sqliteDiagnosticCode(walAnchor) ?? closeResult
             )
         }
         self.walAnchor = nil
@@ -89,13 +92,19 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
             let message = candidate.map {
                 String(cString: sqlite3_errmsg($0))
             } ?? "unknown SQLite WAL anchor open error"
+            let sqliteCode = sqliteDiagnosticCode(candidate) ?? openResult
             sqlite3_close(candidate)
-            throw SQLiteRepositoryError.openFailed(message)
+            throw SQLiteRepositoryError.openFailed(
+                message,
+                sqliteCode: sqliteCode
+            )
         }
         do {
-            guard sqlite3_extended_result_codes(candidate, 1) == SQLITE_OK else {
+            let extendedResult = sqlite3_extended_result_codes(candidate, 1)
+            guard extendedResult == SQLITE_OK else {
                 throw SQLiteRepositoryError.openFailed(
-                    lastError(candidate)
+                    lastError(candidate),
+                    sqliteCode: sqliteDiagnosticCode(candidate) ?? extendedResult
                 )
             }
             guard sqlite3_exec(
@@ -111,7 +120,8 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
                 nil
             ) == SQLITE_OK else {
                 throw SQLiteRepositoryError.openFailed(
-                    lastError(candidate)
+                    lastError(candidate),
+                    sqliteCode: sqliteDiagnosticCode(candidate)
                 )
             }
             walAnchor = candidate

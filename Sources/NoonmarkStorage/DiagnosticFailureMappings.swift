@@ -1,15 +1,23 @@
 import NoonmarkDiagnostics
+import SQLite3
 
 extension SQLiteRepositoryError: DiagnosticFailureProviding {
     public var diagnosticFailure: DiagnosticFailure {
-        let code = switch self {
-        case .transientContention: 1
-        case .openFailed: 2
-        case .prepareFailed: 3
-        case .executeFailed: 4
-        case .stepFailed: 5
-        case .invalidStoredValue: 6
-        case .backupFailed: 7
+        let code: Int = switch self {
+        case .transientContention:
+            Int(SQLITE_BUSY)
+        case let .openFailed(_, sqliteCode):
+            sqliteCode.map(Int.init) ?? -1002
+        case let .prepareFailed(_, sqliteCode):
+            sqliteCode.map(Int.init) ?? -1003
+        case let .executeFailed(_, sqliteCode):
+            sqliteCode.map(Int.init) ?? -1004
+        case let .stepFailed(_, sqliteCode):
+            sqliteCode.map(Int.init) ?? -1005
+        case .invalidStoredValue:
+            -1006
+        case let .backupFailed(_, sqliteCode):
+            sqliteCode.map(Int.init) ?? -1007
         }
         return DiagnosticFailure(domain: .sqlite, code: code)
     }

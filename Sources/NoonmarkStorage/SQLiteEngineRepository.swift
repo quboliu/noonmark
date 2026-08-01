@@ -43,7 +43,10 @@ enum SQLiteJournalCAS {
         defer { sqlite3_finalize(insert) }
         bind(entry, to: insert)
         guard sqlite3_step(insert) == SQLITE_DONE else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
 
         let match = try prepare(exactMatchSQL, on: database)
@@ -57,7 +60,10 @@ enum SQLiteJournalCAS {
                 "sync journal identity collision: \(entry.id.uuidString)"
             )
         default:
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 
@@ -67,7 +73,10 @@ enum SQLiteJournalCAS {
     ) throws -> OpaquePointer? {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
         return statement
     }
@@ -1087,12 +1096,12 @@ public final class SQLiteEngineRepository {
 
 public enum SQLiteRepositoryError: Error, Equatable {
     case transientContention
-    case openFailed(String)
-    case prepareFailed(String)
-    case executeFailed(String)
-    case stepFailed(String)
+    case openFailed(String, sqliteCode: Int32? = nil)
+    case prepareFailed(String, sqliteCode: Int32? = nil)
+    case executeFailed(String, sqliteCode: Int32? = nil)
+    case stepFailed(String, sqliteCode: Int32? = nil)
     case invalidStoredValue(String)
-    case backupFailed(String)
+    case backupFailed(String, sqliteCode: Int32? = nil)
 
     public var isTransientContention: Bool {
         if case .transientContention = self {
@@ -1107,20 +1116,26 @@ extension SQLiteRepositoryError: LocalizedError {
         switch self {
         case .transientContention:
             return "SQLite is temporarily busy; retry later."
-        case let .openFailed(message):
+        case let .openFailed(message, _):
             return "SQLite open failed: \(message)"
-        case let .prepareFailed(message):
+        case let .prepareFailed(message, _):
             return "SQLite prepare failed: \(message)"
-        case let .executeFailed(message):
+        case let .executeFailed(message, _):
             return "SQLite execute failed: \(message)"
-        case let .stepFailed(message):
+        case let .stepFailed(message, _):
             return "SQLite step failed: \(message)"
         case let .invalidStoredValue(message):
             return "SQLite stored value is invalid: \(message)"
-        case let .backupFailed(message):
+        case let .backupFailed(message, _):
             return "SQLite backup failed: \(message)"
         }
     }
+}
+
+func sqliteDiagnosticCode(_ database: OpaquePointer?) -> Int32? {
+    guard let database else { return nil }
+    let code = sqlite3_extended_errcode(database)
+    return code == SQLITE_OK ? nil : code
 }
 
 private extension SQLiteEngineRepository {
@@ -1395,13 +1410,21 @@ private extension SQLiteEngineRepository {
         var database: Database?
         guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown sqlite open error"
+            let sqliteCode = sqliteDiagnosticCode(database)
             sqlite3_close(database)
-            throw SQLiteRepositoryError.openFailed(message)
+            throw SQLiteRepositoryError.openFailed(
+                message,
+                sqliteCode: sqliteCode
+            )
         }
         guard sqlite3_exec(database, "PRAGMA foreign_keys = ON", nil, nil, nil) == SQLITE_OK else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "foreign key setup failed"
+            let sqliteCode = sqliteDiagnosticCode(database)
             sqlite3_close(database)
-            throw SQLiteRepositoryError.openFailed(message)
+            throw SQLiteRepositoryError.openFailed(
+                message,
+                sqliteCode: sqliteCode
+            )
         }
         return database
     }
@@ -1414,13 +1437,18 @@ private extension SQLiteEngineRepository {
         sqlite3_busy_timeout(destination, 5000)
 
         guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
-            throw SQLiteRepositoryError.backupFailed(lastError(destination))
+            throw SQLiteRepositoryError.backupFailed(
+                lastError(destination),
+                sqliteCode: sqliteDiagnosticCode(destination)
+            )
         }
         let stepResult = sqlite3_backup_step(backup, -1)
         let finishResult = sqlite3_backup_finish(backup)
         guard stepResult == SQLITE_DONE, finishResult == SQLITE_OK else {
             throw SQLiteRepositoryError.backupFailed(
-                "step=\(stepResult) finish=\(finishResult): \(lastError(destination))"
+                "step=\(stepResult) finish=\(finishResult): \(lastError(destination))",
+                sqliteCode: sqliteDiagnosticCode(destination)
+                    ?? (finishResult == SQLITE_OK ? stepResult : finishResult)
             )
         }
     }
@@ -1486,14 +1514,20 @@ private extension SQLiteEngineRepository {
 
     func execute(_ sql: String, on database: Database?) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.executeFailed(lastError(database))
+            throw SQLiteRepositoryError.executeFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 
     func prepare(_ sql: String, on database: Database?) throws -> Statement? {
         var statement: Statement?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
         return statement
     }
@@ -1503,7 +1537,10 @@ private extension SQLiteEngineRepository {
         defer { sqlite3_finalize(statement) }
         try bind(statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteRepositoryError.stepFailed("\(lastError(database)) in \(sqlSummary(sql))")
+            throw SQLiteRepositoryError.stepFailed(
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 
@@ -1561,7 +1598,8 @@ private extension SQLiteEngineRepository {
             }
             guard result == SQLITE_ROW else {
                 throw SQLiteRepositoryError.stepFailed(
-                    "\(lastError(database)) in \(sqlSummary(sql))"
+                    "\(lastError(database)) in \(sqlSummary(sql))",
+                    sqliteCode: sqliteDiagnosticCode(database)
                 )
             }
             rows.append(try row(statement))

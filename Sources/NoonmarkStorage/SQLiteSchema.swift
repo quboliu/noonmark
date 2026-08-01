@@ -2907,11 +2907,16 @@ extension SQLiteSchema {
 
     private static func expectedSchemaDefinitions() throws -> [String: String] {
         var database: OpaquePointer?
-        guard sqlite3_open(":memory:", &database) == SQLITE_OK else {
+        let openResult = sqlite3_open(":memory:", &database)
+        guard openResult == SQLITE_OK else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) }
                 ?? "unknown in-memory schema open error"
+            let sqliteCode = sqliteDiagnosticCode(database) ?? openResult
             sqlite3_close(database)
-            throw SQLiteRepositoryError.openFailed(message)
+            throw SQLiteRepositoryError.openFailed(
+                message,
+                sqliteCode: sqliteCode
+            )
         }
         defer { sqlite3_close(database) }
         for statement in statements {
@@ -2936,7 +2941,10 @@ extension SQLiteSchema {
             &statement,
             nil
         ) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
         defer { sqlite3_finalize(statement) }
 
@@ -2953,7 +2961,10 @@ extension SQLiteSchema {
         guard sqlite3_errcode(database) == SQLITE_OK
             || sqlite3_errcode(database) == SQLITE_DONE
         else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
         return definitions
     }
@@ -2965,13 +2976,15 @@ extension SQLiteSchema {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.prepareFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))"
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
             )
         }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw SQLiteRepositoryError.stepFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))"
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
             )
         }
         return Int(sqlite3_column_int64(statement, 0))
@@ -2984,7 +2997,8 @@ extension SQLiteSchema {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.prepareFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))"
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
             )
         }
         defer { sqlite3_finalize(statement) }
@@ -2997,7 +3011,8 @@ extension SQLiteSchema {
                 return values
             default:
                 throw SQLiteRepositoryError.stepFailed(
-                    "\(lastError(database)) in \(sqlSummary(sql))"
+                    "\(lastError(database)) in \(sqlSummary(sql))",
+                    sqliteCode: sqliteDiagnosticCode(database)
                 )
             }
         }
@@ -3010,14 +3025,16 @@ extension SQLiteSchema {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.prepareFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))"
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
             )
         }
         defer { sqlite3_finalize(statement) }
         let result = sqlite3_step(statement)
         guard result == SQLITE_ROW || result == SQLITE_DONE else {
             throw SQLiteRepositoryError.stepFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))"
+                "\(lastError(database)) in \(sqlSummary(sql))",
+                sqliteCode: sqliteDiagnosticCode(database)
             )
         }
         return result == SQLITE_ROW
@@ -3028,7 +3045,10 @@ extension SQLiteSchema {
         on database: OpaquePointer?
     ) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.executeFailed(lastError(database))
+            throw SQLiteRepositoryError.executeFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 

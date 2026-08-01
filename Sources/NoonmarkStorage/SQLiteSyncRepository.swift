@@ -557,10 +557,15 @@ private extension SQLiteSyncRepository {
         )
 
         var database: Database?
-        guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK else {
+        let openResult = sqlite3_open(databaseURL.path, &database)
+        guard openResult == SQLITE_OK else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown sqlite open error"
+            let sqliteCode = sqliteDiagnosticCode(database) ?? openResult
             sqlite3_close(database)
-            throw SQLiteRepositoryError.openFailed(message)
+            throw SQLiteRepositoryError.openFailed(
+                message,
+                sqliteCode: sqliteCode
+            )
         }
         return database
     }
@@ -1250,14 +1255,20 @@ private extension SQLiteSyncRepository {
 
     func execute(_ sql: String, on database: Database?) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.executeFailed(lastError(database))
+            throw SQLiteRepositoryError.executeFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 
     func prepare(_ sql: String, on database: Database?) throws -> Statement? {
         var statement: Statement?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw SQLiteRepositoryError.prepareFailed(lastError(database))
+            throw SQLiteRepositoryError.prepareFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
         return statement
     }
@@ -1267,7 +1278,10 @@ private extension SQLiteSyncRepository {
         defer { sqlite3_finalize(statement) }
         try bind(statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteRepositoryError.stepFailed(lastError(database))
+            throw SQLiteRepositoryError.stepFailed(
+                lastError(database),
+                sqliteCode: sqliteDiagnosticCode(database)
+            )
         }
     }
 
@@ -1283,7 +1297,10 @@ private extension SQLiteSyncRepository {
                 return rows
             }
             guard result == SQLITE_ROW else {
-                throw SQLiteRepositoryError.stepFailed(lastError(database))
+                throw SQLiteRepositoryError.stepFailed(
+                    lastError(database),
+                    sqliteCode: sqliteDiagnosticCode(database)
+                )
             }
             rows.append(try row(statement))
         }

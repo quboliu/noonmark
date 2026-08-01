@@ -2541,12 +2541,16 @@ enum SQLiteAutomaticClassificationJobSQL {
     static func repositoryError(
         for result: Int32,
         database: OpaquePointer?,
-        otherwise: (String) -> SQLiteRepositoryError
+        otherwise: (String, Int32?) -> SQLiteRepositoryError
     ) -> SQLiteRepositoryError {
         if isTransientContention(result: result, database: database) {
             return .transientContention
         }
-        return otherwise(lastError(database))
+        let code = database.map(sqlite3_extended_errcode) ?? result
+        return otherwise(
+            lastError(database),
+            code == SQLITE_OK ? nil : code
+        )
     }
 
     private static func isTransientContention(

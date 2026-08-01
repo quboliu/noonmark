@@ -2,6 +2,18 @@ import Foundation
 import NoonmarkDiagnostics
 
 extension AppCopy {
+    var versionInformationTitle: String {
+        language == .chinese ? "版本信息" : "Version Information"
+    }
+
+    var copyVersionInformation: String {
+        language == .chinese ? "复制版本信息" : "Copy Version Information"
+    }
+
+    var versionInformationCopied: String {
+        language == .chinese ? "版本信息已复制" : "Version Information Copied"
+    }
+
     var localDiagnosticsTitle: String {
         language == .chinese ? "本机诊断记录" : "Local diagnostics"
     }
@@ -117,9 +129,9 @@ extension AppCopy {
         )
         switch language {
         case .chinese:
-            return "Schema v\(preview.schemaVersion)\n证据记录：\(preview.recordCount)\n操作摘要：\(preview.operationCapsuleCount)\n系统诊断附件：\(preview.metricPayloadCount)\n本机占用：\(allocated)\n预计导出：\(exportSize)\n时间范围：\(period)\n\n资料不会自动发送；只有选择保存位置后才会建立导出文件。"
+            return "Schema v\(preview.schemaVersion)\n证据记录：\(preview.recordCount)\n进行中操作：\(preview.activeOperationCount)\n操作摘要：\(preview.operationCapsuleCount)\n系统诊断附件：\(preview.metricPayloadCount)\n本机占用：\(allocated)\n预计导出：\(exportSize)\n时间范围：\(period)\n\n资料不会自动发送；只有选择保存位置后才会建立导出文件。"
         case .english:
-            return "Schema v\(preview.schemaVersion)\nEvidence records: \(preview.recordCount)\nOperation summaries: \(preview.operationCapsuleCount)\nSystem diagnostic attachments: \(preview.metricPayloadCount)\nLocal storage: \(allocated)\nEstimated export: \(exportSize)\nTime range: \(period)\n\nNothing is sent automatically. An export file is created only after you choose a save location."
+            return "Schema v\(preview.schemaVersion)\nEvidence records: \(preview.recordCount)\nActive operations: \(preview.activeOperationCount)\nOperation summaries: \(preview.operationCapsuleCount)\nSystem diagnostic attachments: \(preview.metricPayloadCount)\nLocal storage: \(allocated)\nEstimated export: \(exportSize)\nTime range: \(period)\n\nNothing is sent automatically. An export file is created only after you choose a save location."
         }
     }
 

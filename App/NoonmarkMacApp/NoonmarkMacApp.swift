@@ -59,6 +59,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private lazy var helpWindowController = NoonmarkHelpWindowController(
         store: store
     )
+    private lazy var aboutWindowController = NoonmarkAboutWindowController(
+        store: store
+    )
 
     private init(
         store: NoonmarkStore,
@@ -220,6 +223,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             self?.quickEntryWindowController.refreshLocalizedChrome()
             self?.searchWindowController.refreshLocalizedChrome()
             self?.helpWindowController.refreshLocalizedChrome()
+            self?.aboutWindowController.refreshLocalizedChrome()
         }
         let shouldOpenSettings = store.page == .settings
         if shouldOpenSettings {
@@ -512,29 +516,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     }
 
     @objc func showAboutAction(_ sender: Any?) {
-        let shortVersion = Bundle.main.object(
-            forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "Development"
-        let build = Bundle.main.object(
-            forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? ""
-        var options: [NSApplication.AboutPanelOptionKey: Any] = [
-            .applicationName: store.copy.appName,
-            .applicationVersion: shortVersion,
-            .version: build
-        ]
-        let poemPolicy = store.engine.preferences.settingsPoemDisplayPolicy
-        if poemPolicy.enabled, poemPolicy.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            options[.credits] = NSAttributedString(
-                string: poemPolicy.text,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: NSColor.secondaryLabelColor
-                ]
-            )
-        }
-        NSApp.orderFrontStandardAboutPanel(options: options)
-        NSApp.activate(ignoringOtherApps: true)
+        aboutWindowController.show()
     }
 
     @objc func showSettingsAction(_ sender: Any?) {

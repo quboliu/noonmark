@@ -167,11 +167,11 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
             throw NoonmarkRuntimePathOverrideError.missingProductionScope
         }
 
-        let candidatePath = Self.lexicalComparisonPath(for: candidateURL)
+        let candidatePath = Self.normalizedLexicalPath(for: candidateURL)
         for protectedRoot in protectedProductionRoots {
             // Production roots are lexical canaries. A nonproduction process
             // must not stat or traverse them merely to prove isolation.
-            let protectedPath = Self.lexicalComparisonPath(
+            let protectedPath = Self.normalizedLexicalPath(
                 for: protectedRoot
             )
             if Self.isSameOrDescendant(candidatePath, of: protectedPath)
@@ -185,8 +185,22 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
         try Self.rejectExistingCandidateSymlink(in: candidateURL)
     }
 
-    private static func lexicalComparisonPath(for url: URL) -> String {
-        url.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+    static func normalizedLexicalPath(for url: URL) -> String {
+        let rawPath = url.path.precomposedStringWithCanonicalMapping
+        var components: [Substring] = []
+        for component in rawPath.split(separator: "/") {
+            switch component {
+            case ".":
+                continue
+            case "..":
+                if components.isEmpty == false {
+                    components.removeLast()
+                }
+            default:
+                components.append(component)
+            }
+        }
+        return "/" + components.joined(separator: "/")
     }
 
     private static func isSameOrDescendant(
@@ -195,6 +209,9 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
     ) -> Bool {
         let candidate = candidatePath.lowercased()
         let root = rootPath.lowercased()
+        if root == "/" {
+            return candidate.hasPrefix("/")
+        }
         return candidate == root || candidate.hasPrefix(root + "/")
     }
 
@@ -202,10 +219,9 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
         in candidateURL: URL
     ) throws {
         var currentURL = URL(fileURLWithPath: "/", isDirectory: true)
-        for component in candidateURL.standardizedFileURL.pathComponents
-            where component != "/"
-        {
-            currentURL.appendPathComponent(component)
+        let lexicalPath = Self.normalizedLexicalPath(for: candidateURL)
+        for component in lexicalPath.split(separator: "/") {
+            currentURL.appendPathComponent(String(component))
             var information = stat()
             let result: (status: Int32, errorCode: Int32) = currentURL
                 .withUnsafeFileSystemRepresentation { path in

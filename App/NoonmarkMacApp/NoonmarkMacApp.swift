@@ -23,6 +23,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private let fixedNaturalDayEnvironment: FixedNaturalDayEnvironment?
     private let workspaceStateRepository: WorkspaceStateRepository
     private let windowStatePersistenceEnabled: Bool
+    private let mainWindowIdentityPublisher: MainWindowIdentityPublisher?
     private var terminationTask: Task<Void, Never>?
     private var terminationWasApproved = false
     private var didPrepareForTermination = false
@@ -67,19 +68,21 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         store: NoonmarkStore,
         fixedNaturalDayEnvironment: FixedNaturalDayEnvironment?,
         workspaceStateRepository: WorkspaceStateRepository,
-        windowStatePersistenceEnabled: Bool
+        windowStatePersistenceEnabled: Bool,
+        mainWindowIdentityPublisher: MainWindowIdentityPublisher?
     ) {
         self.store = store
         self.fixedNaturalDayEnvironment = fixedNaturalDayEnvironment
         self.workspaceStateRepository = workspaceStateRepository
         self.windowStatePersistenceEnabled = windowStatePersistenceEnabled
+        self.mainWindowIdentityPublisher = mainWindowIdentityPublisher
         super.init()
     }
 
     static func main() async {
+        let mainWindowIdentityPublisher: MainWindowIdentityPublisher?
         do {
-            _ = try AppLaunchArguments.runtimeProfile
-            try AppLaunchArguments.validateRuntimeDataIsolation()
+            mainWindowIdentityPublisher = try prepareWindowIdentityPublisher()
         } catch {
             _ = recordEarlyStartupFailure(error)
             exit(EX_CONFIG)
@@ -145,7 +148,8 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 fixedNaturalDayEnvironment: environment
                     as? FixedNaturalDayEnvironment,
                 workspaceStateRepository: workspaceStateRepository,
-                windowStatePersistenceEnabled: windowStatePersistenceEnabled
+                windowStatePersistenceEnabled: windowStatePersistenceEnabled,
+                mainWindowIdentityPublisher: mainWindowIdentityPublisher
             )
             let workspaceState = workspaceStateRepository.load()
             delegate.store.isSidebarExpanded = workspaceState.sidebarExpanded
@@ -178,6 +182,31 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         app.delegate = delegate
         app.setActivationPolicy(.regular)
         app.run()
+    }
+
+    private static func prepareWindowIdentityPublisher() throws -> MainWindowIdentityPublisher? {
+        let runtimeProfile = try AppLaunchArguments.runtimeProfile
+        try AppLaunchArguments.validateRuntimeDataIsolation()
+        guard runtimeProfile != .production else {
+            // Production must not even ask FileManager for paths on behalf of
+            // a validation-only evidence protocol.
+            return nil
+        }
+        let homeDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        let applicationSupportBaseURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? homeDirectoryURL.appendingPathComponent(
+            "Library/Application Support",
+            isDirectory: true
+        )
+        return try MainWindowIdentityPublisher.prepare(
+            profile: runtimeProfile,
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            processArguments: AppLaunchArguments.values,
+            applicationSupportBaseURL: applicationSupportBaseURL,
+            homeDirectoryURL: homeDirectoryURL
+        )
     }
 
     private static func requestedE2EWindowSize() -> NSSize? {
@@ -257,10 +286,44 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             // turn. Present Settings afterwards so the main window cannot
             // steal key status from the native Settings window at launch.
             DispatchQueue.main.async { [weak self] in
-                self?.settingsWindowController.show()
+                guard let self else { return }
+                settingsWindowController.show()
+                publishWindowIdentityIfRequested(
+                    for: settingsWindowController.window
+                )
+            }
+        } else {
+            // `openMainWindow()` queued the order-front operation first. This
+            // turn therefore observes the App-owned, mapped window number
+            // without asking WindowServer to enumerate any other process.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                publishWindowIdentityIfRequested(for: window)
             }
         }
         runLaunchAutomationIfNeeded()
+    }
+
+    private func publishWindowIdentityIfRequested(for window: NSWindow?) {
+        guard let publisher = mainWindowIdentityPublisher else { return }
+        guard let window,
+              window.windowNumber > 0,
+              window.isVisible,
+              window.isMiniaturized == false,
+              window.title.isEmpty == false
+        else {
+            exit(EX_SOFTWARE)
+        }
+        do {
+            try publisher.publish(
+                processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                bundleIdentifier: Bundle.main.bundleIdentifier ?? "",
+                windowNumber: window.windowNumber,
+                title: window.title
+            )
+        } catch {
+            exit(EX_IOERR)
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

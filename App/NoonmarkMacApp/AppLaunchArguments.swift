@@ -111,7 +111,11 @@ enum AppLaunchArguments {
             )
         }
 
-        for flag in ["--data-url", "--sync-folder-url"] {
+        for flag in [
+            "--data-url",
+            "--sync-folder-url",
+            MainWindowIdentityPublisher.e2eIdentityURLArgument
+        ] {
             guard let path = value(after: flag), path.isEmpty == false else {
                 continue
             }

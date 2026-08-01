@@ -469,14 +469,7 @@ terminate_e2e_app() {
     echo "failed to terminate ${app_executable_name}" >&2
     return 1
   fi
-  for _ in {1..30}; do
-    if ! has_e2e_windows; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "failed to close visible ${app_display_name} windows" >&2
-  return 1
+  return 0
 }
 
 native_command_helper_process_matches() {
@@ -1105,30 +1098,6 @@ finish_e2e_session() {
   exit "$suite_status"
 }
 
-visible_e2e_windows() {
-  swift -e '
-import CoreGraphics
-import Foundation
-
-let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
-
-if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
-    for window in list {
-        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
-        let name = window[kCGWindowName as String] as? String ?? ""
-        if owner == expectedOwner || owner == expectedDisplayName {
-            print("window owner=\(owner) title=\(name)")
-        }
-    }
-}
-'
-}
-
-has_e2e_windows() {
-  [[ -n "$(visible_e2e_windows)" ]]
-}
-
 terminate_e2e_app
 trap 'finish_e2e_session "$?"' EXIT
 mkdir -p "$runtime_evidence_dir"
@@ -1156,175 +1125,289 @@ else
 fi
 runtime_evidence_started=1
 
-find_window_id() {
-  local expected_title="$1"
-  local expected_width="${2:-$expected_window_width}"
-  local expected_height="${3:-$expected_window_height}"
-  local expected_process_id="$4"
-  NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
+resolve_exact_e2e_window_id() {
+  local identity_path="$1"
+  local launch_token="$2"
+  local expected_process_id="$3"
+  local expected_title="$4"
+  local expected_width="${5:-$expected_window_width}"
+  local expected_height="${6:-$expected_window_height}"
+
+  NOONMARK_E2E_WINDOW_IDENTITY_PATH="$identity_path" \
+    NOONMARK_E2E_WINDOW_LAUNCH_TOKEN="$launch_token" \
+    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" \
+    NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
     NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_width" \
     NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_height" \
-    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
+    NOONMARK_E2E_EXPECTED_APP_PATH="$PWD/$app_path" swift -e '
+import AppKit
 import CoreGraphics
 import Darwin
 import Foundation
 
-let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
-let expectedTitle = ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"] ?? "晷迹 · Day Todo — 7月5日"
-let expectedWidth = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
-let expectedHeight = Double(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT"] ?? "") ?? 0
-let expectedProcessID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"] ?? "") ?? -1
+struct Identity: Codable {
+    let schemaVersion: Int
+    let profile: String
+    let launchToken: String
+    let processIdentifier: Int
+    let bundleIdentifier: String
+    let windowNumber: Int
+    let title: String
 
-guard expectedProcessID > 0 else { exit(2) }
-
-if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
-    for window in list {
-        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
-        let name = window[kCGWindowName as String] as? String ?? ""
-        var allowedOwners = [expectedOwner, expectedDisplayName]
-        if expectedOwner == "NoonmarkMacApp" {
-            allowedOwners.append(contentsOf: ["晷迹", "Noonmark", "NoonmarkMacApp"])
-        }
-        if allowedOwners.contains(owner), name == expectedTitle,
-           (window[kCGWindowOwnerPID as String] as? Int) == expectedProcessID
-        {
-            let layer = window[kCGWindowLayer as String] as? Int ?? -1
-            let bounds = window[kCGWindowBounds as String] as? [String: Any]
-            let width = bounds?["Width"] as? Double ?? 0
-            let height = bounds?["Height"] as? Double ?? 0
-            let sizeMatches = expectedWidth <= 0 || expectedHeight <= 0
-                || (width == expectedWidth && height == expectedHeight)
-            if layer == 0, sizeMatches,
-               let number = window[kCGWindowNumber as String]
-            {
-                print(number)
-                exit(0)
-            }
-        }
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case profile
+        case launchToken = "launch_token"
+        case processIdentifier = "process_identifier"
+        case bundleIdentifier = "bundle_identifier"
+        case windowNumber = "window_number"
+        case title
     }
 }
-exit(1)
-'
+
+func sameSnapshot(_ lhs: stat, _ rhs: stat) -> Bool {
+    lhs.st_dev == rhs.st_dev
+        && lhs.st_ino == rhs.st_ino
+        && lhs.st_size == rhs.st_size
+        && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+        && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+        && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+        && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
 }
 
-probe_auxiliary_window_state() {
-  local window_id="$1"
-  local expected_process_id="$2"
-  NOONMARK_E2E_WINDOW_ID="$window_id" \
-    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
-import CoreGraphics
-import Darwin
-import Foundation
+func openDirectoryWithoutFollowingLinks(_ path: String) -> Int32? {
+    guard path.hasPrefix("/") else { return nil }
+    var descriptor = Darwin.open(
+        "/",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { return nil }
+    for component in path.split(separator: "/") {
+        let nextDescriptor = openat(
+            descriptor,
+            String(component),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        _ = Darwin.close(descriptor)
+        guard nextDescriptor >= 0 else { return nil }
+        descriptor = nextDescriptor
+    }
+    return descriptor
+}
 
-let expectedID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_WINDOW_ID"] ?? "") ?? -1
-let expectedProcessID = Int(ProcessInfo.processInfo.environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"] ?? "") ?? -1
-let expectedOwner = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_EXECUTABLE_NAME"] ?? "NoonmarkMacAppE2E"
-let expectedDisplayName = ProcessInfo.processInfo.environment["NOONMARK_E2E_APP_DISPLAY_NAME"] ?? "晷迹 E2E"
+let environment = ProcessInfo.processInfo.environment
+guard let identityPath = environment["NOONMARK_E2E_WINDOW_IDENTITY_PATH"],
+      identityPath.hasPrefix("/"),
+      let launchToken = environment["NOONMARK_E2E_WINDOW_LAUNCH_TOKEN"],
+      UUID(uuidString: launchToken)?.uuidString == launchToken,
+      let rawProcessID = environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"],
+      let expectedProcessID = Int32(rawProcessID), expectedProcessID > 0,
+      let expectedTitle = environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"],
+      expectedTitle.isEmpty == false,
+      let expectedAppPath = environment["NOONMARK_E2E_EXPECTED_APP_PATH"]
+else { exit(2) }
+let expectedWidth = Double(environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
+let expectedHeight = Double(environment["NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT"] ?? "") ?? 0
+let identityURL = URL(fileURLWithPath: identityPath)
+guard identityURL.lastPathComponent == "main-window-identity.json" else { exit(2) }
+guard let directoryDescriptor = openDirectoryWithoutFollowingLinks(
+    identityURL.deletingLastPathComponent().path
+) else { exit(1) }
+defer { _ = Darwin.close(directoryDescriptor) }
+var directoryStatus = stat()
+guard fstat(directoryDescriptor, &directoryStatus) == 0,
+      directoryStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+      directoryStatus.st_uid == geteuid(),
+      directoryStatus.st_mode & mode_t(0o777) == mode_t(0o700)
+else { exit(1) }
 
-guard expectedID > 0, expectedProcessID > 0 else { exit(2) }
-guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
-      let main = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == expectedID }),
-      (main[kCGWindowOwnerPID as String] as? Int) == expectedProcessID,
-      let mainOwner = main[kCGWindowOwnerName as String] as? String,
-      mainOwner == expectedOwner || mainOwner == expectedDisplayName,
-      let mainBounds = main[kCGWindowBounds as String] as? [String: Any],
-      let mainX = mainBounds["X"] as? Double,
-      let mainY = mainBounds["Y"] as? Double,
-      let mainWidth = mainBounds["Width"] as? Double,
-      let mainHeight = mainBounds["Height"] as? Double,
-      let mainProcessID = main[kCGWindowOwnerPID as String] as? Int
-else {
+var pathStatus = stat()
+guard fstatat(
+    directoryDescriptor,
+    "main-window-identity.json",
+    &pathStatus,
+    AT_SYMLINK_NOFOLLOW
+) == 0,
+    pathStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+    pathStatus.st_uid == geteuid(),
+    pathStatus.st_nlink == 1,
+    pathStatus.st_mode & mode_t(0o777) == mode_t(0o600),
+    pathStatus.st_size > 0,
+    pathStatus.st_size <= 4096
+else { exit(1) }
+let descriptor = openat(
+    directoryDescriptor,
+    "main-window-identity.json",
+    O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+)
+guard descriptor >= 0 else { exit(1) }
+defer { _ = Darwin.close(descriptor) }
+var openedStatus = stat()
+guard fstat(descriptor, &openedStatus) == 0,
+      sameSnapshot(pathStatus, openedStatus)
+else { exit(1) }
+var data = Data()
+var buffer = [UInt8](repeating: 0, count: 4097)
+while data.count <= 4096 {
+    let remaining = 4097 - data.count
+    let count = buffer.withUnsafeMutableBytes {
+        Darwin.read(descriptor, $0.baseAddress, min($0.count, remaining))
+    }
+    if count > 0 {
+        data.append(contentsOf: buffer.prefix(count))
+        continue
+    }
+    if count == 0 { break }
+    if errno == EINTR { continue }
     exit(1)
 }
-
-var best: (id: Int, area: Double)?
-for window in list {
-    guard let number = window[kCGWindowNumber as String] as? Int,
-          number != expectedID,
-          (window[kCGWindowOwnerPID as String] as? Int) == mainProcessID,
-          let owner = window[kCGWindowOwnerName as String] as? String,
-          owner == expectedOwner || owner == expectedDisplayName,
-          let bounds = window[kCGWindowBounds as String] as? [String: Any],
-          let x = bounds["X"] as? Double,
-          let y = bounds["Y"] as? Double,
-          let width = bounds["Width"] as? Double,
-          let height = bounds["Height"] as? Double,
-          width >= 40,
-          height >= 40,
-          width < mainWidth,
-          height < mainHeight,
-          x < mainX + mainWidth,
-          x + width > mainX,
-          y < mainY + mainHeight,
-          y + height > mainY
-    else { continue }
-    let area = width * height
-    if best == nil || area > best!.area {
-        best = (number, area)
-    }
+var finalStatus = stat()
+var finalPathStatus = stat()
+guard data.count <= 4096,
+      fstat(descriptor, &finalStatus) == 0,
+      fstatat(
+          directoryDescriptor,
+          "main-window-identity.json",
+          &finalPathStatus,
+          AT_SYMLINK_NOFOLLOW
+      ) == 0,
+      sameSnapshot(openedStatus, finalStatus),
+      sameSnapshot(openedStatus, finalPathStatus),
+      finalStatus.st_size == data.count,
+      let rawObject = try? JSONSerialization.jsonObject(with: data),
+      let object = rawObject as? [String: Any],
+      Set(object.keys) == Set([
+          "schema_version", "profile", "launch_token",
+          "process_identifier", "bundle_identifier", "window_number", "title"
+      ]),
+      let identity = try? JSONDecoder().decode(Identity.self, from: data)
+else { exit(1) }
+let encoder = JSONEncoder()
+encoder.outputFormatting = [.sortedKeys]
+guard let canonicalData = try? encoder.encode(identity),
+      canonicalData == data,
+      identity.schemaVersion == 1,
+      identity.profile == "e2e",
+      identity.launchToken == launchToken,
+      identity.processIdentifier == Int(expectedProcessID),
+      identity.bundleIdentifier == "app.noonmark.mac.e2e",
+      identity.windowNumber > 0,
+      identity.title == expectedTitle,
+      let runningApp = NSRunningApplication(processIdentifier: expectedProcessID),
+      runningApp.isTerminated == false,
+      runningApp.isActive,
+      runningApp.bundleIdentifier == identity.bundleIdentifier,
+      let bundleURL = runningApp.bundleURL
+else { exit(1) }
+let actualAppPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+let normalizedExpectedAppPath = URL(fileURLWithPath: expectedAppPath)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+guard actualAppPath == normalizedExpectedAppPath,
+      let records = CGWindowListCopyWindowInfo(
+          [.optionIncludingWindow],
+          CGWindowID(identity.windowNumber)
+      ) as? [[String: Any]],
+      records.count == 1,
+      let record = records.first,
+      (record[kCGWindowNumber as String] as? NSNumber)?.intValue
+        == identity.windowNumber,
+      (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        == expectedProcessID,
+      (record[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+      (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
+      let bounds = record[kCGWindowBounds as String] as? [String: Any],
+      let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+      let height = (bounds["Height"] as? NSNumber)?.doubleValue,
+      expectedWidth <= 0 || expectedHeight <= 0
+        || (width == expectedWidth && height == expectedHeight)
+else { exit(1) }
+if let windowTitle = record[kCGWindowName as String] as? String,
+   windowTitle != identity.title
+{
+    exit(1)
 }
-if let best {
-    print("present|\(mainProcessID)|\(expectedID)|\(best.id)")
-} else {
-    print("clear|\(mainProcessID)|\(expectedID)")
-}
+print(identity.windowNumber)
 '
 }
 
-find_auxiliary_window_id() {
-  local window_id="$1"
-  local expected_process_id="$2"
-  local observation_state=""
-  local status=""
-  local observed_process_id=""
-  local observed_main_window_id=""
-  local observed_auxiliary_window_id=""
-  local extra_field=""
-
-  if ! observation_state="$(
-    probe_auxiliary_window_state "$window_id" "$expected_process_id"
-  )"; then
-    return 2
-  fi
-  IFS="|" read -r status observed_process_id observed_main_window_id \
-    observed_auxiliary_window_id extra_field <<<"$observation_state"
-  if [[ "$status" == "clear" &&
-    "$observed_process_id" == "$expected_process_id" &&
-    "$observed_main_window_id" == "$window_id" &&
-    -z "$observed_auxiliary_window_id" && -z "$extra_field" ]]; then
-    return 1
-  fi
-  if [[ "$status" == "present" &&
-    "$observed_process_id" == "$expected_process_id" &&
-    "$observed_main_window_id" == "$window_id" &&
-    "$observed_auxiliary_window_id" =~ ^[1-9][0-9]*$ &&
-    -z "$extra_field" ]]; then
-    printf '%s\n' "$observed_auxiliary_window_id"
-    return 0
-  fi
-  return 2
-}
-
-dump_visible_windows() {
-  swift -e '
+exact_auxiliary_window_matches() {
+  local main_window_id="$1"
+  local auxiliary_window_id="$2"
+  local expected_process_id="$3"
+  NOONMARK_E2E_MAIN_WINDOW_ID="$main_window_id" \
+    NOONMARK_E2E_AUXILIARY_WINDOW_ID="$auxiliary_window_id" \
+    NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
+import AppKit
 import CoreGraphics
+import Darwin
 import Foundation
 
-if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
-    for window in list {
-        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
-        let name = window[kCGWindowName as String] as? String ?? ""
-        if owner.contains("Noonmark") || owner.contains("晷迹") || name.contains("晷迹") {
-            let number = window[kCGWindowNumber as String] as? Int ?? -1
-            let processID = window[kCGWindowOwnerPID as String] as? Int ?? -1
-            let layer = window[kCGWindowLayer as String] as? Int ?? -1
-            let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
-            print("window id=\(number) pid=\(processID) owner=\(owner) title=\(name) layer=\(layer) bounds=\(bounds)")
-        }
-    }
+let environment = ProcessInfo.processInfo.environment
+guard let mainID = UInt32(environment["NOONMARK_E2E_MAIN_WINDOW_ID"] ?? ""), mainID > 0,
+      let auxiliaryID = UInt32(environment["NOONMARK_E2E_AUXILIARY_WINDOW_ID"] ?? ""),
+      auxiliaryID > 0, auxiliaryID != mainID,
+      let processID = Int32(environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"] ?? ""),
+      processID > 0,
+      let app = NSRunningApplication(processIdentifier: processID),
+      app.isTerminated == false,
+      app.bundleIdentifier == "app.noonmark.mac.e2e"
+else { exit(2) }
+
+func exactWindow(_ identifier: UInt32) -> [String: Any]? {
+    guard let records = CGWindowListCopyWindowInfo(
+        [.optionIncludingWindow],
+        CGWindowID(identifier)
+    ) as? [[String: Any]], records.count == 1,
+        let record = records.first,
+        (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value == identifier,
+        (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processID,
+        (record[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+        (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true
+    else { return nil }
+    return record
 }
+
+guard let main = exactWindow(mainID),
+      let auxiliary = exactWindow(auxiliaryID),
+      let mainBounds = main[kCGWindowBounds as String] as? [String: Any],
+      let auxiliaryBounds = auxiliary[kCGWindowBounds as String] as? [String: Any],
+      let mainX = (mainBounds["X"] as? NSNumber)?.doubleValue,
+      let mainY = (mainBounds["Y"] as? NSNumber)?.doubleValue,
+      let mainWidth = (mainBounds["Width"] as? NSNumber)?.doubleValue,
+      let mainHeight = (mainBounds["Height"] as? NSNumber)?.doubleValue,
+      let x = (auxiliaryBounds["X"] as? NSNumber)?.doubleValue,
+      let y = (auxiliaryBounds["Y"] as? NSNumber)?.doubleValue,
+      let width = (auxiliaryBounds["Width"] as? NSNumber)?.doubleValue,
+      let height = (auxiliaryBounds["Height"] as? NSNumber)?.doubleValue,
+      width >= 40, height >= 40,
+      width < mainWidth, height < mainHeight,
+      x < mainX + mainWidth, x + width > mainX,
+      y < mainY + mainHeight, y + height > mainY
+else { exit(1) }
 '
+}
+
+dump_exact_e2e_window_evidence() {
+  local identity_path="$1"
+  local launch_token="$2"
+  local process_id="$3"
+  local title="$4"
+  local width="$5"
+  local height="$6"
+  local resolved_id=""
+  if resolved_id="$(
+    resolve_exact_e2e_window_id \
+      "$identity_path" "$launch_token" "$process_id" "$title" "$width" "$height"
+  )"; then
+    printf 'exact E2E window id=%s pid=%s title=%s\n' \
+      "$resolved_id" "$process_id" "$title"
+  elif [[ -f "$identity_path" ]]; then
+    printf 'exact E2E window identity present but invalid: %s pid=%s\n' \
+      "$identity_path" "$process_id"
+  else
+    printf 'exact E2E window identity missing: %s pid=%s\n' \
+      "$identity_path" "$process_id"
+  fi
 }
 
 close_ui_entry_start_gate() {
@@ -1368,12 +1451,7 @@ arm_ui_entry_start_gate() {
   local token="$2"
   local process_id="$3"
   local main_window_id="$4"
-  local observation_state=""
-  local observation_status=""
-  local observed_process_id=""
-  local observed_main_window_id=""
-  local unexpected_presentation_id=""
-  local extra_field=""
+  local waiting_state=""
 
   if [[ "$ui_entry_start_gate_fd_open" != "1" ||
     "$active_ui_entry_start_gate_token" != "$token" ||
@@ -1382,30 +1460,20 @@ arm_ui_entry_start_gate() {
     echo "UI-entry start gate cannot be armed with a stale identity" >&2
     return 1
   fi
-  if ! observation_state="$(
-    probe_auxiliary_window_state \
-      "$main_window_id" \
-      "$process_id" 2>/dev/null
-  )"; then
-    echo "UI-entry pre-arm WindowServer observer failed" >&2
-    return 1
-  fi
-  IFS="|" read -r observation_status observed_process_id \
-    observed_main_window_id unexpected_presentation_id extra_field \
-    <<<"$observation_state"
-  if [[ "$observation_status" == "present" &&
-    "$observed_process_id" == "$process_id" &&
-    "$observed_main_window_id" == "$main_window_id" &&
-    "$unexpected_presentation_id" =~ ^[1-9][0-9]*$ &&
-    -z "$extra_field" ]]; then
-    echo "UI-entry transient presentation appeared before the external main-window discovery gate: $unexpected_presentation_id" >&2
-    return 1
-  fi
-  if [[ "$observation_status" != "clear" ||
-    "$observed_process_id" != "$process_id" ||
-    "$observed_main_window_id" != "$main_window_id" ||
-    -n "$unexpected_presentation_id" || -n "$extra_field" ]]; then
-    echo "UI-entry pre-arm WindowServer observer returned a malformed or stale identity: $observation_state" >&2
+  for _ in {1..120}; do
+    if [[ -f "$result_path" ]]; then
+      waiting_state="$(<"$result_path")"
+      if [[ "$waiting_state" == "waiting|$token|$process_id" ]]; then
+        break
+      fi
+      if [[ "$waiting_state" == failed:* ]]; then
+        break
+      fi
+    fi
+    sleep 0.025
+  done
+  if [[ "$waiting_state" != "waiting|$token|$process_id" ]]; then
+    echo "UI-entry start gate did not bind its exact waiting App identity: ${waiting_state:-missing}" >&2
     return 1
   fi
   printf 'arm|%s|%s|%s\n' "$token" "$process_id" "$main_window_id" >&8
@@ -1430,7 +1498,6 @@ capture_classification_overflow_handshake() {
   local ready_presentation_window_id=""
   local ready_recovery_count=""
   local extra_field=""
-  local observed_presentation_window_id=""
   local acknowledgement_state=""
 
   for _ in {1..200}; do
@@ -1448,30 +1515,23 @@ capture_classification_overflow_handshake() {
         "$ready_presentation_window_id" =~ ^[0-9]+$ &&
         "$ready_recovery_count" =~ ^[0-9]+$ ]] &&
         ((ready_recovery_count >= expected_recovery_count)); then
-        observed_presentation_window_id=""
-        observed_presentation_window_id="$(
-          find_auxiliary_window_id \
-            "$main_window_id" \
-            "$process_id" 2>/dev/null || true
-        )"
-        if [[ "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+        if exact_auxiliary_window_matches \
+          "$main_window_id" \
+          "$ready_presentation_window_id" \
+          "$process_id" 2>/dev/null; then
           screencapture -x -o -l"$main_window_id" "$warmup_screenshot"
           sleep 0.25
-          observed_presentation_window_id="$(
-            find_auxiliary_window_id \
+          if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" ]] &&
+            exact_auxiliary_window_matches \
               "$main_window_id" \
-              "$process_id" 2>/dev/null || true
-          )"
-          if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
-            "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+              "$ready_presentation_window_id" \
+              "$process_id" 2>/dev/null; then
             screencapture -x -o -l"$main_window_id" "$screenshot"
-            observed_presentation_window_id="$(
-              find_auxiliary_window_id \
+            if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" ]] &&
+              exact_auxiliary_window_matches \
                 "$main_window_id" \
-                "$process_id" 2>/dev/null || true
-            )"
-            if [[ -f "$result_path" && "$(<"$result_path")" == "$result_value" &&
-              "$observed_presentation_window_id" == "$ready_presentation_window_id" ]]; then
+                "$ready_presentation_window_id" \
+                "$process_id" 2>/dev/null; then
               printf '%s\n' "$generation" >"$acknowledgement_path"
               for _ in {1..80}; do
                 acknowledgement_state=""
@@ -1528,6 +1588,9 @@ capture_app_screenshot() {
   local english_ui_result=""
   local zhulong_title_geometry_result=""
   local expected_overflow_recovery_count=0
+  local window_identity_directory=""
+  local window_identity_path=""
+  local window_identity_token=""
   local launch_arguments=()
   shift 3
 
@@ -1616,10 +1679,24 @@ capture_app_screenshot() {
   fi
 
   window_id=""
+  mkdir -p "$out_dir"
   : >"$launch_log"
   for launch_attempt in {1..3}; do
     terminate_e2e_app
+    window_id=""
     launch_arguments=("${arguments[@]}")
+    window_identity_token="$(uuidgen)"
+    if [[ ! "$window_identity_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+      echo "could not create one canonical E2E window identity token" >&2
+      exit 1
+    fi
+    window_identity_directory="${out_dir}/.main-window-identity-${screenshot_name}-${launch_attempt}-${window_identity_token}"
+    window_identity_path="${window_identity_directory}/main-window-identity.json"
+    mkdir -m 700 -- "$window_identity_directory"
+    launch_arguments+=(
+      --e2e-main-window-identity-url "$PWD/$window_identity_path"
+      --e2e-main-window-launch-token "$window_identity_token"
+    )
     if [[ "$uses_ui_entry_start_gate" == "1" ]]; then
       ui_entry_start_gate="${ui_entry_result}.start-gate.${launch_attempt}.fifo"
       ui_entry_start_gate_token="$(uuidgen)"
@@ -1631,7 +1708,6 @@ capture_app_screenshot() {
         --e2e-ui-entry-start-gate-token "$ui_entry_start_gate_token"
       )
     fi
-    mkdir -p "$out_dir"
     echo "launch attempt=$launch_attempt page=$page expected_title=$expected_window_title" >>"$launch_log"
     if [[ -n "$ui_entry_result" ]]; then
       /usr/bin/open -W -n \
@@ -1667,11 +1743,13 @@ capture_app_screenshot() {
 
     for _ in {1..20}; do
       if window_id="$(
-        find_window_id \
+        resolve_exact_e2e_window_id \
+          "$PWD/$window_identity_path" \
+          "$window_identity_token" \
+          "$app_pid" \
           "$expected_window_title" \
           "$expected_frame_width" \
-          "$expected_frame_height" \
-          "$app_pid" 2>/dev/null
+          "$expected_frame_height" 2>/dev/null
       )"; then
         break
       fi
@@ -1698,7 +1776,13 @@ capture_app_screenshot() {
       wait "$launcher_pid" || app_exit_code=$?
       echo "launch attempt=$launch_attempt pid=$app_pid state=exited exit_code=$app_exit_code window_match=missing" >>"$launch_log"
     fi
-    dump_visible_windows >>"$launch_log"
+    dump_exact_e2e_window_evidence \
+      "$PWD/$window_identity_path" \
+      "$window_identity_token" \
+      "$app_pid" \
+      "$expected_window_title" \
+      "$expected_frame_width" \
+      "$expected_frame_height" >>"$launch_log"
     terminate_e2e_app
     close_ui_entry_start_gate
     sleep 0.5
@@ -1779,7 +1863,13 @@ capture_app_screenshot() {
       "$screenshot" \
       "$expected_overflow_recovery_count"; then
       echo "classification overflow popover was not capture-ready" >&2
-      dump_visible_windows >&2
+      dump_exact_e2e_window_evidence \
+        "$PWD/$window_identity_path" \
+        "$window_identity_token" \
+        "$app_pid" \
+        "$expected_window_title" \
+        "$expected_frame_width" \
+        "$expected_frame_height" >&2
       exit 1
     fi
   else
@@ -9581,6 +9671,8 @@ run_diagnostic_evidence_closure_probe() {
   local lock_holder_log="$PWD/$closure_dir/repository-lock-holder.log"
   local repository_lock="$sync_root/.repository.lock"
   local window_title="晷迹 · Day Todo — 7月5日"
+  local restart_window_identity_directory=""
+  local restart_window_identity_path=""
   local seed_token stall_token restart_token helper_token lock_token
   local seed_pid stall_pid restart_pid lock_pid window_number
   local seed_status=0 stall_status=0 restart_status=0 lock_status=0
@@ -9745,6 +9837,13 @@ run_diagnostic_evidence_closure_probe() {
     'RUUyRV9QUklWQVRFX0JBU0U2NF9TRU5USU5FTA==' \
     >"$sentinels"
   restart_token="$(uuidgen)"
+  if [[ ! "$restart_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    echo "diagnostic restart could not create a canonical window identity token" >&2
+    return 1
+  fi
+  restart_window_identity_directory="$PWD/$closure_dir/.main-window-identity-$restart_token"
+  restart_window_identity_path="$restart_window_identity_directory/main-window-identity.json"
+  mkdir -m 700 -- "$restart_window_identity_directory"
   "$PWD/$app_executable_path" \
     --data-url "$database" \
     --sync-folder-url "$sync_root" \
@@ -9756,6 +9855,8 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-diagnostic-evidence-result-url "$restart_result" \
     --e2e-diagnostic-evidence-export-url "$export_path" \
     --e2e-diagnostic-evidence-launch-token "$restart_token" \
+    --e2e-main-window-identity-url "$restart_window_identity_path" \
+    --e2e-main-window-launch-token "$restart_token" \
     >"$closure_dir/restart-app.log" 2>&1 &
   restart_pid=$!
   if ! diagnostic_closure_app_process_matches \
@@ -9779,11 +9880,13 @@ run_diagnostic_evidence_closure_probe() {
     return 1
   fi
   window_number="$(
-    find_window_id \
+    resolve_exact_e2e_window_id \
+      "$restart_window_identity_path" \
+      "$restart_token" \
+      "$restart_pid" \
       "$window_title" \
       "$expected_window_width" \
-      "$expected_window_height" \
-      "$restart_pid"
+      "$expected_window_height"
   )"
   if [[ ! "$window_number" =~ ^[1-9][0-9]*$ ]] ||
     ! native_command_app_ready_identity_matches \
@@ -9792,7 +9895,13 @@ run_diagnostic_evidence_closure_probe() {
       "$window_number" \
       "$window_title"; then
     echo "diagnostic restart main-window identity did not match" >&2
-    dump_visible_windows >&2
+    dump_exact_e2e_window_evidence \
+      "$restart_window_identity_path" \
+      "$restart_token" \
+      "$restart_pid" \
+      "$window_title" \
+      "$expected_window_width" \
+      "$expected_window_height" >&2
     return 1
   fi
   helper_token="$(uuidgen)"

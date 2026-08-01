@@ -292,6 +292,88 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
         }
     }
 
+    func testLexicalProductionOverlapDoesNotDependOnDescendantExistence() throws {
+        let fixtureRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent(
+                "noonmark-lexical-overlap-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let productionRoot = fixtureRoot.appendingPathComponent(
+            "production",
+            isDirectory: true
+        )
+        let missingDescendant = productionRoot.appendingPathComponent(
+            "RuntimeEvidence/main-window-identity.json"
+        )
+        try FileManager.default.createDirectory(
+            at: productionRoot,
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fixtureRoot)
+        }
+
+        XCTAssertThrowsError(
+            try NoonmarkRuntimeProfile.e2e.validateInternalPathOverride(
+                missingDescendant,
+                protectedProductionRoots: [productionRoot]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkRuntimePathOverrideError,
+                .productionScopeOverlap
+            )
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: missingDescendant.path)
+        )
+    }
+
+    func testLexicalProductionComparisonAllowsOnlyTruePathComponentSiblings() {
+        let applicationSupport = URL(
+            fileURLWithPath: "/Users/example/Library/Application Support",
+            isDirectory: true
+        )
+        let productionRoot = applicationSupport.appendingPathComponent(
+            "noonmark",
+            isDirectory: true
+        )
+        for siblingName in [
+            "noonmark-development",
+            "noonmark-e2e",
+            "noonmark-dmg-validation"
+        ] {
+            XCTAssertNoThrow(
+                try NoonmarkRuntimeProfile.e2e.validateInternalPathOverride(
+                    applicationSupport.appendingPathComponent(
+                        siblingName,
+                        isDirectory: true
+                    ),
+                    protectedProductionRoots: [productionRoot]
+                )
+            )
+        }
+    }
+
+    func testFilesystemRootIsRejectedAsAProductionScopeAncestor() {
+        let productionRoot = URL(
+            fileURLWithPath: "/Users/example/Library/Application Support/noonmark",
+            isDirectory: true
+        )
+
+        XCTAssertThrowsError(
+            try NoonmarkRuntimeProfile.e2e.validateInternalPathOverride(
+                URL(fileURLWithPath: "/", isDirectory: true),
+                protectedProductionRoots: [productionRoot]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoonmarkRuntimePathOverrideError,
+                .productionScopeOverlap
+            )
+        }
+    }
+
     func testOverrideRejectsEveryExistingCandidateSymlinkWithoutFollowingItsTarget() throws {
         let fixtureRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

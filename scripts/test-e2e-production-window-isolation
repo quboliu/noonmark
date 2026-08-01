@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+test_e2e="${1:-$repo_root/scripts/test-e2e}"
+
+if [[ ! -f "$test_e2e" ]]; then
+  echo "missing E2E entry: $test_e2e" >&2
+  exit 1
+fi
+
+validate_production_window_isolation() {
+  local source_path="$1"
+  local forbidden
+  local required
+  local query_count
+  local exact_option_count
+  local exact_identifier_count
+  local forbidden_literals=(
+    '.optionOnScreenOnly'
+    'kCGNullWindowID'
+    'owner.contains("Noonmark")'
+    'owner.contains("晷迹")'
+    'expectedOwner == "NoonmarkMacApp"'
+    'identityPath).standardizedFileURL'
+  )
+  local required_literals=(
+    '--e2e-main-window-identity-url'
+    '--e2e-main-window-launch-token'
+    '"schema_version", "profile", "launch_token"'
+    '"process_identifier", "bundle_identifier", "window_number", "title"'
+    'identity.profile == "e2e"'
+    'identity.bundleIdentifier == "app.noonmark.mac.e2e"'
+    'O_NOFOLLOW'
+    'openDirectoryWithoutFollowingLinks'
+    'pathStatus.st_nlink == 1'
+    'directoryStatus.st_mode & mode_t(0o777) == mode_t(0o700)'
+    'pathStatus.st_mode & mode_t(0o777) == mode_t(0o600)'
+  )
+
+  for forbidden in "${forbidden_literals[@]}"; do
+    if rg -F -- "$forbidden" "$source_path" >/dev/null; then
+      echo "E2E window isolation contains a global or production-scoped probe: $forbidden" >&2
+      return 1
+    fi
+  done
+  for required in "${required_literals[@]}"; do
+    if ! rg -F -- "$required" "$source_path" >/dev/null; then
+      echo "E2E window isolation is missing an exact identity boundary: $required" >&2
+      return 1
+    fi
+  done
+
+  query_count="$(rg -c 'CGWindowListCopyWindowInfo\(' "$source_path")"
+  exact_option_count="$(rg -c '\[\.optionIncludingWindow\]' "$source_path")"
+  exact_identifier_count="$(rg -c 'CGWindowID\(' "$source_path")"
+  if [[ "$query_count" -le 0 ||
+    "$query_count" != "$exact_option_count" ||
+    "$query_count" != "$exact_identifier_count" ]]; then
+    echo "every WindowServer query must consume one explicit CGWindowID" >&2
+    return 1
+  fi
+}
+
+validate_production_window_isolation "$test_e2e"
+
+fixture="$(mktemp "${TMPDIR:-/tmp}/noonmark-e2e-window-isolation.XXXXXX")"
+trap 'rm -f "$fixture"' EXIT
+cp "$test_e2e" "$fixture"
+printf '%s\n' \
+  'CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)' \
+  'print("window pid=1 owner=NoonmarkMacApp title=production")' \
+  >>"$fixture"
+if validate_production_window_isolation "$fixture" >/dev/null 2>&1; then
+  echo "production-window negative fixture was not rejected" >&2
+  exit 1
+fi
+
+echo "E2E production-window isolation contract passed"

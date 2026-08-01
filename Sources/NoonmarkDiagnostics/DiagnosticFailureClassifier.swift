@@ -2,18 +2,38 @@ import Foundation
 
 public enum DiagnosticFailureClassifier {
     public static func classify(_ error: Error) -> DiagnosticFailure {
-        let nsError = error as NSError
-        return switch nsError.domain {
+        var visited: Set<ObjectIdentifier> = []
+        return classify(error as NSError, depth: 0, visited: &visited)
+    }
+
+    private static func classify(
+        _ error: NSError,
+        depth: Int,
+        visited: inout Set<ObjectIdentifier>
+    ) -> DiagnosticFailure {
+        let recognized: DiagnosticFailure? = switch error.domain {
         case NSCocoaErrorDomain:
-            DiagnosticFailure(domain: .cocoa, code: nsError.code)
+            DiagnosticFailure(domain: .cocoa, code: error.code)
         case NSPOSIXErrorDomain:
-            DiagnosticFailure(domain: .posix, code: nsError.code)
+            DiagnosticFailure(domain: .posix, code: error.code)
         case NSURLErrorDomain:
-            DiagnosticFailure(domain: .url, code: nsError.code)
+            DiagnosticFailure(domain: .url, code: error.code)
         case "CKErrorDomain":
-            DiagnosticFailure(domain: .cloudKit, code: nsError.code)
+            DiagnosticFailure(domain: .cloudKit, code: error.code)
         default:
-            DiagnosticFailure(domain: .unknown, code: 0)
+            nil
         }
+        if let recognized {
+            return recognized
+        }
+
+        let identity = ObjectIdentifier(error)
+        guard depth < 4,
+              visited.insert(identity).inserted,
+              let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        else {
+            return DiagnosticFailure(domain: .unknown, code: 0)
+        }
+        return classify(underlying, depth: depth + 1, visited: &visited)
     }
 }

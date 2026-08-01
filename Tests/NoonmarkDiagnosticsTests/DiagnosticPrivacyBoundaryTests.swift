@@ -78,6 +78,27 @@ final class DiagnosticPrivacyBoundaryTests: XCTestCase {
         XCTAssertEqual(failure, DiagnosticFailure(domain: .unknown, code: 0))
     }
 
+    func testRecognizedUnderlyingSystemFailureSurvivesSafeWrapper() {
+        let underlying = NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(EIO),
+            userInfo: [NSLocalizedDescriptionKey: "PRIVATE-TASK-TITLE-7Q9X"]
+        )
+        let wrapper = NSError(
+            domain: "app.noonmark.persistence",
+            code: 99_001,
+            userInfo: [
+                NSUnderlyingErrorKey: underlying,
+                NSLocalizedDescriptionKey: "Bearer secret-access-token"
+            ]
+        )
+
+        XCTAssertEqual(
+            DiagnosticFailureClassifier.classify(wrapper),
+            DiagnosticFailure(domain: .posix, code: Int(EIO))
+        )
+    }
+
     private func diagnosticFileText(in rootURL: URL) throws -> String {
         let urls = try FileManager.default.contentsOfDirectory(
             at: rootURL,

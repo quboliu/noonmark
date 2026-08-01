@@ -176,6 +176,7 @@ public final class LocalDiagnosticRecorder: DiagnosticRecording, @unchecked Send
         return DiagnosticExportPreview(
             schemaVersion: package.manifest.schemaVersion,
             recordCount: package.records.count,
+            activeOperationCount: package.activeOperations.count,
             operationCapsuleCount: package.operationCapsules.count,
             metricPayloadCount: package.metricAttachments.count,
             oldestRecordAt: package.manifest.oldestRecordAt,
@@ -613,6 +614,7 @@ private final class DiagnosticDiskStore {
             generatedAt: Date(),
             appIdentity: appIdentity,
             recordCount: records.count,
+            activeOperationCount: activeOperations.count,
             operationCapsuleCount: operationCapsules.count,
             metricPayloadCount: metrics.count,
             oldestRecordAt: records.map(\.timestamp).min(),
@@ -634,6 +636,9 @@ private final class DiagnosticDiskStore {
         return DiagnosticExportPackage(
             manifest: manifest,
             records: records,
+            activeOperations: activeOperations.sorted {
+                $0.startedAt < $1.startedAt
+            },
             operationCapsules: operationCapsules,
             metricAttachments: metrics
         )

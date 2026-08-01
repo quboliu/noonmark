@@ -113,6 +113,38 @@ final class LocalDiagnosticRecorderTests: XCTestCase {
         XCTAssertNil(interruption.event.incidentID)
     }
 
+    func testExportIncludesActiveOperationMarkerForInProgressSync() async throws {
+        let rootURL = temporaryDirectory(named: "active-sync")
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let recorder = try LocalDiagnosticRecorder(
+            rootURL: rootURL,
+            appIdentity: .testFixture
+        )
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive,
+            at: startedAt
+        )
+        operation.stage(
+            .transportFetch,
+            progress: DiagnosticProgress(attempt: 2, recordCount: 17),
+            at: startedAt.addingTimeInterval(5)
+        )
+
+        let package = try await recorder.snapshotPackage()
+
+        let active = try XCTUnwrap(
+            package.activeOperations.first { $0.id == operation.id }
+        )
+        XCTAssertEqual(active.startedAt, startedAt)
+        XCTAssertEqual(active.updatedAt, startedAt.addingTimeInterval(5))
+        XCTAssertEqual(active.endpoint, .iCloudDrive)
+        XCTAssertEqual(active.lastStage, .transportFetch)
+        XCTAssertEqual(active.lastProgress?.attempt, 2)
+        XCTAssertEqual(active.lastProgress?.recordCount, 17)
+        XCTAssertEqual(package.manifest.activeOperationCount, 1)
+    }
+
     func testClearRemovesOnlyManagedDiagnosticEvidence() async throws {
         let parentURL = temporaryDirectory(named: "clear")
         try FileManager.default.createDirectory(

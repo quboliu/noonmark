@@ -383,6 +383,7 @@ public struct DiagnosticHealth: Codable, Equatable, Sendable {
 public struct DiagnosticExportPreview: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let recordCount: Int
+    public let activeOperationCount: Int
     public let operationCapsuleCount: Int
     public let metricPayloadCount: Int
     public let oldestRecordAt: Date?
@@ -396,6 +397,7 @@ public struct DiagnosticExportManifest: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let appIdentity: DiagnosticAppIdentity
     public let recordCount: Int
+    public let activeOperationCount: Int
     public let operationCapsuleCount: Int
     public let metricPayloadCount: Int
     public let oldestRecordAt: Date?
@@ -419,6 +421,7 @@ public struct DiagnosticMetricAttachment: Codable, Equatable, Sendable {
 public struct DiagnosticExportPackage: Codable, Equatable, Sendable {
     public let manifest: DiagnosticExportManifest
     public let records: [RecordedEvidence]
+    public let activeOperations: [DiagnosticActiveOperation]
     public let operationCapsules: [DiagnosticOperationCapsule]
     public let metricAttachments: [DiagnosticMetricAttachment]
 }

@@ -97,6 +97,9 @@ make test-tencent-ime-input-matrix
 # 真实交互式 Mac：24 自动保存输入面立即退出、重启与故障重试
 make test-tencent-ime-termination-persistence
 
+# 私有 DMG 发行：一个稳定的真实用户路径
+make test-tencent-ime-release-smoke
+
 # 子任务原生编辑器：ASCII 分段计时、真实腾讯拼音、SQLite 与重启
 NOONMARK_E2E_SUBTASK_LAYOUT_ONLY=1 scripts/test-e2e
 NOONMARK_E2E_SUBTASK_LAYOUT_ONLY=1 \
@@ -104,7 +107,7 @@ NOONMARK_E2E_SUBTASK_LAYOUT_ONLY=1 \
   scripts/test-e2e
 ```
 
-真实矩阵需要稳定 Apple Development 签名、已授权 Input Monitoring 的交互式 WindowServer，以及已安装并可选中的腾讯拼音。缺少任何依赖都 fail-closed。`make check` 包含快速 contract；main 分支 self-hosted E2E 和 release workflow 额外运行两套真实矩阵。
+真实矩阵需要稳定 Apple Development 签名、已授权 Input Monitoring 的交互式 WindowServer，以及已安装并可选中的腾讯拼音。缺少任何依赖都 fail-closed。`make check` 只包含快速 contract；main 分支 self-hosted E2E 与私有 DMG 发行运行 Day Todo 输入、即时退出和重启 smoke。完整 53 面性能矩阵与 24 面退出矩阵在 `.github/workflows/tencent-ime-quality.yml` 的 scheduled／manual quality job 运行，不阻断 DMG 发行。
 
 结果保存在：
 

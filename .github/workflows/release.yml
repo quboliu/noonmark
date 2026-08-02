@@ -39,10 +39,6 @@ jobs:
         run: scripts/test-data-root-process-lease-e2e
       - name: Full App E2E
         run: scripts/test-e2e
-      - name: Tencent IME input latency and durability
-        run: |
-          scripts/test-tencent-ime-input-matrix release
-          scripts/test-tencent-ime-termination-persistence release
       - name: Package artifact
         run: |
           scripts/release-private-dmg

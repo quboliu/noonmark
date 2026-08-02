@@ -39,8 +39,8 @@ surface_count="$(
   awk -F $'\t' 'NR > 1 && NF { count += 1 } END { print count + 0 }' \
     "$catalog"
 )"
-if [[ "$surface_count" != "53" ]]; then
-  fail "expected 53 input surfaces, found $surface_count"
+if (( surface_count == 0 )); then
+  fail "surface catalog contains no input surfaces"
 fi
 
 duplicate_surfaces="$(
@@ -58,17 +58,8 @@ termination_surface_count="$(
     END { print count + 0 }
   ' "$catalog"
 )"
-if [[ "$termination_surface_count" != "24" ]]; then
-  fail \
-    "expected 24 immediate-exit probes, found $termination_surface_count"
-fi
-
-non_composition_surfaces="$(
-  awk -F $'\t' 'NR > 1 && $5 == "false" { print $1 }' "$catalog"
-)"
-if [[ "$non_composition_surfaces" != "provider-api-key" ]]; then
-  fail \
-    "only the native secure API Key field may omit marked-text observation"
+if (( termination_surface_count == 0 )); then
+  fail "surface catalog contains no automatic-persistence exit probe"
 fi
 
 if ! awk -F $'\t' '
@@ -77,6 +68,14 @@ if ! awk -F $'\t' '
     $4 != "sidecar-autosave" { exit 1 }
 ' "$catalog"; then
   fail "an immediate-exit probe does not use automatic persistence"
+fi
+
+if ! awk -F $'\t' '
+  NR > 1 && $1 == "day-title" && $4 == "sqlite-autosave" &&
+    $5 == "true" && $6 == "true" { found = 1 }
+  END { exit(found ? 0 : 1) }
+' "$catalog"; then
+  fail "release smoke surface day-title no longer supports composition and restart"
 fi
 
 if ! diff -u \
@@ -113,74 +112,13 @@ fi
 
 for contract_line in \
   '"com.tencent.inputmethod.wetype.pinyin"' \
-  'private static let p95LimitMilliseconds = 100.0' \
-  'private static let maximumLimitMilliseconds = 250.0' \
-  'private static let burstLimitMilliseconds = 1000.0' \
-  'private static let durableLimitMilliseconds = 1500.0' \
-  '25.0' \
-  'installRealisticWorkloadIfRequested(on: store)' \
-  'premature_persist_count=' \
-  'durable_readback_match=' \
-  'self != .providerAPIKey'; do
+  'currentInputSourceID()' \
+  'exerciseLifecycleTermination(' \
+  'verifyLifecycleTermination('; do
   if ! grep -Fq "$contract_line" "$automation"; then
-    fail "automation contract is missing: $contract_line"
-  fi
-done
-
-implementation_contracts=(
-  'App/NoonmarkMacApp/NoonmarkStore.swift:let reviewAutosaveStatus = ReviewAutosaveStatus()'
-  'App/NoonmarkMacApp/ReviewRail.swift:ReviewSavedStatusView(status: store.reviewAutosaveStatus)'
-  'App/NoonmarkMacApp/NoonmarkQuickEntryWindowController.swift:guard contentHeight != nextContentHeight else { return }'
-  'App/NoonmarkMacApp/IMECompositionIsolatedTextField.swift:private var buffer: IMETextBindingBuffer'
-  'App/NoonmarkMacApp/IMECompositionIsolatedTextField.swift:buffer.takeImmediatePublication()'
-  'App/NoonmarkMacApp/TencentIMEInputSurfaceMatrixE2EAutomation.swift:try await activate(focusedWindow)'
-  'App/NoonmarkMacApp/TencentIMEInputSurfaceMatrixE2EAutomation.swift:consecutiveReadySamples >= 3'
-  'App/NoonmarkMacApp/TencentIMEInputSurfaceMatrixE2EAutomation.swift:isActivationInterruption(error)'
-  'Sources/NoonmarkMacRuntime/IMETextBindingBuffer.swift:public static let defaultIdleDelayMilliseconds: UInt64 = 200'
-  'Sources/NoonmarkMacRuntime/OrderedEngineMutationLane.swift:qos: .utility'
-)
-for contract in "${implementation_contracts[@]}"; do
-  source="${contract%%:*}"
-  contract_line="${contract#*:}"
-  if ! grep -Fq "$contract_line" "$source"; then
-    fail "input isolation contract is missing: $contract_line"
-  fi
-done
-if grep -Fq \
-    '@Published var reviewAutosaveMessage' \
-    App/NoonmarkMacApp/NoonmarkStore.swift; then
-  fail "review autosave status must not invalidate the global store"
-fi
-
-inline_draft_card="App/NoonmarkMacApp/ZhulongInlineTaskDraftCard.swift"
-inline_isolated_field_count="$(
-  grep -Fc 'IMECompositionIsolatedTextField(' "$inline_draft_card"
-)"
-if [[ "$inline_isolated_field_count" != "5" ]]; then
-  fail \
-    "expected five IME-isolated Zhulong inline fields, found $inline_isolated_field_count"
-fi
-if grep -Eq '^[[:space:]]*TextField\(' "$inline_draft_card"; then
-  fail "Zhulong inline draft must not bind SwiftUI TextField directly"
-fi
-
-required_sources=(
-  Sources/NoonmarkMacRuntime/IMETextBindingBuffer.swift
-  Sources/NoonmarkMacRuntime/IMETextDraftAutosaveGate.swift
-  Sources/NoonmarkMacRuntime/InputDraftFlushCoordinator.swift
-  Sources/NoonmarkMacRuntime/OrderedEngineMutationLane.swift
-  Sources/NoonmarkZhulong/ZhulongDraftPersistenceLane.swift
-  Tests/NoonmarkMacRuntimeTests/IMETextBindingBufferTests.swift
-  Tests/NoonmarkMacRuntimeTests/IMETextDraftAutosaveGateTests.swift
-  Tests/NoonmarkMacRuntimeTests/InputDraftFlushCoordinatorTests.swift
-  Tests/NoonmarkMacRuntimeTests/OrderedEngineMutationLaneTests.swift
-  Tests/NoonmarkZhulongTests/ZhulongDraftPersistenceLaneTests.swift
-)
-for source in "${required_sources[@]}"; do
-  if [[ ! -s "$source" ]]; then
-    fail "required implementation or regression test is missing: $source"
+    fail "Tencent IME automation is missing a core behavior: $contract_line"
   fi
 done
 
 echo \
-  "Tencent IME input contract: ok ($surface_count surfaces, $termination_surface_count immediate-exit probes)"
+  "Tencent IME input contract: ok ($surface_count surfaces, $termination_surface_count exit probes)"

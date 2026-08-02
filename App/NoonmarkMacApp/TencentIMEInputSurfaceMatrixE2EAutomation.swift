@@ -18,6 +18,7 @@ struct TencentIMEInputSurfaceMatrixE2EAutomation:
         "ceshishuru",
         "renwumiaoshu"
     ]
+    private static let lifecycleExpectedText = "你好师姐测试输入任务描述"
     private static let burstPhrase = "renwumiaoshu"
     private static let persistenceOverlapPhrases = phrases
     private static let p95LimitMilliseconds = 100.0
@@ -1871,6 +1872,13 @@ struct TencentIMEInputSurfaceMatrixE2EAutomation:
         guard expected.isEmpty == false else {
             throw Failure.failed(
                 "\(surface.label)退出门禁最终文本为空"
+            )
+        }
+        if surface == .dayTitle,
+           expected != Self.lifecycleExpectedText
+        {
+            throw Failure.failed(
+                "\(surface.label)退出门禁中文组合提交文本不正确"
             )
         }
         guard persistence.liveReadback() != expected else {

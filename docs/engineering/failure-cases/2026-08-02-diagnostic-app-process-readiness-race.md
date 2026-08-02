@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-06：诊断闭环 App 进程身份缺少就绪握手
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02（本轮 targeted diagnostic closure）
 - 影响版本／构建：Noonmark 0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2` 已包含引入提交
 - 引入提交：`d1b3c9a835633e381d7d5d0410820db041cbf640`（`feat(diagnostics): 闭合真实故障证据导出链路`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -65,7 +65,7 @@ scripts/test-e2e
 - Symptom 绿：run `local-20260802-diagnostic-focused-sheet-green-1`、`-2`、`-3` 连续三轮完成 seed／stall／restart 三次 exact process identity、完整故障闭环与 UI 导出，suite exit status 均为 0。
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 的未过滤完整 E2E 再次通过 seed／stall／restart 三次 exact process identity readiness、post-result identity 对账及完整 UI 导出，suite exit status 为 0。
 - Release：待 clean repair commit 的 clean release diagnostic closure 后回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

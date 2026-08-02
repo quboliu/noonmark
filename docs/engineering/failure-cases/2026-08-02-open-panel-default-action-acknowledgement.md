@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-04：NSOpenPanel 物理 Open action 缺少端到端确认
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T10:33:00Z
 - 影响版本／构建：Noonmark 0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2`；commit `51eca76cb306168cba7c29d4a440c62d325e021b` 后的完整 E2E 验证
 - 引入提交：`3b40774c49f35e8acce847c82e800c3fda55c62c`（`feat(app): 完成原生体验与一致性验收升级`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -91,7 +91,7 @@ scripts/test-e2e
 - 全量静态／测试聚合绿：run `local-20260802-gate-audit-check-2` 的 `scripts/check` 在静止 source 上通过 1440 项测试、DMG evidence mutation、签名、observer、lint／format 与发行契约，exit status 为 0。
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 的未过滤完整 E2E 完成正常导入的取消／确认与两轮结果，并让四个损坏包逐一走真实 File 菜单、`NSOpenPanel`、独立签名 Helper exact Open click、App ACK、错误提示、SQLite／journal 不变与重启，suite exit status 为 0。
 - Release：待 clean repair commit 的正式发行闭环后回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

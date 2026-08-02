@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-01：E2E 重启恢复原因判定漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T05:40:03Z 前；同一任务中的第一轮失败产物已被第二轮确定性复现覆盖
 - 影响版本／构建：0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2` 的隔离 `e2e` 诊断故障闭环
 - 引入提交：`d1b3c9a835633e381d7d5d0410820db041cbf640`（`feat(diagnostics): 闭合真实故障证据导出链路`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -63,7 +63,7 @@ NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e debug
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 从 fresh `e2e` reset 后完成未过滤的 `scripts/test-e2e`；诊断闭环在完整套件中再次走完失败、锁等待、修改拒绝、SIGKILL、重启、Help 菜单导出与持久化对账，suite exit status 为 0。
 - Release 配置绿：同一 targeted closure 以 `scripts/test-e2e release` 完成一次；随后 pre-commit review 证明不得在主工作树直接重跑，否则会把 full E2E manifest 改成 only mode。
 - Release：待 clean repair commit 的正式发行门禁回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

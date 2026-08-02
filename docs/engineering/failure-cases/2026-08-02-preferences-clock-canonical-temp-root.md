@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-05：PreferencesClock 临时同步根仍使用 symlink 路径
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02（现有运行证据只能把首次发现精确到本轮完整 E2E 尾段）
 - 影响版本／构建：Noonmark 0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2`；该 source 已包含引入提交
 - 引入提交：`699ea0cccba3fa0c10536305114f1e002ea49122`（`fix(runtime): 绑定运行身份与数据范围`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -80,7 +80,7 @@ scripts/test-e2e
 - 专项 symptom 绿：run `local-20260802-preferences-clock-raw-canonical-2` 的真实签名 E2E App 依次完成 remote setup、原生 Settings 物理输入、stale-remote restart 与 persisted-failure restart；四个 result 均为 `ok`，SQLite／journal／audit probe 为 `1 1 3 3 0 1 2 10 3 1 6`，WindowServer input trace probe 为 `1 1 1 1 1 1`，suite exit status 为 0。
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 的未过滤完整 E2E 使用 canonical `/private/tmp` 根完成 remote setup、原生 Settings 物理输入、stale-remote restart、persisted-failure restart、SQLite／journal／audit、input trace 与截图对账，probe 为 `1 1 3 3 0 1 2 10 3 1 6`，suite exit status 为 0。
 - Release：待 clean repair commit 的同一 run 正式发行闭环后回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

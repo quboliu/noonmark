@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-03：E2E 窗口身份与就绪标题跨时点漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T10:04:49Z
 - 影响版本／构建：Noonmark 0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2`；clean gate 修复 commit `51eca76cb306168cba7c29d4a440c62d325e021b` 的完整 E2E 验证
 - 引入提交：`3616621c8c0ce76161e3686be2f03f078cb9464d`（`fix(e2e): 禁止全局探测正式版窗口`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -72,7 +72,7 @@ NOONMARK_EVIDENCE_RUN_ID=local-20260802-51eca76-release-1 scripts/test-e2e
 - 全量静态／测试聚合绿：run `local-20260802-gate-audit-check-2` 的 `scripts/check` 以 1440 项测试、0 失败完成；两个显式禁用的 live iCloud 用例按合同不进入默认测试。
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 的未过滤完整 E2E 完成 `day-changed-target`、`english-day-history-header` 及其余中英文窗口场景，实时 ready title、exact window、截图与 ledger 全部对账，suite exit status 为 0。
 - Release：待 clean repair commit 的正式发行闭环后回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

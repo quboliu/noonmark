@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-02：Save Panel 物理文本替换竞态
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T05:46:40Z，隔离 E2E 诊断导出 helper
 - 影响版本／构建：0.1.1（4），source commit `61d82a8dd7bbe6ee1eb0033b7ff5a3b5dea320b2` 的 `e2e`／`dmg-validation` 诊断导出验收
 - 引入提交：`d1b3c9a835633e381d7d5d0410820db041cbf640`（`feat(diagnostics): 闭合真实故障证据导出链路`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 历史只能证明 author／committer identity，现有仓库与 session 证据不足以确认实际操作者
-- 修复提交：待回填
+- 修复提交：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`（`fix(e2e): 收紧原生交互与发行证据协议`）
 
 ## 用户症状与影响
 
@@ -95,7 +95,7 @@ location 路径还必须先确认精确 `GoToWindow` sheet 关系，输入后等
 - 复发 symptom 绿：run `local-20260802-diagnostic-focused-sheet-green-1`、`-2`、`-3` 连续三轮从 reset 后完成失败同步、锁等待、修改拒绝、SIGKILL、重启、Help 菜单、Preview、Save Panel、GoToWindow、双锁导出、隐私与 kernel exit 对账，suite exit status 均为 0。
 - 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 的未过滤完整 E2E 在同一真实 Help／Preview／Save Panel 路径确认 shortcut 前 savePanel focus、shortcut 后 `GoToWindow` sheet focus、物理路径与文件名输入、导出文件、toast、隐私与 Helper kernel exit，随后继续完成全部后置探针，suite exit status 为 0。
 - Release：待 clean repair commit 的正式发行门禁回填。
-- 修复 commit：待回填。
+- 修复 commit：`b35541e8a5e5ac5290c173b5bc9dae260a63a45c`。
 
 ## 永久门禁
 

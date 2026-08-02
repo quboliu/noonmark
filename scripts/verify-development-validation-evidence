@@ -9,6 +9,8 @@ cd "$repo_root"
 source scripts/evidence-common
 # shellcheck source=scripts/runtime-evidence
 source scripts/runtime-evidence
+# shellcheck source=scripts/diagnostic-scope-manifest
+source scripts/diagnostic-scope-manifest
 
 scope="full"
 if [[ "${1:-}" == "--scope" ]]; then
@@ -585,6 +587,8 @@ require_install_ledger_semantics() {
   local expected_sentinels_path="${6:-}"
   local expected_window_number="${7:-}"
   local expected_window_title="${8:-}"
+  local expected_database_path="${9:-}"
+  local expected_repository_lock_path="${10:-}"
   local actual_steps
 
   if [[ ! -f "$path" || -L "$path" ]]; then
@@ -662,7 +666,8 @@ require_install_ledger_semantics() {
     expected_argument_prefix="$expected_bundle_path window_number=$expected_window_number window=$expected_window_title target_profile=dmg-validation database="
     if [[ ! "$argument_pid" =~ ^[1-9][0-9]*$ ||
       -z "$expected_bundle_path" || -z "$expected_export_path" ||
-      -z "$expected_sentinels_path" ||
+      -z "$expected_sentinels_path" || -z "$expected_database_path" ||
+      -z "$expected_repository_lock_path" ||
       "$argument_tail" != "$expected_argument_prefix"* ]]; then
       echo "DMG install diagnostic-export ledger has an invalid arguments proof" >&2
       return 1
@@ -681,13 +686,13 @@ require_install_ledger_semantics() {
     diagnostic_repository_lock="${argument_tail%% export=*}"
     argument_tail="${argument_tail#* export=}"
     expected_argument_suffix="$expected_export_path sentinels=$expected_sentinels_path"
-    if [[ "$argument_tail" != "$expected_argument_suffix" ||
-      "$diagnostic_database" != \
-        */Library/Application\ Support/noonmark-dmg-validation/Noonmark.sqlite ||
+    if [[ "$diagnostic_database" != "$expected_database_path" ||
       "$diagnostic_repository_lock" != \
-        */Library/Application\ Support/noonmark-dmg-validation/sync-repository/.repository.lock ||
-      "${diagnostic_database%/Noonmark.sqlite}" != \
-        "${diagnostic_repository_lock%/sync-repository/.repository.lock}" ]]; then
+        "$expected_repository_lock_path" ]]; then
+      echo "DMG install diagnostic-export ledger disagrees with canonical scope" >&2
+      return 1
+    fi
+    if [[ "$argument_tail" != "$expected_argument_suffix" ]]; then
       echo "DMG install diagnostic-export ledger has an invalid isolated persistence proof" >&2
       return 1
     fi
@@ -1235,6 +1240,8 @@ if [[ "$scope" == "full" ]]; then
     "release_symbols_unchanged=true" \
     "release_identity_provenance_unchanged=true" \
     "diagnostic_diff_status=clean" \
+    "diagnostic_scope_schema_version=1" \
+    "diagnostic_scope_target_profile=dmg-validation" \
     "diagnostic_export_ui_completed=true" \
     "diagnostic_export_lock_overlap=sqlite-writer+sync-repository" \
     "diagnostic_export_schema_version=1" \
@@ -1242,8 +1249,7 @@ if [[ "$scope" == "full" ]]; then
     "diagnostic_export_runtime_identity_match=true" \
     "diagnostic_export_size_within_limit=true" \
     "diagnostic_export_sentinels_absent=true" \
-    "diagnostic_export_owner_only=true" \
-    "diagnostic_export_path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+    "diagnostic_export_owner_only=true"
 
   production_info_plist="$repo_root/dist/Noonmark.app/Contents/Info.plist"
   validation_info_plist="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/Info.plist"
@@ -1805,28 +1811,119 @@ require_file_sha256 \
   "$install_inventory" \
   "install artifact inventory"
 validation_derivation_fragment="$repo_root/artifacts/dmg-install/dmg-validation-derivation.fragment"
-diagnostic_export_relative="$(
-  evidence_read "$install_manifest" diagnostic_export_path
+diagnostic_scope_relative="$(
+  evidence_read "$install_manifest" diagnostic_scope_manifest_path
 )"
-if ! require_safe_repo_relative_path "$diagnostic_export_relative" ||
-  [[ "$diagnostic_export_relative" != \
-    "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics" ]]; then
-  echo "install manifest contains an unsafe diagnostic export path" >&2
+diagnostic_scope_stderr_relative="$(
+  evidence_read "$install_manifest" diagnostic_scope_stderr_path
+)"
+if ! require_safe_repo_relative_path "$diagnostic_scope_relative" ||
+  ! require_safe_repo_relative_path "$diagnostic_scope_stderr_relative" ||
+  [[ "$diagnostic_scope_relative" != artifacts/dmg-install/* ||
+    "$diagnostic_scope_stderr_relative" != artifacts/dmg-install/* ]]; then
+  echo "install manifest contains unsafe diagnostic scope evidence paths" >&2
   exit 1
 fi
-diagnostic_export_path="$repo_root/$diagnostic_export_relative"
-diagnostic_export_ledger="$repo_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_scope_manifest="$repo_root/$diagnostic_scope_relative"
+diagnostic_scope_stderr="$repo_root/$diagnostic_scope_stderr_relative"
+require_file_sha256 \
+  "$install_manifest" \
+  diagnostic_scope_manifest_sha256 \
+  "$diagnostic_scope_manifest" \
+  "diagnostic scope manifest"
+require_file_sha256 \
+  "$install_manifest" \
+  diagnostic_scope_stderr_sha256 \
+  "$diagnostic_scope_stderr" \
+  "diagnostic scope stderr"
+if [[ -s "$diagnostic_scope_stderr" ]] ||
+  ! diagnostic_scope_manifest_validate \
+    "$diagnostic_scope_manifest" \
+    dmg-validation; then
+  echo "diagnostic scope evidence failed its strict schema" >&2
+  exit 1
+fi
+diagnostic_scope_application="$(
+  diagnostic_scope_manifest_value \
+    "$diagnostic_scope_manifest" application
+)"
+diagnostic_scope_database="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" database
+)"
+diagnostic_scope_repository_lock="$(
+  diagnostic_scope_manifest_value \
+    "$diagnostic_scope_manifest" repository_lock
+)"
+diagnostic_export_path="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" export
+)"
+diagnostic_export_sentinels="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" sentinels
+)"
+diagnostic_export_ledger="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" ledger
+)"
+diagnostic_export_helper_observer_gate="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" start_gate
+)"
+diagnostic_work_root="$repo_root/artifacts/dmg-install"
+installed_bundle_path="$diagnostic_work_root/Applications/NoonmarkDMGValidation.app"
+diagnostic_control_dir="${diagnostic_export_ledger%/*}"
+diagnostic_data_root="${diagnostic_scope_database%/*}"
+diagnostic_repository_root="${diagnostic_scope_repository_lock%/*}"
+diagnostic_data_directory_name="$(
+  evidence_read "$install_manifest" validation_data_directory_name
+)"
+if [[ "$diagnostic_scope_application" != "$installed_bundle_path" ||
+  "${diagnostic_export_path%/*}" != "$diagnostic_work_root" ||
+  "${diagnostic_export_sentinels%/*}" != "$diagnostic_work_root" ||
+  "${diagnostic_control_dir%/*}" != "$diagnostic_work_root" ||
+  "${diagnostic_export_helper_observer_gate%/*}" != \
+    "$diagnostic_control_dir" ||
+  "$diagnostic_data_root" != \
+    */Library/Application\ Support/"$diagnostic_data_directory_name" ||
+  "${diagnostic_repository_root%/*}" != "$diagnostic_data_root" ]]; then
+  echo "diagnostic scope evidence escaped its isolated runtime layout" >&2
+  exit 1
+fi
+for scoped_path in \
+  "$diagnostic_export_path" \
+  "$diagnostic_export_sentinels" \
+  "$diagnostic_export_ledger" \
+  "$diagnostic_export_helper_observer_gate"; do
+  scoped_relative="${scoped_path#${repo_root}/}"
+  if [[ "$scoped_relative" == "$scoped_path" ]] ||
+    ! require_safe_repo_relative_path "$scoped_relative"; then
+    echo "diagnostic scope contains a non-repository artifact path" >&2
+    exit 1
+  fi
+done
+diagnostic_export_relative="${diagnostic_export_path#${repo_root}/}"
+if [[ "$(evidence_read "$install_manifest" diagnostic_export_path)" != \
+  "$diagnostic_export_relative" ]]; then
+  echo "diagnostic export manifest path disagrees with canonical scope" >&2
+  exit 1
+fi
+diagnostic_helper_executable="$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+diagnostic_scope_helper_sha="$(
+  evidence_read "$install_manifest" diagnostic_scope_helper_binary_sha256
+)"
+if [[ "$diagnostic_scope_helper_sha" != \
+    "$(evidence_read "$install_manifest" helper_binary_sha256)" ||
+  "$diagnostic_scope_helper_sha" != \
+    "$(shasum -a 256 "$diagnostic_helper_executable" | awk '{print $1}')" ]]; then
+  echo "diagnostic scope was not emitted by the archived helper binary" >&2
+  exit 1
+fi
 diagnostic_export_launch="$repo_root/artifacts/dmg-install/diagnostic-export-launch.log"
 diagnostic_export_helper="$repo_root/artifacts/dmg-install/diagnostic-export-helper.log"
 diagnostic_export_helper_stderr="$repo_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
 diagnostic_export_helper_launch="$repo_root/artifacts/dmg-install/diagnostic-export-helper-launch.log"
 diagnostic_export_helper_observer="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
-diagnostic_export_helper_observer_gate="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt"
 diagnostic_export_helper_exit_status="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt"
 diagnostic_export_console="$repo_root/artifacts/dmg-install/diagnostic-export-console.log"
 diagnostic_export_screenshot="$repo_root/artifacts/dmg-install/installed-diagnostic-export.png"
 diagnostic_export_window_metadata="$repo_root/artifacts/dmg-install/installed-diagnostic-export-window.txt"
-diagnostic_export_sentinels="$repo_root/artifacts/dmg-install/diagnostic-export-sentinels.txt"
 diagnostic_export_package_report="$repo_root/artifacts/dmg-install/diagnostic-export-package.txt"
 require_file_sha256 \
   "$install_manifest" \
@@ -1885,6 +1982,8 @@ evidence_require_inventory_paths \
   "$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation" \
   "$validation_derivation_fragment" \
   "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
+  "$diagnostic_scope_manifest" \
+  "$diagnostic_scope_stderr" \
   "$repo_root/artifacts/dmg-install/installed-day.png" \
   "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
   "$repo_root/artifacts/dmg-install/installed-restart.png" \
@@ -1994,7 +2093,9 @@ require_install_ledger_semantics \
   "$diagnostic_export_path" \
   "$diagnostic_export_sentinels" \
   "$diagnostic_window_number" \
-  "$diagnostic_window_title"
+  "$diagnostic_window_title" \
+  "$diagnostic_scope_database" \
+  "$diagnostic_scope_repository_lock"
 exercise_natural_day="$(evidence_read "$exercise_window_metadata" natural_day)"
 restart_natural_day="$(evidence_read "$restart_window_metadata" natural_day)"
 diagnostic_natural_day="$(

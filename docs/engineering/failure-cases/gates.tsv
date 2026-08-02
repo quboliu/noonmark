@@ -14,3 +14,12 @@ FAIL-2026-08-01-03	release	scripts/test-dmg-install	scripts/release-private-dmg	
 FAIL-2026-08-01-04	fast	scripts/test-dmg-foreground-ownership-contract	scripts/check	精确身份前置、单一激活请求、AppKit 与 AX 双信号及 ledger 对账
 FAIL-2026-08-01-04	symptom	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 在真实菜单与物理输入前建立并证明前台所有权
 FAIL-2026-08-01-04	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的签名派生、前台协议、退出、重启、持久化与完整清单
+FAIL-2026-08-01-05	fast	scripts/test-dmg-diagnostic-scope-contract	scripts/check	唯一 canonical scope、同一 helper 身份、严格 TSV、no-follow／exclusive 控制证据
+FAIL-2026-08-01-05	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实诊断导出 helper 参数与自身派生 scope 完全对账
+FAIL-2026-08-01-05	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的诊断 UI、双锁现场、隐私边界与完整证据清单
+FAIL-2026-08-02-01	fast	scripts/test-e2e-evidence-contract	scripts/check	分别约束 seed transportOrStorage 与 restart operationInterrupted 的阶段语义
+FAIL-2026-08-02-01	symptom	scripts/test-e2e	scripts/test-all	真实失败、锁等待、修改拒绝、SIGKILL、重启与 Help 菜单导出
+FAIL-2026-08-02-01	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean HEAD 的独立 worktree 以 release 配置重跑重启原因转换与诊断闭环
+FAIL-2026-08-02-02	fast	scripts/test-e2e-evidence-contract	scripts/check	约束共享物理清空／输入协议、GoToWindow suggestion ACK 与 sheet dismissal
+FAIL-2026-08-02-02	symptom	scripts/test-e2e	scripts/test-all	真实 Help 菜单、预览、Save Panel、物理路径与文件名输入
+FAIL-2026-08-02-02	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean HEAD 的独立 worktree 重跑 Save Panel 物理输入及导出对账

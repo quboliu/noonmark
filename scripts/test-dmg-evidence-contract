@@ -5,15 +5,27 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-evidence-contract.XXXXXX")"
 fixture_root="$(cd "$fixture_root" && pwd -P)"
+source "$repo_root/scripts/diagnostic-scope-manifest"
 
 cleanup() {
   rm -rf "$fixture_root"
 }
 trap cleanup EXIT
 
+swift build --product NoonmarkDMGInstallHarness >/dev/null
+harness_bin_directory="$(swift build --show-bin-path)"
+real_harness_binary="$harness_bin_directory/NoonmarkDMGInstallHarness"
+if [[ ! -x "$real_harness_binary" ]]; then
+  echo "DMG evidence contract could not build the real install harness" >&2
+  exit 1
+fi
+
 mkdir -p "$fixture_root/scripts" "$fixture_root/bin" "$fixture_root/dist/Noonmark.app"
 cp "$repo_root/scripts/package-dmg" "$fixture_root/scripts/package-dmg"
 cp "$repo_root/scripts/verify-dmg" "$fixture_root/scripts/verify-dmg"
+cp \
+  "$repo_root/scripts/diagnostic-scope-manifest" \
+  "$fixture_root/scripts/diagnostic-scope-manifest"
 cp \
   "$repo_root/scripts/verify-window-lookup-boundary" \
   "$fixture_root/scripts/verify-window-lookup-boundary"
@@ -531,8 +543,9 @@ chmod +x \
 cp -R \
   "$fixture_root/artifacts/e2e-runtime/app-snapshot/NoonmarkE2E.app" \
   "$fixture_root/artifacts/e2e-data-root-process-lease/app-snapshot/NoonmarkE2E.app"
-printf 'fixture-helper-binary\n' \
-  >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+cp \
+  "$real_harness_binary" \
+  "$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
 cat >"$fixture_root/artifacts/e2e-runtime/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -823,14 +836,74 @@ validation_source_linked_binary_uuid_set=$release_identity_binary_uuid_set
 validation_signed_binary_sha256=$validation_fixture_binary
 validation_signed_binary_uuid_set=$release_symbols_binary_uuid_set
 EOF
-diagnostic_export="$fixture_root/artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
-diagnostic_ledger="$fixture_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_scope_manifest="$fixture_root/artifacts/dmg-install/diagnostic-export-scope.tsv"
+diagnostic_scope_stderr="$fixture_root/artifacts/dmg-install/diagnostic-export-scope.stderr.log"
+diagnostic_scope_helper="$fixture_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+diagnostic_scope_temp="$(
+  mktemp "$fixture_root/artifacts/dmg-install/.diagnostic-export-scope.XXXXXX"
+)"
 diagnostic_window="$fixture_root/artifacts/dmg-install/installed-diagnostic-export-window.txt"
 diagnostic_console="$fixture_root/artifacts/dmg-install/diagnostic-export-console.log"
-diagnostic_sentinels="$fixture_root/artifacts/dmg-install/diagnostic-export-sentinels.txt"
 diagnostic_package_report="$fixture_root/artifacts/dmg-install/diagnostic-export-package.txt"
-diagnostic_database="$fixture_root/Library/Application Support/noonmark-dmg-validation/Noonmark.sqlite"
-diagnostic_repository_lock="$fixture_root/Library/Application Support/noonmark-dmg-validation/sync-repository/.repository.lock"
+if [[ "$(shasum -a 256 "$diagnostic_scope_helper" | awk '{print $1}')" != \
+  "$helper_fixture_binary" ]]; then
+  echo "fixture archived helper differs from its captured real binary" >&2
+  exit 1
+fi
+: >"$diagnostic_scope_stderr"
+chmod 600 "$diagnostic_scope_temp" "$diagnostic_scope_stderr"
+set +e
+"$diagnostic_scope_helper" \
+  --mode diagnostic-export-scope \
+  --app-path "$fixture_validation_app" \
+  --target-profile dmg-validation \
+  >"$diagnostic_scope_temp" \
+  2>"$diagnostic_scope_stderr"
+diagnostic_scope_status=$?
+set -e
+if [[ "$diagnostic_scope_status" -ne 0 || -s "$diagnostic_scope_stderr" ]] ||
+  ! diagnostic_scope_manifest_validate \
+    "$diagnostic_scope_temp" \
+    dmg-validation; then
+  echo "fixture diagnostic scope emitter failed its strict schema" >&2
+  sed -n '1,120p' "$diagnostic_scope_stderr" >&2
+  exit 1
+fi
+mv "$diagnostic_scope_temp" "$diagnostic_scope_manifest"
+diagnostic_scope_application="$(
+  diagnostic_scope_manifest_value \
+    "$diagnostic_scope_manifest" application
+)"
+diagnostic_database="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" database
+)"
+diagnostic_repository_lock="$(
+  diagnostic_scope_manifest_value \
+    "$diagnostic_scope_manifest" repository_lock
+)"
+diagnostic_export="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" export
+)"
+diagnostic_sentinels="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" sentinels
+)"
+diagnostic_ledger="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" ledger
+)"
+diagnostic_helper_gate="$(
+  diagnostic_scope_manifest_value "$diagnostic_scope_manifest" start_gate
+)"
+diagnostic_control_dir="${diagnostic_ledger%/*}"
+if [[ "$diagnostic_scope_application" != "$fixture_validation_app" ||
+  "${diagnostic_export%/*}" != "$fixture_root/artifacts/dmg-install" ||
+  "${diagnostic_sentinels%/*}" != "$fixture_root/artifacts/dmg-install" ||
+  "${diagnostic_ledger%/*}" != "${diagnostic_helper_gate%/*}" ||
+  "${diagnostic_control_dir%/*}" != "$fixture_root/artifacts/dmg-install" ]]; then
+  echo "fixture diagnostic scope escaped its real helper boundary" >&2
+  exit 1
+fi
+mkdir -p "$diagnostic_control_dir"
+chmod 700 "$diagnostic_control_dir"
 diagnostic_runtime_architecture="$(uname -m)"
 diagnostic_operating_system_version="$(sw_vers -productVersion)"
 diagnostic_darwin_version="$(uname -r)"
@@ -916,7 +989,7 @@ cp "$diagnostic_ledger" \
 : >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
 : >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-launch.log"
 : >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
-cat >"$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" <<'EOF'
+cat >"$diagnostic_helper_gate" <<'EOF'
 mode=diagnostic-export
 helper_pid=502
 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
@@ -974,7 +1047,9 @@ diagnostic_helper_stdout_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-in
 diagnostic_helper_stderr_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log" | awk '{print $1}')"
 diagnostic_helper_launch_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-launch.log" | awk '{print $1}')"
 diagnostic_helper_observer_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log" | awk '{print $1}')"
-diagnostic_helper_observer_gate_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" | awk '{print $1}')"
+diagnostic_helper_observer_gate_sha256="$(shasum -a 256 "$diagnostic_helper_gate" | awk '{print $1}')"
+diagnostic_scope_manifest_sha256="$(shasum -a 256 "$diagnostic_scope_manifest" | awk '{print $1}')"
+diagnostic_scope_stderr_sha256="$(shasum -a 256 "$diagnostic_scope_stderr" | awk '{print $1}')"
 diagnostic_helper_exit_status_sha256="$(shasum -a 256 "$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt" | awk '{print $1}')"
 diagnostic_window_sha256="$(shasum -a 256 "$diagnostic_window" | awk '{print $1}')"
 diagnostic_console_sha256="$(shasum -a 256 "$diagnostic_console" | awk '{print $1}')"
@@ -1359,6 +1434,13 @@ dmg_sha256=$dmg_sha256
 dmg_checksum_sha256=$dmg_checksum_sha256
 package_manifest_sha256=$package_manifest_sha256
 diagnostic_diff_status=clean
+diagnostic_scope_schema_version=1
+diagnostic_scope_target_profile=dmg-validation
+diagnostic_scope_manifest_path=artifacts/dmg-install/diagnostic-export-scope.tsv
+diagnostic_scope_stderr_path=artifacts/dmg-install/diagnostic-export-scope.stderr.log
+diagnostic_scope_manifest_sha256=$diagnostic_scope_manifest_sha256
+diagnostic_scope_stderr_sha256=$diagnostic_scope_stderr_sha256
+diagnostic_scope_helper_binary_sha256=$helper_fixture_binary
 diagnostic_export_ui_completed=true
 diagnostic_export_lock_overlap=sqlite-writer+sync-repository
 diagnostic_export_schema_version=1
@@ -1894,15 +1976,18 @@ expect_install_semantic_mutation_rejected() {
   fi
 }
 
-diagnostic_ledger="$fixture_root/artifacts/dmg-install/diagnostic-export-ledger.tsv"
+diagnostic_ledger_relative="${diagnostic_ledger#${fixture_root}/}"
+diagnostic_scope_manifest_relative="${diagnostic_scope_manifest#${fixture_root}/}"
+diagnostic_scope_manifest_pristine="${diagnostic_scope_manifest}.pristine"
 diagnostic_ledger_pristine="${diagnostic_ledger}.pristine"
 diagnostic_helper="$fixture_root/artifacts/dmg-install/diagnostic-export-helper.log"
 diagnostic_helper_pristine="${diagnostic_helper}.pristine"
 diagnostic_export_pristine="${diagnostic_export}.pristine"
 diagnostic_package_report_pristine="${diagnostic_package_report}.pristine"
 diagnostic_sentinels_pristine="${diagnostic_sentinels}.pristine"
-diagnostic_helper_gate="$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt"
+diagnostic_helper_gate_relative="${diagnostic_helper_gate#${fixture_root}/}"
 diagnostic_helper_gate_pristine="${diagnostic_helper_gate}.pristine"
+cp "$diagnostic_scope_manifest" "$diagnostic_scope_manifest_pristine"
 cp "$diagnostic_ledger" "$diagnostic_ledger_pristine"
 cp "$diagnostic_helper" "$diagnostic_helper_pristine"
 cp "$diagnostic_export" "$diagnostic_export_pristine"
@@ -1911,6 +1996,7 @@ cp "$diagnostic_sentinels" "$diagnostic_sentinels_pristine"
 cp "$diagnostic_helper_gate" "$diagnostic_helper_gate_pristine"
 
 restore_diagnostic_fixture() {
+  cp "$diagnostic_scope_manifest_pristine" "$diagnostic_scope_manifest"
   cp "$diagnostic_ledger_pristine" "$diagnostic_ledger"
   cp "$diagnostic_helper_pristine" "$diagnostic_helper"
   cp "$diagnostic_export_pristine" "$diagnostic_export"
@@ -1963,7 +2049,7 @@ rebind_diagnostic_export_claims() {
   refresh_install_manifest_binding \
     "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
   refresh_install_manifest_artifact_binding \
-    "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+    "$diagnostic_ledger_relative" \
     "diagnostic_export_ledger_sha256"
   refresh_install_manifest_artifact_binding \
     "artifacts/dmg-install/diagnostic-export-helper.log" \
@@ -1977,7 +2063,7 @@ awk 'NR == 8 { held = $0; next } NR == 9 { print; print held; next } { print }' 
   "$diagnostic_ledger" >"${diagnostic_ledger}.reordered"
 mv "${diagnostic_ledger}.reordered" "$diagnostic_ledger"
 refresh_install_manifest_artifact_binding \
-  "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+  "$diagnostic_ledger_relative" \
   "diagnostic_export_ledger_sha256"
 expect_install_semantic_mutation_rejected \
   reordered-diagnostic-export-ledger \
@@ -1993,7 +2079,7 @@ awk -F $'\t' -v OFS=$'\t' '
 mv "${diagnostic_ledger}.forged-lock" "$diagnostic_ledger"
 cp "$diagnostic_ledger" "$diagnostic_helper"
 refresh_install_manifest_artifact_binding \
-  "artifacts/dmg-install/diagnostic-export-ledger.tsv" \
+  "$diagnostic_ledger_relative" \
   "diagnostic_export_ledger_sha256"
 refresh_install_manifest_artifact_binding \
   "artifacts/dmg-install/diagnostic-export-helper.log" \
@@ -2003,9 +2089,41 @@ expect_install_semantic_mutation_rejected \
   "DMG install diagnostic-export ledger lacks exact overlapping lock proof"
 restore_diagnostic_fixture
 
+mutated_scope_database="${diagnostic_database%/*}/Alternate-Noonmark.sqlite"
+awk -F $'\t' -v OFS=$'\t' -v database="$mutated_scope_database" '
+  $1 == "database" { $2 = database }
+  { print }
+' "$diagnostic_scope_manifest" >"${diagnostic_scope_manifest}.database-drift"
+mv \
+  "${diagnostic_scope_manifest}.database-drift" \
+  "$diagnostic_scope_manifest"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_scope_manifest_relative" \
+  "diagnostic_scope_manifest_sha256"
+expect_install_semantic_mutation_rejected \
+  diagnostic-scope-database-disagreement \
+  "DMG install diagnostic-export ledger disagrees with canonical scope"
+restore_diagnostic_fixture
+
+mutated_scope_repository_lock="${diagnostic_repository_lock%/*}/.alternate.lock"
+awk -F $'\t' -v OFS=$'\t' -v lock="$mutated_scope_repository_lock" '
+  $1 == "repository_lock" { $2 = lock }
+  { print }
+' "$diagnostic_scope_manifest" >"${diagnostic_scope_manifest}.repository-drift"
+mv \
+  "${diagnostic_scope_manifest}.repository-drift" \
+  "$diagnostic_scope_manifest"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_scope_manifest_relative" \
+  "diagnostic_scope_manifest_sha256"
+expect_install_semantic_mutation_rejected \
+  diagnostic-scope-repository-disagreement \
+  "DMG install diagnostic-export ledger disagrees with canonical scope"
+restore_diagnostic_fixture
+
 sed -i '' 's/^helper_pid=.*/helper_pid=999999/' "$diagnostic_helper_gate"
 refresh_install_manifest_artifact_binding \
-  "artifacts/dmg-install/diagnostic-export-helper-exit-observer-gate.txt" \
+  "$diagnostic_helper_gate_relative" \
   "diagnostic_export_helper_observer_gate_sha256"
 expect_install_semantic_mutation_rejected \
   forged-diagnostic-helper-observer-gate \

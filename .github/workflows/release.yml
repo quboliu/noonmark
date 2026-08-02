@@ -68,5 +68,6 @@ jobs:
             artifacts/audit-final
             artifacts/e2e*
             artifacts/dmg-install*
+            artifacts/release-diagnostic-closure-gate
           if-no-files-found: error
           retention-days: 14

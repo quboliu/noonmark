@@ -17,6 +17,7 @@ enum NoonmarkDMGInstallHarness {
         case e2eInspect = "e2e-inspect"
         case e2eMenuCommand = "e2e-menu-command"
         case diagnosticExport = "diagnostic-export"
+        case diagnosticExportScope = "diagnostic-export-scope"
     }
 
     struct Configuration {
@@ -80,8 +81,18 @@ enum NoonmarkDMGInstallHarness {
                     "unknown options: \(unknown.sorted().joined(separator: ", "))"
                 )
             }
-            guard let rawMode = values["--mode"], let mode = Mode(rawValue: rawMode),
-                  let ledgerPath = values["--ledger"], ledgerPath.isEmpty == false,
+            guard let rawMode = values["--mode"], let mode = Mode(rawValue: rawMode)
+            else {
+                throw HarnessFailure.invalidArguments(
+                    "required: --mode preflight|exercise|restart|e2e-inspect|"
+                        + "e2e-menu-command|diagnostic-export|"
+                        + "diagnostic-export-scope"
+                )
+            }
+            if mode == .diagnosticExportScope {
+                return try parseDiagnosticExportScope(values)
+            }
+            guard let ledgerPath = values["--ledger"], ledgerPath.isEmpty == false,
                   let rawLaunchToken = values["--launch-token"],
                   let launchToken = UUID(uuidString: rawLaunchToken)?.uuidString,
                   launchToken == rawLaunchToken,
@@ -90,7 +101,8 @@ enum NoonmarkDMGInstallHarness {
             else {
                 throw HarnessFailure.invalidArguments(
                     "required: --mode preflight|exercise|restart|e2e-inspect|"
-                        + "e2e-menu-command --ledger PATH --launch-token UUID "
+                        + "e2e-menu-command|diagnostic-export --ledger PATH "
+                        + "--launch-token UUID "
                         + "--start-gate ABSOLUTE_PATH"
                 )
             }
@@ -328,6 +340,42 @@ enum NoonmarkDMGInstallHarness {
         private static func isAbsoluteSingleLinePath(_ path: String) -> Bool {
             (try? CanonicalAbsolutePath(path))?.string == path
         }
+
+        private static func parseDiagnosticExportScope(
+            _ values: [String: String]
+        ) throws -> Self {
+            guard values.count == 3,
+                  let appPath = values["--app-path"],
+                  Self.isAbsoluteSingleLinePath(appPath),
+                  let targetProfile = values["--target-profile"],
+                  ["e2e", "dmg-validation"].contains(targetProfile)
+            else {
+                throw HarnessFailure.invalidArguments(
+                    "diagnostic-export-scope accepts only exact --app-path "
+                        + "and --target-profile e2e|dmg-validation"
+                )
+            }
+            return Self(
+                mode: .diagnosticExportScope,
+                pid: 0,
+                appPath: appPath,
+                taskTitle: "",
+                ledgerPath: "",
+                launchToken: "",
+                startGatePath: "",
+                windowNumber: 0,
+                windowTitle: "",
+                expectationsPath: "",
+                menuTitle: "",
+                menuItemTitle: "",
+                completionPath: "",
+                targetProfile: targetProfile,
+                databasePath: "",
+                repositoryLockPath: "",
+                exportPath: "",
+                sentinelsPath: ""
+            )
+        }
     }
 
     enum HarnessFailure: LocalizedError {
@@ -355,6 +403,13 @@ enum NoonmarkDMGInstallHarness {
         var ledger: HarnessLedger?
         do {
             let configuration = try Configuration.parse(arguments)
+            if configuration.mode == .diagnosticExportScope {
+                let manifest = try DiagnosticExportScopeContract.scopeManifest(
+                    configuration
+                )
+                FileHandle.standardOutput.write(Data(manifest.utf8))
+                exit(EXIT_SUCCESS)
+            }
             let diagnosticScope: PinnedDiagnosticExportScope? =
                 if configuration.mode == .diagnosticExport {
                     try DiagnosticExportScopeContract.pin(configuration)
@@ -364,7 +419,8 @@ enum NoonmarkDMGInstallHarness {
             if let diagnosticScope {
                 ledger = try HarnessLedger(
                     directory: diagnosticScope.controlDirectory,
-                    fileName: diagnosticScope.ledgerFileName
+                    fileName: diagnosticScope.ledgerFileName,
+                    requireNew: true
                 )
             } else {
                 ledger = try HarnessLedger(path: configuration.ledgerPath)
@@ -466,6 +522,10 @@ enum NoonmarkDMGInstallHarness {
                 runner: runner,
                 ledger: ledger,
                 scope: diagnosticScope
+            )
+        case .diagnosticExportScope:
+            throw HarnessFailure.contract(
+                "diagnostic-export-scope reached the validation runner"
             )
         }
     }
@@ -583,7 +643,7 @@ enum NoonmarkDMGInstallHarness {
             configuration.targetProfile == "e2e"
                 ? expectedE2EBundleIdentifier
                 : expectedDMGValidationBundleIdentifier
-        case .preflight, .exercise, .restart:
+        case .preflight, .exercise, .restart, .diagnosticExportScope:
             expectedDMGValidationBundleIdentifier
         }
         guard let running = NSRunningApplication(
@@ -658,6 +718,10 @@ private extension NoonmarkDMGInstallHarness.Configuration {
                 + "target_profile=\(targetProfile) database=\(databasePath) "
                 + "repository_lock=\(repositoryLockPath) export=\(exportPath) "
                 + "sentinels=\(sentinelsPath)"
+        }
+        if mode == .diagnosticExportScope {
+            return "mode=\(mode.rawValue) app=\(appPath) "
+                + "target_profile=\(targetProfile)"
         }
         return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath)"
     }
@@ -1396,13 +1460,79 @@ private final class Runner {
             else { return nil }
             return focused
         }
+        let goToSheet: AXUIElement = try target.wait(
+            description: "exact save-panel GoToWindow sheet"
+        ) {
+            guard let sheet = target.element(
+                locationField,
+                kAXParentAttribute as String
+            ),
+                let sheetParent = target.element(
+                    sheet,
+                    kAXParentAttribute as String
+                ), CFEqual(sheetParent, savePanel),
+                let identifier = target.string(
+                    sheet,
+                    kAXIdentifierAttribute as String
+                ), identifier == "GoToWindow",
+                target.string(sheet, kAXRoleAttribute as String)
+                == kAXSheetRole as String
+            else { return nil }
+            return sheet
+        }
         let exportParent = exportURL.deletingLastPathComponent().path
-        try input.typeUnicode(exportParent)
-        _ = try target.wait(description: "exact save-panel location value") {
-            target.string(locationField, kAXValueAttribute as String)
-            == exportParent ? true : nil
+        try replaceFocusedTextField(
+            locationField,
+            with: exportParent,
+            description: "save-panel location"
+        )
+        let _: AXTarget.Match = try target.wait(
+            description: "selected save-panel location suggestion"
+        ) {
+            let rows = try target.strictMatches(
+                in: goToSheet,
+                roles: [kAXRowRole as String]
+            )
+            let selectedRows = rows.filter {
+                target.boolean(
+                    $0.element,
+                    kAXSelectedAttribute as String
+                ) == true
+            }
+            guard selectedRows.count <= 1 else {
+                throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                    "GoToWindow exposed duplicate selected suggestions"
+                )
+            }
+            return selectedRows.first
         }
         try input.keyStroke(virtualKey: 36)
+
+        let saveButton = try uniqueMatch(
+            in: savePanel,
+            roles: [kAXButtonRole as String],
+            titles: ["存储", "保存", "Save"],
+            identifier: nil,
+            description: "diagnostic save button"
+        )
+        let _: Bool = try target.wait(
+            description: "dismissed save-panel location sheet"
+        ) {
+            guard let focusedWindow = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            ), CFEqual(focusedWindow, savePanel),
+                let focused = target.element(
+                    target.application,
+                    kAXFocusedUIElementAttribute as String
+                ), CFEqual(focused, locationField) == false,
+                target.boolean(
+                    saveButton.element,
+                    kAXEnabledAttribute as String
+                ) == true
+            else { return nil }
+            return true
+        }
 
         let basename = exportURL.lastPathComponent
         let nameField: AXTarget.Match = try target.wait(
@@ -1426,24 +1556,10 @@ private final class Runner {
             }
             return fields.first
         }
-        try input.click(
-            frame: target.requiredFrame(
-                nameField,
-                description: "diagnostic filename field"
-            ),
-            clickCount: 3
-        )
-        try input.typeUnicode(basename)
-        _ = try target.wait(description: "exact diagnostic export filename") {
-            target.string(nameField.element, kAXValueAttribute as String)
-            == basename ? true : nil
-        }
-        let saveButton = try uniqueMatch(
-            in: savePanel,
-            roles: [kAXButtonRole as String],
-            titles: ["存储", "保存", "Save"],
-            identifier: nil,
-            description: "diagnostic save button"
+        try replaceFocusedTextField(
+            nameField.element,
+            with: basename,
+            description: "diagnostic filename"
         )
         try input.click(
             frame: target.requiredFrame(
@@ -1479,6 +1595,59 @@ private final class Runner {
             "menu=physical preview=physical save_panel=physical "
                 + "path=selected toast=visible source=cghidEventTap"
         )
+    }
+
+    private func replaceFocusedTextField(
+        _ field: AXUIElement,
+        with expectedValue: String,
+        description: String
+    ) throws {
+        guard expectedValue.isEmpty == false,
+              target.string(field, kAXRoleAttribute as String)
+              == kAXTextFieldRole as String
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "\(description) replacement requires a nonempty exact text field"
+            )
+        }
+        try input.click(
+            frame: target.requiredFrame(
+                field,
+                description: "\(description) field"
+            ),
+            clickCount: 3
+        )
+        let _: Bool = try target.wait(description: "focused \(description) field") {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedUIElementAttribute as String
+            ), CFEqual(focused, field) else { return nil }
+            return true
+        }
+        try input.keyStroke(virtualKey: 51)
+        let _: Bool = try target.wait(description: "cleared \(description) value") {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedUIElementAttribute as String
+            ), CFEqual(focused, field),
+                let currentValue = target.string(
+                    field,
+                    kAXValueAttribute as String
+                ), currentValue.isEmpty
+            else { return nil }
+            return true
+        }
+        try input.typeUnicode(expectedValue)
+        let _: Bool = try target.wait(description: "exact \(description) value") {
+            guard let focused = target.element(
+                target.application,
+                kAXFocusedUIElementAttribute as String
+            ), CFEqual(focused, field),
+                target.string(field, kAXValueAttribute as String)
+                == expectedValue
+            else { return nil }
+            return true
+        }
     }
 
     private func requireDiagnosticExportDestination(

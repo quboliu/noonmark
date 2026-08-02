@@ -8,6 +8,7 @@ enum ObserverFailure: LocalizedError {
     case timedOut(Int)
     case waitFailed(Int32, Int32)
     case unexpectedEvent(UInt32)
+    case publicationFailed(String, Int32)
 
     var errorDescription: String? {
         switch self {
@@ -23,15 +24,109 @@ enum ObserverFailure: LocalizedError {
             "EVFILT_PROC wait returned count=\(count) errno=\(code)"
         case let .unexpectedEvent(flags):
             "EVFILT_PROC omitted NOTE_EXIT or NOTE_EXITSTATUS: fflags=\(flags)"
+        case let .publicationFailed(operation, code):
+            "observer artifact \(operation) failed with errno=\(code)"
         }
     }
 }
 
+func destinationComponents(for path: String) throws -> (
+    parentPath: String,
+    leaf: String
+) {
+    let destination = URL(fileURLWithPath: path)
+    let leaf = destination.lastPathComponent
+    guard path.first == "/",
+          leaf.isEmpty == false,
+          leaf != ".",
+          leaf != "..",
+          leaf.contains("/") == false,
+          path.unicodeScalars.allSatisfy({
+              CharacterSet.controlCharacters.contains($0) == false
+          })
+    else {
+        throw ObserverFailure.invalidConfiguration
+    }
+    return (destination.deletingLastPathComponent().path, leaf)
+}
+
 func writeAtomically(_ value: String, to path: String) throws {
-    try Data(value.utf8).write(
-        to: URL(fileURLWithPath: path),
-        options: .atomic
+    let (parentPath, leaf) = try destinationComponents(for: path)
+    let directory = Darwin.open(
+        parentPath,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
     )
+    guard directory >= 0 else {
+        throw ObserverFailure.publicationFailed("open parent", errno)
+    }
+    defer { _ = Darwin.close(directory) }
+    var directoryStatus = stat()
+    guard fstat(directory, &directoryStatus) == 0,
+          directoryStatus.st_mode & S_IFMT == S_IFDIR,
+          directoryStatus.st_uid == geteuid()
+    else {
+        throw ObserverFailure.publicationFailed("validate parent", errno)
+    }
+
+    let temporaryLeaf = ".\(leaf).\(UUID().uuidString).tmp"
+    let descriptor = temporaryLeaf.withCString { name in
+        Darwin.openat(
+            directory,
+            name,
+            O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(S_IRUSR | S_IWUSR)
+        )
+    }
+    guard descriptor >= 0 else {
+        throw ObserverFailure.publicationFailed("create temporary", errno)
+    }
+    var published = false
+    defer {
+        _ = Darwin.close(descriptor)
+        if published == false {
+            temporaryLeaf.withCString { name in
+                _ = Darwin.unlinkat(directory, name, 0)
+            }
+        }
+    }
+
+    let data = Data(value.utf8)
+    try data.withUnsafeBytes { rawBuffer in
+        guard let baseAddress = rawBuffer.baseAddress else { return }
+        var offset = 0
+        while offset < rawBuffer.count {
+            let count = Darwin.write(
+                descriptor,
+                baseAddress.advanced(by: offset),
+                rawBuffer.count - offset
+            )
+            guard count > 0 else {
+                throw ObserverFailure.publicationFailed("write temporary", errno)
+            }
+            offset += count
+        }
+    }
+    guard fsync(descriptor) == 0 else {
+        throw ObserverFailure.publicationFailed("sync temporary", errno)
+    }
+    let renameResult = temporaryLeaf.withCString { source in
+        leaf.withCString { target in
+            renameatx_np(
+                directory,
+                source,
+                directory,
+                target,
+                UInt32(RENAME_EXCL)
+            )
+        }
+    }
+    guard renameResult == 0 else {
+        throw ObserverFailure.publicationFailed("publish exclusive", errno)
+    }
+    published = true
+    guard fsync(directory) == 0 else {
+        throw ObserverFailure.publicationFailed("sync parent", errno)
+    }
 }
 
 let environment = ProcessInfo.processInfo.environment

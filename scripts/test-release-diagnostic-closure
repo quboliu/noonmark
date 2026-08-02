@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+repo_parent="$(cd "$repo_root/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/evidence-common
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/test-release-diagnostic-closure" >&2
+  exit 64
+fi
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  echo "release diagnostic closure requires a clean committed source tree" >&2
+  exit 1
+fi
+
+source_commit="$(git rev-parse --verify HEAD^{commit})"
+evidence_relative="artifacts/release-diagnostic-closure-gate"
+evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"
+evidence_root="$repo_root/$evidence_relative"
+chmod 700 "$evidence_root"
+gate_log="$evidence_root/test-e2e.log"
+gate_result="$evidence_root/result.txt"
+gate_inventory="$evidence_root/artifact-inventory.sha256"
+
+gate_parent="$(
+  mktemp -d "$repo_parent/.noonmark-release-e2e.XXXXXX"
+)"
+gate_worktree="$gate_parent/worktree"
+worktree_added=0
+
+cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+
+  trap - EXIT
+  set +e
+  if [[ "$worktree_added" == "1" || -e "$gate_worktree/.git" ]]; then
+    "$gate_worktree/scripts/reset-dev-data" e2e >/dev/null 2>&1 ||
+      cleanup_status=1
+    git worktree remove --force "$gate_worktree" >/dev/null 2>&1 ||
+      cleanup_status=1
+  fi
+  if [[ -d "$gate_parent" ]]; then
+    rmdir "$gate_parent" >/dev/null 2>&1 || cleanup_status=1
+  fi
+  if [[ "$original_status" -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
+}
+trap cleanup EXIT
+
+if [[ "$gate_parent" != "$repo_parent"/.noonmark-release-e2e.* ||
+  -L "$gate_parent" || "$(stat -f '%Lp' "$gate_parent")" != "700" ]]; then
+  echo "release diagnostic closure worktree parent is unsafe" >&2
+  exit 1
+fi
+
+git worktree add --detach "$gate_worktree" "$source_commit" >/dev/null
+worktree_added=1
+if [[ "$(git -C "$gate_worktree" rev-parse --verify HEAD^{commit})" != \
+  "$source_commit" ]]; then
+  echo "release diagnostic closure worktree changed source identity" >&2
+  exit 1
+fi
+
+set +e
+(
+  cd "$gate_worktree"
+  NOONMARK_EVIDENCE_RUN_ID="${NOONMARK_EVIDENCE_RUN_ID:-local}-release-diagnostic"
+  export NOONMARK_EVIDENCE_RUN_ID
+  NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e release
+) >"$gate_log" 2>&1
+gate_status=$?
+set -e
+cat "$gate_log"
+
+closure_root="$gate_worktree/artifacts/e2e-diagnostic-closure"
+runtime_root="$gate_worktree/artifacts/e2e-runtime"
+if [[ "$gate_status" -eq 0 ]] && {
+  [[ ! -f "$closure_root/restart-result.txt" ]] ||
+    [[ "$(<"$closure_root/restart-result.txt")" != \
+      "ok: restarted evidence exported through UI" ]] ||
+    [[ ! -d "$closure_root/helper" || -L "$closure_root/helper" ]] ||
+    [[ "$(stat -f '%Lp' "$closure_root/helper")" != "700" ]] ||
+    [[ "$(stat -f '%u' "$closure_root/helper")" != "$(id -u)" ]] ||
+    [[ "$(evidence_read "$runtime_root/manifest.txt" suite_mode)" != \
+      "only:diagnostic-closure" ]] ||
+    [[ "$(evidence_read "$runtime_root/manifest.txt" source_head_commit)" != \
+      "$source_commit" ]];
+}; then
+  echo "release diagnostic closure evidence was incomplete" | tee -a "$gate_log" >&2
+  gate_status=1
+fi
+
+artifact_paths=("$gate_log")
+for source in "$closure_root" "$runtime_root"; do
+  if [[ -d "$source" && ! -L "$source" ]]; then
+    destination="$evidence_root/$(basename "$source")"
+    cp -R "$source" "$destination"
+    artifact_paths+=("$destination")
+  fi
+done
+
+if [[ "$gate_status" -eq 0 ]]; then
+  gate_outcome="PASS"
+else
+  gate_outcome="FAIL"
+fi
+{
+  printf 'schema_version=1\n'
+  printf 'source_commit=%s\n' "$source_commit"
+  printf 'status=%s\n' "$gate_outcome"
+  printf 'e2e_exit_code=%s\n' "$gate_status"
+  printf 'production_app_executed=false\n'
+} >"$gate_result"
+chmod 600 "$gate_log" "$gate_result"
+artifact_paths+=("$gate_result")
+evidence_inventory \
+  "$repo_root" \
+  "$gate_inventory" \
+  "${artifact_paths[@]}"
+chmod 600 "$gate_inventory"
+
+if [[ "$gate_status" -ne 0 ]]; then
+  exit "$gate_status"
+fi
+echo "Release diagnostic closure passed in an isolated temporary worktree"

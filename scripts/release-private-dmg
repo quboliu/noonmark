@@ -9,6 +9,7 @@ if [[ "$#" -ne 0 ]]; then
   exit 64
 fi
 
+scripts/test-release-diagnostic-closure
 scripts/package-dmg release
 scripts/verify-dmg dist/Noonmark.dmg
 scripts/test-dmg-install dist/Noonmark.dmg

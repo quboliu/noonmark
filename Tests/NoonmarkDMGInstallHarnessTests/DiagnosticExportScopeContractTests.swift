@@ -150,6 +150,53 @@ final class DiagnosticExportScopeContractTests: XCTestCase {
         )
     }
 
+    func testDiagnosticExportScopeModeEmitsTheCanonicalVersionedLayout() throws {
+        let fixture = try DMGScopeFixture()
+        defer { fixture.remove() }
+
+        let configuration = try NoonmarkDMGInstallHarness.Configuration.parse(
+            fixture.scopeArguments()
+        )
+        let manifest = try DiagnosticExportScopeContract.scopeManifest(
+            configuration,
+            applicationSupportBaseURL: fixture.applicationSupportBaseURL,
+            homeDirectoryURL: fixture.root
+        )
+
+        XCTAssertEqual(configuration.mode, .diagnosticExportScope)
+        XCTAssertEqual(
+            manifest,
+            [
+                "schema_version\t1",
+                "target_profile\tdmg-validation",
+                "application\t\(fixture.appURL.path)",
+                "database\t\(fixture.databaseURL.path)",
+                "repository_lock\t\(fixture.repositoryLockURL.path)",
+                "export\t\(fixture.exportURL.path)",
+                "sentinels\t\(fixture.sentinelsURL.path)",
+                "ledger\t\(fixture.workRoot.path)/helper/ledger.tsv",
+                "start_gate\t\(fixture.workRoot.path)/helper/exit-observer-gate.txt",
+                ""
+            ].joined(separator: "\n")
+        )
+    }
+
+    func testDiagnosticExportScopeModeRejectsCallerSuppliedResources() throws {
+        let fixture = try DMGScopeFixture()
+        defer { fixture.remove() }
+        let unexpectedArguments = fixture.scopeArguments() + [
+            "--ledger", fixture.workRoot
+                .appendingPathComponent("caller-ledger.tsv")
+                .path
+        ]
+
+        XCTAssertThrowsError(
+            try NoonmarkDMGInstallHarness.Configuration.parse(
+                unexpectedArguments
+            )
+        )
+    }
+
     func testDiagnosticExportRejectsAnE2EScopeNestedInProductionData() throws {
         let temporaryRoot = fixtureBaseURL
             .appendingPathComponent(
@@ -414,6 +461,14 @@ private struct DMGScopeFixture {
             exportPath: exportPath ?? exportURL.path,
             sentinelsPath: sentinelsURL.path
         )
+    }
+
+    func scopeArguments() -> [String] {
+        [
+            "--mode", "diagnostic-export-scope",
+            "--app-path", appURL.path,
+            "--target-profile", "dmg-validation"
+        ]
     }
 
     func remove() {

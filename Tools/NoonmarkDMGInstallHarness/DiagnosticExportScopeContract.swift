@@ -53,6 +53,39 @@ final class PinnedDiagnosticExportScope {
 /// lexical components, then pins each controlled root through no-following
 /// directory descriptors before any database or artifact is opened.
 enum DiagnosticExportScopeContract {
+    static func scopeManifest(
+        _ configuration: NoonmarkDMGInstallHarness.Configuration
+    ) throws -> String {
+        guard let applicationSupportBaseURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw invalid("the user Application Support root is unavailable")
+        }
+        return try scopeManifest(
+            configuration,
+            applicationSupportBaseURL: applicationSupportBaseURL,
+            homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+        )
+    }
+
+    static func scopeManifest(
+        _ configuration: NoonmarkDMGInstallHarness.Configuration,
+        applicationSupportBaseURL: URL,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) throws -> String {
+        guard configuration.mode == .diagnosticExportScope else {
+            throw invalid("only diagnostic-export-scope can emit a scope manifest")
+        }
+        let scope = try derivedScope(
+            targetProfile: configuration.targetProfile,
+            appPath: configuration.appPath,
+            applicationSupportBasePath: applicationSupportBaseURL.path,
+            homeDirectoryPath: homeDirectoryURL.path
+        )
+        return scope.manifest
+    }
+
     static func validate(
         _ configuration: NoonmarkDMGInstallHarness.Configuration
     ) throws {
@@ -62,7 +95,7 @@ enum DiagnosticExportScopeContract {
         ).first else {
             throw invalid("the user Application Support root is unavailable")
         }
-        _ = try expectedScope(
+        _ = try validatedScope(
             configuration,
             applicationSupportBasePath: applicationSupportBaseURL.path,
             homeDirectoryPath: FileManager.default.homeDirectoryForCurrentUser.path
@@ -74,7 +107,7 @@ enum DiagnosticExportScopeContract {
         applicationSupportBaseURL: URL,
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws {
-        _ = try expectedScope(
+        _ = try validatedScope(
             configuration,
             applicationSupportBasePath: applicationSupportBaseURL.path,
             homeDirectoryPath: homeDirectoryURL.path
@@ -102,7 +135,7 @@ enum DiagnosticExportScopeContract {
         applicationSupportBaseURL: URL,
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws -> PinnedDiagnosticExportScope {
-        let scope = try expectedScope(
+        let scope = try validatedScope(
             configuration,
             applicationSupportBasePath: applicationSupportBaseURL.path,
             homeDirectoryPath: homeDirectoryURL.path
@@ -131,6 +164,7 @@ enum DiagnosticExportScopeContract {
     }
 
     private struct Scope {
+        let profile: NoonmarkRuntimeProfile
         let application: CanonicalAbsolutePath
         let database: CanonicalAbsolutePath
         let repositoryLock: CanonicalAbsolutePath
@@ -138,9 +172,24 @@ enum DiagnosticExportScopeContract {
         let sentinels: CanonicalAbsolutePath
         let ledger: CanonicalAbsolutePath
         let startGate: CanonicalAbsolutePath
+
+        var manifest: String {
+            [
+                "schema_version\t1",
+                "target_profile\t\(profile.rawValue)",
+                "application\t\(application.string)",
+                "database\t\(database.string)",
+                "repository_lock\t\(repositoryLock.string)",
+                "export\t\(export.string)",
+                "sentinels\t\(sentinels.string)",
+                "ledger\t\(ledger.string)",
+                "start_gate\t\(startGate.string)",
+                ""
+            ].joined(separator: "\n")
+        }
     }
 
-    private static func expectedScope(
+    private static func validatedScope(
         _ configuration: NoonmarkDMGInstallHarness.Configuration,
         applicationSupportBasePath: String,
         homeDirectoryPath: String
@@ -148,28 +197,22 @@ enum DiagnosticExportScopeContract {
         guard configuration.mode == .diagnosticExport else {
             throw invalid("only diagnostic-export mode has a pinned scope")
         }
-        guard let profile = NoonmarkRuntimeProfile(
-            rawValue: configuration.targetProfile
-        ), profile == .e2e || profile == .dmgValidation else {
-            throw invalid("diagnostic export requires an isolated runtime profile")
-        }
-        let application = try CanonicalAbsolutePath(configuration.appPath)
-        let applicationSupportBase = try CanonicalAbsolutePath(
-            applicationSupportBasePath
-        )
-        let homeDirectory = try CanonicalAbsolutePath(homeDirectoryPath)
-        let expected = try expectedScope(
-            profile: profile,
-            application: application,
-            applicationSupportBase: applicationSupportBase
+        let expected = try derivedScope(
+            targetProfile: configuration.targetProfile,
+            appPath: configuration.appPath,
+            applicationSupportBasePath: applicationSupportBasePath,
+            homeDirectoryPath: homeDirectoryPath
         )
         let supplied = try [
-            CanonicalAbsolutePath(configuration.databasePath),
-            CanonicalAbsolutePath(configuration.repositoryLockPath),
-            CanonicalAbsolutePath(configuration.exportPath),
-            CanonicalAbsolutePath(configuration.sentinelsPath),
-            CanonicalAbsolutePath(configuration.ledgerPath),
-            CanonicalAbsolutePath(configuration.startGatePath)
+            ("database", CanonicalAbsolutePath(configuration.databasePath)),
+            (
+                "repository_lock",
+                CanonicalAbsolutePath(configuration.repositoryLockPath)
+            ),
+            ("export", CanonicalAbsolutePath(configuration.exportPath)),
+            ("sentinels", CanonicalAbsolutePath(configuration.sentinelsPath)),
+            ("ledger", CanonicalAbsolutePath(configuration.ledgerPath)),
+            ("start_gate", CanonicalAbsolutePath(configuration.startGatePath))
         ]
         let required = [
             expected.database,
@@ -179,12 +222,38 @@ enum DiagnosticExportScopeContract {
             expected.ledger,
             expected.startGate
         ]
-        guard supplied == required else {
-            throw invalid(
-                "diagnostic-export resources are outside the exact "
-                    + "\(profile.rawValue) scope"
-            )
+        for ((field, actual), requiredPath) in zip(supplied, required) {
+            guard actual == requiredPath else {
+                throw invalid(
+                    "diagnostic-export \(field) is outside the exact "
+                        + "\(expected.profile.rawValue) scope"
+                )
+            }
         }
+        return expected
+    }
+
+    private static func derivedScope(
+        targetProfile: String,
+        appPath: String,
+        applicationSupportBasePath: String,
+        homeDirectoryPath: String
+    ) throws -> Scope {
+        guard let profile = NoonmarkRuntimeProfile(rawValue: targetProfile),
+              profile == .e2e || profile == .dmgValidation
+        else {
+            throw invalid("diagnostic export requires an isolated runtime profile")
+        }
+        let application = try CanonicalAbsolutePath(appPath)
+        let applicationSupportBase = try CanonicalAbsolutePath(
+            applicationSupportBasePath
+        )
+        let homeDirectory = try CanonicalAbsolutePath(homeDirectoryPath)
+        let expected = try expectedScope(
+            profile: profile,
+            application: application,
+            applicationSupportBase: applicationSupportBase
+        )
 
         let protectedRoots = try [
             applicationSupportBase.appending(
@@ -240,6 +309,7 @@ enum DiagnosticExportScopeContract {
                 .appending("e2e-diagnostic-closure")
             let controlRoot = try evidenceRoot.appending("helper")
             return Scope(
+                profile: profile,
                 application: application,
                 database: try evidenceRoot.appending("Noonmark.sqlite"),
                 repositoryLock: try evidenceRoot
@@ -274,6 +344,7 @@ enum DiagnosticExportScopeContract {
             )
             let controlRoot = try workRoot.appending("helper")
             return Scope(
+                profile: profile,
                 application: application,
                 database: try dataRoot.appending("Noonmark.sqlite"),
                 repositoryLock: try dataRoot

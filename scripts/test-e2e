@@ -11,6 +11,7 @@ cd "$repo_root"
 source scripts/runtime-evidence
 source scripts/evidence-common
 source scripts/dmg-install-observer-common
+source scripts/diagnostic-scope-manifest
 
 configuration="${1:-debug}"
 evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
@@ -9410,6 +9411,16 @@ run_native_command_menu_helper() {
   active_native_command_helper_mode=""
 }
 
+diagnostic_control_directory_is_owner_only() {
+  local directory="$1"
+  local expected_parent="$2"
+
+  [[ "${directory%/*}" == "$expected_parent" &&
+    -d "$directory" && ! -L "$directory" &&
+    "$(stat -f '%Lp' "$directory")" == "700" &&
+    "$(stat -f '%u' "$directory")" == "$(id -u)" ]]
+}
+
 run_diagnostic_export_helper() {
   local target_pid="$1"
   local target_app_path="$2"
@@ -9420,27 +9431,17 @@ run_diagnostic_export_helper() {
   local repository_lock_path="$7"
   local export_path="$8"
   local sentinels_path="$9"
-  local evidence_dir="${10}"
-  local ledger_path="$evidence_dir/ledger.tsv"
+  local ledger_path="${10}"
+  local observer_gate_path="${11}"
+  local evidence_dir="${ledger_path%/*}"
   local stdout_path="$evidence_dir/stdout.log"
   local stderr_path="$evidence_dir/stderr.log"
   local launch_path="$evidence_dir/open.log"
   local observer_log_path="$evidence_dir/exit-observer.log"
-  local observer_gate_path="$evidence_dir/exit-observer-gate.txt"
   local exit_result_path="$evidence_dir/exit-status.txt"
   local helper_pid=""
   local live_pids=""
 
-  if [[ "$evidence_dir" != /* ]]; then
-    evidence_dir="$PWD/$evidence_dir"
-    ledger_path="$evidence_dir/ledger.tsv"
-    stdout_path="$evidence_dir/stdout.log"
-    stderr_path="$evidence_dir/stderr.log"
-    launch_path="$evidence_dir/open.log"
-    observer_log_path="$evidence_dir/exit-observer.log"
-    observer_gate_path="$evidence_dir/exit-observer-gate.txt"
-    exit_result_path="$evidence_dir/exit-status.txt"
-  fi
   if [[ "$helper_requested" != "1" || ! -x "$helper_executable_path" ]] ||
     ! codesign --verify --deep --strict "$helper_bundle" >/dev/null 2>&1; then
     echo "diagnostic export lacks its verified signed Helper bundle" >&2
@@ -9451,7 +9452,11 @@ run_diagnostic_export_helper() {
     ! "$window_number" =~ ^[1-9][0-9]*$ ||
     "$target_app_path" != /* || "$database_path" != /* ||
     "$repository_lock_path" != /* || "$export_path" != /* ||
-    "$sentinels_path" != /* || -e "$export_path" || -L "$export_path" ]]; then
+    "$sentinels_path" != /* || "$ledger_path" != /* ||
+    "$observer_gate_path" != /* ||
+    "${observer_gate_path%/*}" != "$evidence_dir" ||
+    "${evidence_dir%/*}" != "${export_path%/*}" ||
+    -e "$export_path" || -L "$export_path" ]]; then
     echo "diagnostic export Helper received an invalid controlled boundary" >&2
     return 1
   fi
@@ -9461,7 +9466,14 @@ run_diagnostic_export_helper() {
     return 1
   fi
 
-  mkdir -p "$evidence_dir"
+  if [[ -e "$evidence_dir" || -L "$evidence_dir" ]] ||
+    ! mkdir -m 700 "$evidence_dir" ||
+    ! diagnostic_control_directory_is_owner_only \
+      "$evidence_dir" \
+      "${export_path%/*}"; then
+    echo "diagnostic export Helper control directory was not fresh owner-only" >&2
+    return 1
+  fi
   rm -f \
     "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path" \
     "$observer_log_path" "$observer_gate_path" "$exit_result_path"
@@ -9610,6 +9622,12 @@ run_diagnostic_export_helper() {
     echo "diagnostic export Helper remained after verified exit" >&2
     return 1
   fi
+  if ! diagnostic_control_directory_is_owner_only \
+    "$evidence_dir" \
+    "${export_path%/*}"; then
+    echo "diagnostic export Helper control directory changed identity" >&2
+    return 1
+  fi
   active_native_command_helper_pid=""
   active_native_command_helper_token=""
   active_native_command_helper_mode=""
@@ -9733,11 +9751,14 @@ diagnostic_closure_app_process_matches() {
   local pid="$1"
   local token="$2"
   local mode="$3"
+  local database_path="$4"
+  local sync_root="$5"
   local command_line=""
 
   if [[ ! "$pid" =~ ^[1-9][0-9]*$ ||
     ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
-    "$mode" != "seed-failure" && "$mode" != "stall" && "$mode" != "restart" ]]; then
+    "$mode" != "seed-failure" && "$mode" != "stall" && "$mode" != "restart" ||
+    "$database_path" != /* || "$sync_root" != /* ]]; then
     return 2
   fi
   if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
@@ -9746,36 +9767,101 @@ diagnostic_closure_app_process_matches() {
   [[ "$command_line" == "$PWD/$app_executable_path "* ]] &&
     [[ " $command_line " == *" --e2e-diagnostic-evidence-$mode "* ]] &&
     [[ " $command_line " == *" --e2e-diagnostic-evidence-launch-token $token "* ]] &&
-    [[ " $command_line " == *" --data-url $PWD/artifacts/e2e-diagnostic-closure/Noonmark.sqlite "* ]] &&
-    [[ " $command_line " == *" --sync-folder-url $PWD/artifacts/e2e-diagnostic-closure/SyncRepository "* ]]
+    [[ " $command_line " == *" --data-url $database_path "* ]] &&
+    [[ " $command_line " == *" --sync-folder-url $sync_root "* ]]
 }
 
 run_diagnostic_evidence_closure_probe() {
   local closure_dir="artifacts/e2e-diagnostic-closure"
-  local database="$PWD/$closure_dir/Noonmark.sqlite"
-  local sync_root="$PWD/$closure_dir/SyncRepository"
+  local closure_root="$PWD/$closure_dir"
+  local scope_manifest="$closure_root/diagnostic-export-scope.tsv"
+  local scope_stderr="$closure_root/diagnostic-export-scope.stderr.log"
+  local scope_application=""
+  local database=""
+  local repository_lock=""
+  local sync_root=""
+  local export_path=""
+  local sentinels=""
+  local diagnostic_ledger=""
+  local diagnostic_start_gate=""
   local state="$PWD/$closure_dir/state.json"
   local seed_result="$PWD/$closure_dir/seed-result.txt"
   local stall_result="$PWD/$closure_dir/stall-result.txt"
   local restart_result="$PWD/$closure_dir/restart-result.txt"
-  local export_path="$PWD/$closure_dir/Noonmark-Diagnostic-Closure.noonmarkdiagnostics"
-  local sentinels="$PWD/$closure_dir/privacy-sentinels.txt"
   local lock_holder_source="$PWD/scripts/e2e-repository-lock-holder.swift"
   local lock_holder_binary="$PWD/$closure_dir/repository-lock-holder"
   local lock_holder_ready="$PWD/$closure_dir/repository-lock-holder.ready"
   local lock_holder_log="$PWD/$closure_dir/repository-lock-holder.log"
-  local repository_lock="$sync_root/.repository.lock"
   local window_title="晷迹 · Day Todo — 7月5日"
   local restart_window_identity_directory=""
   local restart_window_identity_path=""
+  local scope_temp=""
   local seed_token stall_token restart_token helper_token lock_token
   local seed_pid stall_pid restart_pid lock_pid window_number
-  local seed_status=0 stall_status=0 restart_status=0 lock_status=0
+  local scope_status=0 seed_status=0 stall_status=0 restart_status=0
+  local lock_status=0
   local failed_operation_id failed_incident_id stalled_operation_id
   local mutation_incident_id
 
   rm -rf "$closure_dir"
   mkdir -p "$closure_dir"
+  scope_temp="$(mktemp "$closure_root/.diagnostic-export-scope.XXXXXX")"
+  : >"$scope_stderr"
+  chmod 600 "$scope_temp" "$scope_stderr"
+  set +e
+  "$helper_executable_path" \
+    --mode diagnostic-export-scope \
+    --app-path "$PWD/$app_path" \
+    --target-profile e2e \
+    >"$scope_temp" \
+    2>"$scope_stderr"
+  scope_status=$?
+  set -e
+  if [[ "$scope_status" -ne 0 || -s "$scope_stderr" ]] ||
+    ! diagnostic_scope_manifest_validate "$scope_temp" e2e; then
+    echo "diagnostic closure scope emitter failed its strict schema" >&2
+    sed -n '1,120p' "$scope_stderr" >&2
+    rm -f "$scope_temp"
+    return 1
+  fi
+  mv "$scope_temp" "$scope_manifest"
+  if ! scope_application="$(
+      diagnostic_scope_manifest_value "$scope_manifest" application
+    )" ||
+    ! database="$(
+      diagnostic_scope_manifest_value "$scope_manifest" database
+    )" ||
+    ! repository_lock="$(
+      diagnostic_scope_manifest_value "$scope_manifest" repository_lock
+    )" ||
+    ! export_path="$(
+      diagnostic_scope_manifest_value "$scope_manifest" export
+    )" ||
+    ! sentinels="$(
+      diagnostic_scope_manifest_value "$scope_manifest" sentinels
+    )" ||
+    ! diagnostic_ledger="$(
+      diagnostic_scope_manifest_value "$scope_manifest" ledger
+    )" ||
+    ! diagnostic_start_gate="$(
+      diagnostic_scope_manifest_value "$scope_manifest" start_gate
+    )"; then
+    echo "diagnostic closure could not read its canonical scope" >&2
+    return 1
+  fi
+  sync_root="${repository_lock%/*}"
+  if [[ "$scope_application" != "$PWD/$app_path" ||
+    "${database%/*}" != "$closure_root" ||
+    "${sync_root%/*}" != "$closure_root" ||
+    "${export_path%/*}" != "$closure_root" ||
+    "${sentinels%/*}" != "$closure_root" ||
+    "${diagnostic_ledger%/*}" != "${diagnostic_start_gate%/*}" ||
+    "${diagnostic_ledger%/*/*}" != "$closure_root" ||
+    "$helper_binary_sha256_before" != \
+      "$(shasum -a 256 "$helper_executable_path" | awk '{print $1}')" ]]; then
+    echo "diagnostic closure scope escaped its captured helper boundary" >&2
+    return 1
+  fi
   printf 'this path is intentionally not a directory\n' >"$sync_root"
   seed_token="$(uuidgen)"
   "$PWD/$app_executable_path" \
@@ -9791,7 +9877,7 @@ run_diagnostic_evidence_closure_probe() {
     >"$closure_dir/seed-app.log" 2>&1 &
   seed_pid=$!
   if ! diagnostic_closure_app_process_matches \
-    "$seed_pid" "$seed_token" "seed-failure"; then
+    "$seed_pid" "$seed_token" "seed-failure" "$database" "$sync_root"; then
     echo "diagnostic seed App identity did not match its exact launch" >&2
     return 1
   fi
@@ -9863,7 +9949,7 @@ run_diagnostic_evidence_closure_probe() {
     >"$closure_dir/stall-app.log" 2>&1 &
   stall_pid=$!
   if ! diagnostic_closure_app_process_matches \
-    "$stall_pid" "$stall_token" "stall"; then
+    "$stall_pid" "$stall_token" "stall" "$database" "$sync_root"; then
     echo "diagnostic stalled App identity did not match its exact launch" >&2
     return 1
   fi
@@ -9876,7 +9962,7 @@ run_diagnostic_evidence_closure_probe() {
   if [[ ! -f "$stall_result" ||
     "$(<"$stall_result")" != "ready: stalled sync and rejected mutation" ]] ||
     ! diagnostic_closure_app_process_matches \
-      "$stall_pid" "$stall_token" "stall"; then
+      "$stall_pid" "$stall_token" "stall" "$database" "$sync_root"; then
     terminate_e2e_app >/dev/null 2>&1 || true
     kill -TERM "$lock_pid" 2>/dev/null || true
     wait "$stall_pid" 2>/dev/null || true
@@ -9955,7 +10041,7 @@ run_diagnostic_evidence_closure_probe() {
     >"$closure_dir/restart-app.log" 2>&1 &
   restart_pid=$!
   if ! diagnostic_closure_app_process_matches \
-    "$restart_pid" "$restart_token" "restart"; then
+    "$restart_pid" "$restart_token" "restart" "$database" "$sync_root"; then
     echo "diagnostic restart App identity did not match its exact launch" >&2
     return 1
   fi
@@ -9986,7 +10072,7 @@ run_diagnostic_evidence_closure_probe() {
   if [[ ! "$window_number" =~ ^[1-9][0-9]*$ ]] ||
     ! native_command_app_ready_identity_matches \
       "$restart_pid" \
-      "$PWD/$app_path" \
+      "$scope_application" \
       "$window_number" \
       "$window_title"; then
     echo "diagnostic restart main-window identity did not match" >&2
@@ -10002,7 +10088,7 @@ run_diagnostic_evidence_closure_probe() {
   helper_token="$(uuidgen)"
   if ! run_diagnostic_export_helper \
     "$restart_pid" \
-    "$PWD/$app_path" \
+    "$scope_application" \
     "$window_number" \
     "$window_title" \
     "$helper_token" \
@@ -10010,7 +10096,8 @@ run_diagnostic_evidence_closure_probe() {
     "$repository_lock" \
     "$export_path" \
     "$sentinels" \
-    "$PWD/$closure_dir/helper"; then
+    "$diagnostic_ledger" \
+    "$diagnostic_start_gate"; then
     terminate_e2e_app >/dev/null 2>&1 || true
     wait "$restart_pid" 2>/dev/null || true
     echo "diagnostic export UI/lock Helper failed" >&2

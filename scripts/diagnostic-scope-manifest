@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+if [[ "${NOONMARK_DIAGNOSTIC_SCOPE_MANIFEST_LOADED:-0}" == "1" ]]; then
+  return 0
+fi
+NOONMARK_DIAGNOSTIC_SCOPE_MANIFEST_LOADED=1
+
+diagnostic_scope_manifest_validate() {
+  local manifest="$1"
+  local expected_profile="$2"
+
+  case "$expected_profile" in
+    e2e | dmg-validation) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  LC_ALL=C awk -F $'\t' -v profile="$expected_profile" '
+    BEGIN {
+      keys[1] = "schema_version"
+      keys[2] = "target_profile"
+      keys[3] = "application"
+      keys[4] = "database"
+      keys[5] = "repository_lock"
+      keys[6] = "export"
+      keys[7] = "sentinels"
+      keys[8] = "ledger"
+      keys[9] = "start_gate"
+    }
+    {
+      if (NR > 9 || NF != 2 || $1 != keys[NR] || $2 == "" ||
+          index($0, "\r") != 0) {
+        invalid = 1
+        exit
+      }
+      if (NR == 1 && $2 != "1") { invalid = 1; exit }
+      if (NR == 2 && $2 != profile) { invalid = 1; exit }
+      if (NR >= 3 && substr($2, 1, 1) != "/") { invalid = 1; exit }
+    }
+    END { exit(invalid || NR != 9) }
+  ' "$manifest"
+}
+
+diagnostic_scope_manifest_value() {
+  local manifest="$1"
+  local key="$2"
+
+  awk -F $'\t' -v expected="$key" '
+    $1 == expected { count += 1; value = $2 }
+    END {
+      if (count != 1) { exit 1 }
+      print value
+    }
+  ' "$manifest"
+}

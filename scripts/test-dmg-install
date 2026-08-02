@@ -6,6 +6,7 @@ repo_root="$(cd "${script_dir}/.." && pwd -P)"
 cd "$repo_root"
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
+source scripts/diagnostic-scope-manifest
 
 # Synthetic contract probes dispatch before runtime-profile setup so they
 # cannot inspect or reset any signed runtime profile.
@@ -942,19 +943,23 @@ restart_helper_log="${work_dir}/restart-helper.log"
 restart_console_log="${work_dir}/restart-console.log"
 restart_screenshot_path="${work_dir}/installed-restart.png"
 restart_window_metadata_path="${work_dir}/installed-restart-window.txt"
-diagnostic_export_ledger="${work_dir}/diagnostic-export-ledger.tsv"
+diagnostic_scope_manifest="${work_dir}/diagnostic-export-scope.tsv"
+diagnostic_scope_stderr="${work_dir}/diagnostic-export-scope.stderr.log"
+diagnostic_scope_helper_binary_sha256=""
+diagnostic_control_dir=""
+diagnostic_export_ledger=""
 diagnostic_export_launch_log="${work_dir}/diagnostic-export-launch.log"
 diagnostic_export_helper_log="${work_dir}/diagnostic-export-helper.log"
 diagnostic_export_helper_stderr_log="${work_dir}/diagnostic-export-helper-stderr.log"
 diagnostic_export_helper_launch_log="${work_dir}/diagnostic-export-helper-launch.log"
 diagnostic_export_helper_observer_log="${work_dir}/diagnostic-export-helper-exit-observer.log"
-diagnostic_export_helper_observer_gate="${work_dir}/diagnostic-export-helper-exit-observer-gate.txt"
+diagnostic_export_helper_observer_gate=""
 diagnostic_export_helper_exit_status="${work_dir}/diagnostic-export-helper-exit-status.txt"
 diagnostic_export_console_log="${work_dir}/diagnostic-export-console.log"
 diagnostic_export_screenshot_path="${work_dir}/installed-diagnostic-export.png"
 diagnostic_export_window_metadata_path="${work_dir}/installed-diagnostic-export-window.txt"
-diagnostic_export_path="${work_dir}/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
-diagnostic_export_sentinels_path="${work_dir}/diagnostic-export-sentinels.txt"
+diagnostic_export_path=""
+diagnostic_export_sentinels_path=""
 diagnostic_export_package_report="${work_dir}/diagnostic-export-package.txt"
 diagnostic_repository_root=""
 diagnostic_repository_lock=""
@@ -1802,6 +1807,8 @@ cleanup() {
         "$restart_console_log" \
         "$restart_screenshot_path" \
         "$restart_window_metadata_path" \
+        "$diagnostic_scope_manifest" \
+        "$diagnostic_scope_stderr" \
         "$diagnostic_export_ledger" \
         "$diagnostic_export_launch_log" \
         "$diagnostic_export_helper_log" \
@@ -1908,6 +1915,13 @@ cleanup() {
       "validation_signed_binary_uuid_set" \
       "validation_derivation_fragment_sha256" \
       "validation_app_executed" \
+      "diagnostic_scope_schema_version" \
+      "diagnostic_scope_target_profile" \
+      "diagnostic_scope_manifest_path" \
+      "diagnostic_scope_stderr_path" \
+      "diagnostic_scope_manifest_sha256" \
+      "diagnostic_scope_stderr_sha256" \
+      "diagnostic_scope_helper_binary_sha256" \
       "diagnostic_export_ui_completed" \
       "diagnostic_export_lock_overlap" \
       "diagnostic_export_schema_version" \
@@ -2475,16 +2489,35 @@ assert_helper_completed() {
   fi
 }
 
+assert_diagnostic_control_directory() {
+  local mode_text owner_uid
+
+  if [[ -z "$diagnostic_control_dir" ||
+    "${diagnostic_control_dir%/*}" != "$work_dir" ||
+    ! -d "$diagnostic_control_dir" ||
+    -L "$diagnostic_control_dir" ]]; then
+    echo "diagnostic helper control directory escaped its canonical scope" >&2
+    return 1
+  fi
+  mode_text="$(stat -f '%Lp' "$diagnostic_control_dir")"
+  owner_uid="$(stat -f '%u' "$diagnostic_control_dir")"
+  if [[ "$mode_text" != "700" || "$owner_uid" != "$(id -u)" ]]; then
+    echo "diagnostic helper control directory is not owner-only" >&2
+    return 1
+  fi
+}
+
 run_helper() {
   local mode="$1"
   local pid="$2"
   local ledger_path="$3"
   local helper_log_path="$4"
+  local requested_observer_gate="${5:-}"
   local helper_log_base="${helper_log_path%.log}"
   local helper_stderr_path="${helper_log_base}-stderr.log"
   local helper_launch_path="${helper_log_base}-launch.log"
   local observer_log_path="${helper_log_base}-exit-observer.log"
-  local observer_gate_path="${helper_log_base}-exit-observer-gate.txt"
+  local observer_gate_path="${requested_observer_gate:-${helper_log_base}-exit-observer-gate.txt}"
   local exit_result_path="${helper_log_base}-exit-status.txt"
   local token
   local helper_pid
@@ -2537,6 +2570,17 @@ run_helper() {
       return 1
       ;;
   esac
+
+  if [[ "$mode" == "diagnostic-export" ]]; then
+    assert_diagnostic_control_directory
+    if [[ "$ledger_path" != "$diagnostic_export_ledger" ||
+      "$observer_gate_path" != "$diagnostic_export_helper_observer_gate" ||
+      -e "$ledger_path" || -L "$ledger_path" ||
+      -e "$observer_gate_path" || -L "$observer_gate_path" ]]; then
+      echo "diagnostic helper control artifacts were not fresh canonical paths" >&2
+      return 1
+    fi
+  fi
 
   rm -f \
     "$ledger_path" \
@@ -2682,6 +2726,9 @@ run_helper() {
       "$observer_log_path" \
       "$exit_result_path"
     return 1
+  fi
+  if [[ "$mode" == "diagnostic-export" ]]; then
+    assert_diagnostic_control_directory
   fi
   active_helper_pid=""
   active_helper_mode=""
@@ -3078,19 +3125,169 @@ run_validation_helper_phase() {
     "$console_log_path"
 }
 
+derive_diagnostic_export_scope() {
+  local scope_temp scope_status helper_sha_before helper_sha_after
+  local expected_helper_sha scope_profile scope_application path
+  local validation_data_root scope_manifest_relative scope_stderr_relative
+
+  if [[ -e "$diagnostic_scope_manifest" ||
+    -L "$diagnostic_scope_manifest" ||
+    -e "$diagnostic_scope_stderr" ||
+    -L "$diagnostic_scope_stderr" ]]; then
+    echo "diagnostic scope evidence destination was not fresh" >&2
+    return 1
+  fi
+  expected_helper_sha="$(
+    evidence_read "$helper_fragment" helper_binary_sha256
+  )"
+  helper_sha_before="$(shasum -a 256 "$helper_executable" | awk '{print $1}')"
+  if [[ ! "$expected_helper_sha" =~ ^[0-9a-f]{64}$ ||
+    "$helper_sha_before" != "$expected_helper_sha" ]]; then
+    echo "diagnostic scope helper binary did not match captured identity" >&2
+    return 1
+  fi
+
+  scope_temp="$(mktemp "${work_dir}/.diagnostic-export-scope.XXXXXX")"
+  chmod 600 "$scope_temp"
+  set +e
+  (
+    umask 077
+    "$helper_executable" \
+      --mode diagnostic-export-scope \
+      --app-path "$installed_app" \
+      --target-profile dmg-validation \
+      >"$scope_temp" \
+      2>"$diagnostic_scope_stderr"
+  )
+  scope_status=$?
+  set -e
+  helper_sha_after="$(shasum -a 256 "$helper_executable" | awk '{print $1}')"
+  if [[ "$scope_status" -ne 0 || -s "$diagnostic_scope_stderr" ||
+    "$helper_sha_after" != "$helper_sha_before" ]]; then
+    echo "canonical diagnostic scope derivation failed or changed helper identity" >&2
+    sed -n '1,120p' "$diagnostic_scope_stderr" >&2
+    rm -f "$scope_temp"
+    return 1
+  fi
+  if [[ ! -f "$scope_temp" || -L "$scope_temp" ||
+    "$(stat -f '%Lp' "$scope_temp")" != "600" ||
+    "$(stat -f '%u' "$scope_temp")" != "$(id -u)" ||
+    "$(stat -f '%l' "$scope_temp")" != "1" ||
+    "$(stat -f '%z' "$scope_temp")" -gt 32768 ]] ||
+    ! diagnostic_scope_manifest_validate "$scope_temp" dmg-validation; then
+    echo "canonical diagnostic scope manifest failed its strict schema" >&2
+    rm -f "$scope_temp"
+    return 1
+  fi
+  mv "$scope_temp" "$diagnostic_scope_manifest"
+
+  scope_profile="$(
+    diagnostic_scope_manifest_value \
+      "$diagnostic_scope_manifest" target_profile
+  )"
+  scope_application="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" application
+  )"
+  database_path="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" database
+  )"
+  diagnostic_repository_lock="$(
+    diagnostic_scope_manifest_value \
+      "$diagnostic_scope_manifest" repository_lock
+  )"
+  diagnostic_export_path="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" export
+  )"
+  diagnostic_export_sentinels_path="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" sentinels
+  )"
+  diagnostic_export_ledger="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" ledger
+  )"
+  diagnostic_export_helper_observer_gate="$(
+    diagnostic_scope_manifest_value "$diagnostic_scope_manifest" start_gate
+  )"
+  for path in \
+    "$scope_application" \
+    "$database_path" \
+    "$diagnostic_repository_lock" \
+    "$diagnostic_export_path" \
+    "$diagnostic_export_sentinels_path" \
+    "$diagnostic_export_ledger" \
+    "$diagnostic_export_helper_observer_gate"; do
+    if [[ "$path" != /* || "$path" == *"//"* || "$path" == *"/./"* ||
+      "$path" == *"/../"* || "$path" == *$'\n'* || "$path" == *$'\r'* ]]; then
+      echo "canonical diagnostic scope emitted a noncanonical path" >&2
+      return 1
+    fi
+  done
+  diagnostic_control_dir="${diagnostic_export_ledger%/*}"
+  validation_data_root="${database_path%/*}"
+  diagnostic_repository_root="${diagnostic_repository_lock%/*}"
+  if [[ "$scope_profile" != "dmg-validation" ||
+    "$scope_application" != "$installed_app" ||
+    "${diagnostic_export_helper_observer_gate%/*}" != \
+      "$diagnostic_control_dir" ||
+    "${diagnostic_control_dir%/*}" != "$work_dir" ||
+    "${diagnostic_export_path%/*}" != "$work_dir" ||
+    "${diagnostic_export_sentinels_path%/*}" != "$work_dir" ||
+    "$validation_data_root" != \
+      */Library/Application\ Support/"$validation_data_directory_name" ||
+    "${diagnostic_repository_root%/*}" != "$validation_data_root" ]]; then
+    echo "canonical diagnostic scope escaped its isolated runtime layout" >&2
+    return 1
+  fi
+  if [[ -e "$diagnostic_control_dir" || -L "$diagnostic_control_dir" ]]; then
+    echo "diagnostic helper control directory was not fresh" >&2
+    return 1
+  fi
+  mkdir -m 700 "$diagnostic_control_dir"
+  assert_diagnostic_control_directory
+
+  diagnostic_scope_helper_binary_sha256="$helper_sha_before"
+  window_runtime_evidence_root="${validation_data_root}/RuntimeEvidence"
+  scope_manifest_relative="${diagnostic_scope_manifest#${repo_root}/}"
+  scope_stderr_relative="${diagnostic_scope_stderr#${repo_root}/}"
+  if [[ "$scope_manifest_relative" == "$diagnostic_scope_manifest" ||
+    "$scope_stderr_relative" == "$diagnostic_scope_stderr" ]]; then
+    echo "diagnostic scope evidence was not repository-relative" >&2
+    return 1
+  fi
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_schema_version" "1"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_target_profile" "$scope_profile"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_manifest_path" "$scope_manifest_relative"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_stderr_path" "$scope_stderr_relative"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_manifest_sha256" \
+    "$(shasum -a 256 "$diagnostic_scope_manifest" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_stderr_sha256" \
+    "$(shasum -a 256 "$diagnostic_scope_stderr" | awk '{print $1}')"
+  evidence_append "$runtime_manifest_path" \
+    "diagnostic_scope_helper_binary_sha256" \
+    "$diagnostic_scope_helper_binary_sha256"
+}
+
 prepare_diagnostic_export_contract() {
-  local validation_data_root="${database_path%/Noonmark.sqlite}"
+  local validation_data_root="${database_path%/*}"
 
   if [[ "$validation_data_root" == "$database_path" ||
     "$validation_data_root" != \
-      */Library/Application\ Support/noonmark-dmg-validation ||
+      */Library/Application\ Support/"$validation_data_directory_name" ||
     ! -d "$validation_data_root" || -L "$validation_data_root" ]]; then
     echo "refusing to prepare diagnostics outside the real dmg-validation data root: $validation_data_root" >&2
     return 1
   fi
 
-  diagnostic_repository_root="${validation_data_root}/sync-repository"
-  diagnostic_repository_lock="${diagnostic_repository_root}/.repository.lock"
+  if [[ "${diagnostic_repository_root%/*}" != "$validation_data_root" ||
+    "${diagnostic_repository_lock%/*}" != "$diagnostic_repository_root" ]]; then
+    echo "canonical diagnostic repository escaped validation data" >&2
+    return 1
+  fi
   if [[ -e "$diagnostic_repository_root" ]]; then
     if [[ ! -d "$diagnostic_repository_root" ||
       -L "$diagnostic_repository_root" ]]; then
@@ -3392,7 +3589,8 @@ run_validation_diagnostic_export_phase() {
     "diagnostic-export" \
     "$pid" \
     "$diagnostic_export_ledger" \
-    "$diagnostic_export_helper_log"
+    "$diagnostic_export_helper_log" \
+    "$diagnostic_export_helper_observer_gate"
   if [[ "$last_helper_stderr_log" != \
       "$diagnostic_export_helper_stderr_log" ||
     "$last_helper_launch_log" != \
@@ -3616,37 +3814,6 @@ capture_task_snapshot() {
   } >"$output_path"
   TASK_IDENTITY_LINE="$identity_line"
 }
-
-database_path="$(swift -e '
-import Foundation
-
-guard let base = FileManager.default.urls(
-    for: .applicationSupportDirectory,
-    in: .userDomainMask
-).first else {
-    exit(1)
-}
-print(base
-    .appendingPathComponent("noonmark-dmg-validation", isDirectory: true)
-    .appendingPathComponent("Noonmark.sqlite")
-    .path)
-')"
-if [[ "$database_path" != \
-  */Library/Application\ Support/noonmark-dmg-validation/Noonmark.sqlite ]]; then
-  echo "refusing to inspect an unexpected DMG validation database path: $database_path" >&2
-  exit 1
-fi
-window_runtime_evidence_root="${database_path%/Noonmark.sqlite}/RuntimeEvidence"
-if [[ "$window_runtime_evidence_root" != \
-    */Library/Application\ Support/noonmark-dmg-validation/RuntimeEvidence ||
-  "$window_runtime_evidence_root" == *"//"* ||
-  "$window_runtime_evidence_root" == *"/./"* ||
-  "$window_runtime_evidence_root" == *"/../"* ||
-  "$window_runtime_evidence_root" == *$'\n'* ||
-  "$window_runtime_evidence_root" == *$'\r'* ]]; then
-  echo "refusing an unexpected dmg-validation window evidence root" >&2
-  exit 1
-fi
 
 if [[ ! -f "$dmg_path" ]]; then
   echo "missing DMG: $dmg_path" >&2
@@ -4011,6 +4178,18 @@ evidence_append \
   "window_probe_binary_sha256" \
   "$window_probe_binary_sha256"
 runtime_manifest_started=1
+
+derive_diagnostic_export_scope
+if [[ "$window_runtime_evidence_root" != \
+    */Library/Application\ Support/"$validation_data_directory_name"/RuntimeEvidence ||
+  "$window_runtime_evidence_root" == *"//"* ||
+  "$window_runtime_evidence_root" == *"/./"* ||
+  "$window_runtime_evidence_root" == *"/../"* ||
+  "$window_runtime_evidence_root" == *$'\n'* ||
+  "$window_runtime_evidence_root" == *$'\r'* ]]; then
+  echo "refusing an unexpected dmg-validation window evidence root" >&2
+  exit 1
+fi
 
 scripts/reset-dev-data dmg-validation
 if [[ -e "$database_path" ]]; then

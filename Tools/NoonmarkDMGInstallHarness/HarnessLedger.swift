@@ -35,8 +35,7 @@ final class HarnessLedger {
             throw Failure.cannotCreateParent(parent)
         }
         if FileManager.default.fileExists(atPath: url.path) == false,
-           FileManager.default.createFile(atPath: url.path, contents: nil) == false
-        {
+           FileManager.default.createFile(atPath: url.path, contents: nil) == false {
             throw Failure.cannotOpen(url)
         }
         guard let handle = FileHandle(forWritingAtPath: url.path) else {
@@ -50,12 +49,18 @@ final class HarnessLedger {
 
     init(
         directory: DescriptorBoundDirectory,
-        fileName: String
+        fileName: String,
+        requireNew: Bool = false
     ) throws {
         let opened = try directory.createOrOpenFile(
             named: fileName,
             mode: mode_t(S_IRUSR | S_IWUSR)
         )
+        guard requireNew == false || opened.created else {
+            throw DescriptorBoundDirectory.contract(
+                "descriptor-bound ledger already existed"
+            )
+        }
         let file = opened.file
         let initialIdentity = try file.identity()
         if opened.created {

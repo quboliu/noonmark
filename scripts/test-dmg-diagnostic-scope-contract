@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "DMG diagnostic scope contract: $*" >&2
+  exit 1
+}
+
+harness_source="Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift"
+scope_source="Tools/NoonmarkDMGInstallHarness/DiagnosticExportScopeContract.swift"
+ledger_source="Tools/NoonmarkDMGInstallHarness/HarnessLedger.swift"
+observer_source="scripts/dmg-install-exit-observer.swift"
+scope_parser="scripts/diagnostic-scope-manifest"
+
+[[ -f "$scope_parser" ]] ||
+  fail "missing shared diagnostic scope manifest parser"
+source "$scope_parser"
+for consumer in \
+  scripts/test-dmg-install \
+  scripts/test-e2e \
+  scripts/test-dmg-evidence-contract \
+  scripts/verify-development-validation-evidence; do
+  rg -F 'diagnostic-scope-manifest' "$consumer" >/dev/null ||
+    fail "$consumer does not consume the shared scope parser"
+done
+schema_marker='keys[1] = "schema_'
+schema_marker+='version"'
+schema_owners="$(
+  rg -l -F "$schema_marker" \
+    scripts/test-dmg-diagnostic-scope-contract \
+    scripts/test-dmg-evidence-contract \
+    scripts/test-dmg-install \
+    scripts/test-e2e \
+    scripts/verify-development-validation-evidence \
+    "$scope_parser" 2>/dev/null || true
+)"
+[[ "$schema_owners" == "$scope_parser" ]] ||
+  fail "diagnostic scope schema parser has more than one owner: $schema_owners"
+
+rg -F 'case diagnosticExportScope = "diagnostic-export-scope"' \
+  "$harness_source" >/dev/null ||
+  fail "harness has no pure diagnostic scope mode"
+rg -F 'static func scopeManifest(' "$scope_source" >/dev/null ||
+  fail "scope contract has no canonical manifest emitter"
+rg -F 'requireNew: true' "$harness_source" >/dev/null ||
+  fail "diagnostic ledger does not require exclusive creation"
+rg -F 'opened.created' "$ledger_source" >/dev/null ||
+  fail "descriptor-bound ledger does not enforce fresh creation"
+rg -F 'O_EXCL' "$observer_source" >/dev/null ||
+  fail "observer does not create its publication exclusively"
+rg -F 'O_NOFOLLOW' "$observer_source" >/dev/null ||
+  fail "observer follows filesystem links"
+rg -F 'RENAME_EXCL' "$observer_source" >/dev/null ||
+  fail "observer does not publish atomically without replacement"
+rg -F '"$helper_executable" \' scripts/test-dmg-install >/dev/null ||
+  fail "release script does not use its captured helper executable"
+rg -F -- '--mode diagnostic-export-scope' scripts/test-dmg-install >/dev/null ||
+  fail "release script does not consume the canonical scope emitter"
+rg -F -- '--mode diagnostic-export-scope' scripts/test-e2e >/dev/null ||
+  fail "E2E diagnostic closure does not consume the canonical scope emitter"
+rg -F 'mkdir -m 700 "$evidence_dir"' scripts/test-e2e >/dev/null ||
+  fail "E2E diagnostic control directory is not created owner-only"
+if [[ "$(rg -F -c 'diagnostic_control_directory_is_owner_only' \
+    scripts/test-e2e)" -lt 3 ]]; then
+  fail "E2E diagnostic control directory is not checked before and after use"
+fi
+if rg -n \
+  -e '\$closure_dir/Noonmark\.sqlite' \
+  -e '\$closure_dir/SyncRepository' \
+  -e '\$closure_dir/Noonmark-Diagnostic-Closure\.noonmarkdiagnostics' \
+  -e '\$closure_dir/privacy-sentinels\.txt' \
+  -e '\$closure_dir/helper(["/]|$)' \
+  scripts/test-e2e >/dev/null; then
+  fail "E2E diagnostic closure still owns a hand-written scope layout"
+fi
+rg -F -- '--mode diagnostic-export-scope' \
+  scripts/test-dmg-evidence-contract >/dev/null ||
+  fail "evidence fixture does not consume the canonical scope emitter"
+if rg -F 'cat >"$diagnostic_scope_manifest"' \
+  scripts/test-dmg-evidence-contract >/dev/null; then
+  fail "evidence fixture still hand-writes the diagnostic scope manifest"
+fi
+rg -F 'diagnostic_scope_helper_binary_sha256' \
+  scripts/test-dmg-install \
+  scripts/verify-development-validation-evidence >/dev/null ||
+  fail "scope evidence is not bound to the helper binary"
+if rg -n 'diagnostic-export-ledger\.tsv|diagnostic-export-helper-exit-observer-gate\.txt' \
+  scripts/test-dmg-install \
+  scripts/verify-development-validation-evidence \
+  scripts/test-dmg-evidence-contract >/dev/null; then
+  fail "a legacy diagnostic control layout remains hard-coded"
+fi
+if rg -n '\beval\b' scripts/test-dmg-install >/dev/null; then
+  fail "release script evaluates untrusted scope output"
+fi
+
+scripts/reset-dev-data audit
+swift test --filter 'DiagnosticExportScopeContractTests|HarnessLedgerDescriptorTests'
+xcrun swiftc -typecheck "$observer_source"
+
+harness_binary=".build/debug/NoonmarkDMGInstallHarness"
+if [[ ! -x "$harness_binary" ]]; then
+  fail "focused tests did not build the harness binary"
+fi
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-diagnostic-scope.XXXXXX")"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+fixture_app="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
+scope_output="$fixture_root/scope.tsv"
+scope_stderr="$fixture_root/scope.stderr"
+"$harness_binary" \
+  --mode diagnostic-export-scope \
+  --app-path "$fixture_app" \
+  --target-profile dmg-validation \
+  >"$scope_output" \
+  2>"$scope_stderr"
+if [[ -s "$scope_stderr" ]] ||
+  ! diagnostic_scope_manifest_validate "$scope_output" dmg-validation; then
+  fail "scope CLI output was not a strict canonical layout"
+fi
+scope_application="$(
+  diagnostic_scope_manifest_value "$scope_output" application
+)"
+scope_ledger="$(diagnostic_scope_manifest_value "$scope_output" ledger)"
+scope_gate="$(diagnostic_scope_manifest_value "$scope_output" start_gate)"
+scope_export="$(diagnostic_scope_manifest_value "$scope_output" export)"
+scope_sentinels="$(
+  diagnostic_scope_manifest_value "$scope_output" sentinels
+)"
+scope_work_root="${scope_application%/Applications/NoonmarkDMGValidation.app}"
+scope_control_root="${scope_ledger%/*}"
+if [[ "$scope_application" != "$fixture_app" ||
+  "${scope_gate%/*}" != "$scope_control_root" ||
+  "${scope_control_root%/*}" != "$scope_work_root" ||
+  "${scope_export%/*}" != "$scope_work_root" ||
+  "${scope_sentinels%/*}" != "$scope_work_root" ]]; then
+  fail "scope CLI output escaped its canonical layout"
+fi
+if "$harness_binary" \
+  --mode diagnostic-export-scope \
+  --app-path "$fixture_app" \
+  --target-profile dmg-validation \
+  --ledger "$fixture_root/forged.tsv" \
+  >/dev/null 2>&1; then
+  fail "scope CLI accepted a caller-supplied resource"
+fi
+
+echo "DMG diagnostic scope contract passed"

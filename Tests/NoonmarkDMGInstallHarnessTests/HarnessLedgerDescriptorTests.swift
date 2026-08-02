@@ -87,6 +87,15 @@ final class HarnessLedgerDescriptorTests: XCTestCase {
 
         XCTAssertThrowsError(try ledger.pass("must", "fail"))
     }
+
+    func testRequiredNewDescriptorLedgerRejectsAValidPreexistingFile() throws {
+        let fixture = try LedgerFixture()
+        defer { fixture.remove() }
+        try Data().write(to: fixture.ledgerURL)
+        XCTAssertEqual(chmod(fixture.ledgerURL.path, 0o600), 0)
+
+        XCTAssertThrowsError(try fixture.ledger(requireNew: true))
+    }
 }
 
 private struct LedgerFixture {
@@ -110,11 +119,15 @@ private struct LedgerFixture {
         )
     }
 
-    func ledger() throws -> HarnessLedger {
+    func ledger(requireNew: Bool = false) throws -> HarnessLedger {
         let directory = try DescriptorBoundDirectory(
             path: CanonicalAbsolutePath(root.path)
         )
-        return try HarnessLedger(directory: directory, fileName: "ledger.tsv")
+        return try HarnessLedger(
+            directory: directory,
+            fileName: "ledger.tsv",
+            requireNew: requireNew
+        )
     }
 
     func remove() {

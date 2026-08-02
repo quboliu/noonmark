@@ -132,13 +132,19 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         store.syncLocalFolderNow()
         try await waitUntil("invalid sync root did not produce a failed status") {
             guard store.isLocalFirstSyncing == false,
-                  let correlation = try persistedFailureCorrelation(store)
+                  let correlation = try persistedFailureCorrelation(
+                      store,
+                      expectedReason: .transportOrStorage
+                  )
             else { return false }
             return store.operationFailureNotice?.context == .sync
                 && store.operationFailureNotice?.diagnosticIncidentID
                 == correlation.incidentID
         }
-        guard let correlation = try persistedFailureCorrelation(store),
+        guard let correlation = try persistedFailureCorrelation(
+            store,
+            expectedReason: .transportOrStorage
+        ),
               let recorder = store.localDiagnosticRecorder
         else {
             throw Failure.failed("failed sync lost its persistent correlation")
@@ -261,7 +267,8 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
                 rejectedIncidentID: rejectedIncidentID
             ),
                 let persistedCorrelation = try persistedFailureCorrelation(
-                    store
+                    store,
+                    expectedReason: .operationInterrupted
                 )
             else { return false }
             return persistedCorrelation.operationID == interruptedOperationID
@@ -324,7 +331,8 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func persistedFailureCorrelation(
-        _ store: NoonmarkStore
+        _ store: NoonmarkStore,
+        expectedReason: SQLiteLocalFirstSyncFailureReason
     ) throws -> DiagnosticOperationCorrelation? {
         guard let databaseURL = store.databaseURL,
               let metadata = try SQLiteSyncRepository(databaseURL: databaseURL)
@@ -344,7 +352,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
             _,
             diagnosticCorrelation
         ) = status,
-            reason == .transportOrStorage
+            reason == expectedReason
         else { return nil }
         return diagnosticCorrelation
     }

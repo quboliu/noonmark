@@ -605,6 +605,134 @@ require_literal scripts/test-e2e "run_windowserver_input_cleanup"
 require_literal \
   scripts/test-e2e \
   "--e2e-windowserver-input-cleanup-result-url"
+
+diagnostic_closure_source="App/NoonmarkMacApp/DiagnosticEvidenceClosureE2EAutomation.swift"
+diagnostic_seed_function="$fixture_root/diagnostic-seed.swift"
+diagnostic_restart_function="$fixture_root/diagnostic-restart.swift"
+diagnostic_correlation_function="$fixture_root/diagnostic-correlation.swift"
+sed -n \
+  '/^    private func seedFailure(/,/^    private func stallAndReject(/p' \
+  "$diagnostic_closure_source" \
+  | tr -d '[:space:]' >"$diagnostic_seed_function"
+sed -n \
+  '/^    private func verifyRestartAndExport(/,/^    private func validateIsolation(/p' \
+  "$diagnostic_closure_source" \
+  | tr -d '[:space:]' >"$diagnostic_restart_function"
+sed -n \
+  '/^    private func persistedFailureCorrelation(/,/^    private func assertFailedSync(/p' \
+  "$diagnostic_closure_source" \
+  | tr -d '[:space:]' >"$diagnostic_correlation_function"
+if [[ "$(grep -oF \
+  'persistedFailureCorrelation(store,expectedReason:.transportOrStorage)' \
+  "$diagnostic_seed_function" | wc -l | tr -d ' ')" != "2" ]]; then
+  echo "diagnostic seed does not require transportOrStorage for both persistent reads" >&2
+  exit 1
+fi
+require_literal \
+  "$diagnostic_restart_function" \
+  'persistedFailureCorrelation(store,expectedReason:.operationInterrupted)'
+require_literal \
+  "$diagnostic_correlation_function" \
+  'expectedReason:SQLiteLocalFirstSyncFailureReason'
+require_literal \
+  "$diagnostic_correlation_function" \
+  'reason==expectedReason'
+forbid_literal \
+  "$diagnostic_seed_function" \
+  'persistedFailureCorrelation(store)'
+forbid_literal \
+  "$diagnostic_restart_function" \
+  'persistedFailureCorrelation(store)'
+
+diagnostic_export_function="$fixture_root/diagnostic-export.swift"
+diagnostic_text_replacement_function="$fixture_root/diagnostic-text-replacement.swift"
+sed -n \
+  '/^    func performDiagnosticExport() throws {$/,/^    private func requireDiagnosticExportDestination(/p' \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  | tr -d '[:space:]' >"$diagnostic_export_function"
+sed -n \
+  '/^    private func replaceFocusedTextField(/,/^    private func requireDiagnosticExportDestination(/p' \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  | tr -d '[:space:]' >"$diagnostic_text_replacement_function"
+if [[ "$(grep -oF 'tryreplaceFocusedTextField(' \
+  "$diagnostic_export_function" | wc -l | tr -d ' ')" != "2" ]]; then
+  echo "diagnostic export does not share one exact text replacement protocol" >&2
+  exit 1
+fi
+require_literal \
+  "$diagnostic_text_replacement_function" \
+  'input.keyStroke(virtualKey:51)'
+require_literal \
+  "$diagnostic_text_replacement_function" \
+  'currentValue.isEmpty'
+require_literal \
+  "$diagnostic_text_replacement_function" \
+  'clickCount:3'
+require_literal \
+  "$diagnostic_text_replacement_function" \
+  'CFEqual(focused,field)'
+require_literal \
+  "$diagnostic_text_replacement_function" \
+  'input.typeUnicode(expectedValue)'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'try input.keyStroke(virtualKey: 51)' \
+  'try input.typeUnicode(expectedValue)'
+require_literal \
+  "$diagnostic_export_function" \
+  'CFEqual(focusedWindow,savePanel)'
+require_literal \
+  "$diagnostic_export_function" \
+  'CFEqual(focused,locationField)==false'
+require_literal \
+  "$diagnostic_export_function" \
+  'target.boolean(saveButton.element,kAXEnabledAttributeasString)==true'
+require_literal \
+  "$diagnostic_export_function" \
+  'identifier=="GoToWindow"'
+require_literal \
+  "$diagnostic_export_function" \
+  'kAXSelectedAttributeasString'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'description: "selected save-panel location suggestion"' \
+  'description: "dismissed save-panel location sheet"'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'description: "dismissed save-panel location sheet"' \
+  'let nameField: AXTarget.Match'
+
+release_diagnostic_gate="scripts/test-release-diagnostic-closure"
+[[ -x "$release_diagnostic_gate" ]] || {
+  echo "release diagnostic closure gate is missing or not executable" >&2
+  exit 1
+}
+require_literal \
+  scripts/release-private-dmg \
+  'scripts/test-release-diagnostic-closure'
+forbid_literal \
+  scripts/release-private-dmg \
+  'NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e release'
+require_literal "$release_diagnostic_gate" 'git worktree add --detach'
+require_literal "$release_diagnostic_gate" 'git worktree remove --force'
+require_literal \
+  "$release_diagnostic_gate" \
+  '"$gate_worktree/scripts/reset-dev-data" e2e'
+require_literal \
+  "$release_diagnostic_gate" \
+  'git status --porcelain --untracked-files=all'
+require_literal "$release_diagnostic_gate" 'production_app_executed=false'
+require_literal "$release_diagnostic_gate" 'evidence_inventory'
+require_literal \
+  "$release_diagnostic_gate" \
+  'NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e release'
+require_literal \
+  "$release_diagnostic_gate" \
+  'artifacts/release-diagnostic-closure-gate'
+require_literal \
+  .github/workflows/release.yml \
+  'artifacts/release-diagnostic-closure-gate'
+
 cleanup_function="$(
   sed -n \
     '/^run_windowserver_input_cleanup() {$/,/^}$/p' \

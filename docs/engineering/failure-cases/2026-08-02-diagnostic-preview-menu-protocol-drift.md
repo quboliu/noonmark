@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-07：诊断导出菜单物理选择协议漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T14:34:34Z
 - 影响版本／构建：Noonmark 0.1.1（4），clean source commit `cdbe2d69b1fdaf4f78f52ba32e66b8dc7154bc75`
 - 引入提交：`d1b3c9a835633e381d7d5d0410820db041cbf640`（`feat(diagnostics): 闭合真实故障证据导出链路`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能单独证明实际操作者
-- 修复提交：待回填
+- 修复提交：`53255d65b43b29c89f41c08fc3438a251aec3279`（`fix(e2e): 收紧诊断菜单物理选择协议`）
 - Task-ID：noonmark-cloud-sync-debug
 
 ## 用户症状与影响
@@ -72,8 +72,10 @@ scripts/test-dmg-harness-evidence-contract
 
 - 症状红：run `release-20260802-cdbe2d6` 的未过滤 full E2E 在原始预览缺失点 exit 1。
 - Fast 红转绿：新的 shared-menu static contract 先判红；Harness 编译、`scripts/test-dmg-harness-evidence-contract` 与 `scripts/test-e2e-evidence-contract` 已通过。
-- 聚焦 symptom 绿：run `debug-20260802-menu-protocol-green-1` 的真实诊断闭环通过，ledger 明确记录 `pre_mouse_down=exact menu_closed=true left_button_up=true`。
-- 待完成：完整未过滤 E2E、发行证据 mutation／release contract、clean commit 同源正式发行链及 DMG validation。
+- 聚焦 symptom 绿：run `debug-20260802-menu-protocol-green-1`、`debug-20260802-menu-protocol-green-2` 与 `debug-20260802-menu-protocol-green-3` 的真实诊断闭环连续通过，ledger 明确记录 `pre_mouse_down=exact menu_closed=true left_button_up=true`。
+- 完整 symptom 绿：run `debug-20260802-menu-protocol-full-green-1` 的未过滤 `scripts/test-e2e` 以 exit 0 完成，覆盖原始失败点及全部后续用户路径。
+- Fast／回归绿：`scripts/check` 以 exit 0 完成；1,440 项自动测试通过、2 项显式 live iCloud 测试按环境策略 skip，确定性模拟、failure-case gates、DMG evidence／scope／ownership／observer 及 format lint 均通过。
+- 发行状态：修复提交已确定；仍待从故障案例回填后的最终 HEAD 重跑正式发行链和 exact DMG validation，完成前不得交付发行物。
 
 ## 永久门禁
 

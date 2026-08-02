@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "DMG foreground ownership contract: $*" >&2
+  exit 1
+}
+
+ownership_source="Tools/NoonmarkDMGInstallHarness/TargetForegroundOwnership.swift"
+harness_source="Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift"
+ax_source="Tools/NoonmarkDMGInstallHarness/AXTarget.swift"
+
+[[ -f "$ownership_source" ]] || fail "missing ownership module"
+[[ -f "$harness_source" ]] || fail "missing harness entry point"
+[[ -f "$ax_source" ]] || fail "missing read-only AX target"
+
+[[ "$(rg -F -c '.activate(options: [])' "$ownership_source")" -eq 1 ]] ||
+  fail "ownership must use exactly one exact-process AppKit activation request"
+if rg -n 'activateIgnoringOtherApps|AXUIElementSetAttributeValue|/usr/bin/open' \
+  "$ownership_source" "$ax_source" >/dev/null; then
+  fail "ownership introduced a deprecated, AX-mutating, or LaunchServices fallback"
+fi
+if rg -n 'usleep|sleep\(' "$ownership_source" >/dev/null; then
+  fail "ownership blocks instead of pumping the AppKit RunLoop"
+fi
+rg -F 'RunLoop.current.run(' "$ownership_source" >/dev/null ||
+  fail "ownership does not advance AppKit state delivery"
+rg -F 'proc_pidinfo(' "$ownership_source" >/dev/null ||
+  fail "ownership does not bind a kernel process start identity"
+rg -F 'isSameProcessInstance(as:' "$ownership_source" >/dev/null ||
+  fail "ownership does not compare re-resolved AppKit process instances"
+rg -F 'resolveApplication(expected.processIdentifier)' \
+  "$ownership_source" >/dev/null ||
+  fail "ownership does not re-resolve the current PID"
+rg -F 'current.activationPolicy == .regular' "$ownership_source" >/dev/null ||
+  fail "ownership does not require a regular target"
+rg -F 'if activeAfter, axFrontmostAfter' "$ownership_source" >/dev/null ||
+  fail "ownership does not require AppKit and AX agreement"
+rg -F '"activation",' "$harness_source" >/dev/null ||
+  fail "harness does not publish activation evidence"
+rg -F 'activation_policy=regular request_accepted=true' \
+  scripts/test-dmg-install >/dev/null ||
+  fail "release gate does not reconcile activation evidence"
+
+identity_line="$(rg -n -F 'guard actualURL.path == expectedURL.path else {' \
+  "$harness_source" | cut -d: -f1)"
+ownership_line="$(rg -n -F 'let activationEvidence = try TargetForegroundOwnership(' \
+  "$harness_source" | cut -d: -f1)"
+ledger_line="$(rg -n -F '"activation",' "$harness_source" | cut -d: -f1)"
+if [[ ! "$identity_line" =~ ^[0-9]+$ || ! "$ownership_line" =~ ^[0-9]+$ ||
+  ! "$ledger_line" =~ ^[0-9]+$ || "$identity_line" -ge "$ownership_line" ||
+  "$ownership_line" -ge "$ledger_line" ]]; then
+  fail "identity proof, activation request, and ledger evidence are out of order"
+fi
+
+scripts/reset-dev-data audit
+swift test --filter TargetForegroundOwnershipTests
+
+echo "DMG foreground ownership contract passed"

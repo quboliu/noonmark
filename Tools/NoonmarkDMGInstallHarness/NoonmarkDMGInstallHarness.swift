@@ -612,10 +612,20 @@ enum NoonmarkDMGInstallHarness {
             )
         }
         let target = AXTarget(pid: configuration.pid)
-        try target.waitUntilFrontmost()
-        guard running.isActive else {
-            throw HarnessFailure.targetIdentity("target app is not frontmost")
-        }
+        let activationEvidence = try TargetForegroundOwnership(
+            expected: .init(
+                processIdentifier: configuration.pid,
+                bundleIdentifier: expectedBundleIdentifier,
+                bundleURL: expectedURL
+            ),
+            application: running,
+            accessibility: target
+        ).establish()
+        try ledger?.pass(
+            "activation",
+            "bundle=\(expectedBundleIdentifier) path=\(actualURL.path) "
+                + activationEvidence.ledgerDetail
+        )
         guard target.windows().isEmpty == false else {
             throw HarnessFailure.targetIdentity("target app exposes no AX windows")
         }

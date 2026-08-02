@@ -187,7 +187,7 @@ if [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
   done
   exit 1
 fi
-for step in arguments process exit-observer permissions target e2e-window e2e-remove-buttons complete; do
+for step in arguments process exit-observer permissions activation target e2e-window e2e-remove-buttons complete; do
   if [[ "$(awk -F $'\t' -v step="$step" '$2 == "PASS" && $3 == step { count += 1 } END { print count + 0 }' "$ledger_path")" != "1" ]]; then
     echo "E2E AX helper ledger lost unique step: $step" >&2
     exit 1
@@ -195,6 +195,19 @@ for step in arguments process exit-observer permissions target e2e-window e2e-re
 done
 if ! grep -F $'\tPASS\tpermissions\tAXIsProcessTrusted=true CGPreflightPostEventAccess=true' \
   "$ledger_path" >/dev/null 2>&1 ||
+  ! awk -F $'\t' -v app="$target_app" -v target_pid="$target_pid" '
+    $2 == "PASS" && $3 == "activation" {
+      prefix = "bundle=app.noonmark.mac.e2e path=" app \
+        " process_identifier=" target_pid " "
+      detail = substr($4, length(prefix) + 1)
+      if (index($4, prefix) == 1 &&
+          detail ~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
+        valid += 1
+      }
+      count += 1
+    }
+    END { exit !(count == 1 && valid == 1) }
+  ' "$ledger_path" ||
   ! grep -F $'\tPASS\te2e-remove-buttons\tcount=2 unique=true ' \
     "$ledger_path" >/dev/null 2>&1; then
   echo "E2E AX helper did not prove trusted unique remove buttons" >&2

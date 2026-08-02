@@ -92,6 +92,9 @@ run_check_suite() {
   echo "==> DMG evidence contract"
   scripts/test-dmg-evidence-contract
 
+  echo "==> DMG foreground ownership contract"
+  scripts/test-dmg-foreground-ownership-contract
+
   echo "==> DMG window identity contract"
   scripts/test-dmg-window-identity-contract
 

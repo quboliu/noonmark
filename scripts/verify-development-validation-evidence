@@ -553,6 +553,29 @@ require_install_task_identity() {
   fi
 }
 
+require_install_activation_semantics() {
+  local mode="$1"
+  local ledger_path="$2"
+  local app_path="$3"
+  local expected_pid="$4"
+  local detail
+  local prefix
+  local state_detail
+
+  detail="$(awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path")"
+  prefix="bundle=app.noonmark.mac.dmg-validation path=$app_path process_identifier=$expected_pid "
+  if [[ "$detail" != "$prefix"* ]]; then
+    echo "DMG install $mode ledger has an invalid foreground ownership proof" >&2
+    return 1
+  fi
+  state_detail="${detail#"$prefix"}"
+  if [[ ! "$expected_pid" =~ ^[1-9][0-9]*$ ]] ||
+    [[ ! "$state_detail" =~ ^process_start_tvsec=[1-9][0-9]*[[:space:]]process_start_tvusec=[0-9]{1,6}[[:space:]]activation_policy=regular[[:space:]]request_accepted=true[[:space:]]active_before=(true|false)[[:space:]]ax_frontmost_before=(true|false)[[:space:]]active_after=true[[:space:]]ax_frontmost_after=true$ ]]; then
+    echo "DMG install $mode ledger has an invalid foreground ownership state" >&2
+    return 1
+  fi
+}
+
 require_install_ledger_semantics() {
   local mode="$1"
   local path="$2"
@@ -669,6 +692,9 @@ require_install_ledger_semantics() {
       return 1
     fi
     app_path="$expected_bundle_path"
+    require_install_activation_semantics \
+      "$mode" "$path" "$app_path" "$argument_pid" ||
+      return 1
     if [[ "$(awk -F $'\t' '$3 == "target" { print $4 }' "$path")" != \
       "bundle=app.noonmark.mac.dmg-validation path=$app_path frontmost=true windows=1" ]]; then
       echo "DMG install diagnostic-export ledger has an invalid target proof" >&2
@@ -717,6 +743,9 @@ require_install_ledger_semantics() {
     return 1
   fi
   app_path="${BASH_REMATCH[2]}"
+  require_install_activation_semantics \
+    "$mode" "$path" "$app_path" "${BASH_REMATCH[1]}" ||
+    return 1
   if [[ "$(awk -F $'\t' '$3 == "target" { print $4 }' "$path")" != \
     "bundle=app.noonmark.mac.dmg-validation path=$app_path frontmost=true windows=1" ]]; then
     echo "DMG install $mode ledger has an invalid target proof" >&2
@@ -1919,11 +1948,11 @@ require_install_ledger_semantics \
 require_install_ledger_semantics \
   exercise \
   "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
-  "arguments,process,exit-observer,permissions,target,main-window,settings-menu,settings-window,settings-close,quick-entry-menu,quick-entry-input,quick-entry-add,exercise-title-visible,quit-menu,quit,complete"
+  "arguments,process,exit-observer,permissions,activation,target,main-window,settings-menu,settings-window,settings-close,quick-entry-menu,quick-entry-input,quick-entry-add,exercise-title-visible,quit-menu,quit,complete"
 require_install_ledger_semantics \
   restart \
   "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
-  "arguments,process,exit-observer,permissions,target,main-window,restart-title-visible,quit-menu,quit,complete"
+  "arguments,process,exit-observer,permissions,activation,target,main-window,restart-title-visible,quit-menu,quit,complete"
 exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
 restart_window_metadata="$repo_root/artifacts/dmg-install/installed-restart-window.txt"
 require_install_window_metadata \
@@ -1960,7 +1989,7 @@ diagnostic_window_title="$(
 require_install_ledger_semantics \
   diagnostic-export \
   "$diagnostic_export_ledger" \
-  "arguments,process,exit-observer,permissions,target,diagnostic-locks-before-export,diagnostic-window,diagnostic-menu,diagnostic-preview,diagnostic-export-ui,diagnostic-locks-after-export,diagnostic-package,complete" \
+  "arguments,process,exit-observer,permissions,activation,target,diagnostic-locks-before-export,diagnostic-window,diagnostic-menu,diagnostic-preview,diagnostic-export-ui,diagnostic-locks-after-export,diagnostic-package,complete" \
   "$installed_bundle_path" \
   "$diagnostic_export_path" \
   "$diagnostic_export_sentinels" \

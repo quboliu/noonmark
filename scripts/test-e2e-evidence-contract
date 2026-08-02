@@ -573,8 +573,8 @@ require_literal scripts/test-e2e "assert_native_command_helper_completion()"
 require_literal scripts/test-e2e "run_native_command_menu_helper()"
 require_literal scripts/test-e2e "run_native_command_surface_exercise()"
 require_literal scripts/test-e2e "e2e-menu-command"
-require_literal scripts/test-e2e 'expected[10] = "completion"'
-require_literal scripts/test-e2e 'expected[11] = "complete"'
+require_literal scripts/test-e2e 'expected[11] = "completion"'
+require_literal scripts/test-e2e 'expected[12] = "complete"'
 require_literal scripts/test-e2e '--e2e-native-command-help-token'
 require_literal scripts/test-e2e '--e2e-native-command-help-completion-url'
 require_literal scripts/test-e2e 'NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands'

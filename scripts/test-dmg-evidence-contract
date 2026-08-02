@@ -581,6 +581,7 @@ cat >"$fixture_root/artifacts/dmg-install/exercise-ledger.tsv" <<EOF
 2026-07-17T00:00:01Z	PASS	process	mode=exercise helper_pid=202 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-FFFFFFFFFFFF
 2026-07-17T00:00:01Z	PASS	exit-observer	helper_pid=202 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-FFFFFFFFFFFF observer=EVFILT_PROC+NOTE_EXITSTATUS
 2026-07-17T00:00:01Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:01Z	PASS	activation	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app process_identifier=201 process_start_tvsec=1800000000 process_start_tvusec=123456 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true
 2026-07-17T00:00:01Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:01Z	PASS	main-window	native AXWindow is visible
 2026-07-17T00:00:01Z	PASS	settings-menu	title=设置… shortcut=Command-,
@@ -599,6 +600,7 @@ cat >"$fixture_root/artifacts/dmg-install/restart-ledger.tsv" <<EOF
 2026-07-17T00:00:02Z	PASS	process	mode=restart helper_pid=302 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-111111111111
 2026-07-17T00:00:02Z	PASS	exit-observer	helper_pid=302 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-111111111111 observer=EVFILT_PROC+NOTE_EXITSTATUS
 2026-07-17T00:00:02Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:02Z	PASS	activation	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app process_identifier=301 process_start_tvsec=1800000001 process_start_tvusec=234567 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true
 2026-07-17T00:00:02Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:02Z	PASS	main-window	native AXWindow is visible
 2026-07-17T00:00:02Z	PASS	restart-title-visible	title=dmgvalidationtask visibleAXMatches=1
@@ -897,6 +899,7 @@ cat >"$diagnostic_ledger" <<EOF
 2026-07-17T00:00:04Z	PASS	process	mode=diagnostic-export helper_pid=502 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
 2026-07-17T00:00:04Z	PASS	exit-observer	helper_pid=502 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222 observer=EVFILT_PROC+NOTE_EXITSTATUS
 2026-07-17T00:00:04Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
+2026-07-17T00:00:04Z	PASS	activation	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app process_identifier=501 process_start_tvsec=1800000002 process_start_tvusec=345678 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true
 2026-07-17T00:00:04Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:04Z	PASS	diagnostic-locks-before-export	sqlite_writer=busy repository_flock=would-block held=true
 2026-07-17T00:00:04Z	PASS	diagnostic-window	window_number=403 frame=(0.0, 0.0, 1280.0, 800.0) focused=true exact=true
@@ -2181,7 +2184,41 @@ cp "$exercise_ledger_pristine" "$exercise_ledger"
 cp "$install_inventory_pristine" "$install_inventory"
 cp "$install_manifest_pristine" "$install_manifest"
 
-sed -i '' 's/pid=201/pid=999999/g' "$exercise_ledger" "$exercise_window"
+sed -i '' '/\tactivation\t/d' "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  missing-foreground-ownership \
+  "DMG install exercise ledger has an incomplete or reordered phase set"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/active_after=true ax_frontmost_after=true/active_after=false ax_frontmost_after=true/' \
+  "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  unilateral-foreground-ownership \
+  "DMG install exercise ledger has an invalid foreground ownership state"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/process_identifier=201/process_identifier=777777/' \
+  "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  replayed-foreground-ownership-pid \
+  "DMG install exercise ledger has an invalid foreground ownership proof"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  -e 's/pid=201/pid=999999/g' \
+  -e 's/process_identifier=201/process_identifier=999999/g' \
+  "$exercise_ledger" "$exercise_window"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
 refresh_install_manifest_binding \
   "artifacts/dmg-install/installed-exercise-window.txt"
@@ -2195,6 +2232,7 @@ cp "$install_manifest_pristine" "$install_manifest"
 
 sed -i '' \
   -e 's/pid=201/pid=901/g' \
+  -e 's/process_identifier=201/process_identifier=901/g' \
   -e 's/NoonmarkMacAppDMGValidation\[201:/NoonmarkMacAppDMGValidation[901:/g' \
   "$exercise_ledger" "$exercise_window" "$exercise_console"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
@@ -2302,6 +2340,8 @@ cp "$install_manifest_pristine" "$install_manifest"
 
 sed -i '' \
   -e 's#pid=201 app=[^[:space:]]*#pid=999999 app=/tmp/forged/Applications/NoonmarkDMGValidation.app#' \
+  -e 's#process_identifier=201#process_identifier=999999#' \
+  -e 's#path=[^[:space:]]* process_identifier=#path=/tmp/forged/Applications/NoonmarkDMGValidation.app process_identifier=#' \
   -e 's#path=[^[:space:]]* frontmost=true#path=/tmp/forged/Applications/NoonmarkDMGValidation.app frontmost=true#' \
   "$exercise_ledger"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"

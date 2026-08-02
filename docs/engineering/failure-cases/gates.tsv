@@ -11,3 +11,6 @@ FAIL-2026-08-01-03	fast	scripts/test-dmg-validation-derivation-contract	scripts/
 FAIL-2026-08-01-03	fast	scripts/test-dmg-evidence-contract	scripts/check	交叉核对菜单身份、失败 manifest 三元组与篡改注入
 FAIL-2026-08-01-03	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实 AX 菜单、物理输入与 App 内退出路径
 FAIL-2026-08-01-03	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的退出、进程消失、重启、持久化与诊断导出
+FAIL-2026-08-01-04	fast	scripts/test-dmg-foreground-ownership-contract	scripts/check	精确身份前置、单一激活请求、AppKit 与 AX 双信号及 ledger 对账
+FAIL-2026-08-01-04	symptom	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 在真实菜单与物理输入前建立并证明前台所有权
+FAIL-2026-08-01-04	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的签名派生、前台协议、退出、重启、持久化与完整清单

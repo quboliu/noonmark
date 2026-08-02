@@ -2283,6 +2283,7 @@ assert_helper_completed() {
   local exit_result_path="$7"
   local helper_pid="$8"
   local token="$9"
+  local target_pid="${10:-}"
   local last_line=""
   local timestamp status step detail
   local required_step step_count step_line previous_step_line=0
@@ -2338,6 +2339,7 @@ assert_helper_completed() {
         process
         exit-observer
         permissions
+        activation
         target
         main-window
         settings-menu
@@ -2357,6 +2359,7 @@ assert_helper_completed() {
         process
         exit-observer
         permissions
+        activation
         target
         main-window
         restart-title-visible
@@ -2370,6 +2373,7 @@ assert_helper_completed() {
         process
         exit-observer
         permissions
+        activation
         target
         diagnostic-locks-before-export
         diagnostic-window
@@ -2411,6 +2415,28 @@ assert_helper_completed() {
       END { exit !(process_count == 1 && observer_count == 1) }
     ' "$ledger_path"; then
     echo "DMG install harness process or exit-observer identity detail was invalid" >&2
+    return 1
+  fi
+
+  if [[ "$mode" != "preflight" ]] &&
+    ! awk -F $'\t' \
+      -v app="$installed_app" \
+      -v target_pid="$target_pid" '
+        $2 == "PASS" && $3 == "activation" {
+          count += 1
+          prefix = "bundle=app.noonmark.mac.dmg-validation path=" app \
+            " process_identifier=" target_pid " "
+          detail = substr($4, length(prefix) + 1)
+          if (index($4, prefix) == 1 &&
+              detail ~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
+            valid += 1
+          }
+        }
+        END {
+          exit !(target_pid ~ /^[1-9][0-9]*$/ && count == 1 && valid == 1)
+        }
+      ' "$ledger_path"; then
+    echo "DMG install harness did not prove exact-process foreground ownership in $mode mode" >&2
     return 1
   fi
 
@@ -2623,7 +2649,8 @@ run_helper() {
     "$observer_log_path" \
     "$exit_result_path" \
     "$helper_pid" \
-    "$token"; then
+    "$token" \
+    "$pid"; then
     dump_helper_evidence \
       "$ledger_path" \
       "$helper_log_path" \

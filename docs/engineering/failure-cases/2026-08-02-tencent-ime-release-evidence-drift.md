@@ -1,13 +1,13 @@
 # FAIL-2026-08-02-08：腾讯输入发行证据入口漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-02T12:37:19Z
 - 影响版本／构建：Noonmark 0.1.1（4），source commit `3329b8cd0bafe7e5f383e9903698eae1f12be9f4`
 - 引入提交：`811064550340390606ff5b514b9e248b20ae2bc9`（`test(release): 固化故障案例回归门禁`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能单独证明实际操作者
-- 修复提交：待回填
+- 修复提交：`d9aeb8d0a1a384156c5982a96cdb7ffd9135c3dd`（`fix(test): 消除腾讯输入 smoke 漂移`；根因方案见父提交 `9e8b774b3e7aac198e786f48af18937ca3489ced`）
 - Task-ID：noonmark-cloud-sync-debug
 
 ## 用户症状与影响
@@ -48,9 +48,9 @@
 ## 验证结果
 
 - 原始真实 symptom：完整矩阵 51／53；失败已按细分时序记录，未被忽略或重试掩盖。
-- 定点真实 symptom：两个受影响输入面合共三轮均通过；release smoke 首次执行还以 view-tree 证实腾讯拼音候选不可固定，且 marked-text 与提交文本属于不同 AppKit 表示；smoke 只对账产品可控制的最终编辑器文本、退出和重启回读。完整质量矩阵会在 scheduled／manual runner 继续保留该覆盖。
-- Fast：`scripts/test-release-gate-contract` 和 `scripts/test-tencent-ime-input-contract` 已在实现中转绿；仍待最终 `scripts/check`。
-- Release：待修复提交后的 `scripts/test-tencent-ime-release-smoke release` 与 `scripts/release-private-dmg` 转绿。
+- 定点真实 symptom：两个受影响输入面合共三轮均通过；修复后的 release smoke 已用真实腾讯拼音通过 Day Todo 标题组合提交、自动保存 pending 时即时退出、App 与 SQLite 重启回读；本次退出请求在最终文本回显后 1.217ms 发出，`failure_retry=false`、两项 readback 均为 `true`。完整质量矩阵会在 scheduled／manual runner 继续保留该覆盖。
+- Fast：`NOONMARK_EVIDENCE_RUN_ID=release-20260802-d9aeb8d-fast scripts/check` 于 2026-08-02T18:05:16Z 通过（退出码 0）；包含 `scripts/test-release-gate-contract`、`scripts/test-tencent-ime-input-contract` 和 failure-case 映射校验，起止 source commit／tree 均为 `d9aeb8d0a1a384156c5982a96cdb7ffd9135c3dd`／`1ecbf74c45ff773a01d9541e11dc1a310cf9b1a9`。
+- Release：`scripts/test-tencent-ime-release-smoke release` 已在修复提交上转绿；正式 DMG 将在合并到 `main` 后从该精确源码按 `scripts/release-private-dmg` 再次执行并留存发行证据。
 
 ## 永久门禁
 

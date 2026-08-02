@@ -18,7 +18,7 @@ cat >"$source_app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleDisplayName</key><string>Noonmark</string>
+<key>CFBundleDisplayName</key><string>晷迹</string>
 <key>CFBundleExecutable</key><string>NoonmarkMacApp</string>
 <key>CFBundleIdentifier</key><string>app.noonmark.mac</string>
 <key>CFBundleName</key><string>Noonmark</string>
@@ -91,6 +91,21 @@ read_evidence() {
     "$evidence_fragment"
 }
 
+validation_bundle_name="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleName' \
+    "$validation_app/Contents/Info.plist"
+)"
+validation_display_name="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' \
+    "$validation_app/Contents/Info.plist"
+)"
+
+if [[ "$validation_bundle_name" != "Noonmark" ||
+  "$validation_display_name" != "晷迹" ]]; then
+  echo "DMG validation derivation changed the production menu identity" >&2
+  exit 1
+fi
+
 if [[ "$source_sha256_before" != "$source_sha256_after" ]] ||
   [[ "$(read_evidence validation_derivation_source_binary_sha256)" != \
     "$source_sha256_before" ]] ||
@@ -100,7 +115,7 @@ if [[ "$source_sha256_before" != "$source_sha256_after" ]] ||
   [[ "$(read_evidence validation_signed_binary_sha256)" != \
     "$validation_sha256" ]] ||
   [[ "$(read_evidence validation_derivation_allowed_delta)" != \
-    "bundle-identifier,executable-name,bundle-name,display-name,code-signature" ]] ||
+    "bundle-identifier,executable-name,code-signature" ]] ||
   [[ "$(read_evidence validation_derivation_pre_sign_uuid_set)" != \
     "arm64:AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE" ]] ||
   [[ "$(read_evidence validation_signed_binary_uuid_set)" != \

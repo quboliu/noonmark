@@ -1193,13 +1193,16 @@ if [[ "$scope" == "full" ]]; then
     "validation_bundle_identifier=app.noonmark.mac.dmg-validation" \
     "validation_data_directory_name=noonmark-dmg-validation" \
     "validation_icloud_repository=Noonmark-DMGValidation/SyncRepository" \
-    "validation_derivation_allowed_delta=bundle-identifier,executable-name,bundle-name,display-name,code-signature" \
+    "validation_derivation_allowed_delta=bundle-identifier,executable-name,code-signature" \
     "validation_source_linked_binary_sha256_scope=linked-before-bundle-signing" \
     "validation_app_executed=true" \
     "installed_app_binary_unchanged=true" \
     "installed_app_signature_unchanged=true" \
     "helper_binary_unchanged=true" \
     "helper_signature_unchanged=true" \
+    "window_identity_failure_evidence_present=false" \
+    "window_identity_failure_evidence_path=none" \
+    "window_identity_failure_evidence_sha256=none" \
     "release_symbols_unchanged=true" \
     "release_identity_provenance_unchanged=true" \
     "diagnostic_diff_status=clean" \
@@ -1212,6 +1215,24 @@ if [[ "$scope" == "full" ]]; then
     "diagnostic_export_sentinels_absent=true" \
     "diagnostic_export_owner_only=true" \
     "diagnostic_export_path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+
+  production_info_plist="$repo_root/dist/Noonmark.app/Contents/Info.plist"
+  validation_info_plist="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/Info.plist"
+  for menu_identity_key in CFBundleName CFBundleDisplayName; do
+    if ! production_menu_identity="$(
+      /usr/libexec/PlistBuddy \
+        -c "Print :${menu_identity_key}" \
+        "$production_info_plist"
+    )" || ! validation_menu_identity="$(
+      /usr/libexec/PlistBuddy \
+        -c "Print :${menu_identity_key}" \
+        "$validation_info_plist"
+    )" || [[ -z "$production_menu_identity" ||
+      "$validation_menu_identity" != "$production_menu_identity" ]]; then
+      echo "DMG validation App changed production menu identity: $menu_identity_key" >&2
+      exit 1
+    fi
+  done
 fi
 
 current_source_fragment="$(

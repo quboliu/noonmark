@@ -23,6 +23,7 @@
 - 2026-08-01：同一活跃窗口、同一调用进程和同一时刻完成两个 API 的对照取证；Kimi K3 独立审查修复方案。
 - 2026-08-01：双审查发现首版未提交修复仍在 E2E 与 DMG shell 脚本复制四处查询实现；按 K3 的共享组件要求收敛为 test-only `NoonmarkWindowProbe`，脚本不再直接调用 CoreGraphics 查询。
 - 2026-08-01：阶段证据 writer 的首个注入测试判红；原因是 rename 后合法变化的 ctime 被错误地与 rename 前快照比较。实现改为 rename 后同时复核仍打开的 descriptor 与最终路径，测试转绿；该缺陷从未进入 commit 或发行物。
+- 2026-08-01：实现提交 `217df19607105472942b9e3d791e8f857bb6161f` 后的 standards 定点复核发现两项证据缺口：递归 `find` 的实际 process-substitution 退出码未观察，以及失败文件虽然写入 manifest，但 fixture 只检查源码字串、未核对真实路径与 SHA。两项均先补行为注入再修复；真实 release gate 仍待重跑，案例继续保持「处理中」。
 
 ## 复现与证据
 
@@ -65,6 +66,7 @@ scripts/test-dmg-install dist/Noonmark.dmg
 - 已实施、待真实门禁确认：继续强制 query count、returned ID、PID、title、layer、onscreen 和 bounds 校验；若未来 OS 行为漂移则 fail-closed，并输出固定 typed stage，不落盘自由文本。
 - 已实施、待真实门禁确认：静态合同约束 exact ID 来源与调用所有权，禁止 `optionAll`、`optionOnScreenOnly`、above／below、`kCGNullWindowID` 和已知失效 API，并对源码扫描错误 fail-closed。
 - 已实施、待真实门禁确认：失败产物记录 response 是否出现、是否通过 canonical validation，以及 WindowServer 复核的安全阶段码；文件以 descriptor-bound 临时文件、`RENAME_EXCL`、`fsync` 和 `0600` 原子发布，不覆写既有文件，不写用户内容。
+- 已实施、待真实门禁确认：递归 App 文件清单先完整落入受控临时 inventory 并检查 producer 退出码，再逐项检查改名 Mach-O；失败证据 fixture 使用与 cleanup 相同的 manifest binder，核对实际 SHA、路径和非零闭合状态。
 
 ## 验证结果
 

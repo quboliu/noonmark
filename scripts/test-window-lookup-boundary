@@ -192,5 +192,13 @@ if "$verifier" dmg-staging-root "$staging_root" \
   echo "DMG staging boundary accepted the test-only window probe" >&2
   exit 1
 fi
+rm -f "$staging_root/Noonmark.app/Contents/Resources/window-metadata"
+
+if NOONMARK_WINDOW_BOUNDARY_INJECT_APP_FIND_FAILURE=1 \
+  "$verifier" dmg-staging-root "$staging_root" \
+  >/dev/null 2>&1; then
+  echo "DMG staging boundary ignored an incomplete App file enumeration" >&2
+  exit 1
+fi
 
 echo "Window lookup binary boundary passed"

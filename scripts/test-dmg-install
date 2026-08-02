@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Synthetic contract probes dispatch before repository setup so they cannot
-# inspect or reset any signed runtime profile.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd -P)"
+cd "$repo_root"
+# shellcheck source=scripts/evidence-common
+source scripts/evidence-common
+
+# Synthetic contract probes dispatch before runtime-profile setup so they
+# cannot inspect or reset any signed runtime profile.
 dmg_window_identity_read_response() {
   local runtime_evidence_root="$1"
   local launch_token="$2"
@@ -762,6 +768,85 @@ else { fail() }
 '
 }
 
+dmg_window_identity_bind_failure_evidence() {
+  local manifest="$1"
+  local evidence_path="$2"
+  local evidence_relative="$3"
+  local original_status="$4"
+  local evidence_present=false
+  local manifest_path=none
+  local evidence_sha256=none
+  local evidence_mode=""
+  local evidence_owner=""
+  local evidence_links=""
+  local binding_status=0
+
+  if [[ "$evidence_relative" != \
+      "artifacts/dmg-install/window-identity-failure.txt" ||
+    ! "$original_status" =~ ^[0-9]+$ ]]; then
+    echo "invalid window failure evidence manifest binding input" >&2
+    return 1
+  fi
+
+  if [[ -L "$evidence_path" ]] ||
+    { [[ -e "$evidence_path" ]] && [[ ! -f "$evidence_path" ]]; }; then
+    echo "window failure evidence is not a regular non-symlink file" >&2
+    evidence_present=true
+    manifest_path="$evidence_relative"
+    evidence_sha256=invalid
+    binding_status=1
+  elif [[ -f "$evidence_path" ]]; then
+    evidence_present=true
+    manifest_path="$evidence_relative"
+    if ! evidence_mode="$(stat -f '%Lp' "$evidence_path")" ||
+      ! evidence_owner="$(stat -f '%u' "$evidence_path")" ||
+      ! evidence_links="$(stat -f '%l' "$evidence_path")" ||
+      [[ "$evidence_mode" != "600" ||
+        "$evidence_owner" != "$(id -u)" ||
+        "$evidence_links" != "1" ]] ||
+      ! awk '
+        NR == 1 && $0 != "evidence_schema_version=1" { exit 1 }
+        NR == 2 && $0 != "profile=dmg-validation" { exit 1 }
+        NR == 3 && $0 !~ /^app_running=(true|false)$/ { exit 1 }
+        NR == 4 && $0 !~ /^response_seen=(true|false)$/ { exit 1 }
+        NR == 5 && $0 !~ /^response_validated=(true|false)$/ { exit 1 }
+        NR == 6 && $0 !~ /^windowserver_verification=(invalid-input|not-attempted|query-unavailable|query-empty|window-number-mismatch|owner-pid-mismatch|title-mismatch|layer-mismatch|onscreen-mismatch|bounds-missing|width-below-minimum|height-below-minimum|snapshot-invalid|probe-failure|unknown-failure|query-count-[0-9]+)$/ { exit 1 }
+        END { exit !(NR == 6) }
+      ' "$evidence_path"; then
+      echo "window failure evidence failed its final schema or identity check" >&2
+      evidence_sha256=invalid
+      binding_status=1
+    else
+      evidence_sha256="$(
+        shasum -a 256 "$evidence_path" | awk '{print $1}'
+      )"
+      if [[ ! "$evidence_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+        evidence_sha256=invalid
+        binding_status=1
+      fi
+    fi
+    if [[ "$original_status" -eq 0 ]]; then
+      echo "successful DMG validation left stale window failure evidence" >&2
+      binding_status=1
+    fi
+  fi
+
+  evidence_append \
+    "$manifest" \
+    "window_identity_failure_evidence_present" \
+    "$evidence_present" || binding_status=1
+  evidence_append \
+    "$manifest" \
+    "window_identity_failure_evidence_path" \
+    "$manifest_path" || binding_status=1
+  evidence_append \
+    "$manifest" \
+    "window_identity_failure_evidence_sha256" \
+    "$evidence_sha256" || binding_status=1
+
+  return "$binding_status"
+}
+
 if [[ "${1:-}" == "--verify-window-identity-fixture" ]]; then
   if [[ "$#" -ne 6 ]]; then
     echo "usage: scripts/test-dmg-install --verify-window-identity-fixture ROOT TOKEN PID BUNDLE TITLE" >&2
@@ -779,12 +864,30 @@ if [[ "${1:-}" == "--prepare-window-identity-fixture" ]]; then
   exit $?
 fi
 if [[ "${1:-}" == "--record-window-failure-fixture" ]]; then
+  fixture_failure_manifest=""
   if [[ "$#" -ne 6 ]]; then
     echo "usage: scripts/test-dmg-install --record-window-failure-fixture ROOT APP_RUNNING RESPONSE_SEEN RESPONSE_VALIDATED VERIFICATION" >&2
     exit 64
   fi
   dmg_window_identity_write_failure_evidence \
     "$2" "$3" "$4" "$5" "$6" fixture
+  fixture_failure_manifest="$2/window-failure-runtime-manifest.txt"
+  if [[ -e "$fixture_failure_manifest" || -L "$fixture_failure_manifest" ]] ||
+    ! (umask 077 && : >"$fixture_failure_manifest"); then
+    echo "window failure manifest fixture destination was unsafe" >&2
+    exit 1
+  fi
+  dmg_window_identity_bind_failure_evidence \
+    "$fixture_failure_manifest" \
+    "$2/window-identity-failure.txt" \
+    "artifacts/dmg-install/window-identity-failure.txt" \
+    1
+  evidence_finish_manifest \
+    "$fixture_failure_manifest" \
+    1 \
+    window_identity_failure_evidence_present \
+    window_identity_failure_evidence_path \
+    window_identity_failure_evidence_sha256
   exit $?
 fi
 
@@ -792,14 +895,8 @@ fi
 # designated requirement so its one-time TCC authorization survives rebuilds.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-cd "$repo_root"
-
 source scripts/runtime-evidence
 source scripts/dmg-install-observer-common
-# shellcheck source=scripts/evidence-common
-source scripts/evidence-common
 # shellcheck source=scripts/runtime-profile-common
 source scripts/runtime-profile-common
 
@@ -1413,12 +1510,6 @@ cleanup() {
   local diagnostic_inventory_digest=""
   local diagnostic_inventory_size=""
   local diagnostic_inventory_relative=""
-  local window_failure_evidence_present=false
-  local window_failure_evidence_relative=none
-  local window_failure_evidence_sha256=none
-  local window_failure_mode=""
-  local window_failure_owner=""
-  local window_failure_links=""
 
   trap - EXIT
   set +e
@@ -1596,64 +1687,13 @@ cleanup() {
       "$runtime_manifest_path" \
       "window_probe_binary_unchanged" \
       "$window_probe_unchanged"
-    if [[ -L "$window_failure_evidence_path" ]] ||
-      { [[ -e "$window_failure_evidence_path" ]] &&
-        [[ ! -f "$window_failure_evidence_path" ]]; }; then
-      echo "window failure evidence is not a regular non-symlink file" >&2
-      window_failure_evidence_present=true
-      window_failure_evidence_relative="artifacts/dmg-install/window-identity-failure.txt"
-      window_failure_evidence_sha256=invalid
+    if ! dmg_window_identity_bind_failure_evidence \
+      "$runtime_manifest_path" \
+      "$window_failure_evidence_path" \
+      "artifacts/dmg-install/window-identity-failure.txt" \
+      "$original_status"; then
       final_status=1
-    elif [[ -f "$window_failure_evidence_path" ]]; then
-      window_failure_evidence_present=true
-      window_failure_evidence_relative="artifacts/dmg-install/window-identity-failure.txt"
-      if ! window_failure_mode="$(
-        stat -f '%Lp' "$window_failure_evidence_path"
-      )" || ! window_failure_owner="$(
-        stat -f '%u' "$window_failure_evidence_path"
-      )" || ! window_failure_links="$(
-        stat -f '%l' "$window_failure_evidence_path"
-      )" || [[ "$window_failure_mode" != "600" ||
-        "$window_failure_owner" != "$(id -u)" ||
-        "$window_failure_links" != "1" ]] ||
-        ! awk '
-          NR == 1 && $0 != "evidence_schema_version=1" { exit 1 }
-          NR == 2 && $0 != "profile=dmg-validation" { exit 1 }
-          NR == 3 && $0 !~ /^app_running=(true|false)$/ { exit 1 }
-          NR == 4 && $0 !~ /^response_seen=(true|false)$/ { exit 1 }
-          NR == 5 && $0 !~ /^response_validated=(true|false)$/ { exit 1 }
-          NR == 6 && $0 !~ /^windowserver_verification=(invalid-input|not-attempted|query-unavailable|query-empty|window-number-mismatch|owner-pid-mismatch|title-mismatch|layer-mismatch|onscreen-mismatch|bounds-missing|width-below-minimum|height-below-minimum|snapshot-invalid|probe-failure|unknown-failure|query-count-[0-9]+)$/ { exit 1 }
-          END { exit !(NR == 6) }
-        ' "$window_failure_evidence_path"; then
-        echo "window failure evidence failed its final schema or identity check" >&2
-        window_failure_evidence_sha256=invalid
-        final_status=1
-      else
-        window_failure_evidence_sha256="$(
-          shasum -a 256 "$window_failure_evidence_path" | awk '{print $1}'
-        )"
-        if [[ ! "$window_failure_evidence_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-          window_failure_evidence_sha256=invalid
-          final_status=1
-        fi
-      fi
-      if [[ "$original_status" -eq 0 ]]; then
-        echo "successful DMG validation left stale window failure evidence" >&2
-        final_status=1
-      fi
     fi
-    evidence_append \
-      "$runtime_manifest_path" \
-      "window_identity_failure_evidence_present" \
-      "$window_failure_evidence_present"
-    evidence_append \
-      "$runtime_manifest_path" \
-      "window_identity_failure_evidence_path" \
-      "$window_failure_evidence_relative"
-    evidence_append \
-      "$runtime_manifest_path" \
-      "window_identity_failure_evidence_sha256" \
-      "$window_failure_evidence_sha256"
     if [[ -f "$app_diagnostic_baseline" &&
       -f "$app_diagnostic_final" &&
       -f "$app_diagnostic_diff" &&
@@ -1820,9 +1860,10 @@ cleanup() {
         final_status=1
       fi
     fi
-    if ! evidence_finish_manifest \
-      "$runtime_manifest_path" \
-      "$final_status" \
+    if [[ "$final_status" -eq 0 ]]; then
+      if ! evidence_finish_manifest \
+        "$runtime_manifest_path" \
+        "$final_status" \
       "source_worktree_tree_oid" \
       "source_end_worktree_tree_oid" \
       "mounted_app_binary_sha256" \
@@ -1901,6 +1942,26 @@ cleanup() {
       "helper_binary_unchanged" \
       "helper_signature_unchanged" \
       "window_probe_binary_sha256" \
+      "window_probe_binary_unchanged" \
+      "window_identity_failure_evidence_present" \
+      "window_identity_failure_evidence_path" \
+        "window_identity_failure_evidence_sha256" \
+        "diagnostic_diff_status"; then
+        final_status=1
+      fi
+    elif ! evidence_finish_manifest \
+      "$runtime_manifest_path" \
+      "$final_status" \
+      "source_worktree_tree_oid" \
+      "production_bundle_identifier" \
+      "production_app_executed" \
+      "validation_bundle_identifier" \
+      "validation_data_directory_name" \
+      "validation_icloud_repository" \
+      "window_probe_binary_sha256" \
+      "source_tree_unchanged" \
+      "installed_app_binary_unchanged" \
+      "helper_binary_unchanged" \
       "window_probe_binary_unchanged" \
       "window_identity_failure_evidence_present" \
       "window_identity_failure_evidence_path" \
@@ -3751,7 +3812,7 @@ if [[ "$validation_derivation_source_binary_sha256" != \
     "linked-before-bundle-signing" ||
   "$validation_source_linked_binary_uuid_set" != "$package_binary_uuid_set" ||
   "$validation_derivation_allowed_delta" != \
-    "bundle-identifier,executable-name,bundle-name,display-name,code-signature" ]]; then
+    "bundle-identifier,executable-name,code-signature" ]]; then
   echo "derived validation App is not bound to the mounted production binary and release identity" >&2
   exit 1
 fi

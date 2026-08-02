@@ -555,12 +555,6 @@ mv \
 /usr/libexec/PlistBuddy \
   -c 'Set :CFBundleExecutable NoonmarkMacAppDMGValidation' \
   "$fixture_validation_app/Contents/Info.plist"
-/usr/libexec/PlistBuddy \
-  -c 'Set :CFBundleName NoonmarkDMGValidation' \
-  "$fixture_validation_app/Contents/Info.plist"
-/usr/libexec/PlistBuddy \
-  -c 'Set :CFBundleDisplayName Noonmark DMG Validation' \
-  "$fixture_validation_app/Contents/Info.plist"
 printf 'fixture-validation-signature\n' \
   >>"$fixture_validation_app/Contents/MacOS/NoonmarkMacAppDMGValidation"
 cp -R \
@@ -817,7 +811,7 @@ validation_fixture_binary="$(
     awk '{print $1}'
 )"
 cat >"$fixture_root/artifacts/dmg-install/dmg-validation-derivation.fragment" <<EOF
-validation_derivation_allowed_delta=bundle-identifier,executable-name,bundle-name,display-name,code-signature
+validation_derivation_allowed_delta=bundle-identifier,executable-name,code-signature
 validation_derivation_source_binary_sha256=$app_binary_sha256
 validation_derivation_pre_sign_binary_sha256=$app_binary_sha256
 validation_derivation_pre_sign_uuid_set=$release_symbols_binary_uuid_set
@@ -1263,7 +1257,7 @@ validation_bundle_identifier=app.noonmark.mac.dmg-validation
 validation_executable=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation
 validation_data_directory_name=noonmark-dmg-validation
 validation_icloud_repository=Noonmark-DMGValidation/SyncRepository
-validation_derivation_allowed_delta=bundle-identifier,executable-name,bundle-name,display-name,code-signature
+validation_derivation_allowed_delta=bundle-identifier,executable-name,code-signature
 validation_derivation_source_binary_sha256=$app_binary_sha256
 validation_derivation_pre_sign_binary_sha256=$app_binary_sha256
 validation_derivation_pre_sign_uuid_set=$release_symbols_binary_uuid_set
@@ -1334,6 +1328,9 @@ installed_app_binary_unchanged=true
 installed_app_signature_unchanged=true
 helper_binary_unchanged=true
 helper_signature_unchanged=true
+window_identity_failure_evidence_present=false
+window_identity_failure_evidence_path=none
+window_identity_failure_evidence_sha256=none
 release_symbols_unchanged=true
 release_identity_provenance_unchanged=true
 artifact_inventory_sha256=$install_inventory_sha256
@@ -2392,6 +2389,15 @@ expect_install_manifest_mutation_rejected \
 expect_install_manifest_mutation_rejected \
   false-installed-signature-stability \
   's/^installed_app_signature_unchanged=.*/installed_app_signature_unchanged=false/'
+expect_install_manifest_mutation_rejected \
+  missing-window-failure-presence \
+  '/^window_identity_failure_evidence_present=/d'
+expect_install_manifest_mutation_rejected \
+  stale-window-failure-presence \
+  's/^window_identity_failure_evidence_present=.*/window_identity_failure_evidence_present=true/'
+expect_install_manifest_mutation_rejected \
+  forged-window-failure-sha \
+  's/^window_identity_failure_evidence_sha256=.*/window_identity_failure_evidence_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
 expect_install_manifest_mutation_rejected \
   missing-helper-stability \
   '/^helper_binary_unchanged=/d'

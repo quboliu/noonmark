@@ -7,3 +7,7 @@ FAIL-2026-08-01-02	fast	scripts/test-window-lookup-boundary	scripts/check	限制
 FAIL-2026-08-01-02	fast	scripts/test-dmg-window-identity-contract	scripts/check	约束 owner-only handshake、单窗口查询与阶段化失败证据
 FAIL-2026-08-01-02	symptom	scripts/test-e2e	scripts/test-all	真实 E2E 主窗口与辅助窗口 exact-ID WindowServer 复核
 FAIL-2026-08-01-02	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的真实安装、窗口、退出、重启与持久化
+FAIL-2026-08-01-03	fast	scripts/test-dmg-validation-derivation-contract	scripts/test-dmg-evidence-contract	派生 App 只改变隔离必需身份并保留 production 菜单身份
+FAIL-2026-08-01-03	fast	scripts/test-dmg-evidence-contract	scripts/check	交叉核对菜单身份、失败 manifest 三元组与篡改注入
+FAIL-2026-08-01-03	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实 AX 菜单、物理输入与 App 内退出路径
+FAIL-2026-08-01-03	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的退出、进程消失、重启、持久化与诊断导出

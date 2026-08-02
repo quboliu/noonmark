@@ -78,9 +78,16 @@ actual_production_identifier="$(
 production_executable_name="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$production_plist"
 )"
+production_bundle_name="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$production_plist"
+)"
+production_display_name="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$production_plist"
+)"
 production_executable="${production_app}/Contents/MacOS/${production_executable_name}"
 if [[ "$actual_production_identifier" != "$production_bundle_identifier" ||
   "$production_executable_name" != "NoonmarkMacApp" ||
+  -z "$production_bundle_name" || -z "$production_display_name" ||
   ! -x "$production_executable" || -L "$production_executable" ]]; then
   echo "mounted production App is not a safe derivation source" >&2
   exit 1
@@ -125,12 +132,6 @@ mv \
 /usr/libexec/PlistBuddy \
   -c "Set :CFBundleExecutable ${validation_executable_name}" \
   "$validation_plist"
-/usr/libexec/PlistBuddy \
-  -c 'Set :CFBundleName NoonmarkDMGValidation' \
-  "$validation_plist"
-/usr/libexec/PlistBuddy \
-  -c 'Set :CFBundleDisplayName Noonmark DMG Validation' \
-  "$validation_plist"
 
 pre_sign_binary_sha256="$(
   shasum -a 256 "$validation_executable" | awk '{print $1}'
@@ -165,7 +166,11 @@ if [[ "$signed_uuid_set" != "$source_uuid_set" ||
   "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$validation_plist")" != \
     "$validation_bundle_identifier" ||
   "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$validation_plist")" != \
-    "$validation_executable_name" ]]; then
+    "$validation_executable_name" ||
+  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$validation_plist")" != \
+    "$production_bundle_name" ||
+  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$validation_plist")" != \
+    "$production_display_name" ]]; then
   echo "signed validation App lost its controlled derivation identity" >&2
   exit 1
 fi
@@ -173,7 +178,7 @@ fi
 evidence_content="$(mktemp "${TMPDIR:-/tmp}/noonmark-dmg-derivation.XXXXXX")"
 {
   printf 'validation_derivation_allowed_delta=%s\n' \
-    'bundle-identifier,executable-name,bundle-name,display-name,code-signature'
+    'bundle-identifier,executable-name,code-signature'
   printf 'validation_derivation_source_binary_sha256=%s\n' \
     "$source_binary_sha256"
   printf 'validation_derivation_pre_sign_binary_sha256=%s\n' \

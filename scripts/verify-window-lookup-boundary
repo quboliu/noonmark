@@ -4,6 +4,14 @@ set -euo pipefail
 private_symbol="_AXUIElementGetWindow"
 exact_window_symbol="_CGWindowListCopyWindowInfo"
 known_broken_window_symbol="_CGWindowListCreateDescriptionFromArray"
+temporary_app_inventory=""
+
+cleanup() {
+  if [[ -n "$temporary_app_inventory" ]]; then
+    /bin/rm -f -- "$temporary_app_inventory"
+  fi
+}
+trap cleanup EXIT
 
 usage() {
   echo "usage: scripts/verify-window-lookup-boundary <production-binary|helper-binary|probe-binary|dmg-staging-root> <path>" >&2
@@ -66,6 +74,24 @@ contains_private_symbol() {
       exit 1
       ;;
   esac
+}
+
+enumerate_app_files() {
+  local app="$1"
+  local injection="${NOONMARK_WINDOW_BOUNDARY_INJECT_APP_FIND_FAILURE:-0}"
+
+  case "$injection" in
+    0) ;;
+    1)
+      /usr/bin/find -P "$app" -type f -print0
+      return 97
+      ;;
+    *)
+      echo "invalid WindowServer boundary find-failure injection" >&2
+      return 98
+      ;;
+  esac
+  /usr/bin/find -P "$app" -type f -print0
 }
 
 verify_production_binary() {
@@ -176,7 +202,13 @@ verify_dmg_staging_root() {
     exit 1
   fi
   verify_production_binary "$app_binary"
-  if ! /usr/bin/find -P "$app" -type f -print >/dev/null; then
+  temporary_app_inventory="$(
+    mktemp "${TMPDIR:-/tmp}/noonmark-window-boundary-files.XXXXXX"
+  )" || {
+    echo "DMG App inventory staging could not be created" >&2
+    exit 1
+  }
+  if ! enumerate_app_files "$app" >"$temporary_app_inventory"; then
     echo "DMG App contents could not be enumerated" >&2
     exit 1
   fi
@@ -194,7 +226,9 @@ verify_dmg_staging_root() {
       echo "DMG staging contains private SPI material: $entry" >&2
       exit 1
     fi
-  done < <(/usr/bin/find -P "$app" -type f -print0)
+  done <"$temporary_app_inventory"
+  /bin/rm -f -- "$temporary_app_inventory"
+  temporary_app_inventory=""
 }
 
 [[ "$#" -eq 2 ]] || usage

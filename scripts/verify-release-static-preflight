@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/evidence-common
+
+if [[ "$#" -gt 1 ]]; then
+  echo "usage: scripts/verify-release-static-preflight [check-manifest]" >&2
+  exit 64
+fi
+if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
+  echo "release static preflight requires NOONMARK_EVIDENCE_RUN_ID" >&2
+  exit 1
+fi
+
+check_manifest="${1:-artifacts/audit-final/make-check/manifest.txt}"
+check_directory="$(dirname "$check_manifest")"
+check_inventory="$check_directory/artifact-inventory.sha256"
+check_log_relative="$(evidence_read "$check_manifest" check_log_path)"
+if [[ -z "$check_log_relative" || "$check_log_relative" == /* ||
+  "$check_log_relative" == *$'\n'* || "$check_log_relative" == *$'\r'* ]]; then
+  echo "release static preflight contains an unsafe check log path" >&2
+  exit 1
+fi
+case "/$check_log_relative/" in
+  */../* | */./*)
+    echo "release static preflight contains an unsafe check log path" >&2
+    exit 1
+    ;;
+esac
+check_log="$repo_root/$check_log_relative"
+if [[ "$(cd "$(dirname "$check_log")" && pwd -P)" != \
+  "$(cd "$check_directory" && pwd -P)" ||
+  "$(basename "$check_log")" != "make-check.log" ]]; then
+  echo "release static preflight check log escaped its manifest directory" >&2
+  exit 1
+fi
+
+evidence_require_manifest \
+  "$check_manifest" \
+  "evidence_schema_version=1" \
+  "suite=make-check" \
+  "evidence_run_id=$NOONMARK_EVIDENCE_RUN_ID" \
+  "configuration=repository" \
+  "suite_mode=full" \
+  "source_tree_dirty=0" \
+  "source_end_tree_dirty=0" \
+  "suite_exit_status=0"
+require_equal_preflight_value() {
+  local left_key="$1"
+  local right_key="$2"
+  local left
+  local right
+
+  left="$(evidence_read "$check_manifest" "$left_key")"
+  right="$(evidence_read "$check_manifest" "$right_key")"
+  if [[ "$left" != "$right" ]]; then
+    echo "release static preflight source changed during check: $left_key" >&2
+    return 1
+  fi
+}
+require_equal_preflight_value \
+  source_worktree_tree_oid source_end_worktree_tree_oid
+
+current_source="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-release-preflight-source.XXXXXX"
+)"
+trap 'rm -f "$current_source"' EXIT
+evidence_capture_source "$repo_root" current "$current_source"
+for suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
+  if [[ "$(evidence_read "$current_source" "current_${suffix}")" != \
+    "$(evidence_read "$check_manifest" "source_${suffix}")" ]]; then
+    echo "release static preflight does not describe the current source: $suffix" >&2
+    exit 1
+  fi
+done
+
+if [[ "$(shasum -a 256 "$check_log" | awk '{print $1}')" != \
+  "$(evidence_read "$check_manifest" check_log_sha256)" ||
+  "$(shasum -a 256 "$check_inventory" | awk '{print $1}')" != \
+  "$(evidence_read "$check_manifest" artifact_inventory_sha256)" ]]; then
+  echo "release static preflight artifact digest disagrees with its manifest" >&2
+  exit 1
+fi
+evidence_verify_inventory "$repo_root" "$check_inventory"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$check_inventory" \
+  "$check_log" \
+  "$check_directory/source-start.fragment" \
+  "$check_directory/source-end.fragment"
+
+echo "Release static preflight evidence passed"

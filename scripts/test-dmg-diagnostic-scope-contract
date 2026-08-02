@@ -83,6 +83,12 @@ if rg -F 'cat >"$diagnostic_scope_manifest"' \
   scripts/test-dmg-evidence-contract >/dev/null; then
   fail "evidence fixture still hand-writes the diagnostic scope manifest"
 fi
+if rg -n \
+  -e 'artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics\.noonmarkdiagnostics' \
+  -e 'artifacts/dmg-install/diagnostic-export-sentinels\.txt' \
+  scripts/test-dmg-evidence-contract >/dev/null; then
+  fail "evidence fixture still hard-codes a diagnostic scope resource"
+fi
 rg -F 'diagnostic_scope_helper_binary_sha256' \
   scripts/test-dmg-install \
   scripts/verify-development-validation-evidence >/dev/null ||

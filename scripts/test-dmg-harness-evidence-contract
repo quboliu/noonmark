@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/dmg-harness-evidence
+
+fail() {
+  echo "DMG harness evidence contract: $*" >&2
+  exit 1
+}
+
+fixture_root="$(
+  mktemp -d "${TMPDIR:-/tmp}/noonmark-harness-evidence.XXXXXX"
+)"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+
+contract="scripts/dmg-harness-ledger-contract.tsv"
+fixture_helper_pid=501
+fixture_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
+[[ -f "$contract" && ! -L "$contract" ]] ||
+  fail "missing safe ledger contract"
+if ! awk -F $'\t' '
+  NF != 2 || $1 == "" || $2 == "" { exit 1 }
+  { seen[$1] += 1 }
+  END {
+    if (NR != 6) exit 1
+    for (mode in seen) if (seen[mode] != 1) exit 1
+  }
+' "$contract"; then
+  fail "ledger contract is malformed or has duplicate modes"
+fi
+
+for mode in \
+  preflight exercise restart e2e-inspect e2e-menu-command diagnostic-export; do
+  steps="$(dmg_harness_expected_steps "$mode")" ||
+    fail "missing exact steps for $mode"
+  IFS=',' read -r -a step_array <<<"$steps"
+  exact="$fixture_root/$mode-exact.tsv"
+  for step in "${step_array[@]}"; do
+    case "$step" in
+      process)
+        detail="mode=$mode helper_pid=$fixture_helper_pid launch_token=$fixture_token"
+        ;;
+      exit-observer)
+        detail="helper_pid=$fixture_helper_pid launch_token=$fixture_token observer=EVFILT_PROC+NOTE_EXITSTATUS"
+        ;;
+      *)
+        detail="detail=$step"
+        ;;
+    esac
+    printf '2026-08-02T00:00:00Z\tPASS\t%s\t%s\n' \
+      "$step" "$detail" >>"$exact"
+  done
+  dmg_harness_require_exact_steps "$mode" "$exact" ||
+    fail "shared parser rejected the exact $mode protocol"
+  dmg_harness_process_observer_evidence_matches \
+    "$mode" "$exact" "$fixture_helper_pid" "$fixture_token" ||
+    fail "shared parser rejected the exact $mode process identity"
+  if dmg_harness_process_observer_evidence_matches \
+    "$mode" "$exact" 502 "$fixture_token"; then
+    fail "shared parser accepted the wrong $mode process identity"
+  fi
+
+  missing="$fixture_root/$mode-missing.tsv"
+  sed '2d' "$exact" >"$missing"
+  if dmg_harness_require_exact_steps "$mode" "$missing"; then
+    fail "shared parser accepted a missing $mode step"
+  fi
+
+  reordered="$fixture_root/$mode-reordered.tsv"
+  awk 'NR == 1 { first = $0; next } NR == 2 { print; print first; next } { print }' \
+    "$exact" >"$reordered"
+  if dmg_harness_require_exact_steps "$mode" "$reordered"; then
+    fail "shared parser accepted reordered $mode steps"
+  fi
+
+  extra="$fixture_root/$mode-extra.tsv"
+  cp "$exact" "$extra"
+  printf '2026-08-02T00:00:00Z\tPASS\tunexpected\tdetail=unexpected\n' \
+    >>"$extra"
+  if dmg_harness_require_exact_steps "$mode" "$extra"; then
+    fail "shared parser accepted an extra $mode step"
+  fi
+done
+
+for consumer in \
+  scripts/test-dmg-install \
+  scripts/test-e2e \
+  scripts/run-e2e-ax-inspect \
+  scripts/verify-development-validation-evidence; do
+  rg -F 'source scripts/dmg-harness-evidence' "$consumer" >/dev/null ||
+    fail "$consumer does not source the shared harness evidence contract"
+  rg -F 'dmg_harness_require_exact_steps' "$consumer" >/dev/null ||
+    fail "$consumer does not enforce the shared ledger contract"
+  rg -F 'dmg_harness_process_observer_evidence_matches' "$consumer" >/dev/null ||
+    fail "$consumer does not enforce the shared process identity contract"
+done
+
+consumer_paths=(
+  scripts/test-dmg-install
+  scripts/test-e2e
+  scripts/run-e2e-ax-inspect
+  scripts/verify-development-validation-evidence
+)
+if rg -n -F '$3 == "process"' "${consumer_paths[@]}" >/dev/null; then
+  fail "a harness consumer still parses process rows outside the shared parser"
+fi
+if rg -n -F 'observer=EVFILT_PROC+NOTE_EXITSTATUS' \
+  "${consumer_paths[@]}" >/dev/null; then
+  fail "a harness consumer still owns the observer detail schema"
+fi
+if rg -n -F 'fflags=' "${consumer_paths[@]}" >/dev/null; then
+  fail "a harness consumer still owns the helper exit-result schema"
+fi
+if rg -n \
+  -e 'required_steps' \
+  -e 'expected\[[0-9]+\][[:space:]]*=[[:space:]]"(arguments|process|exit-observer|permissions|activation|target|complete)"' \
+  "${consumer_paths[@]}" >/dev/null; then
+  fail "a harness consumer still owns a ledger step array"
+fi
+ledger_prefix='arguments,process,'
+ledger_prefix+='exit-observer'
+if rg -n -F "$ledger_prefix" \
+  scripts Tools Tests .github \
+  --glob '!dmg-harness-ledger-contract.tsv' >/dev/null; then
+  fail "a comma-separated harness ledger contract exists outside the canonical TSV"
+fi
+
+producer="Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift"
+rg -F 'expectedPassSteps: HarnessLedgerContract.expectedPassSteps(' \
+  "$producer" >/dev/null ||
+  fail "Swift producer does not enforce its typed ledger contract"
+
+scripts/reset-dev-data audit
+swift test --filter HarnessLedgerContractTests
+
+echo "DMG harness evidence contract passed"

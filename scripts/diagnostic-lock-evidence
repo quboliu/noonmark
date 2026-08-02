@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+
+if [[ "${NOONMARK_DIAGNOSTIC_LOCK_EVIDENCE_LOADED:-0}" == "1" ]]; then
+  return 0
+fi
+NOONMARK_DIAGNOSTIC_LOCK_EVIDENCE_LOADED=1
+
+diagnostic_lock_evidence_format() {
+  [[ $# -eq 5 ]] || return 1
+
+  local target_pid="$1"
+  local main_dev="$2"
+  local main_ino="$3"
+  local shm_dev="$4"
+  local shm_ino="$5"
+
+  if [[ ! "$target_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$main_dev" =~ ^[0-9]+$ || ! "$main_ino" =~ ^[0-9]+$ ||
+    ! "$shm_dev" =~ ^[0-9]+$ || ! "$shm_ino" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  printf '%s\n' \
+    "sqlite_writer=busy repository_flock=would-block held=true target_vnodes=bound target_pid=$target_pid main_dev=$main_dev main_ino=$main_ino shm_dev=$shm_dev shm_ino=$shm_ino"
+}
+
+diagnostic_lock_evidence_matches() {
+  [[ $# -eq 2 ]] || return 1
+
+  local detail="$1"
+  local expected_target_pid="$2"
+  local sqlite_writer repository_flock held target_vnodes target_pid
+  local main_dev main_ino shm_dev shm_ino extra
+
+  if [[ ! "$expected_target_pid" =~ ^[1-9][0-9]*$ ||
+    "$detail" == *$'\n'* || "$detail" == *$'\r'* ]]; then
+    return 1
+  fi
+
+  IFS=' ' read -r \
+    sqlite_writer repository_flock held target_vnodes target_pid \
+    main_dev main_ino shm_dev shm_ino extra <<<"$detail"
+  if [[ -n "$extra" ||
+    "$detail" != "$sqlite_writer $repository_flock $held $target_vnodes $target_pid $main_dev $main_ino $shm_dev $shm_ino" ||
+    "$sqlite_writer" != "sqlite_writer=busy" ||
+    "$repository_flock" != "repository_flock=would-block" ||
+    "$held" != "held=true" || "$target_vnodes" != "target_vnodes=bound" ||
+    "$target_pid" != "target_pid=$expected_target_pid" ||
+    ! "$main_dev" =~ ^main_dev=[0-9]+$ ||
+    ! "$main_ino" =~ ^main_ino=[0-9]+$ ||
+    ! "$shm_dev" =~ ^shm_dev=[0-9]+$ ||
+    ! "$shm_ino" =~ ^shm_ino=[0-9]+$ ]]; then
+    return 1
+  fi
+}
+
+diagnostic_lock_evidence_tuple() {
+  [[ $# -eq 2 ]] || return 1
+
+  local detail="$1"
+  local expected_target_pid="$2"
+  local sqlite_writer repository_flock held target_vnodes target_pid
+  local main_dev main_ino shm_dev shm_ino extra
+
+  diagnostic_lock_evidence_matches "$detail" "$expected_target_pid" ||
+    return 1
+  IFS=' ' read -r \
+    sqlite_writer repository_flock held target_vnodes target_pid \
+    main_dev main_ino shm_dev shm_ino extra <<<"$detail"
+  printf '%s\t%s\t%s\t%s\n' \
+    "${main_dev#main_dev=}" \
+    "${main_ino#main_ino=}" \
+    "${shm_dev#shm_dev=}" \
+    "${shm_ino#shm_ino=}"
+}
+
+diagnostic_lock_holder_evidence_format() {
+  [[ $# -eq 6 ]] || return 1
+
+  local child_pid="$1"
+  local token="$2"
+  local main_dev="$3"
+  local main_ino="$4"
+  local shm_dev="$5"
+  local shm_ino="$6"
+
+  if [[ ! "$child_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    ! "$main_dev" =~ ^[0-9]+$ || ! "$main_ino" =~ ^[0-9]+$ ||
+    ! "$shm_dev" =~ ^[0-9]+$ || ! "$shm_ino" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  printf '%s\n' \
+    "lock_holder=posix_spawn child_pid=$child_pid token=$token main_dev=$main_dev main_ino=$main_ino shm_dev=$shm_dev shm_ino=$shm_ino normal_exit=true exit_code=0"
+}
+
+diagnostic_lock_holder_evidence_matches() {
+  [[ $# -eq 5 ]] || return 1
+
+  local detail="$1"
+  local expected_main_dev="$2"
+  local expected_main_ino="$3"
+  local expected_shm_dev="$4"
+  local expected_shm_ino="$5"
+  local lock_holder child_pid token main_dev main_ino shm_dev shm_ino
+  local normal_exit exit_code extra
+
+  if [[ "$detail" == *$'\n'* || "$detail" == *$'\r'* ]]; then
+    return 1
+  fi
+  IFS=' ' read -r \
+    lock_holder child_pid token main_dev main_ino shm_dev shm_ino \
+    normal_exit exit_code extra <<<"$detail"
+  if [[ -n "$extra" ||
+    "$detail" != "$lock_holder $child_pid $token $main_dev $main_ino $shm_dev $shm_ino $normal_exit $exit_code" ||
+    "$lock_holder" != "lock_holder=posix_spawn" ||
+    ! "$child_pid" =~ ^child_pid=[1-9][0-9]*$ ||
+    ! "$token" =~ ^token=[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    "$main_dev" != "main_dev=$expected_main_dev" ||
+    "$main_ino" != "main_ino=$expected_main_ino" ||
+    "$shm_dev" != "shm_dev=$expected_shm_dev" ||
+    "$shm_ino" != "shm_ino=$expected_shm_ino" ||
+    "$normal_exit" != "normal_exit=true" ||
+    "$exit_code" != "exit_code=0" ]]; then
+    return 1
+  fi
+}
+
+diagnostic_lock_evidence_set_matches() {
+  [[ $# -eq 4 ]] || return 1
+
+  local before_detail="$1"
+  local after_detail="$2"
+  local holder_exit_detail="$3"
+  local expected_target_pid="$4"
+  local before_tuple
+  local after_tuple
+  local main_dev main_ino shm_dev shm_ino
+
+  before_tuple="$(
+    diagnostic_lock_evidence_tuple "$before_detail" "$expected_target_pid"
+  )" || return 1
+  after_tuple="$(
+    diagnostic_lock_evidence_tuple "$after_detail" "$expected_target_pid"
+  )" || return 1
+  [[ "$before_tuple" == "$after_tuple" ]] || return 1
+  IFS=$'\t' read -r main_dev main_ino shm_dev shm_ino <<<"$before_tuple"
+  diagnostic_lock_holder_evidence_matches \
+    "$holder_exit_detail" \
+    "$main_dev" \
+    "$main_ino" \
+    "$shm_dev" \
+    "$shm_ino"
+}

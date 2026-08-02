@@ -42,19 +42,32 @@ start_helper_exit_observer_process() {
   active_helper_observer_token="$token"
 }
 
-assert_helper_observer_gate_matches() {
-  local gate_path="$1"
-  local expected_gate="$2"
-  local actual_gate
+helper_observer_gate_matches() {
+  [[ $# -eq 4 ]] || return 1
 
-  if ! actual_gate="$(<"$gate_path")"; then
-    echo "helper exit observer gate could not be read" >&2
+  local gate_path="$1"
+  local expected_mode="$2"
+  local expected_helper_pid="$3"
+  local expected_token="$4"
+
+  if [[ ! -f "$gate_path" || -L "$gate_path" ||
+    -z "$expected_mode" || "$expected_mode" == *$'\n'* ||
+    "$expected_mode" == *$'\r'* ||
+    ! "$expected_helper_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$expected_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     return 1
   fi
-  if [[ "$actual_gate" != "$expected_gate" ]]; then
-    echo "helper exit observer gate did not match this launch" >&2
-    return 1
-  fi
+
+  awk \
+    -v mode="$expected_mode" \
+    -v pid="$expected_helper_pid" \
+    -v token="$expected_token" '
+      NR == 1 { valid += ($0 == "mode=" mode) }
+      NR == 2 { valid += ($0 == "helper_pid=" pid) }
+      NR == 3 { valid += ($0 == "launch_token=" token) }
+      NR == 4 { valid += ($0 == "observer=EVFILT_PROC+NOTE_EXITSTATUS") }
+      END { exit !(NR == 4 && valid == 4) }
+    ' "$gate_path"
 }
 
 wait_for_helper_observer_gate() {
@@ -63,25 +76,23 @@ wait_for_helper_observer_gate() {
   local token="$3"
   local gate_path="$4"
   local result_path="$5"
-  local expected_gate
-
-  expected_gate="mode=$mode
-helper_pid=$helper_pid
-launch_token=$token
-observer=EVFILT_PROC+NOTE_EXITSTATUS"
   for _ in {1..400}; do
     if [[ -s "$result_path" ]]; then
       if [[ ! -s "$gate_path" ]]; then
         echo "helper exit observer failed before arming" >&2
         return 1
       fi
-      if ! assert_helper_observer_gate_matches "$gate_path" "$expected_gate"; then
+      if ! helper_observer_gate_matches \
+        "$gate_path" "$mode" "$helper_pid" "$token"; then
+        echo "helper exit observer gate did not match this launch" >&2
         return 1
       fi
       return 0
     fi
     if [[ -s "$gate_path" ]]; then
-      if ! assert_helper_observer_gate_matches "$gate_path" "$expected_gate"; then
+      if ! helper_observer_gate_matches \
+        "$gate_path" "$mode" "$helper_pid" "$token"; then
+        echo "helper exit observer gate did not match this launch" >&2
         return 1
       fi
       return 0
@@ -129,4 +140,48 @@ wait_for_helper_exit_result() {
   # The result's exact mode, pid, token, flags and status are validated by
   # assert_helper_completed. Keep this join responsible only for lifecycle.
   : "$helper_pid" "$mode" "$token"
+}
+
+helper_exit_result_matches() {
+  [[ $# -eq 4 ]] || return 1
+
+  local result_path="$1"
+  local expected_mode="$2"
+  local expected_helper_pid="$3"
+  local expected_token="$4"
+  local flags_hex
+  local flags_value
+  local required_flags=$((0x84000000))
+
+  if [[ ! -f "$result_path" || -L "$result_path" ||
+    -z "$expected_mode" || "$expected_mode" == *$'\n'* ||
+    "$expected_mode" == *$'\r'* ||
+    ! "$expected_helper_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$expected_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    return 1
+  fi
+
+  if ! awk \
+    -v mode="$expected_mode" \
+    -v pid="$expected_helper_pid" \
+    -v token="$expected_token" '
+      NR == 1 { valid += ($0 == "status=PASS") }
+      NR == 2 { valid += ($0 == "mode=" mode) }
+      NR == 3 { valid += ($0 == "helper_pid=" pid) }
+      NR == 4 { valid += ($0 == "launch_token=" token) }
+      NR == 5 {
+        valid += ($0 ~ /^fflags=0x[0-9A-F]{1,8}$/)
+      }
+      NR == 6 { valid += ($0 == "raw_status=0") }
+      NR == 7 { valid += ($0 == "normal_exit=true") }
+      NR == 8 { valid += ($0 == "exit_code=0") }
+      NR == 9 { valid += ($0 == "signal=0") }
+      END { exit !(NR == 9 && valid == 9) }
+    ' "$result_path"; then
+    return 1
+  fi
+  flags_hex="$(sed -n '5s/^fflags=0x//p' "$result_path")"
+  [[ "$flags_hex" =~ ^[0-9A-F]{1,8}$ ]] || return 1
+  flags_value=$((16#$flags_hex))
+  (( (flags_value & required_flags) == required_flags ))
 }

@@ -188,22 +188,51 @@ assert_pass_result() {
   local token="$3"
   local result_path="$4"
 
-  if ! awk -v mode="$mode" -v pid="$helper_pid" -v token="$token" '
-    NR == 1 { valid += ($0 == "status=PASS") }
-    NR == 2 { valid += ($0 == "mode=" mode) }
-    NR == 3 { valid += ($0 == "helper_pid=" pid) }
-    NR == 4 { valid += ($0 == "launch_token=" token) }
-    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
-    NR == 6 { valid += ($0 == "raw_status=0") }
-    NR == 7 { valid += ($0 == "normal_exit=true") }
-    NR == 8 { valid += ($0 == "exit_code=0") }
-    NR == 9 { valid += ($0 == "signal=0") }
-    END { exit !(NR == 9 && valid == 9) }
-  ' "$result_path"; then
+  if ! helper_exit_result_matches \
+    "$result_path" "$mode" "$helper_pid" "$token"; then
     echo "real observer did not publish the expected PASS result" >&2
     exit 1
   fi
 }
+
+parser_result="${work_dir}/parser-result.txt"
+publish_artifact "$parser_result" \
+  "status=PASS
+mode=$test_mode
+helper_pid=$test_helper_pid
+launch_token=$test_token
+fflags=0x84000000
+raw_status=0
+normal_exit=true
+exit_code=0
+signal=0
+"
+helper_exit_result_matches \
+  "$parser_result" "$test_mode" "$test_helper_pid" "$test_token" || {
+  echo "shared exit-result parser rejected an exact result" >&2
+  exit 1
+}
+zero_flags_result="${work_dir}/zero-flags-result.txt"
+sed 's/fflags=0x84000000/fflags=0x0/' \
+  "$parser_result" >"$zero_flags_result"
+if helper_exit_result_matches \
+  "$zero_flags_result" "$test_mode" "$test_helper_pid" "$test_token"; then
+  echo "shared exit-result parser accepted zero kernel flags" >&2
+  exit 1
+fi
+missing_flags_result="${work_dir}/missing-flags-result.txt"
+sed 's/fflags=0x84000000/fflags=0x1/' \
+  "$parser_result" >"$missing_flags_result"
+if helper_exit_result_matches \
+  "$missing_flags_result" "$test_mode" "$test_helper_pid" "$test_token"; then
+  echo "shared exit-result parser accepted nonzero unrelated kernel flags" >&2
+  exit 1
+fi
+if helper_exit_result_matches \
+  "$parser_result" "$test_mode" 999998 "$test_token"; then
+  echo "shared exit-result parser accepted the wrong helper PID" >&2
+  exit 1
+fi
 
 gate_path="${work_dir}/gate-interleaving.txt"
 result_path="${work_dir}/gate-interleaving-result.txt"
@@ -212,6 +241,28 @@ helper_pid=$test_helper_pid
 launch_token=$test_token
 observer=EVFILT_PROC+NOTE_EXITSTATUS
 "
+gate_parser_path="${work_dir}/gate-parser.txt"
+publish_artifact "$gate_parser_path" "$gate_content"
+helper_observer_gate_matches \
+  "$gate_parser_path" "$test_mode" "$test_helper_pid" "$test_token" || {
+  echo "shared observer-gate parser rejected an exact gate" >&2
+  exit 1
+}
+if helper_observer_gate_matches \
+  "$gate_parser_path" "$test_mode" 999998 "$test_token"; then
+  echo "shared observer-gate parser accepted the wrong helper PID" >&2
+  exit 1
+fi
+gate_parser_extra_path="${work_dir}/gate-parser-extra.txt"
+{
+  printf '%s' "$gate_content"
+  printf '%s\n' 'unexpected=true'
+} >"$gate_parser_extra_path"
+if helper_observer_gate_matches \
+  "$gate_parser_extra_path" "$test_mode" "$test_helper_pid" "$test_token"; then
+  echo "shared observer-gate parser accepted an extra row" >&2
+  exit 1
+fi
 gate_result_injected=0
 
 inject_gate_result_interleaving() {

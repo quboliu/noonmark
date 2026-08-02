@@ -573,8 +573,10 @@ require_literal scripts/test-e2e "assert_native_command_helper_completion()"
 require_literal scripts/test-e2e "run_native_command_menu_helper()"
 require_literal scripts/test-e2e "run_native_command_surface_exercise()"
 require_literal scripts/test-e2e "e2e-menu-command"
-require_literal scripts/test-e2e 'expected[11] = "completion"'
-require_literal scripts/test-e2e 'expected[12] = "complete"'
+require_literal scripts/test-e2e "dmg_harness_require_exact_steps"
+require_literal \
+  scripts/dmg-harness-ledger-contract.tsv \
+  $'e2e-menu-command\t'
 require_literal scripts/test-e2e '--e2e-native-command-help-token'
 require_literal scripts/test-e2e '--e2e-native-command-help-completion-url'
 require_literal scripts/test-e2e 'NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands'
@@ -713,25 +715,6 @@ require_literal \
 forbid_literal \
   scripts/release-private-dmg \
   'NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e release'
-require_literal "$release_diagnostic_gate" 'git worktree add --detach'
-require_literal "$release_diagnostic_gate" 'git worktree remove --force'
-require_literal \
-  "$release_diagnostic_gate" \
-  '"$gate_worktree/scripts/reset-dev-data" e2e'
-require_literal \
-  "$release_diagnostic_gate" \
-  'git status --porcelain --untracked-files=all'
-require_literal "$release_diagnostic_gate" 'production_app_executed=false'
-require_literal "$release_diagnostic_gate" 'evidence_inventory'
-require_literal \
-  "$release_diagnostic_gate" \
-  'NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e release'
-require_literal \
-  "$release_diagnostic_gate" \
-  'artifacts/release-diagnostic-closure-gate'
-require_literal \
-  .github/workflows/release.yml \
-  'artifacts/release-diagnostic-closure-gate'
 
 cleanup_function="$(
   sed -n \
@@ -820,9 +803,6 @@ for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
   require_literal "$workflow" "artifacts/e2e*"
   require_literal "$workflow" "if-no-files-found: error"
   require_literal "$workflow" "NOONMARK_EVIDENCE_RUN_ID"
-  require_literal \
-    "$workflow" \
-    "scripts/verify-development-validation-evidence --scope runtime"
   if grep -F "source scripts/evidence-common" "$workflow" >/dev/null ||
     grep -F "evidence_require_manifest" "$workflow" >/dev/null ||
     grep -F "evidence_read" "$workflow" >/dev/null; then
@@ -831,7 +811,11 @@ for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
   fi
 done
 require_literal \
+  .github/workflows/ci.yml \
+  "scripts/verify-development-validation-evidence --scope runtime"
+require_literal .github/workflows/release.yml "scripts/release-private-dmg"
+forbid_literal \
   .github/workflows/release.yml \
-  "scripts/verify-development-validation-evidence --scope full"
+  "scripts/verify-development-validation-evidence"
 
 echo "E2E and data-root process lease evidence contract passed"

@@ -12,6 +12,8 @@ source scripts/runtime-evidence
 source scripts/evidence-common
 source scripts/dmg-install-observer-common
 source scripts/diagnostic-scope-manifest
+source scripts/diagnostic-lock-evidence
+source scripts/dmg-harness-evidence
 
 configuration="${1:-debug}"
 evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
@@ -9082,8 +9084,8 @@ wait_for_native_command_helper_process_record() {
   local ledger_path="$1"
   local token="$2"
   local expected_mode="${3:-e2e-menu-command}"
-  local process_count process_detail mode_field pid_field token_field extra_field
   local helper_pid live_pids
+  local observed_token
 
   NATIVE_COMMAND_HELPER_PID=""
   for _ in {1..400}; do
@@ -9092,24 +9094,13 @@ wait_for_native_command_helper_process_record() {
         echo "native command Helper failed before publishing its process identity" >&2
         return 1
       fi
-      IFS=$'\t' read -r process_count process_detail < <(
-        awk -F $'\t' '
-          $2 == "PASS" && $3 == "process" { count += 1; detail = $4 }
-          END { printf "%d\t%s\n", count + 0, detail }
-        ' "$ledger_path"
-      )
-      if [[ "$process_count" -gt 1 ]]; then
-        echo "native command Helper published duplicate process identities" >&2
-        return 1
-      fi
-      if [[ "$process_count" -eq 1 ]]; then
-        read -r mode_field pid_field token_field extra_field <<<"$process_detail"
-        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=$expected_mode" ||
-          "$pid_field" != helper_pid=* || "$token_field" != "launch_token=$token" ]]; then
-          echo "native command Helper process record was invalid: $process_detail" >&2
+      if IFS=$'\t' read -r helper_pid observed_token < <(
+        dmg_harness_process_identity "$expected_mode" "$ledger_path"
+      ); then
+        if [[ "$observed_token" != "$token" ]]; then
+          echo "native command Helper process launch token was invalid" >&2
           return 1
         fi
-        helper_pid="${pid_field#helper_pid=}"
         if ! native_command_helper_process_matches \
           "$helper_pid" \
           "$expected_mode" \
@@ -9127,6 +9118,9 @@ wait_for_native_command_helper_process_record() {
         fi
         NATIVE_COMMAND_HELPER_PID="$helper_pid"
         return 0
+      elif grep -F $'\tprocess\t' "$ledger_path" >/dev/null 2>&1; then
+        echo "native command Helper process record was invalid or duplicated" >&2
+        return 1
       fi
     fi
     sleep 0.025
@@ -9152,19 +9146,13 @@ assert_native_command_helper_completed() {
   local menu_title="${14}"
   local menu_item_title="${15}"
   local argument_detail
+  local activation_detail
 
-  if ! awk -v pid="$helper_pid" -v token="$token" '
-    NR == 1 { valid += ($0 == "status=PASS") }
-    NR == 2 { valid += ($0 == "mode=e2e-menu-command") }
-    NR == 3 { valid += ($0 == "helper_pid=" pid) }
-    NR == 4 { valid += ($0 == "launch_token=" token) }
-    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
-    NR == 6 { valid += ($0 == "raw_status=0") }
-    NR == 7 { valid += ($0 == "normal_exit=true") }
-    NR == 8 { valid += ($0 == "exit_code=0") }
-    NR == 9 { valid += ($0 == "signal=0") }
-    END { exit !(NR == 9 && valid == 9) }
-  ' "$exit_result_path"; then
+  if ! helper_exit_result_matches \
+    "$exit_result_path" \
+    "e2e-menu-command" \
+    "$helper_pid" \
+    "$token"; then
     echo "native command Helper did not expose one normal kernel exit" >&2
     return 1
   fi
@@ -9174,43 +9162,32 @@ assert_native_command_helper_completed() {
     echo "native command Helper output was incomplete, divergent, or failed" >&2
     return 1
   fi
+  if ! dmg_harness_require_exact_steps \
+    "e2e-menu-command" "$ledger_path"; then
+    echo "native command Helper ledger lost its exact ordered protocol" >&2
+    return 1
+  fi
+  if ! dmg_harness_process_observer_evidence_matches \
+    "e2e-menu-command" "$ledger_path" "$helper_pid" "$token"; then
+    echo "native command Helper process identity evidence was invalid" >&2
+    return 1
+  fi
+  activation_detail="$(
+    awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path"
+  )"
+  if ! dmg_harness_activation_evidence_matches \
+    "$activation_detail" \
+    "app.noonmark.mac.e2e" \
+    "$target_app_path" \
+    "$target_pid"; then
+    echo "native command Helper activation evidence was invalid" >&2
+    return 1
+  fi
   if ! awk -F $'\t' \
-    -v pid="$helper_pid" \
-    -v token="$token" \
     -v app="$target_app_path" \
     -v target_pid="$target_pid" '
-      BEGIN {
-        expected[1] = "arguments"
-        expected[2] = "process"
-        expected[3] = "exit-observer"
-        expected[4] = "permissions"
-        expected[5] = "activation"
-        expected[6] = "target"
-        expected[7] = "e2e-window"
-        expected[8] = "menu-bar"
-        expected[9] = "menu-item"
-        expected[10] = "menu-command"
-        expected[11] = "completion"
-        expected[12] = "complete"
-      }
-      NF != 4 || $2 != "PASS" || $3 != expected[NR] { exit 1 }
-      NR == 2 && $4 != "mode=e2e-menu-command helper_pid=" pid " launch_token=" token {
-        exit 1
-      }
-      NR == 3 && $4 != "helper_pid=" pid " launch_token=" token " observer=EVFILT_PROC+NOTE_EXITSTATUS" {
-        exit 1
-      }
       NR == 4 && $4 != "AXIsProcessTrusted=true CGPreflightPostEventAccess=true" {
         exit 1
-      }
-      NR == 5 {
-        prefix = "bundle=app.noonmark.mac.e2e path=" app \
-          " process_identifier=" target_pid " "
-        detail = substr($4, length(prefix) + 1)
-        if (index($4, prefix) != 1 ||
-            detail !~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
-          exit 1
-        }
       }
       NR == 6 && index($4, "bundle=app.noonmark.mac.e2e path=" app " frontmost=true windows=") != 1 {
         exit 1
@@ -9441,6 +9418,10 @@ run_diagnostic_export_helper() {
   local exit_result_path="$evidence_dir/exit-status.txt"
   local helper_pid=""
   local live_pids=""
+  local diagnostic_lock_before=""
+  local diagnostic_lock_after=""
+  local diagnostic_lock_holder_exit=""
+  local activation_detail=""
 
   if [[ "$helper_requested" != "1" || ! -x "$helper_executable_path" ]] ||
     ! codesign --verify --deep --strict "$helper_bundle" >/dev/null 2>&1; then
@@ -9546,62 +9527,53 @@ run_diagnostic_export_helper() {
       "$ledger_path" "$stderr_path" "$observer_log_path" "$exit_result_path"
     return 1
   fi
-  if ! awk -v pid="$helper_pid" -v token="$token" '
-    NR == 1 { valid += ($0 == "status=PASS") }
-    NR == 2 { valid += ($0 == "mode=diagnostic-export") }
-    NR == 3 { valid += ($0 == "helper_pid=" pid) }
-    NR == 4 { valid += ($0 == "launch_token=" token) }
-    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
-    NR == 6 { valid += ($0 == "raw_status=0") }
-    NR == 7 { valid += ($0 == "normal_exit=true") }
-    NR == 8 { valid += ($0 == "exit_code=0") }
-    NR == 9 { valid += ($0 == "signal=0") }
-    END { exit !(NR == 9 && valid == 9) }
-  ' "$exit_result_path"; then
+  if ! helper_exit_result_matches \
+    "$exit_result_path" \
+    "diagnostic-export" \
+    "$helper_pid" \
+    "$token"; then
     echo "diagnostic export Helper did not expose one normal kernel exit" >&2
     return 1
   fi
+  diagnostic_lock_before="$(
+    awk -F $'\t' \
+      '$3 == "diagnostic-locks-before-export" { print $4 }' \
+      "$ledger_path" 2>/dev/null || true
+  )"
+  diagnostic_lock_after="$(
+    awk -F $'\t' \
+      '$3 == "diagnostic-locks-after-export" { print $4 }' \
+      "$ledger_path" 2>/dev/null || true
+  )"
+  diagnostic_lock_holder_exit="$(
+    awk -F $'\t' \
+      '$3 == "diagnostic-lock-holder-exit" { print $4 }' \
+      "$ledger_path" 2>/dev/null || true
+  )"
+  activation_detail="$(
+    awk -F $'\t' '$3 == "activation" { print $4 }' \
+      "$ledger_path" 2>/dev/null || true
+  )"
   if [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
     [[ -s "$stderr_path" || -s "$launch_path" || -s "$observer_log_path" ]] ||
     grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1 ||
+    ! dmg_harness_require_exact_steps "diagnostic-export" "$ledger_path" ||
+    ! dmg_harness_process_observer_evidence_matches \
+      "diagnostic-export" "$ledger_path" "$helper_pid" "$token" ||
+    ! dmg_harness_activation_evidence_matches \
+      "$activation_detail" \
+      "app.noonmark.mac.e2e" \
+      "$target_app_path" \
+      "$target_pid" ||
+    ! diagnostic_lock_evidence_set_matches \
+      "$diagnostic_lock_before" \
+      "$diagnostic_lock_after" \
+      "$diagnostic_lock_holder_exit" \
+      "$target_pid" ||
     ! awk -F $'\t' \
-      -v pid="$helper_pid" \
-      -v token="$token" \
-      -v target_pid="$target_pid" \
       -v app="$target_app_path" '
-        BEGIN {
-          expected[1] = "arguments"
-          expected[2] = "process"
-          expected[3] = "exit-observer"
-          expected[4] = "permissions"
-          expected[5] = "activation"
-          expected[6] = "target"
-          expected[7] = "diagnostic-locks-before-export"
-          expected[8] = "diagnostic-window"
-          expected[9] = "diagnostic-menu"
-          expected[10] = "diagnostic-preview"
-          expected[11] = "diagnostic-export-ui"
-          expected[12] = "diagnostic-locks-after-export"
-          expected[13] = "diagnostic-package"
-          expected[14] = "diagnostic-lock-holder-exit"
-          expected[15] = "complete"
-        }
-        NF != 4 || $2 != "PASS" || $3 != expected[NR] { exit 1 }
-        NR == 2 && $4 != "mode=diagnostic-export helper_pid=" pid " launch_token=" token { exit 1 }
-        NR == 5 {
-          prefix = "bundle=app.noonmark.mac.e2e path=" app \
-            " process_identifier=" target_pid " "
-          detail = substr($4, length(prefix) + 1)
-          if (index($4, prefix) != 1 ||
-              detail !~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
-            exit 1
-          }
-        }
         NR == 6 && index($4, "bundle=app.noonmark.mac.e2e path=" app " frontmost=true windows=") != 1 { exit 1 }
-        (NR == 7 || NR == 12) && $4 !~ /^sqlite_writer=busy repository_flock=would-block held=true target_vnodes=bound target_pid=[1-9][0-9]* main_dev=[0-9]+ main_ino=[0-9]+ shm_dev=[0-9]+ shm_ino=[0-9]+$/ { exit 1 }
-        (NR == 7 || NR == 12) && index($4, "target_pid=" target_pid " ") == 0 { exit 1 }
         NR == 13 && index($4, "schema=1 bytes=") != 1 { exit 1 }
-        NR == 14 && $4 !~ /^lock_holder=posix_spawn child_pid=[1-9][0-9]* token=[0-9A-F-]{36} main_dev=[0-9]+ main_ino=[0-9]+ shm_dev=[0-9]+ shm_ino=[0-9]+ normal_exit=true exit_code=0$/ { exit 1 }
         NR == 15 && $4 != "mode=diagnostic-export" { exit 1 }
         END { exit !(NR == 15) }
       ' "$ledger_path"; then

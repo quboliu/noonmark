@@ -95,8 +95,17 @@ run_check_suite() {
   echo "==> DMG foreground ownership contract"
   scripts/test-dmg-foreground-ownership-contract
 
+  echo "==> DMG harness evidence contract"
+  scripts/test-dmg-harness-evidence-contract
+
   echo "==> DMG diagnostic scope contract"
   scripts/test-dmg-diagnostic-scope-contract
+
+  echo "==> DMG diagnostic lock evidence contract"
+  scripts/test-diagnostic-lock-evidence-contract
+
+  echo "==> Release gate aggregation contract"
+  scripts/test-release-gate-contract
 
   echo "==> DMG window identity contract"
   scripts/test-dmg-window-identity-contract

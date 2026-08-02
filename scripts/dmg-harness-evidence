@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+
+if [[ "${NOONMARK_DMG_HARNESS_EVIDENCE_LOADED:-0}" == "1" ]]; then
+  return 0
+fi
+NOONMARK_DMG_HARNESS_EVIDENCE_LOADED=1
+
+dmg_harness_contract_directory="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P
+)"
+dmg_harness_ledger_contract_path="${dmg_harness_contract_directory}/dmg-harness-ledger-contract.tsv"
+
+dmg_harness_expected_steps() {
+  [[ $# -eq 1 ]] || return 1
+
+  local mode="$1"
+  local result
+  if [[ ! -f "$dmg_harness_ledger_contract_path" ||
+    -L "$dmg_harness_ledger_contract_path" ]]; then
+    return 1
+  fi
+  result="$(
+    awk -F $'\t' -v expected_mode="$mode" '
+      NF != 2 || $1 == "" || $2 == "" { exit 1 }
+      $1 == expected_mode { count += 1; steps = $2 }
+      END {
+        if (count != 1) exit 1
+        print steps
+      }
+    ' "$dmg_harness_ledger_contract_path"
+  )" || return 1
+  [[ -n "$result" ]] || return 1
+  printf '%s\n' "$result"
+}
+
+dmg_harness_require_exact_steps() {
+  [[ $# -eq 2 ]] || return 1
+
+  local mode="$1"
+  local ledger_path="$2"
+  local expected_steps
+  local actual_steps
+
+  if [[ ! -f "$ledger_path" || -L "$ledger_path" ]]; then
+    return 1
+  fi
+  expected_steps="$(dmg_harness_expected_steps "$mode")" || return 1
+  actual_steps="$(
+    awk -F $'\t' '
+      NF != 4 ||
+        $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
+        $2 != "PASS" || $3 == "" || $4 == "" { exit 1 }
+      { steps = steps (steps == "" ? "" : ",") $3 }
+      END {
+        if (NR == 0) exit 1
+        print steps
+      }
+    ' "$ledger_path"
+  )" || return 1
+  [[ "$actual_steps" == "$expected_steps" ]]
+}
+
+dmg_harness_process_identity() {
+  [[ $# -eq 2 ]] || return 1
+
+  local mode="$1"
+  local ledger_path="$2"
+  local detail
+  local tail
+  local helper_pid
+  local launch_token
+
+  if [[ ! "$mode" =~ ^[a-z][a-z0-9-]*$ ||
+    ! -f "$ledger_path" || -L "$ledger_path" ]]; then
+    return 1
+  fi
+  detail="$(
+    awk -F $'\t' '
+      $3 == "process" {
+        count += 1
+        if (NF != 4 || $2 != "PASS" ||
+            $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) {
+          invalid = 1
+        }
+        detail = $4
+      }
+      END {
+        if (count != 1 || invalid) exit 1
+        print detail
+      }
+    ' "$ledger_path"
+  )" || return 1
+  tail="${detail#"mode=$mode helper_pid="}"
+  [[ "$tail" != "$detail" && "$tail" == *" launch_token="* ]] || return 1
+  helper_pid="${tail%% launch_token=*}"
+  launch_token="${tail#* launch_token=}"
+  if [[ ! "$helper_pid" =~ ^[1-9][0-9]*$ ||
+    ! "$launch_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ||
+    "$detail" != \
+      "mode=$mode helper_pid=$helper_pid launch_token=$launch_token" ]]; then
+    return 1
+  fi
+  printf '%s\t%s\n' "$helper_pid" "$launch_token"
+}
+
+dmg_harness_process_observer_evidence_matches() {
+  [[ $# -eq 4 ]] || return 1
+
+  local mode="$1"
+  local ledger_path="$2"
+  local expected_helper_pid="$3"
+  local expected_token="$4"
+  local actual_helper_pid
+  local actual_token
+  local observer_detail
+
+  IFS=$'\t' read -r actual_helper_pid actual_token < <(
+    dmg_harness_process_identity "$mode" "$ledger_path"
+  ) || return 1
+  if [[ "$actual_helper_pid" != "$expected_helper_pid" ||
+    "$actual_token" != "$expected_token" ]]; then
+    return 1
+  fi
+  observer_detail="$(
+    awk -F $'\t' '
+      $3 == "exit-observer" {
+        count += 1
+        if (NF != 4 || $2 != "PASS" ||
+            $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) {
+          invalid = 1
+        }
+        detail = $4
+      }
+      END {
+        if (count != 1 || invalid) exit 1
+        print detail
+      }
+    ' "$ledger_path"
+  )" || return 1
+  [[ "$observer_detail" == \
+    "helper_pid=$expected_helper_pid launch_token=$expected_token observer=EVFILT_PROC+NOTE_EXITSTATUS" ]]
+}
+
+dmg_harness_activation_evidence_matches() {
+  [[ $# -eq 4 ]] || return 1
+
+  local detail="$1"
+  local expected_bundle="$2"
+  local expected_path="$3"
+  local expected_pid="$4"
+  local prefix
+  local state
+
+  if [[ -z "$expected_bundle" || -z "$expected_path" ||
+    ! "$expected_pid" =~ ^[1-9][0-9]*$ ||
+    "$detail" == *$'\n'* || "$detail" == *$'\r'* ]]; then
+    return 1
+  fi
+  prefix="bundle=$expected_bundle path=$expected_path process_identifier=$expected_pid "
+  [[ "$detail" == "$prefix"* ]] || return 1
+  state="${detail#"$prefix"}"
+  [[ "$state" =~ ^process_start_tvsec=[1-9][0-9]*[[:space:]]process_start_tvusec=[0-9]{1,6}[[:space:]]activation_policy=regular[[:space:]]request_accepted=true[[:space:]]active_before=(true|false)[[:space:]]ax_frontmost_before=(true|false)[[:space:]]active_after=true[[:space:]]ax_frontmost_after=true$ ]]
+}

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "diagnostic lock evidence contract: $*" >&2
+  exit 1
+}
+
+matcher="scripts/diagnostic-lock-evidence"
+[[ -f "$matcher" ]] || fail "missing shared diagnostic lock evidence parser"
+source "$matcher"
+
+valid_detail="$(
+  diagnostic_lock_evidence_format 501 16777231 1001 16777231 1002
+)"
+valid_holder_detail="$(
+  diagnostic_lock_holder_evidence_format \
+    502 \
+    AAAAAAAA-BBBB-CCCC-DDDD-222222222222 \
+    16777231 \
+    1001 \
+    16777231 \
+    1002
+)"
+diagnostic_lock_evidence_matches "$valid_detail" 501 ||
+  fail "shared parser rejected one exact lock proof"
+diagnostic_lock_evidence_set_matches \
+  "$valid_detail" \
+  "$valid_detail" \
+  "$valid_holder_detail" \
+  501 || fail "shared parser rejected one exact three-phase lock proof"
+if diagnostic_lock_evidence_matches \
+  "sqlite_writer=busy repository_flock=would-block held=true" \
+  501; then
+  fail "shared parser accepted the obsolete three-field lock proof"
+fi
+if diagnostic_lock_evidence_matches "$valid_detail" 502; then
+  fail "shared parser accepted a lock proof for the wrong target PID"
+fi
+if diagnostic_lock_evidence_matches "$valid_detail unexpected=true" 501; then
+  fail "shared parser accepted an extra lock evidence field"
+fi
+wrong_after="$(
+  diagnostic_lock_evidence_format 501 16777231 1003 16777231 1002
+)"
+if diagnostic_lock_evidence_set_matches \
+  "$valid_detail" "$wrong_after" "$valid_holder_detail" 501; then
+  fail "shared parser accepted changed before/after vnode identities"
+fi
+wrong_holder="$(
+  diagnostic_lock_holder_evidence_format \
+    502 \
+    AAAAAAAA-BBBB-CCCC-DDDD-222222222222 \
+    16777231 \
+    1001 \
+    16777231 \
+    1004
+)"
+if diagnostic_lock_evidence_set_matches \
+  "$valid_detail" "$valid_detail" "$wrong_holder" 501; then
+  fail "shared parser accepted a released lock-holder for different vnodes"
+fi
+if diagnostic_lock_evidence_set_matches \
+  "$valid_detail" \
+  "$valid_detail" \
+  "${valid_holder_detail/normal_exit=true/normal_exit=false}" \
+  501; then
+  fail "shared parser accepted an abnormal lock-holder exit"
+fi
+
+for consumer in \
+  scripts/test-dmg-install \
+  scripts/test-e2e \
+  scripts/test-dmg-evidence-contract \
+  scripts/verify-development-validation-evidence; do
+  rg -F 'diagnostic-lock-evidence' "$consumer" >/dev/null ||
+    fail "$consumer does not consume the shared lock evidence contract"
+done
+lock_marker='sqlite_writer=busy repository_flock=would-block held='
+lock_marker+='true'
+lock_schema_owners="$(
+  rg -l -F "$lock_marker" \
+    scripts/test-dmg-install \
+    scripts/test-e2e \
+    scripts/test-dmg-evidence-contract \
+    scripts/verify-development-validation-evidence \
+    "$matcher" 2>/dev/null || true
+)"
+[[ "$lock_schema_owners" == "$matcher" ]] ||
+  fail "diagnostic lock schema has more than one shell owner: $lock_schema_owners"
+
+producer="Tools/NoonmarkDMGInstallHarness/DiagnosticExportValidation.swift"
+rg -F '"diagnostic-locks-\(step)",' "$producer" >/dev/null ||
+  fail "Swift producer does not emit the shared contention step family"
+rg -F '"diagnostic-lock-holder-exit",' "$producer" >/dev/null ||
+  fail "Swift producer does not emit the lock-holder exit step"
+for field in \
+  'sqlite_writer=busy repository_flock=would-block held=true ' \
+  'target_vnodes=bound target_pid=\(targetPID) ' \
+  'lock_holder=posix_spawn child_pid=\(childPID) token=\(token) ' \
+  'normal_exit=true exit_code=0'; do
+  rg -F "$field" "$producer" >/dev/null ||
+    fail "Swift producer lost lock evidence field order: $field"
+done
+
+echo "Diagnostic lock evidence contract passed"

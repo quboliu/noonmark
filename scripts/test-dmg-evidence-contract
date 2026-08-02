@@ -6,6 +6,8 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg-evidence-contract.XXXXXX")"
 fixture_root="$(cd "$fixture_root" && pwd -P)"
 source "$repo_root/scripts/diagnostic-scope-manifest"
+source "$repo_root/scripts/diagnostic-lock-evidence"
+source "$repo_root/scripts/dmg-harness-evidence"
 
 cleanup() {
   rm -rf "$fixture_root"
@@ -26,6 +28,18 @@ cp "$repo_root/scripts/verify-dmg" "$fixture_root/scripts/verify-dmg"
 cp \
   "$repo_root/scripts/diagnostic-scope-manifest" \
   "$fixture_root/scripts/diagnostic-scope-manifest"
+cp \
+  "$repo_root/scripts/diagnostic-lock-evidence" \
+  "$fixture_root/scripts/diagnostic-lock-evidence"
+cp \
+  "$repo_root/scripts/dmg-harness-evidence" \
+  "$fixture_root/scripts/dmg-harness-evidence"
+cp \
+  "$repo_root/scripts/dmg-harness-ledger-contract.tsv" \
+  "$fixture_root/scripts/dmg-harness-ledger-contract.tsv"
+cp \
+  "$repo_root/scripts/dmg-install-observer-common" \
+  "$fixture_root/scripts/dmg-install-observer-common"
 cp \
   "$repo_root/scripts/verify-window-lookup-boundary" \
   "$fixture_root/scripts/verify-window-lookup-boundary"
@@ -893,8 +907,12 @@ diagnostic_ledger="$(
 diagnostic_helper_gate="$(
   diagnostic_scope_manifest_value "$diagnostic_scope_manifest" start_gate
 )"
+diagnostic_export_relative="${diagnostic_export#"$fixture_root/"}"
+diagnostic_sentinels_relative="${diagnostic_sentinels#"$fixture_root/"}"
 diagnostic_control_dir="${diagnostic_ledger%/*}"
 if [[ "$diagnostic_scope_application" != "$fixture_validation_app" ||
+  "$diagnostic_export_relative" == "$diagnostic_export" ||
+  "$diagnostic_sentinels_relative" == "$diagnostic_sentinels" ||
   "${diagnostic_export%/*}" != "$fixture_root/artifacts/dmg-install" ||
   "${diagnostic_sentinels%/*}" != "$fixture_root/artifacts/dmg-install" ||
   "${diagnostic_ledger%/*}" != "${diagnostic_helper_gate%/*}" ||
@@ -967,6 +985,18 @@ EOF
 chmod 600 "$diagnostic_sentinels"
 diagnostic_export_sha256="$(shasum -a 256 "$diagnostic_export" | awk '{print $1}')"
 diagnostic_export_bytes="$(stat -f '%z' "$diagnostic_export")"
+diagnostic_lock_detail="$(
+  diagnostic_lock_evidence_format 501 16777231 1001 16777231 1002
+)"
+diagnostic_lock_holder_detail="$(
+  diagnostic_lock_holder_evidence_format \
+    503 \
+    AAAAAAAA-BBBB-CCCC-DDDD-333333333333 \
+    16777231 \
+    1001 \
+    16777231 \
+    1002
+)"
 cat >"$diagnostic_ledger" <<EOF
 2026-07-17T00:00:04Z	PASS	arguments	mode=diagnostic-export pid=501 app=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app window_number=403 window=晷迹 · Day Todo — 7月17日 target_profile=dmg-validation database=$diagnostic_database repository_lock=$diagnostic_repository_lock export=$diagnostic_export sentinels=$diagnostic_sentinels
 2026-07-17T00:00:04Z	PASS	process	mode=diagnostic-export helper_pid=502 launch_token=AAAAAAAA-BBBB-CCCC-DDDD-222222222222
@@ -974,13 +1004,14 @@ cat >"$diagnostic_ledger" <<EOF
 2026-07-17T00:00:04Z	PASS	permissions	AXIsProcessTrusted=true CGPreflightPostEventAccess=true
 2026-07-17T00:00:04Z	PASS	activation	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app process_identifier=501 process_start_tvsec=1800000002 process_start_tvusec=345678 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true
 2026-07-17T00:00:04Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
-2026-07-17T00:00:04Z	PASS	diagnostic-locks-before-export	sqlite_writer=busy repository_flock=would-block held=true
+2026-07-17T00:00:04Z	PASS	diagnostic-locks-before-export	$diagnostic_lock_detail
 2026-07-17T00:00:04Z	PASS	diagnostic-window	window_number=403 frame=(0.0, 0.0, 1280.0, 800.0) focused=true exact=true
 2026-07-17T00:00:04Z	PASS	diagnostic-menu	title=导出诊断资料… shortcut=none source=cghidEventTap
 2026-07-17T00:00:04Z	PASS	diagnostic-preview	schema=1 size=visible consent=visible focused=true default=exact
 2026-07-17T00:00:04Z	PASS	diagnostic-export-ui	menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap
-2026-07-17T00:00:04Z	PASS	diagnostic-locks-after-export	sqlite_writer=busy repository_flock=would-block held=true
+2026-07-17T00:00:04Z	PASS	diagnostic-locks-after-export	$diagnostic_lock_detail
 2026-07-17T00:00:04Z	PASS	diagnostic-package	schema=1 bytes=$diagnostic_export_bytes sha256=$diagnostic_export_sha256 records=1 active=0 capsules=0 metrics=0 sentinels=absent owner_only=true
+2026-07-17T00:00:04Z	PASS	diagnostic-lock-holder-exit	$diagnostic_lock_holder_detail
 2026-07-17T00:00:04Z	PASS	complete	mode=diagnostic-export
 EOF
 cp "$diagnostic_ledger" \
@@ -1025,7 +1056,7 @@ $fixture_diagnostic_process_timestamp.600 I  NoonmarkMacAppDMGValidation[501:def
 EOF
 cat >"$diagnostic_package_report" <<EOF
 schema_version=1
-path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics
+path=$diagnostic_export_relative
 bytes=$diagnostic_export_bytes
 sha256=$diagnostic_export_sha256
 mode=600
@@ -1449,7 +1480,7 @@ diagnostic_export_runtime_identity_match=true
 diagnostic_export_size_within_limit=true
 diagnostic_export_sentinels_absent=true
 diagnostic_export_owner_only=true
-diagnostic_export_path=artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics
+diagnostic_export_path=$diagnostic_export_relative
 diagnostic_export_bytes=$diagnostic_export_bytes
 diagnostic_export_sha256=$diagnostic_export_sha256
 diagnostic_export_runtime_architecture=$diagnostic_runtime_architecture
@@ -1473,6 +1504,90 @@ helper_diagnostic_baseline_sha256=$empty_sha256
 helper_diagnostic_final_sha256=$empty_sha256
 helper_diagnostic_diff_sha256=$empty_sha256
 finished_at=2026-07-17T12:00:05Z
+suite_exit_status=0
+EOF
+
+closure_fixture_root="$fixture_root/artifacts/release-diagnostic-closure-gate"
+closure_fixture_runtime="$closure_fixture_root/e2e-runtime"
+closure_fixture_scenario="$closure_fixture_root/e2e-diagnostic-closure"
+mkdir -p "$closure_fixture_runtime" "$closure_fixture_scenario"
+printf '%s\n' 'ok: restarted evidence exported through UI' \
+  >"$closure_fixture_scenario/restart-result.txt"
+printf '%s\n' 'fixture release diagnostic closure passed' \
+  >"$closure_fixture_root/test-e2e.log"
+cat >"$closure_fixture_root/result.txt" <<EOF
+schema_version=1
+source_commit=$source_head_commit
+evidence_run_id=fixture-run
+status=PASS
+e2e_exit_code=0
+production_app_executed=false
+EOF
+cat >"$closure_fixture_runtime/manifest.txt" <<EOF
+evidence_schema_version=1
+suite=mac-app-e2e
+evidence_run_id=fixture-run
+configuration=release
+suite_mode=only:diagnostic-closure
+started_at=2026-07-17T00:00:00Z
+source_head_commit=$source_head_commit
+source_head_tree_oid=$source_head_tree_oid
+source_worktree_tree_oid=$source_worktree_tree_oid
+source_tree_dirty=$source_tree_dirty
+source_end_worktree_tree_oid=$source_worktree_tree_oid
+source_end_tree_dirty=$source_tree_dirty
+finished_at=2026-07-17T00:00:01Z
+suite_exit_status=0
+EOF
+closure_inner_manifest_sha256="$(
+  shasum -a 256 "$closure_fixture_runtime/manifest.txt" | awk '{print $1}'
+)"
+closure_log_sha256="$(
+  shasum -a 256 "$closure_fixture_root/test-e2e.log" | awk '{print $1}'
+)"
+closure_result_sha256="$(
+  shasum -a 256 "$closure_fixture_root/result.txt" | awk '{print $1}'
+)"
+(
+  cd "$fixture_root"
+  source scripts/evidence-common
+  evidence_inventory \
+    "$PWD" \
+    artifacts/release-diagnostic-closure-gate/artifact-inventory.sha256 \
+    artifacts/release-diagnostic-closure-gate/test-e2e.log \
+    artifacts/release-diagnostic-closure-gate/result.txt \
+    artifacts/release-diagnostic-closure-gate/e2e-runtime \
+    artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure
+)
+closure_inventory_sha256="$(
+  shasum -a 256 \
+    "$closure_fixture_root/artifact-inventory.sha256" |
+    awk '{print $1}'
+)"
+cat >"$closure_fixture_root/manifest.txt" <<EOF
+evidence_schema_version=1
+suite=release-diagnostic-closure
+evidence_run_id=fixture-run
+configuration=release
+suite_mode=diagnostic-closure
+started_at=2026-07-17T00:00:00Z
+source_head_commit=$source_head_commit
+source_head_tree_oid=$source_head_tree_oid
+source_worktree_tree_oid=$source_worktree_tree_oid
+source_tree_dirty=$source_tree_dirty
+source_end_worktree_tree_oid=$source_worktree_tree_oid
+source_end_tree_dirty=$source_tree_dirty
+production_app_executed=false
+closure_e2e_exit_code=0
+closure_restart_result=ok: restarted evidence exported through UI
+closure_e2e_manifest_path=artifacts/release-diagnostic-closure-gate/e2e-runtime/manifest.txt
+closure_e2e_manifest_sha256=$closure_inner_manifest_sha256
+gate_log_path=artifacts/release-diagnostic-closure-gate/test-e2e.log
+gate_log_sha256=$closure_log_sha256
+gate_result_path=artifacts/release-diagnostic-closure-gate/result.txt
+gate_result_sha256=$closure_result_sha256
+artifact_inventory_sha256=$closure_inventory_sha256
+finished_at=2026-07-17T00:00:01Z
 suite_exit_status=0
 EOF
 
@@ -1504,6 +1619,165 @@ if ! (
   cat "$fixture_root/runtime-validator.stderr" >&2
   exit 1
 fi
+
+closure_manifest="$closure_fixture_root/manifest.txt"
+closure_pristine_root="$fixture_root/artifacts/closure-fixture-pristine"
+mkdir -p "$closure_pristine_root"
+closure_manifest_pristine="$closure_pristine_root/manifest.txt"
+closure_inner_manifest="$closure_fixture_runtime/manifest.txt"
+closure_inner_manifest_pristine="$closure_pristine_root/inner-manifest.txt"
+closure_result="$closure_fixture_root/result.txt"
+closure_result_pristine="$closure_pristine_root/result.txt"
+closure_restart="$closure_fixture_scenario/restart-result.txt"
+closure_restart_pristine="$closure_pristine_root/restart-result.txt"
+closure_inventory="$closure_fixture_root/artifact-inventory.sha256"
+closure_inventory_pristine="$closure_pristine_root/inventory.sha256"
+cp "$closure_manifest" "$closure_manifest_pristine"
+cp "$closure_inner_manifest" "$closure_inner_manifest_pristine"
+cp "$closure_result" "$closure_result_pristine"
+cp "$closure_restart" "$closure_restart_pristine"
+cp "$closure_inventory" "$closure_inventory_pristine"
+
+refresh_closure_fixture_bindings() {
+  local inner_sha256
+  local result_sha256
+  local inventory_sha256
+
+  inner_sha256="$(
+    shasum -a 256 "$closure_inner_manifest" | awk '{print $1}'
+  )"
+  result_sha256="$(
+    shasum -a 256 "$closure_result" | awk '{print $1}'
+  )"
+  sed -i '' \
+    "s/^closure_e2e_manifest_sha256=.*/closure_e2e_manifest_sha256=${inner_sha256}/" \
+    "$closure_manifest"
+  sed -i '' \
+    "s/^gate_result_sha256=.*/gate_result_sha256=${result_sha256}/" \
+    "$closure_manifest"
+  (
+    cd "$fixture_root"
+    source scripts/evidence-common
+    evidence_inventory \
+      "$PWD" \
+      artifacts/release-diagnostic-closure-gate/artifact-inventory.sha256 \
+      artifacts/release-diagnostic-closure-gate/test-e2e.log \
+      artifacts/release-diagnostic-closure-gate/result.txt \
+      artifacts/release-diagnostic-closure-gate/e2e-runtime \
+      artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure
+  )
+  inventory_sha256="$(
+    shasum -a 256 "$closure_inventory" | awk '{print $1}'
+  )"
+  sed -i '' \
+    "s/^artifact_inventory_sha256=.*/artifact_inventory_sha256=${inventory_sha256}/" \
+    "$closure_manifest"
+}
+
+restore_closure_fixture() {
+  cp "$closure_manifest_pristine" "$closure_manifest"
+  cp "$closure_inner_manifest_pristine" "$closure_inner_manifest"
+  cp "$closure_result_pristine" "$closure_result"
+  cp "$closure_restart_pristine" "$closure_restart"
+  cp "$closure_inventory_pristine" "$closure_inventory"
+}
+sed -i '' \
+  's/^evidence_run_id=.*/evidence_run_id=stale-closure-run/' \
+  "$closure_manifest"
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence --scope full
+) >"$fixture_root/cross-validator-stale-closure-run.stdout" \
+  2>"$fixture_root/cross-validator-stale-closure-run.stderr"
+stale_closure_run_status=$?
+set -e
+if [[ "$stale_closure_run_status" -eq 0 ]] ||
+  ! grep -F \
+    "development-validation evidence disagrees for release diagnostic closure evidence_run_id" \
+    "$fixture_root/cross-validator-stale-closure-run.stderr" >/dev/null; then
+  echo "full validator accepted a stale release-closure run ID" >&2
+  exit 1
+fi
+restore_closure_fixture
+
+sed -i '' \
+  's/^evidence_run_id=.*/evidence_run_id=forged-inner-closure-run/' \
+  "$closure_inner_manifest"
+refresh_closure_fixture_bindings
+set +e
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence --scope full
+) >"$fixture_root/cross-validator-forged-inner-closure-run.stdout" \
+  2>"$fixture_root/cross-validator-forged-inner-closure-run.stderr"
+forged_inner_closure_status=$?
+set -e
+if [[ "$forged_inner_closure_status" -eq 0 ]] ||
+  ! grep -F \
+    "development-validation evidence disagrees for release diagnostic closure inner evidence_run_id" \
+    "$fixture_root/cross-validator-forged-inner-closure-run.stderr" >/dev/null; then
+  echo "full validator accepted a forged inner release-closure run ID" >&2
+  exit 1
+fi
+restore_closure_fixture
+
+expect_closure_mutation_rejected() {
+  local name="$1"
+  local expected_message="$2"
+  local status
+
+  set +e
+  (
+    cd "$fixture_root"
+    scripts/verify-development-validation-evidence --scope full
+  ) >"$fixture_root/cross-validator-${name}.stdout" \
+    2>"$fixture_root/cross-validator-${name}.stderr"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]] ||
+    ! grep -F "$expected_message" \
+      "$fixture_root/cross-validator-${name}.stderr" >/dev/null; then
+    echo "full validator accepted forged closure evidence: $name" >&2
+    exit 1
+  fi
+  restore_closure_fixture
+}
+
+sed -i '' \
+  's/^source_end_worktree_tree_oid=.*/source_end_worktree_tree_oid=forged-outer-tree/' \
+  "$closure_manifest"
+expect_closure_mutation_rejected \
+  forged-outer-closure-source-end \
+  "development-validation evidence disagrees for release diagnostic closure source tree stability"
+
+sed -i '' \
+  's/^source_end_worktree_tree_oid=.*/source_end_worktree_tree_oid=forged-inner-tree/' \
+  "$closure_inner_manifest"
+refresh_closure_fixture_bindings
+expect_closure_mutation_rejected \
+  forged-inner-closure-source-end \
+  "development-validation evidence disagrees for release diagnostic closure inner source tree stability"
+
+sed -i '' 's/^status=PASS$/status=FAIL/' "$closure_result"
+refresh_closure_fixture_bindings
+expect_closure_mutation_rejected \
+  forged-closure-result \
+  "release diagnostic closure result is semantically inconsistent"
+
+sed -i '' \
+  's/^evidence_run_id=fixture-run$/evidence_run_id=forged-result-run/' \
+  "$closure_result"
+refresh_closure_fixture_bindings
+expect_closure_mutation_rejected \
+  forged-closure-result-run \
+  "release diagnostic closure result is semantically inconsistent"
+
+printf '%s\n' 'forged restart result' >"$closure_restart"
+refresh_closure_fixture_bindings
+expect_closure_mutation_rejected \
+  forged-closure-restart-result \
+  "release diagnostic closure restart result is semantically inconsistent"
 
 e2e_manifest="$fixture_root/artifacts/e2e-runtime/manifest.txt"
 e2e_manifest_pristine="$fixture_root/artifacts/e2e-runtime/manifest.pristine"
@@ -1987,6 +2261,9 @@ diagnostic_package_report_pristine="${diagnostic_package_report}.pristine"
 diagnostic_sentinels_pristine="${diagnostic_sentinels}.pristine"
 diagnostic_helper_gate_relative="${diagnostic_helper_gate#${fixture_root}/}"
 diagnostic_helper_gate_pristine="${diagnostic_helper_gate}.pristine"
+diagnostic_helper_exit_status="$fixture_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt"
+diagnostic_helper_exit_status_relative="${diagnostic_helper_exit_status#${fixture_root}/}"
+diagnostic_helper_exit_status_pristine="${diagnostic_helper_exit_status}.pristine"
 cp "$diagnostic_scope_manifest" "$diagnostic_scope_manifest_pristine"
 cp "$diagnostic_ledger" "$diagnostic_ledger_pristine"
 cp "$diagnostic_helper" "$diagnostic_helper_pristine"
@@ -1994,6 +2271,9 @@ cp "$diagnostic_export" "$diagnostic_export_pristine"
 cp "$diagnostic_package_report" "$diagnostic_package_report_pristine"
 cp "$diagnostic_sentinels" "$diagnostic_sentinels_pristine"
 cp "$diagnostic_helper_gate" "$diagnostic_helper_gate_pristine"
+cp \
+  "$diagnostic_helper_exit_status" \
+  "$diagnostic_helper_exit_status_pristine"
 
 restore_diagnostic_fixture() {
   cp "$diagnostic_scope_manifest_pristine" "$diagnostic_scope_manifest"
@@ -2005,6 +2285,9 @@ restore_diagnostic_fixture() {
   cp "$diagnostic_sentinels_pristine" "$diagnostic_sentinels"
   chmod 600 "$diagnostic_sentinels"
   cp "$diagnostic_helper_gate_pristine" "$diagnostic_helper_gate"
+  cp \
+    "$diagnostic_helper_exit_status_pristine" \
+    "$diagnostic_helper_exit_status"
   cp "$install_inventory_pristine" "$install_inventory"
   cp "$install_manifest_pristine" "$install_manifest"
 }
@@ -2047,7 +2330,7 @@ rebind_diagnostic_export_claims() {
     -e "s/^diagnostic_export_sha256=.*/diagnostic_export_sha256=${sha256}/" \
     "$install_manifest"
   refresh_install_manifest_binding \
-    "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+    "$diagnostic_export_relative"
   refresh_install_manifest_artifact_binding \
     "$diagnostic_ledger_relative" \
     "diagnostic_export_ledger_sha256"
@@ -2087,6 +2370,59 @@ refresh_install_manifest_artifact_binding \
 expect_install_semantic_mutation_rejected \
   forged-diagnostic-lock-overlap \
   "DMG install diagnostic-export ledger lacks exact overlapping lock proof"
+restore_diagnostic_fixture
+
+awk -F $'\t' -v OFS=$'\t' '
+  $3 == "diagnostic-locks-after-export" {
+    sub(/main_ino=[0-9]+/, "main_ino=999999", $4)
+  }
+  { print }
+' "$diagnostic_ledger" >"${diagnostic_ledger}.after-vnode-drift"
+mv "${diagnostic_ledger}.after-vnode-drift" "$diagnostic_ledger"
+cp "$diagnostic_ledger" "$diagnostic_helper"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_ledger_relative" \
+  "diagnostic_export_ledger_sha256"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-helper.log" \
+  "diagnostic_export_helper_stdout_sha256"
+expect_install_semantic_mutation_rejected \
+  diagnostic-lock-after-vnode-drift \
+  "DMG install diagnostic-export ledger lacks exact overlapping lock proof"
+restore_diagnostic_fixture
+
+awk -F $'\t' -v OFS=$'\t' '
+  $3 == "diagnostic-lock-holder-exit" {
+    sub(/shm_ino=[0-9]+/, "shm_ino=999999", $4)
+  }
+  { print }
+' "$diagnostic_ledger" >"${diagnostic_ledger}.holder-vnode-drift"
+mv "${diagnostic_ledger}.holder-vnode-drift" "$diagnostic_ledger"
+cp "$diagnostic_ledger" "$diagnostic_helper"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_ledger_relative" \
+  "diagnostic_export_ledger_sha256"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-helper.log" \
+  "diagnostic_export_helper_stdout_sha256"
+expect_install_semantic_mutation_rejected \
+  diagnostic-lock-holder-vnode-drift \
+  "DMG install diagnostic-export ledger lacks exact overlapping lock proof"
+restore_diagnostic_fixture
+
+awk -F $'\t' '$3 != "diagnostic-lock-holder-exit" { print }' \
+  "$diagnostic_ledger" >"${diagnostic_ledger}.missing-holder-exit"
+mv "${diagnostic_ledger}.missing-holder-exit" "$diagnostic_ledger"
+cp "$diagnostic_ledger" "$diagnostic_helper"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_ledger_relative" \
+  "diagnostic_export_ledger_sha256"
+refresh_install_manifest_artifact_binding \
+  "artifacts/dmg-install/diagnostic-export-helper.log" \
+  "diagnostic_export_helper_stdout_sha256"
+expect_install_semantic_mutation_rejected \
+  missing-diagnostic-lock-holder-exit \
+  "DMG install diagnostic-export ledger has an incomplete or reordered phase set"
 restore_diagnostic_fixture
 
 mutated_scope_database="${diagnostic_database%/*}/Alternate-Noonmark.sqlite"
@@ -2130,6 +2466,15 @@ expect_install_semantic_mutation_rejected \
   "DMG install diagnostic helper observer gate is incomplete or cross-process"
 restore_diagnostic_fixture
 
+sed -i '' 's/^fflags=.*/fflags=0x1/' "$diagnostic_helper_exit_status"
+refresh_install_manifest_artifact_binding \
+  "$diagnostic_helper_exit_status_relative" \
+  "diagnostic_export_helper_exit_status_sha256"
+expect_install_semantic_mutation_rejected \
+  insufficient-diagnostic-helper-exit-flags \
+  "DMG install diagnostic helper exit status is incomplete or cross-process"
+restore_diagnostic_fixture
+
 jq '.manifest.appIdentity.version = "9.9.9"' \
   "$diagnostic_export" >"${diagnostic_export}.forged-identity"
 mv "${diagnostic_export}.forged-identity" "$diagnostic_export"
@@ -2162,7 +2507,7 @@ restore_diagnostic_fixture
 
 printf '\n' >>"$diagnostic_export"
 refresh_install_manifest_binding \
-  "artifacts/dmg-install/Noonmark-DMGValidation-Diagnostics.noonmarkdiagnostics"
+  "$diagnostic_export_relative"
 expect_install_semantic_mutation_rejected \
   diagnostic-export-sha-mismatch \
   "diagnostic export inventory row disagrees with its manifest digest or size"
@@ -2177,7 +2522,7 @@ restore_diagnostic_fixture
 printf 'short\n' >"$diagnostic_sentinels"
 chmod 600 "$diagnostic_sentinels"
 refresh_install_manifest_binding \
-  "artifacts/dmg-install/diagnostic-export-sentinels.txt"
+  "$diagnostic_sentinels_relative"
 expect_install_semantic_mutation_rejected \
   invalid-diagnostic-privacy-sentinel-set \
   "DMG install diagnostic privacy sentinel evidence is invalid"
@@ -2302,6 +2647,15 @@ cp "$exercise_ledger_pristine" "$exercise_ledger"
 cp "$install_inventory_pristine" "$install_inventory"
 cp "$install_manifest_pristine" "$install_manifest"
 
+sed -i '' '/\tquit-menu\t/d' "$exercise_ledger"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
+expect_install_semantic_mutation_rejected \
+  missing-exercise-quit-menu \
+  "DMG install exercise ledger has an incomplete or reordered phase set"
+cp "$exercise_ledger_pristine" "$exercise_ledger"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
 sed -i '' '/\tactivation\t/d' "$exercise_ledger"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
 expect_install_semantic_mutation_rejected \
@@ -2328,7 +2682,7 @@ sed -i '' \
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
 expect_install_semantic_mutation_rejected \
   replayed-foreground-ownership-pid \
-  "DMG install exercise ledger has an invalid foreground ownership proof"
+  "DMG install exercise ledger has an invalid foreground ownership state"
 cp "$exercise_ledger_pristine" "$exercise_ledger"
 cp "$install_inventory_pristine" "$install_inventory"
 cp "$install_manifest_pristine" "$install_manifest"

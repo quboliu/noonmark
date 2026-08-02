@@ -4,14 +4,34 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
+source scripts/evidence-common
+
 if [[ "$#" -ne 0 ]]; then
   echo "usage: scripts/release-private-dmg" >&2
   exit 64
 fi
 
+if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
+  e2e_manifest="artifacts/e2e-runtime/manifest.txt"
+  lease_manifest="artifacts/e2e-data-root-process-lease/manifest.txt"
+  if ! release_run_id="$(evidence_read "$e2e_manifest" evidence_run_id)" ||
+    [[ "$(evidence_read "$lease_manifest" evidence_run_id)" != \
+      "$release_run_id" ]]; then
+    echo "release requires same-run full E2E and writer-lease evidence" >&2
+    exit 1
+  fi
+  NOONMARK_EVIDENCE_RUN_ID="$release_run_id"
+  export NOONMARK_EVIDENCE_RUN_ID
+fi
+
+# The already-completed non-App gate and existing runtime manifests must be
+# valid before the first release-targeted real App gate is allowed to start.
+scripts/verify-release-static-preflight
+scripts/verify-development-validation-evidence --scope runtime
 scripts/test-release-diagnostic-closure
 scripts/package-dmg release
 scripts/verify-dmg dist/Noonmark.dmg
 scripts/test-dmg-install dist/Noonmark.dmg
+scripts/verify-development-validation-evidence --scope full
 
-echo "Private DMG package, static verification, and isolated runtime gate passed"
+echo "Private DMG package and complete same-run validation evidence passed"

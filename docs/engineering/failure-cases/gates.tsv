@@ -15,6 +15,9 @@ FAIL-2026-08-01-04	fast	scripts/test-dmg-foreground-ownership-contract	scripts/c
 FAIL-2026-08-01-04	symptom	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 在真实菜单与物理输入前建立并证明前台所有权
 FAIL-2026-08-01-04	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的签名派生、前台协议、退出、重启、持久化与完整清单
 FAIL-2026-08-01-05	fast	scripts/test-dmg-diagnostic-scope-contract	scripts/check	唯一 canonical scope、同一 helper 身份、严格 TSV、no-follow／exclusive 控制证据
+FAIL-2026-08-01-05	fast	scripts/test-dmg-harness-evidence-contract	scripts/check	producer 自校验且所有 consumer 共用精确 ledger 步骤、helper process／observer、退出与前台证据契约
+FAIL-2026-08-01-05	fast	scripts/test-diagnostic-lock-evidence-contract	scripts/check	唯一锁证据 schema、目标 PID 绑定、before／after／holder-exit 三段 vnode 对账与旧三字段拒绝
+FAIL-2026-08-01-05	fast	scripts/test-release-gate-contract	scripts/check	真实 App 前静态／runtime preflight、同一 run ID、fresh closure manifest、signal fail-closed 与完整五方对账
 FAIL-2026-08-01-05	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实诊断导出 helper 参数与自身派生 scope 完全对账
 FAIL-2026-08-01-05	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的诊断 UI、双锁现场、隐私边界与完整证据清单
 FAIL-2026-08-02-01	fast	scripts/test-e2e-evidence-contract	scripts/check	分别约束 seed transportOrStorage 与 restart operationInterrupted 的阶段语义

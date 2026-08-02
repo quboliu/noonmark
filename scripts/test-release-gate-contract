@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+repo_parent="$(cd "$repo_root/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/evidence-common
+
+fail() {
+  echo "release gate contract: $*" >&2
+  exit 1
+}
+
+require_order() {
+  local path="$1"
+  local first="$2"
+  local second="$3"
+  local first_line
+  local second_line
+
+  first_line="$(rg -n -F "$first" "$path" | head -n 1 | cut -d: -f1)"
+  second_line="$(rg -n -F "$second" "$path" | head -n 1 | cut -d: -f1)"
+  if [[ ! "$first_line" =~ ^[0-9]+$ || ! "$second_line" =~ ^[0-9]+$ ||
+    "$first_line" -ge "$second_line" ]]; then
+    fail "$path does not order '$first' before '$second'"
+  fi
+}
+
+release_script="scripts/release-private-dmg"
+closure_script="scripts/test-release-diagnostic-closure"
+verifier="scripts/verify-development-validation-evidence"
+require_order \
+  "$release_script" \
+  "scripts/verify-release-static-preflight" \
+  "scripts/verify-development-validation-evidence --scope runtime"
+require_order \
+  "$release_script" \
+  "scripts/verify-development-validation-evidence --scope runtime" \
+  "scripts/test-release-diagnostic-closure"
+require_order \
+  "$release_script" \
+  "scripts/test-release-diagnostic-closure" \
+  "scripts/package-dmg release"
+require_order \
+  "$release_script" \
+  "scripts/test-dmg-install dist/Noonmark.dmg" \
+  "scripts/verify-development-validation-evidence --scope full"
+require_order \
+  "$closure_script" \
+  'evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"' \
+  'git status --porcelain --untracked-files=all'
+if rg -n 'NOONMARK_EVIDENCE_RUN_ID=.*-release-diagnostic' \
+  "$closure_script" >/dev/null; then
+  fail "release closure still forks its evidence run ID"
+fi
+if rg -F 'trap cleanup_on_exit EXIT INT TERM' \
+  "$closure_script" >/dev/null; then
+  fail "release closure still reuses an EXIT status for signals"
+fi
+for required in \
+  'git worktree add' \
+  '--detach "$gate_worktree" "$source_commit"' \
+  '"$gate_worktree/scripts/reset-dev-data" e2e' \
+  'git worktree remove --force "$gate_worktree"' \
+  'evidence_begin_manifest' \
+  'evidence_finish_manifest' \
+  'evidence_inventory' \
+  'NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1' \
+  'scripts/test-e2e release' \
+  'closure_e2e_manifest_path' \
+  'production_app_executed false' \
+  'production_app_executed=false' \
+  'trap cleanup_on_exit EXIT' \
+  "trap 'cleanup_on_signal 130' INT" \
+  "trap 'cleanup_on_signal 143' TERM"; do
+  rg -F -- "$required" "$closure_script" >/dev/null ||
+    fail "release closure lacks required boundary: $required"
+done
+rg -F 'closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"' \
+  "$verifier" >/dev/null ||
+  fail "full verifier does not require the release closure manifest"
+rg -F 'artifacts/release-diagnostic-closure-gate' \
+  .github/workflows/release.yml >/dev/null ||
+  fail "release workflow does not retain the diagnostic closure evidence"
+rg -F 'scripts/release-private-dmg' .github/workflows/release.yml >/dev/null ||
+  fail "release workflow does not delegate validation to the release entry"
+if rg -F 'scripts/verify-development-validation-evidence' \
+  .github/workflows/release.yml >/dev/null; then
+  fail "release workflow duplicates validation owned by the release entry"
+fi
+
+if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
+  source_snapshot="$(
+    mktemp "${TMPDIR:-/tmp}/noonmark-release-contract-source.XXXXXX"
+  )"
+  evidence_capture_source "$repo_root" source "$source_snapshot"
+  source_tree="$(evidence_read "$source_snapshot" source_worktree_tree_oid)"
+  rm -f "$source_snapshot"
+  fixture_commit="$(
+    GIT_AUTHOR_NAME=Noonmark \
+      GIT_AUTHOR_EMAIL=noonmark@example.invalid \
+      GIT_COMMITTER_NAME=Noonmark \
+      GIT_COMMITTER_EMAIL=noonmark@example.invalid \
+      git commit-tree \
+        "$source_tree" \
+        -p "$(git rev-parse HEAD)" \
+        -m "test: release gate contract fixture"
+  )"
+  worktree_parent="$(
+    mktemp -d "$repo_parent/.noonmark-release-contract.XXXXXX"
+  )"
+  worktree="$worktree_parent/worktree"
+  worktree_added=0
+  cleanup_fixture_worktree() {
+    local cleanup_status=0
+
+    set +e
+    if [[ "$worktree_added" == "1" || -e "$worktree/.git" ]]; then
+      git worktree remove --force "$worktree" >/dev/null 2>&1 ||
+        cleanup_status=1
+    fi
+    worktree_added=0
+    rmdir "$worktree_parent" >/dev/null 2>&1 || cleanup_status=1
+    set -e
+    return "$cleanup_status"
+  }
+  cleanup_fixture_on_exit() {
+    local original_status=$?
+
+    trap - EXIT INT TERM
+    if ! cleanup_fixture_worktree && [[ "$original_status" -eq 0 ]]; then
+      original_status=1
+    fi
+    exit "$original_status"
+  }
+  cleanup_fixture_on_signal() {
+    local signal_status="$1"
+
+    trap - EXIT INT TERM
+    cleanup_fixture_worktree || true
+    exit "$signal_status"
+  }
+  trap cleanup_fixture_on_exit EXIT
+  trap 'cleanup_fixture_on_signal 130' INT
+  trap 'cleanup_fixture_on_signal 143' TERM
+  git worktree add --detach "$worktree" "$fixture_commit" >/dev/null
+  worktree_added=1
+  (
+    cd "$worktree"
+    NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE=1 \
+      scripts/test-release-gate-contract
+  )
+  git worktree remove --force "$worktree" >/dev/null
+  worktree_added=0
+  rmdir "$worktree_parent"
+  trap - EXIT INT TERM
+  echo "Release gate contract passed"
+  exit 0
+fi
+
+fixture_relative="artifacts/release-static-preflight-contract"
+evidence_prepare_fresh_directory "$repo_root" "$fixture_relative"
+fixture_root="$repo_root/$fixture_relative"
+cleanup() {
+  if [[ -n "${dirty_marker:-}" ]]; then
+    rm -f "$dirty_marker"
+  fi
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+fixture_manifest="$fixture_root/manifest.txt"
+fixture_log="$fixture_root/make-check.log"
+fixture_inventory="$fixture_root/artifact-inventory.sha256"
+fixture_start="$fixture_root/source-start.fragment"
+fixture_end="$fixture_root/source-end.fragment"
+fixture_run_id="release-static-fixture"
+printf '%s\n' 'fixture static gate passed' >"$fixture_log"
+evidence_capture_source "$repo_root" source "$fixture_start"
+evidence_begin_manifest \
+  "$fixture_manifest" make-check "$fixture_run_id" repository full
+evidence_append_snapshot "$fixture_manifest" "$fixture_start"
+evidence_capture_source "$repo_root" source_end "$fixture_end"
+evidence_append_snapshot "$fixture_manifest" "$fixture_end"
+evidence_append \
+  "$fixture_manifest" check_log_path "$fixture_relative/make-check.log"
+evidence_append \
+  "$fixture_manifest" check_log_sha256 \
+  "$(shasum -a 256 "$fixture_log" | awk '{print $1}')"
+evidence_inventory \
+  "$repo_root" \
+  "$fixture_inventory" \
+  "$fixture_log" \
+  "$fixture_start" \
+  "$fixture_end"
+evidence_append \
+  "$fixture_manifest" artifact_inventory_sha256 \
+  "$(shasum -a 256 "$fixture_inventory" | awk '{print $1}')"
+evidence_finish_manifest \
+  "$fixture_manifest" \
+  0 \
+  source_worktree_tree_oid \
+  source_end_worktree_tree_oid \
+  check_log_sha256 \
+  artifact_inventory_sha256
+
+NOONMARK_EVIDENCE_RUN_ID="$fixture_run_id" \
+  scripts/verify-release-static-preflight "$fixture_manifest" >/dev/null ||
+  fail "static preflight verifier rejected exact evidence"
+if NOONMARK_EVIDENCE_RUN_ID="wrong-run" \
+  scripts/verify-release-static-preflight \
+  "$fixture_manifest" >/dev/null 2>&1; then
+  fail "static preflight verifier accepted a stale run ID"
+fi
+
+dirty_marker="$repo_root/.release-closure-dirty-fixture"
+dirty_trace="$fixture_root/dirty-closure.trace"
+printf '%s\n' dirty >"$dirty_marker"
+set +e
+NOONMARK_EVIDENCE_RUN_ID="$fixture_run_id" \
+  bash -x scripts/test-release-diagnostic-closure \
+  >"$fixture_root/dirty-closure.stdout" 2>"$dirty_trace"
+dirty_status=$?
+set -e
+rm "$dirty_marker"
+if [[ "$dirty_status" -eq 0 ]]; then
+  fail "release closure accepted a dirty source tree"
+fi
+if rg -n '/artifacts/e2e-(diagnostic-closure|runtime)' \
+  "$dirty_trace" >/dev/null; then
+  fail "release closure derived a root-level artifact path without a worktree"
+fi
+
+echo "Release gate contract passed"

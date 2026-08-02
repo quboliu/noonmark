@@ -43,12 +43,9 @@ jobs:
         run: |
           scripts/test-tencent-ime-input-matrix release
           scripts/test-tencent-ime-termination-persistence release
-      - name: Verify complete E2E evidence
-        run: scripts/verify-development-validation-evidence --scope runtime
       - name: Package artifact
         run: |
           scripts/release-private-dmg
-          scripts/verify-development-validation-evidence --scope full
           ditto -c -k --keepParent dist/Noonmark.app dist/Noonmark.app.zip
           shasum -a 256 dist/Noonmark.app.zip > dist/Noonmark.app.zip.sha256
           shasum -a 256 -c dist/Noonmark.app.zip.sha256

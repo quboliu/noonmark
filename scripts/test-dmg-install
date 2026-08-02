@@ -7,6 +7,10 @@ cd "$repo_root"
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 source scripts/diagnostic-scope-manifest
+# shellcheck source=scripts/diagnostic-lock-evidence
+source scripts/diagnostic-lock-evidence
+# shellcheck source=scripts/dmg-harness-evidence
+source scripts/dmg-harness-evidence
 
 # Synthetic contract probes dispatch before runtime-profile setup so they
 # cannot inspect or reset any signed runtime profile.
@@ -2211,9 +2215,8 @@ wait_for_helper_process_record() {
   local mode="$1"
   local token="$2"
   local ledger_path="$3"
-  local process_count process_detail
-  local mode_field pid_field token_field extra_field
   local helper_pid owned_pids
+  local observed_token
 
   HELPER_PROCESS_PID=""
   for _ in {1..400}; do
@@ -2222,26 +2225,11 @@ wait_for_helper_process_record() {
         echo "DMG install harness failed before its process identity was verified" >&2
         return 1
       fi
-      IFS=$'\t' read -r process_count process_detail < <(
-        awk -F $'\t' '
-          $2 == "PASS" && $3 == "process" { count += 1; detail = $4 }
-          END { printf "%d\t%s\n", count, detail }
-        ' "$ledger_path"
-      )
-      if [[ "$process_count" -gt 1 ]]; then
-        echo "DMG install harness emitted duplicate process records" >&2
-        return 1
-      fi
-      if [[ "$process_count" -eq 1 ]]; then
-        read -r mode_field pid_field token_field extra_field <<<"$process_detail"
-        if [[ -n "${extra_field:-}" || "$mode_field" != "mode=$mode" ||
-          "$pid_field" != helper_pid=* || "$token_field" != "launch_token=$token" ]]; then
-          echo "invalid helper process record: $process_detail" >&2
-          return 1
-        fi
-        helper_pid="${pid_field#helper_pid=}"
-        if [[ ! "$helper_pid" =~ ^[0-9]+$ || "$helper_pid" -le 0 ]]; then
-          echo "invalid helper pid in process record: $helper_pid" >&2
+      if IFS=$'\t' read -r helper_pid observed_token < <(
+        dmg_harness_process_identity "$mode" "$ledger_path"
+      ); then
+        if [[ "$observed_token" != "$token" ]]; then
+          echo "invalid helper process launch token" >&2
           return 1
         fi
         active_helper_pid="$helper_pid"
@@ -2260,6 +2248,9 @@ wait_for_helper_process_record() {
         fi
         HELPER_PROCESS_PID="$helper_pid"
         return 0
+      elif grep -F $'\tprocess\t' "$ledger_path" >/dev/null 2>&1; then
+        echo "invalid or duplicate helper process record" >&2
+        return 1
       fi
     fi
     sleep 0.025
@@ -2300,21 +2291,13 @@ assert_helper_completed() {
   local target_pid="${10:-}"
   local last_line=""
   local timestamp status step detail
-  local required_step step_count step_line previous_step_line=0
-  local required_steps=()
+  local diagnostic_lock_before=""
+  local diagnostic_lock_after=""
+  local diagnostic_lock_holder_exit=""
+  local activation_detail=""
 
-  if ! awk -v mode="$mode" -v pid="$helper_pid" -v token="$token" '
-    NR == 1 { valid += ($0 == "status=PASS") }
-    NR == 2 { valid += ($0 == "mode=" mode) }
-    NR == 3 { valid += ($0 == "helper_pid=" pid) }
-    NR == 4 { valid += ($0 == "launch_token=" token) }
-    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
-    NR == 6 { valid += ($0 == "raw_status=0") }
-    NR == 7 { valid += ($0 == "normal_exit=true") }
-    NR == 8 { valid += ($0 == "exit_code=0") }
-    NR == 9 { valid += ($0 == "signal=0") }
-    END { exit !(NR == 9 && valid == 9) }
-  ' "$exit_result_path"; then
+  if ! helper_exit_result_matches \
+    "$exit_result_path" "$mode" "$helper_pid" "$token"; then
     echo "DMG install harness did not expose a normal kernel exit status in $mode mode" >&2
     return 1
   fi
@@ -2343,141 +2326,70 @@ assert_helper_completed() {
     return 1
   fi
 
-  case "$mode" in
-    preflight)
-      required_steps=(arguments process exit-observer permissions complete)
-      ;;
-    exercise)
-      required_steps=(
-        arguments
-        process
-        exit-observer
-        permissions
-        activation
-        target
-        main-window
-        settings-menu
-        settings-window
-        settings-close
-        quick-entry-menu
-        quick-entry-input
-        quick-entry-add
-        exercise-title-visible
-        quit
-        complete
-      )
-      ;;
-    restart)
-      required_steps=(
-        arguments
-        process
-        exit-observer
-        permissions
-        activation
-        target
-        main-window
-        restart-title-visible
-        quit
-        complete
-      )
-      ;;
-    diagnostic-export)
-      required_steps=(
-        arguments
-        process
-        exit-observer
-        permissions
-        activation
-        target
-        diagnostic-locks-before-export
-        diagnostic-window
-        diagnostic-menu
-        diagnostic-preview
-        diagnostic-export-ui
-        diagnostic-locks-after-export
-        diagnostic-package
-        complete
-      )
-      ;;
-    *)
-      echo "unknown DMG install harness mode: $mode" >&2
-      return 1
-      ;;
-  esac
-  for required_step in "${required_steps[@]}"; do
-    IFS=$'\t' read -r step_count step_line < <(
-      awk -F $'\t' -v expected="$required_step" '
-        $2 == "PASS" && $3 == expected { count += 1; line = NR }
-        END { printf "%d\t%d\n", count, line }
-      ' "$ledger_path"
-    )
-    if [[ "$step_count" -ne 1 || "$step_line" -le "$previous_step_line" ]]; then
-      echo "DMG install harness step $required_step was absent, duplicated, or out of order in $mode mode" >&2
-      cat "$ledger_path" >&2
-      return 1
-    fi
-    previous_step_line="$step_line"
-  done
+  if ! dmg_harness_require_exact_steps "$mode" "$ledger_path"; then
+    echo "DMG install harness ledger disagrees with the exact $mode protocol" >&2
+    cat "$ledger_path" >&2
+    return 1
+  fi
 
-  if ! awk -F $'\t' \
-    -v process_detail="mode=$mode helper_pid=$helper_pid launch_token=$token" \
-    -v observer_detail="helper_pid=$helper_pid launch_token=$token observer=EVFILT_PROC+NOTE_EXITSTATUS" '
-      $2 == "PASS" && $3 == "process" && $4 == process_detail { process_count += 1 }
-      $2 == "PASS" && $3 == "exit-observer" && $4 == observer_detail {
-        observer_count += 1
-      }
-      END { exit !(process_count == 1 && observer_count == 1) }
-    ' "$ledger_path"; then
+  if ! dmg_harness_process_observer_evidence_matches \
+    "$mode" "$ledger_path" "$helper_pid" "$token"; then
     echo "DMG install harness process or exit-observer identity detail was invalid" >&2
     return 1
   fi
 
-  if [[ "$mode" != "preflight" ]] &&
-    ! awk -F $'\t' \
-      -v app="$installed_app" \
-      -v target_pid="$target_pid" '
-        $2 == "PASS" && $3 == "activation" {
-          count += 1
-          prefix = "bundle=app.noonmark.mac.dmg-validation path=" app \
-            " process_identifier=" target_pid " "
-          detail = substr($4, length(prefix) + 1)
-          if (index($4, prefix) == 1 &&
-              detail ~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
-            valid += 1
-          }
-        }
-        END {
-          exit !(target_pid ~ /^[1-9][0-9]*$/ && count == 1 && valid == 1)
-        }
-      ' "$ledger_path"; then
-    echo "DMG install harness did not prove exact-process foreground ownership in $mode mode" >&2
-    return 1
+  if [[ "$mode" != "preflight" ]]; then
+    activation_detail="$(
+      awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path"
+    )"
+    if ! dmg_harness_activation_evidence_matches \
+      "$activation_detail" \
+      "app.noonmark.mac.dmg-validation" \
+      "$installed_app" \
+      "$target_pid"; then
+      echo "DMG install harness did not prove exact-process foreground ownership in $mode mode" >&2
+      return 1
+    fi
   fi
 
-  if [[ "$mode" == "diagnostic-export" ]] &&
-    ! awk -F $'\t' '
-      $2 == "PASS" &&
-        $3 == "diagnostic-locks-before-export" &&
-        $4 == "sqlite_writer=busy repository_flock=would-block held=true" {
-        before += 1
-      }
-      $2 == "PASS" &&
-        $3 == "diagnostic-locks-after-export" &&
-        $4 == "sqlite_writer=busy repository_flock=would-block held=true" {
-        after += 1
-      }
-      $2 == "PASS" && $3 == "diagnostic-export-ui" &&
-        $4 == "menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap" {
-        ui += 1
-      }
-      $2 == "PASS" && $3 == "diagnostic-package" &&
-        $4 ~ /^schema=1 bytes=[1-9][0-9]* sha256=[0-9a-f]{64} records=[0-9]+ active=[0-9]+ capsules=[0-9]+ metrics=[0-9]+ sentinels=absent owner_only=true$/ {
-        package += 1
-      }
-      END { exit !(before == 1 && after == 1 && ui == 1 && package == 1) }
-    ' "$ledger_path"; then
-    echo "diagnostic export helper omitted exact lock, UI, or package evidence" >&2
-    return 1
+  if [[ "$mode" == "diagnostic-export" ]]; then
+    diagnostic_lock_before="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-locks-before-export" { print $4 }' \
+        "$ledger_path"
+    )"
+    diagnostic_lock_after="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-locks-after-export" { print $4 }' \
+        "$ledger_path"
+    )"
+    diagnostic_lock_holder_exit="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-lock-holder-exit" { print $4 }' \
+        "$ledger_path"
+    )"
+    if ! diagnostic_lock_evidence_set_matches \
+      "$diagnostic_lock_before" \
+      "$diagnostic_lock_after" \
+      "$diagnostic_lock_holder_exit" \
+      "$target_pid"; then
+      echo "diagnostic export helper omitted exact target-bound lock evidence" >&2
+      return 1
+    fi
+    if ! awk -F $'\t' '
+        $2 == "PASS" && $3 == "diagnostic-export-ui" &&
+          $4 == "menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap" {
+          ui += 1
+        }
+        $2 == "PASS" && $3 == "diagnostic-package" &&
+          $4 ~ /^schema=1 bytes=[1-9][0-9]* sha256=[0-9a-f]{64} records=[0-9]+ active=[0-9]+ capsules=[0-9]+ metrics=[0-9]+ sentinels=absent owner_only=true$/ {
+          package += 1
+        }
+        END { exit !(ui == 1 && package == 1) }
+      ' "$ledger_path"; then
+      echo "diagnostic export helper omitted exact UI or package evidence" >&2
+      return 1
+    fi
   fi
 
   last_line="$(tail -n 1 "$ledger_path")"

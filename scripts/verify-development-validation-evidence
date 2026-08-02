@@ -11,11 +11,17 @@ source scripts/evidence-common
 source scripts/runtime-evidence
 # shellcheck source=scripts/diagnostic-scope-manifest
 source scripts/diagnostic-scope-manifest
+# shellcheck source=scripts/diagnostic-lock-evidence
+source scripts/diagnostic-lock-evidence
+# shellcheck source=scripts/dmg-harness-evidence
+source scripts/dmg-harness-evidence
+# shellcheck source=scripts/dmg-install-observer-common
+source scripts/dmg-install-observer-common
 
 scope="full"
 if [[ "${1:-}" == "--scope" ]]; then
   if [[ $# -lt 2 ]]; then
-    echo "usage: $0 [--scope runtime|full] [e2e lease [package install]]" >&2
+    echo "usage: $0 [--scope runtime|full] [e2e lease [package install closure]]" >&2
     exit 2
   fi
   scope="$2"
@@ -28,14 +34,21 @@ case "$scope" in
     exit 2
     ;;
 esac
+if [[ "$scope" == "runtime" && $# -gt 2 ]] ||
+  [[ "$scope" == "full" && $# -gt 5 ]]; then
+  echo "validation evidence received too many manifest paths" >&2
+  exit 2
+fi
 
 e2e_manifest="${1:-artifacts/e2e-runtime/manifest.txt}"
 lease_manifest="${2:-artifacts/e2e-data-root-process-lease/manifest.txt}"
 package_manifest="${3:-dist/Noonmark.dmg.manifest}"
 install_manifest="${4:-artifacts/dmg-install/runtime-manifest.txt}"
+closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"
 expected_english_scenarios="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
 english_ledger="$(dirname "$e2e_manifest")/english-scenario-ledger.tsv"
 install_evidence_dir="$(dirname "$install_manifest")"
+closure_evidence_dir="$(dirname "$closure_manifest")"
 e2e_evidence_dir="$(dirname "$e2e_manifest")"
 lease_evidence_dir="$(dirname "$lease_manifest")"
 if [[ "$e2e_evidence_dir" == /* ]]; then
@@ -51,6 +64,7 @@ fi
 e2e_inventory="${e2e_evidence_dir}/artifact-inventory.sha256"
 lease_inventory="${lease_evidence_dir}/artifact-inventory.sha256"
 install_inventory="$(dirname "$install_evidence_dir")/dmg-install-artifact-inventory.sha256"
+closure_inventory="${closure_evidence_dir}/artifact-inventory.sha256"
 
 require_equal_manifest_value() {
   local left_manifest="$1"
@@ -561,18 +575,13 @@ require_install_activation_semantics() {
   local app_path="$3"
   local expected_pid="$4"
   local detail
-  local prefix
-  local state_detail
 
   detail="$(awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path")"
-  prefix="bundle=app.noonmark.mac.dmg-validation path=$app_path process_identifier=$expected_pid "
-  if [[ "$detail" != "$prefix"* ]]; then
-    echo "DMG install $mode ledger has an invalid foreground ownership proof" >&2
-    return 1
-  fi
-  state_detail="${detail#"$prefix"}"
-  if [[ ! "$expected_pid" =~ ^[1-9][0-9]*$ ]] ||
-    [[ ! "$state_detail" =~ ^process_start_tvsec=[1-9][0-9]*[[:space:]]process_start_tvusec=[0-9]{1,6}[[:space:]]activation_policy=regular[[:space:]]request_accepted=true[[:space:]]active_before=(true|false)[[:space:]]ax_frontmost_before=(true|false)[[:space:]]active_after=true[[:space:]]ax_frontmost_after=true$ ]]; then
+  if ! dmg_harness_activation_evidence_matches \
+    "$detail" \
+    "app.noonmark.mac.dmg-validation" \
+    "$app_path" \
+    "$expected_pid"; then
     echo "DMG install $mode ledger has an invalid foreground ownership state" >&2
     return 1
   fi
@@ -581,31 +590,15 @@ require_install_activation_semantics() {
 require_install_ledger_semantics() {
   local mode="$1"
   local path="$2"
-  local expected_steps="$3"
-  local expected_bundle_path="${4:-}"
-  local expected_export_path="${5:-}"
-  local expected_sentinels_path="${6:-}"
-  local expected_window_number="${7:-}"
-  local expected_window_title="${8:-}"
-  local expected_database_path="${9:-}"
-  local expected_repository_lock_path="${10:-}"
-  local actual_steps
+  local expected_bundle_path="${3:-}"
+  local expected_export_path="${4:-}"
+  local expected_sentinels_path="${5:-}"
+  local expected_window_number="${6:-}"
+  local expected_window_title="${7:-}"
+  local expected_database_path="${8:-}"
+  local expected_repository_lock_path="${9:-}"
 
-  if [[ ! -f "$path" || -L "$path" ]]; then
-    echo "DMG install $mode ledger is missing or unsafe" >&2
-    return 1
-  fi
-  if ! actual_steps="$(awk -F $'\t' '
-    NF != 4 ||
-      $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
-      $2 != "PASS" || $3 == "" || $4 == "" { exit 1 }
-    { steps = steps (steps == "" ? "" : ",") $3 }
-    END { if (NR == 0) exit 1; print steps }
-  ' "$path")"; then
-    echo "DMG install $mode ledger has an invalid row" >&2
-    return 1
-  fi
-  if [[ "$actual_steps" != "$expected_steps" ]]; then
+  if ! dmg_harness_require_exact_steps "$mode" "$path"; then
     echo "DMG install $mode ledger has an incomplete or reordered phase set" >&2
     return 1
   fi
@@ -616,22 +609,18 @@ require_install_ledger_semantics() {
   fi
 
   local arguments_detail
-  local process_detail
-  local observer_detail
   local helper_pid
   local launch_token
   local app_path
   arguments_detail="$(awk -F $'\t' '$3 == "arguments" { print $4 }' "$path")"
-  process_detail="$(awk -F $'\t' '$3 == "process" { print $4 }' "$path")"
-  observer_detail="$(awk -F $'\t' '$3 == "exit-observer" { print $4 }' "$path")"
-  if [[ ! "$process_detail" =~ ^mode=$mode[[:space:]]helper_pid=([1-9][0-9]*)[[:space:]]launch_token=([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})$ ]]; then
+  if ! IFS=$'\t' read -r helper_pid launch_token < <(
+    dmg_harness_process_identity "$mode" "$path"
+  ); then
     echo "DMG install $mode ledger has an invalid helper process proof" >&2
     return 1
   fi
-  helper_pid="${BASH_REMATCH[1]}"
-  launch_token="${BASH_REMATCH[2]}"
-  if [[ "$observer_detail" != \
-    "helper_pid=$helper_pid launch_token=$launch_token observer=EVFILT_PROC+NOTE_EXITSTATUS" ]]; then
+  if ! dmg_harness_process_observer_evidence_matches \
+    "$mode" "$path" "$helper_pid" "$launch_token"; then
     echo "DMG install $mode ledger has a mismatched exit-observer proof" >&2
     return 1
   fi
@@ -654,6 +643,9 @@ require_install_ledger_semantics() {
     local diagnostic_window_detail
     local diagnostic_menu_detail
     local diagnostic_package_detail
+    local diagnostic_lock_before
+    local diagnostic_lock_after
+    local diagnostic_lock_holder_exit
 
     argument_tail="${arguments_detail#mode=diagnostic-export pid=}"
     if [[ "$argument_tail" == "$arguments_detail" ||
@@ -705,10 +697,23 @@ require_install_ledger_semantics() {
       echo "DMG install diagnostic-export ledger has an invalid target proof" >&2
       return 1
     fi
-    if [[ "$(awk -F $'\t' '$3 == "diagnostic-locks-before-export" { print $4 }' "$path")" != \
-        "sqlite_writer=busy repository_flock=would-block held=true" ||
-      "$(awk -F $'\t' '$3 == "diagnostic-locks-after-export" { print $4 }' "$path")" != \
-        "sqlite_writer=busy repository_flock=would-block held=true" ]]; then
+    diagnostic_lock_before="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-locks-before-export" { print $4 }' "$path"
+    )"
+    diagnostic_lock_after="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-locks-after-export" { print $4 }' "$path"
+    )"
+    diagnostic_lock_holder_exit="$(
+      awk -F $'\t' \
+        '$3 == "diagnostic-lock-holder-exit" { print $4 }' "$path"
+    )"
+    if ! diagnostic_lock_evidence_set_matches \
+      "$diagnostic_lock_before" \
+      "$diagnostic_lock_after" \
+      "$diagnostic_lock_holder_exit" \
+      "$argument_pid"; then
       echo "DMG install diagnostic-export ledger lacks exact overlapping lock proof" >&2
       return 1
     fi
@@ -1132,17 +1137,20 @@ require_diagnostic_export_package() {
 
 require_diagnostic_helper_process_artifacts() {
   local ledger_path="$1"
-  local process_detail
   local helper_pid
   local launch_token
 
-  process_detail="$(awk -F $'\t' '$3 == "process" { print $4 }' "$ledger_path")"
-  if [[ ! "$process_detail" =~ ^mode=diagnostic-export[[:space:]]helper_pid=([1-9][0-9]*)[[:space:]]launch_token=([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})$ ]]; then
+  if ! IFS=$'\t' read -r helper_pid launch_token < <(
+    dmg_harness_process_identity "diagnostic-export" "$ledger_path"
+  ); then
     echo "DMG install diagnostic helper process identity is invalid" >&2
     return 1
   fi
-  helper_pid="${BASH_REMATCH[1]}"
-  launch_token="${BASH_REMATCH[2]}"
+  if ! dmg_harness_process_observer_evidence_matches \
+    "diagnostic-export" "$ledger_path" "$helper_pid" "$launch_token"; then
+    echo "DMG install diagnostic helper ledger observer identity is invalid" >&2
+    return 1
+  fi
 
   if ! cmp -s "$ledger_path" "$diagnostic_export_helper" ||
     [[ -s "$diagnostic_export_launch" ||
@@ -1152,28 +1160,19 @@ require_diagnostic_helper_process_artifacts() {
     echo "DMG install diagnostic helper stdout or empty runtime logs disagree" >&2
     return 1
   fi
-  if ! awk -v pid="$helper_pid" -v token="$launch_token" '
-    NR == 1 { valid += ($0 == "mode=diagnostic-export") }
-    NR == 2 { valid += ($0 == "helper_pid=" pid) }
-    NR == 3 { valid += ($0 == "launch_token=" token) }
-    NR == 4 { valid += ($0 == "observer=EVFILT_PROC+NOTE_EXITSTATUS") }
-    END { exit !(NR == 4 && valid == 4) }
-  ' "$diagnostic_export_helper_observer_gate"; then
+  if ! helper_observer_gate_matches \
+    "$diagnostic_export_helper_observer_gate" \
+    "diagnostic-export" \
+    "$helper_pid" \
+    "$launch_token"; then
     echo "DMG install diagnostic helper observer gate is incomplete or cross-process" >&2
     return 1
   fi
-  if ! awk -v pid="$helper_pid" -v token="$launch_token" '
-    NR == 1 { valid += ($0 == "status=PASS") }
-    NR == 2 { valid += ($0 == "mode=diagnostic-export") }
-    NR == 3 { valid += ($0 == "helper_pid=" pid) }
-    NR == 4 { valid += ($0 == "launch_token=" token) }
-    NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]*[1-9A-F][0-9A-F]*$/) }
-    NR == 6 { valid += ($0 == "raw_status=0") }
-    NR == 7 { valid += ($0 == "normal_exit=true") }
-    NR == 8 { valid += ($0 == "exit_code=0") }
-    NR == 9 { valid += ($0 == "signal=0") }
-    END { exit !(NR == 9 && valid == 9) }
-  ' "$diagnostic_export_helper_exit_status"; then
+  if ! helper_exit_result_matches \
+    "$diagnostic_export_helper_exit_status" \
+    "diagnostic-export" \
+    "$helper_pid" \
+    "$launch_token"; then
     echo "DMG install diagnostic helper exit status is incomplete or cross-process" >&2
     return 1
   fi
@@ -1250,6 +1249,162 @@ if [[ "$scope" == "full" ]]; then
     "diagnostic_export_size_within_limit=true" \
     "diagnostic_export_sentinels_absent=true" \
     "diagnostic_export_owner_only=true"
+  evidence_require_manifest \
+    "$closure_manifest" \
+    "evidence_schema_version=1" \
+    "suite=release-diagnostic-closure" \
+    "configuration=release" \
+    "suite_mode=diagnostic-closure" \
+    "suite_exit_status=0" \
+    "production_app_executed=false" \
+    "closure_e2e_exit_code=0" \
+    "closure_restart_result=ok: restarted evidence exported through UI"
+  for closure_outer_key in \
+    evidence_run_id \
+    source_head_commit \
+    source_head_tree_oid \
+    source_worktree_tree_oid \
+    source_tree_dirty; do
+    require_equal_manifest_value \
+      "$e2e_manifest" \
+      "$closure_outer_key" \
+      "$closure_manifest" \
+      "$closure_outer_key" \
+      "release diagnostic closure $closure_outer_key"
+  done
+
+  closure_inner_manifest_relative="$(
+    evidence_read "$closure_manifest" closure_e2e_manifest_path
+  )"
+  if ! require_safe_repo_relative_path "$closure_inner_manifest_relative" ||
+    [[ "$closure_inner_manifest_relative" != \
+      artifacts/release-diagnostic-closure-gate/e2e-runtime/manifest.txt ]]; then
+    echo "release diagnostic closure manifest contains an unsafe inner manifest path" >&2
+    exit 1
+  fi
+  closure_inner_manifest="$repo_root/$closure_inner_manifest_relative"
+  require_file_sha256 \
+    "$closure_manifest" \
+    closure_e2e_manifest_sha256 \
+    "$closure_inner_manifest" \
+    "release diagnostic closure inner E2E manifest"
+  evidence_require_manifest \
+    "$closure_inner_manifest" \
+    "evidence_schema_version=1" \
+    "suite=mac-app-e2e" \
+    "configuration=release" \
+    "suite_mode=only:diagnostic-closure" \
+    "suite_exit_status=0"
+  for closure_key in \
+    evidence_run_id \
+    source_head_commit \
+    source_head_tree_oid \
+    source_worktree_tree_oid \
+    source_tree_dirty; do
+    require_equal_manifest_value \
+      "$closure_manifest" \
+      "$closure_key" \
+      "$closure_inner_manifest" \
+      "$closure_key" \
+      "release diagnostic closure inner $closure_key"
+  done
+  require_equal_manifest_value \
+    "$closure_manifest" \
+    source_worktree_tree_oid \
+    "$closure_manifest" \
+    source_end_worktree_tree_oid \
+    "release diagnostic closure source tree stability"
+  require_equal_manifest_value \
+    "$closure_manifest" \
+    source_tree_dirty \
+    "$closure_manifest" \
+    source_end_tree_dirty \
+    "release diagnostic closure source dirty-state stability"
+  require_equal_manifest_value \
+    "$closure_inner_manifest" \
+    source_worktree_tree_oid \
+    "$closure_inner_manifest" \
+    source_end_worktree_tree_oid \
+    "release diagnostic closure inner source tree stability"
+  require_equal_manifest_value \
+    "$closure_inner_manifest" \
+    source_tree_dirty \
+    "$closure_inner_manifest" \
+    source_end_tree_dirty \
+    "release diagnostic closure inner source dirty-state stability"
+  closure_gate_log_relative="$(
+    evidence_read "$closure_manifest" gate_log_path
+  )"
+  closure_gate_result_relative="$(
+    evidence_read "$closure_manifest" gate_result_path
+  )"
+  if ! require_safe_repo_relative_path "$closure_gate_log_relative" ||
+    ! require_safe_repo_relative_path "$closure_gate_result_relative" ||
+    [[ "$closure_gate_log_relative" != \
+      artifacts/release-diagnostic-closure-gate/test-e2e.log ]] ||
+    [[ "$closure_gate_result_relative" != \
+      artifacts/release-diagnostic-closure-gate/result.txt ]]; then
+    echo "release diagnostic closure manifest contains an unsafe gate artifact path" >&2
+    exit 1
+  fi
+  closure_gate_log="$repo_root/$closure_gate_log_relative"
+  closure_gate_result="$repo_root/$closure_gate_result_relative"
+  require_file_sha256 \
+    "$closure_manifest" \
+    gate_log_sha256 \
+    "$closure_gate_log" \
+    "release diagnostic closure log"
+  require_file_sha256 \
+    "$closure_manifest" \
+    gate_result_sha256 \
+    "$closure_gate_result" \
+    "release diagnostic closure result"
+  closure_source_commit="$(
+    evidence_read "$closure_manifest" source_head_commit
+  )"
+  closure_run_id="$(
+    evidence_read "$closure_manifest" evidence_run_id
+  )"
+  if ! awk \
+    -v expected_commit="$closure_source_commit" \
+    -v expected_run_id="$closure_run_id" '
+      NR == 1 { valid += ($0 == "schema_version=1") }
+      NR == 2 { valid += ($0 == "source_commit=" expected_commit) }
+      NR == 3 { valid += ($0 == "evidence_run_id=" expected_run_id) }
+      NR == 4 { valid += ($0 == "status=PASS") }
+      NR == 5 { valid += ($0 == "e2e_exit_code=0") }
+      NR == 6 { valid += ($0 == "production_app_executed=false") }
+      END { exit !(NR == 6 && valid == 6) }
+    ' "$closure_gate_result"; then
+    echo "release diagnostic closure result is semantically inconsistent" >&2
+    exit 1
+  fi
+  require_file_sha256 \
+    "$closure_manifest" \
+    artifact_inventory_sha256 \
+    "$closure_inventory" \
+    "release diagnostic closure inventory"
+  evidence_verify_inventory "$repo_root" "$closure_inventory"
+  evidence_require_inventory_paths \
+    "$repo_root" \
+    "$closure_inventory" \
+    "$closure_inner_manifest" \
+    "$repo_root/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt" \
+    "$closure_gate_log" \
+    "$closure_gate_result"
+  closure_restart_result_path="$repo_root/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt"
+  closure_restart_result_expected="$(
+    evidence_read "$closure_manifest" closure_restart_result
+  )"
+  if [[ ! -f "$closure_restart_result_path" ||
+    -L "$closure_restart_result_path" ]] ||
+    ! awk -v expected="$closure_restart_result_expected" '
+      NR == 1 { valid += ($0 == expected) }
+      END { exit !(NR == 1 && valid == 1) }
+    ' "$closure_restart_result_path"; then
+    echo "release diagnostic closure restart result is semantically inconsistent" >&2
+    exit 1
+  fi
 
   production_info_plist="$repo_root/dist/Noonmark.app/Contents/Info.plist"
   validation_info_plist="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/Info.plist"
@@ -1520,7 +1675,11 @@ fi
 
 related_manifests=("$lease_manifest")
 if [[ "$scope" == "full" ]]; then
-  related_manifests+=("$package_manifest" "$install_manifest")
+  related_manifests+=(
+    "$package_manifest"
+    "$install_manifest"
+    "$closure_manifest"
+  )
 fi
 for manifest in "${related_manifests[@]}"; do
   require_equal_manifest_value \
@@ -2042,16 +2201,13 @@ if [[ "$installed_executable_path" != \
 fi
 require_install_ledger_semantics \
   preflight \
-  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
-  "arguments,process,exit-observer,permissions,complete"
+  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv"
 require_install_ledger_semantics \
   exercise \
-  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
-  "arguments,process,exit-observer,permissions,activation,target,main-window,settings-menu,settings-window,settings-close,quick-entry-menu,quick-entry-input,quick-entry-add,exercise-title-visible,quit-menu,quit,complete"
+  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv"
 require_install_ledger_semantics \
   restart \
-  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
-  "arguments,process,exit-observer,permissions,activation,target,main-window,restart-title-visible,quit-menu,quit,complete"
+  "$repo_root/artifacts/dmg-install/restart-ledger.tsv"
 exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
 restart_window_metadata="$repo_root/artifacts/dmg-install/installed-restart-window.txt"
 require_install_window_metadata \
@@ -2088,7 +2244,6 @@ diagnostic_window_title="$(
 require_install_ledger_semantics \
   diagnostic-export \
   "$diagnostic_export_ledger" \
-  "arguments,process,exit-observer,permissions,activation,target,diagnostic-locks-before-export,diagnostic-window,diagnostic-menu,diagnostic-preview,diagnostic-export-ui,diagnostic-locks-after-export,diagnostic-package,complete" \
   "$installed_bundle_path" \
   "$diagnostic_export_path" \
   "$diagnostic_export_sentinels" \

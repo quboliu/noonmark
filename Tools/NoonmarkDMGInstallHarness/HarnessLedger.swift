@@ -7,6 +7,7 @@ final class HarnessLedger {
     enum Failure: LocalizedError {
         case cannotCreateParent(URL)
         case cannotOpen(URL)
+        case unexpectedPassStep(expected: String?, actual: String)
 
         var errorDescription: String? {
             switch self {
@@ -14,6 +15,9 @@ final class HarnessLedger {
                 "无法建立 harness ledger 目录：\(url.path)"
             case let .cannotOpen(url):
                 "无法打开 harness ledger：\(url.path)"
+            case let .unexpectedPassStep(expected, actual):
+                "Harness ledger PASS 顺序漂移：expected="
+                    + "\(expected ?? "end-of-contract") actual=\(actual)"
             }
         }
     }
@@ -21,9 +25,11 @@ final class HarnessLedger {
     private let handle: FileHandle
     private let boundFile: DescriptorBoundFile?
     private let closesHandle: Bool
+    private let expectedPassSteps: [String]?
+    private var nextExpectedPassStepIndex = 0
     private let formatter = ISO8601DateFormatter()
 
-    init(path: String) throws {
+    init(path: String, expectedPassSteps: [String]? = nil) throws {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let parent = url.deletingLastPathComponent()
         do {
@@ -45,12 +51,14 @@ final class HarnessLedger {
         self.handle = handle
         boundFile = nil
         closesHandle = true
+        self.expectedPassSteps = expectedPassSteps
     }
 
     init(
         directory: DescriptorBoundDirectory,
         fileName: String,
-        requireNew: Bool = false
+        requireNew: Bool = false,
+        expectedPassSteps: [String]? = nil
     ) throws {
         let opened = try directory.createOrOpenFile(
             named: fileName,
@@ -92,6 +100,7 @@ final class HarnessLedger {
         self.handle = handle
         boundFile = file
         closesHandle = false
+        self.expectedPassSteps = expectedPassSteps
     }
 
     deinit {
@@ -101,7 +110,20 @@ final class HarnessLedger {
     }
 
     func pass(_ step: String, _ detail: String) throws {
+        let cleanStep = Self.singleLine(step)
+        if let expectedPassSteps {
+            let expected = nextExpectedPassStepIndex < expectedPassSteps.count
+                ? expectedPassSteps[nextExpectedPassStepIndex]
+                : nil
+            guard cleanStep == expected else {
+                throw Failure.unexpectedPassStep(
+                    expected: expected,
+                    actual: cleanStep
+                )
+            }
+        }
         try append(status: "PASS", step: step, detail: detail)
+        nextExpectedPassStepIndex += 1
     }
 
     func fail(_ step: String, _ detail: String) {

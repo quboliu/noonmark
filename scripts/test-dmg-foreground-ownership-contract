@@ -12,10 +12,13 @@ fail() {
 ownership_source="Tools/NoonmarkDMGInstallHarness/TargetForegroundOwnership.swift"
 harness_source="Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift"
 ax_source="Tools/NoonmarkDMGInstallHarness/AXTarget.swift"
+evidence_parser="scripts/dmg-harness-evidence"
 
 [[ -f "$ownership_source" ]] || fail "missing ownership module"
 [[ -f "$harness_source" ]] || fail "missing harness entry point"
 [[ -f "$ax_source" ]] || fail "missing read-only AX target"
+[[ -f "$evidence_parser" ]] || fail "missing shared ownership evidence parser"
+source "$evidence_parser"
 
 [[ "$(rg -F -c '.activate(options: [])' "$ownership_source")" -eq 1 ]] ||
   fail "ownership must use exactly one exact-process AppKit activation request"
@@ -41,9 +44,45 @@ rg -F 'if activeAfter, axFrontmostAfter' "$ownership_source" >/dev/null ||
   fail "ownership does not require AppKit and AX agreement"
 rg -F '"activation",' "$harness_source" >/dev/null ||
   fail "harness does not publish activation evidence"
-rg -F 'activation_policy=regular request_accepted=true' \
-  scripts/test-dmg-install >/dev/null ||
-  fail "release gate does not reconcile activation evidence"
+for field in \
+  'activation_policy=regular' \
+  'request_accepted=true' \
+  'active_after=true' \
+  'ax_frontmost_after=true'; do
+  rg -F "$field" "$evidence_parser" >/dev/null ||
+    fail "shared parser does not reconcile activation evidence: $field"
+done
+for consumer in \
+  scripts/test-dmg-install \
+  scripts/test-e2e \
+  scripts/run-e2e-ax-inspect \
+  scripts/verify-development-validation-evidence; do
+  rg -F 'source scripts/dmg-harness-evidence' "$consumer" >/dev/null ||
+    fail "$consumer does not source the shared ownership evidence parser"
+  rg -F 'dmg_harness_activation_evidence_matches' "$consumer" >/dev/null ||
+    fail "$consumer does not enforce exact ownership evidence"
+done
+
+valid_activation="bundle=app.noonmark.mac.e2e path=/tmp/NoonmarkE2E.app process_identifier=501 process_start_tvsec=1800000002 process_start_tvusec=345678 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true"
+dmg_harness_activation_evidence_matches \
+  "$valid_activation" \
+  "app.noonmark.mac.e2e" \
+  "/tmp/NoonmarkE2E.app" \
+  501 || fail "shared parser rejected exact ownership evidence"
+if dmg_harness_activation_evidence_matches \
+  "$valid_activation" \
+  "app.noonmark.mac.e2e" \
+  "/tmp/NoonmarkE2E.app" \
+  502; then
+  fail "shared parser accepted ownership evidence for the wrong PID"
+fi
+if dmg_harness_activation_evidence_matches \
+  "${valid_activation/active_after=true/active_after=false}" \
+  "app.noonmark.mac.e2e" \
+  "/tmp/NoonmarkE2E.app" \
+  501; then
+  fail "shared parser accepted unilateral foreground ownership"
+fi
 
 identity_line="$(rg -n -F 'guard actualURL.path == expectedURL.path else {' \
   "$harness_source" | cut -d: -f1)"

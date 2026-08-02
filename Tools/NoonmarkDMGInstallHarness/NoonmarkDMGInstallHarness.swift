@@ -420,10 +420,18 @@ enum NoonmarkDMGInstallHarness {
                 ledger = try HarnessLedger(
                     directory: diagnosticScope.controlDirectory,
                     fileName: diagnosticScope.ledgerFileName,
-                    requireNew: true
+                    requireNew: true,
+                    expectedPassSteps: HarnessLedgerContract.expectedPassSteps(
+                        for: configuration.mode
+                    )
                 )
             } else {
-                ledger = try HarnessLedger(path: configuration.ledgerPath)
+                ledger = try HarnessLedger(
+                    path: configuration.ledgerPath,
+                    expectedPassSteps: HarnessLedgerContract.expectedPassSteps(
+                        for: configuration.mode
+                    )
+                )
             }
             try ledger?.pass(
                 "arguments",

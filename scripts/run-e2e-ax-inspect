@@ -6,6 +6,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
 source scripts/dmg-install-observer-common
+source scripts/dmg-harness-evidence
 
 target_pid="${1:-}"
 target_app="${2:-}"
@@ -161,18 +162,8 @@ if kill -0 "$helper_pid" 2>/dev/null; then
   exit 1
 fi
 
-if ! awk -v mode="$mode" -v pid="$helper_pid" -v token="$token" '
-  NR == 1 { valid += ($0 == "status=PASS") }
-  NR == 2 { valid += ($0 == "mode=" mode) }
-  NR == 3 { valid += ($0 == "helper_pid=" pid) }
-  NR == 4 { valid += ($0 == "launch_token=" token) }
-  NR == 5 { valid += ($0 ~ /^fflags=0x[0-9A-F]+$/) }
-  NR == 6 { valid += ($0 == "raw_status=0") }
-  NR == 7 { valid += ($0 == "normal_exit=true") }
-  NR == 8 { valid += ($0 == "exit_code=0") }
-  NR == 9 { valid += ($0 == "signal=0") }
-  END { exit !(NR == 9 && valid == 9) }
-' "$exit_result_path"; then
+if ! helper_exit_result_matches \
+  "$exit_result_path" "$mode" "$helper_pid" "$token"; then
   echo "E2E AX helper kernel exit result was invalid" >&2
   exit 1
 fi
@@ -187,27 +178,25 @@ if [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
   done
   exit 1
 fi
-for step in arguments process exit-observer permissions activation target e2e-window e2e-remove-buttons complete; do
-  if [[ "$(awk -F $'\t' -v step="$step" '$2 == "PASS" && $3 == step { count += 1 } END { print count + 0 }' "$ledger_path")" != "1" ]]; then
-    echo "E2E AX helper ledger lost unique step: $step" >&2
-    exit 1
-  fi
-done
+if ! dmg_harness_require_exact_steps "e2e-inspect" "$ledger_path"; then
+  echo "E2E AX helper ledger lost its exact ordered protocol" >&2
+  exit 1
+fi
+if ! dmg_harness_process_observer_evidence_matches \
+  "e2e-inspect" "$ledger_path" "$helper_pid" "$token"; then
+  echo "E2E AX helper process identity evidence was invalid" >&2
+  exit 1
+fi
+activation_detail="$(
+  awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path"
+)"
 if ! grep -F $'\tPASS\tpermissions\tAXIsProcessTrusted=true CGPreflightPostEventAccess=true' \
   "$ledger_path" >/dev/null 2>&1 ||
-  ! awk -F $'\t' -v app="$target_app" -v target_pid="$target_pid" '
-    $2 == "PASS" && $3 == "activation" {
-      prefix = "bundle=app.noonmark.mac.e2e path=" app \
-        " process_identifier=" target_pid " "
-      detail = substr($4, length(prefix) + 1)
-      if (index($4, prefix) == 1 &&
-          detail ~ /^process_start_tvsec=[1-9][0-9]* process_start_tvusec=[0-9]{1,6} activation_policy=regular request_accepted=true active_before=(true|false) ax_frontmost_before=(true|false) active_after=true ax_frontmost_after=true$/) {
-        valid += 1
-      }
-      count += 1
-    }
-    END { exit !(count == 1 && valid == 1) }
-  ' "$ledger_path" ||
+  ! dmg_harness_activation_evidence_matches \
+    "$activation_detail" \
+    "app.noonmark.mac.e2e" \
+    "$target_app" \
+    "$target_pid" ||
   ! grep -F $'\tPASS\te2e-remove-buttons\tcount=2 unique=true ' \
     "$ledger_path" >/dev/null 2>&1; then
   echo "E2E AX helper did not prove trusted unique remove buttons" >&2

@@ -38,3 +38,7 @@ FAIL-2026-08-02-05	release	scripts/verify-development-validation-evidence	script
 FAIL-2026-08-02-06	fast	scripts/test-e2e-evidence-contract	scripts/check	强制诊断 seed／stall／restart 三次 App launch 等待 exact PID／argv identity ready，并保留失败进程证据
 FAIL-2026-08-02-06	symptom	scripts/test-e2e	scripts/test-all	真实失败、锁等待、SIGKILL、重启与 Help 菜单导出覆盖三次 App process identity handshake
 FAIL-2026-08-02-06	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean detached worktree 重跑诊断闭环并阻断任何未 ready 或漂移的 App process identity
+FAIL-2026-08-02-07	fast	scripts/test-dmg-harness-evidence-contract	scripts/check	拒绝旧 AX menu-item handoff，并强制共享 physical selection、strict visible、pre-mouseDown identity/frame、menu close 与 left-button-up
+FAIL-2026-08-02-07	fast	scripts/test-e2e-evidence-contract	scripts/check	E2E Help 外部 Helper 必须复用共享 physical menu selection，而非保留独立旧 click seam
+FAIL-2026-08-02-07	symptom	scripts/test-e2e	scripts/test-all	真实诊断闭环从 Help 菜单到预览、保存面板、导出包、双锁与重启对账
+FAIL-2026-08-02-07	release	scripts/test-dmg-install	scripts/release-private-dmg	从 exact package 受控派生的 dmg-validation 实际完成诊断导出菜单、预览、保存与重启证据

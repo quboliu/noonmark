@@ -1183,6 +1183,19 @@ private struct CorrelatedE2EWindow {
     let initialWindows: [AXUIElement]
 }
 
+private enum PhysicalMenuShortcut: Equatable {
+    case none
+    case command(String)
+}
+
+private struct PhysicalMenuSelection {
+    let topLevelTitle: String
+    let topLevelFrame: CGRect
+    let itemTitle: String
+    let itemFrame: CGRect
+    let itemHidden: Bool?
+}
+
 private final class Runner {
     private let configuration: NoonmarkDMGInstallHarness.Configuration
     private let target: AXTarget
@@ -1335,51 +1348,24 @@ private final class Runner {
                 + "focused=true"
         )
 
-        let menuBar = try target.menuBar()
-        let topLevelMatches = target.directMatches(
-            in: menuBar,
-            roles: [kAXMenuBarItemRole as String],
-            titles: [configuration.menuTitle]
+        let menuSelection = try selectPhysicalMenuCommand(
+            topLevelTitles: [configuration.menuTitle],
+            itemTitles: [configuration.menuItemTitle],
+            shortcut: .none,
+            description: "Help menu command"
         )
-        guard topLevelMatches.count == 1 else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "top-level Help menu count was \(topLevelMatches.count), expected 1"
-            )
-        }
-        let topLevel = topLevelMatches[0]
-        guard topLevel.enabled == true, topLevel.hidden != true else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "top-level Help menu was not visible and enabled"
-            )
-        }
-        let topLevelFrame = try target.requiredFrame(
-            topLevel,
-            description: "top-level Help menu"
-        )
-        try input.click(frame: topLevelFrame)
         try ledger?.pass(
             "menu-bar",
             "title=\(configuration.menuTitle) role=AXMenuBarItem enabled=true "
-                + "hidden=\(topLevel.hidden.map(String.init) ?? "nil") "
-                + "frame=\(topLevelFrame) source=cghidEventTap"
-        )
-
-        let menuItem: AXTarget.Match = try target.wait(
-            description: "the exact visible Help menu command"
-        ) {
-            try visibleMenuItem(in: menuBar)
-        }
-        let menuItemFrame = try target.requiredFrame(
-            menuItem,
-            description: "Help menu command"
+                + "frame=\(menuSelection.topLevelFrame) source=cghidEventTap"
         )
         try ledger?.pass(
             "menu-item",
             "title=\(configuration.menuItemTitle) role=AXMenuItem enabled=true "
-                + "hidden=\(menuItem.hidden.map(String.init) ?? "nil") "
-                + "frame=\(menuItemFrame) exact=true"
+                + "hidden=\(menuSelection.itemHidden.map(String.init) ?? "nil") "
+                + "frame=\(menuSelection.itemFrame) exact=true pre_mouse_down=exact "
+                + "menu_closed=true left_button_up=true"
         )
-        try input.click(frame: menuItemFrame)
 
         let helpWindow: AXUIElement = try target.wait(
             description: "one independent focused Help window after its menu closes"
@@ -1396,7 +1382,6 @@ private final class Runner {
                     "Help command reused a preexisting target window"
                 )
             }
-            guard try visibleMenuItem(in: menuBar) == nil else { return nil }
             guard let focused = target.element(
                 target.application,
                 kAXFocusedWindowAttribute as String
@@ -1585,28 +1570,37 @@ private final class Runner {
                 + "frame=\(correlated.frame) focused=true exact=true"
         )
 
-        let exportItem = try revealMenuItemWithoutShortcut(
+        let menuSelection = try selectPhysicalMenuCommand(
             topLevelTitles: ["帮助", "Help"],
             itemTitles: ["导出诊断资料…", "Export Diagnostics…"],
-            step: "diagnostic-menu"
+            shortcut: .none,
+            description: "Export Diagnostics menu command"
         )
-        try input.click(
-            frame: target.requiredFrame(
-                exportItem,
-                description: "Export Diagnostics menu item"
-            )
+        try ledger?.pass(
+            "diagnostic-menu",
+            "title=\(menuSelection.itemTitle) shortcut=none "
+                + "source=cghidEventTap pre_mouse_down=exact "
+                + "menu_closed=true left_button_up=true"
         )
 
-        let preview = try target.wait(
-            description: "the exact diagnostic export preview"
-        ) {
-            try uniqueDiagnosticWindow(
-                titleTexts: ["导出前预览", "Preview Before Export"],
-                buttonTitles: [
-                    ["选择保存位置…", "Choose Save Location…"],
-                    ["取消", "Cancel"]
-                ],
-                description: "diagnostic preview"
+        let preview: AXUIElement
+        do {
+            preview = try target.wait(
+                description: "the exact diagnostic export preview"
+            ) {
+                try uniqueDiagnosticWindow(
+                    titleTexts: ["导出前预览", "Preview Before Export"],
+                    buttonTitles: [
+                        ["选择保存位置…", "Choose Save Location…"],
+                        ["取消", "Cancel"]
+                    ],
+                    description: "diagnostic preview"
+                )
+            }
+        } catch {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic export preview was not exact; observed="
+                    + diagnosticPreviewStateSummary()
             )
         }
         let previewDescendants = try target.strictDescendants(of: preview)
@@ -1991,6 +1985,85 @@ private final class Runner {
         }.joined(separator: " | ")
     }
 
+    private func diagnosticPreviewStateSummary() -> String {
+        let previewTitles: Set<String> = [
+            "导出前预览", "Preview Before Export"
+        ]
+        let continueTitles: Set<String> = [
+            "选择保存位置…", "Choose Save Location…"
+        ]
+        let cancelTitles: Set<String> = ["取消", "Cancel"]
+        let savePanelTitles: Set<String> = [
+            "导出晷迹诊断资料", "Export Noonmark Diagnostics"
+        ]
+        let windows = target.windows()
+        let focusedWindow = target.element(
+            target.application,
+            kAXFocusedWindowAttribute as String
+        )
+        let windowSummaries = windows.prefix(8).enumerated().map { index, window in
+            let descendants = target.descendants(
+                of: window,
+                maximumDepth: 8,
+                maximumCount: 256
+            )
+            let textValues = descendants.compactMap { match in
+                match.title
+                    ?? target.string(match.element, kAXValueAttribute as String)
+                    ?? match.description
+            }
+            let windowTitle = target.string(
+                window,
+                kAXTitleAttribute as String
+            )
+            let titleClass: String
+            if windowTitle == configuration.windowTitle {
+                titleClass = "main"
+            } else if windowTitle.map(previewTitles.contains) == true {
+                titleClass = "preview"
+            } else if windowTitle.map(savePanelTitles.contains) == true {
+                titleClass = "save-panel"
+            } else {
+                titleClass = "other"
+            }
+            let previewTitleCount = textValues.count {
+                previewTitles.contains($0)
+            }
+            let continueCount = descendants.count { match in
+                match.role == kAXButtonRole as String
+                    && continueTitles.contains(match.title ?? "")
+            }
+            let cancelCount = descendants.count { match in
+                match.role == kAXButtonRole as String
+                    && cancelTitles.contains(match.title ?? "")
+            }
+            let focused = focusedWindow.map { CFEqual($0, window) } == true
+            let role = target.string(
+                window,
+                kAXRoleAttribute as String
+            ) ?? "nil"
+            let windowNumber = target.windowNumber(window).map(String.init) ?? "nil"
+            return "index=\(index),role=\(role),title_class=\(titleClass),"
+                + "window_number=\(windowNumber),focused=\(focused),"
+                + "preview_titles=\(previewTitleCount),"
+                + "continue_buttons=\(continueCount),cancel_buttons=\(cancelCount)"
+        }
+        let exportMenuState: String
+        if let menuBar = try? target.menuBar() {
+            let matches = target.matches(
+                in: menuBar,
+                roles: [kAXMenuItemRole as String],
+                titles: ["导出诊断资料…", "Export Diagnostics…"]
+            )
+            exportMenuState = "matches=\(matches.count),visible=\(matches.count { $0.hidden != true }),"
+                + "enabled=\(matches.count { $0.enabled == true })"
+        } else {
+            exportMenuState = "unavailable"
+        }
+        return "window_count=\(windows.count) export_menu={\(exportMenuState)} "
+            + "windows=[\(windowSummaries.joined(separator: ";"))]"
+    }
+
     private func diagnosticGoToContextSummary(savePanel: AXUIElement) -> String {
         let windows = target.windows()
         let focusedWindow = target.element(
@@ -2047,50 +2120,122 @@ private final class Runner {
             + "is_save_panel=\(CFEqual(element, savePanel)) window_index=\(windowIndex)"
     }
 
-    private func revealMenuItemWithoutShortcut(
+    private func selectPhysicalMenuCommand(
         topLevelTitles: Set<String>,
         itemTitles: Set<String>,
-        step: String
-    ) throws -> AXTarget.Match {
+        shortcut: PhysicalMenuShortcut,
+        description: String
+    ) throws -> PhysicalMenuSelection {
         try target.waitUntilFrontmost()
         let menuBar = try target.menuBar()
-        let topLevel = try uniqueMatch(
+        let topLevelMatches = target.directMatches(
             in: menuBar,
             roles: [kAXMenuBarItemRole as String],
             titles: topLevelTitles,
-            identifier: nil,
-            description: "top-level diagnostic menu"
+            identifier: nil
         )
-        try input.click(
-            frame: target.requiredFrame(
-                topLevel,
-                description: "top-level diagnostic menu"
-            )
-        )
-        let item = try target.wait(description: "diagnostic menu command") {
-            try uniqueMatchIfPresent(
-                in: menuBar,
-                roles: [kAXMenuItemRole as String],
-                titles: itemTitles,
-                identifier: nil,
-                description: "diagnostic menu command"
+        guard topLevelMatches.count == 1 else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "top-level physical menu count was \(topLevelMatches.count), expected 1"
             )
         }
-        guard target.boolean(item.element, kAXEnabledAttribute as String) == true,
-              target.string(
-                  item.element,
-                  kAXMenuItemCmdCharAttribute as String
-              ) == nil
+        let topLevel = topLevelMatches[0]
+        guard topLevel.enabled == true, topLevel.hidden != true,
+              let topLevelTitle = topLevel.title
         else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "diagnostic menu command was disabled or gained a shortcut"
+                "top-level physical menu was not visible, enabled, and titled"
             )
         }
-        try ledger?.pass(
-            step,
-            "title=\(item.title ?? "unknown") shortcut=none source=cghidEventTap"
+        let topLevelFrame = try target.requiredFrame(
+            topLevel,
+            description: "top-level physical menu"
         )
-        return item
+        try input.click(
+            frame: topLevelFrame
+        )
+        let initialItem: AXTarget.Match = try target.wait(
+            description: "the exact visible \(description)"
+        ) {
+            try strictVisibleMenuItem(
+                in: menuBar,
+                titles: itemTitles,
+                description: description
+            )
+        }
+        try validatePhysicalMenuShortcut(shortcut, item: initialItem)
+        let initialItemFrame = try target.requiredFrame(
+            initialItem,
+            description: description
+        )
+
+        let currentTopLevelMatches = target.directMatches(
+            in: menuBar,
+            roles: [kAXMenuBarItemRole as String],
+            titles: topLevelTitles,
+            identifier: nil
+        )
+        guard target.boolean(
+            target.application,
+            kAXFrontmostAttribute as String
+        ) == true,
+            currentTopLevelMatches.count == 1
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "physical menu command lost its frontmost top-level menu before mouseDown"
+            )
+        }
+        let currentTopLevel = currentTopLevelMatches[0]
+        guard
+            CFEqual(currentTopLevel.element, topLevel.element),
+            currentTopLevel.enabled == true,
+            currentTopLevel.hidden != true,
+            target.requiredFrameOrNil(currentTopLevel.element) == topLevelFrame,
+            let currentItem = try strictVisibleMenuItem(
+                in: menuBar,
+                titles: itemTitles,
+                description: description
+            ),
+            CFEqual(currentItem.element, initialItem.element),
+            let currentItemFrame = target.requiredFrameOrNil(currentItem.element),
+            currentItemFrame == initialItemFrame,
+            currentItem.title == initialItem.title
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "physical menu command identity or frame changed before mouseDown"
+            )
+        }
+        try validatePhysicalMenuShortcut(shortcut, item: currentItem)
+        guard input.leftButtonIsDown == false else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "physical menu command began while the global button was down"
+            )
+        }
+        try input.click(frame: currentItemFrame)
+        let _: Bool = try target.wait(
+            description: "the physical menu command to close its menu"
+        ) {
+            if kill(configuration.pid, 0) == -1, errno == ESRCH {
+                return true
+            }
+            return try strictVisibleMenuItem(
+                in: menuBar,
+                titles: itemTitles,
+                description: description
+            ) == nil ? true : nil
+        }
+        guard input.leftButtonIsDown == false else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "physical menu command left the global button down"
+            )
+        }
+        return PhysicalMenuSelection(
+            topLevelTitle: topLevelTitle,
+            topLevelFrame: topLevelFrame,
+            itemTitle: currentItem.title ?? "unknown",
+            itemFrame: currentItemFrame,
+            itemHidden: currentItem.hidden
+        )
     }
 
     private func correlatedE2EWindow(
@@ -2153,13 +2298,15 @@ private final class Runner {
         }
     }
 
-    private func visibleMenuItem(
-        in menuBar: AXUIElement
+    private func strictVisibleMenuItem(
+        in menuBar: AXUIElement,
+        titles: Set<String>,
+        description: String
     ) throws -> AXTarget.Match? {
         let exactMatches = try target.strictMatches(
             in: menuBar,
             roles: [kAXMenuItemRole as String],
-            titles: [configuration.menuItemTitle]
+            titles: titles
         )
         let matches = exactMatches.filter { match in
             match.hidden != true
@@ -2178,7 +2325,7 @@ private final class Runner {
                     + "identity=\(CFHash(match.element))"
             }
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "exact Help menu command was duplicated: count=\(matches.count) "
+                "exact visible \(description) was duplicated: count=\(matches.count) "
                     + "observed=\(observed)"
             )
         }
@@ -2187,10 +2334,36 @@ private final class Runner {
         }
         guard match.enabled == true else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "exact Help menu command was visible but disabled"
+                "exact visible \(description) was disabled"
             )
         }
         return match
+    }
+
+    private func validatePhysicalMenuShortcut(
+        _ shortcut: PhysicalMenuShortcut,
+        item: AXTarget.Match
+    ) throws {
+        let key = target.string(
+            item.element,
+            kAXMenuItemCmdCharAttribute as String
+        )
+        let modifiers = target.integer(
+            item.element,
+            kAXMenuItemCmdModifiersAttribute as String
+        )
+        let valid = switch shortcut {
+        case .none:
+            key == nil
+        case let .command(expectedKey):
+            key?.lowercased() == expectedKey.lowercased() && modifiers == 0
+        }
+        guard valid else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "physical menu shortcut mismatch: key=\(key ?? "nil") "
+                    + "modifiers=\(modifiers.map(String.init) ?? "nil")"
+            )
+        }
     }
 
     private func onscreenCGWindow(
@@ -2304,14 +2477,17 @@ private final class Runner {
 
     private func openAndVerifySettings() throws {
         let preexistingWindows = target.windows()
-        let settingsItem = try revealMenuItem(
+        let settingsSelection = try selectPhysicalMenuCommand(
             topLevelTitles: ["晷迹", "Noonmark"],
             itemTitles: ["设置…", "Settings…"],
-            expectedKey: ",",
-            step: "settings-menu"
+            shortcut: .command(","),
+            description: "Settings menu command"
         )
-        try input.click(
-            frame: target.requiredFrame(settingsItem, description: "Settings menu item")
+        try ledger?.pass(
+            "settings-menu",
+            "title=\(settingsSelection.itemTitle) shortcut=Command-, "
+                + "source=cghidEventTap pre_mouse_down=exact "
+                + "menu_closed=true left_button_up=true"
         )
 
         let settingsWindow = try target.wait(
@@ -2381,14 +2557,17 @@ private final class Runner {
     }
 
     private func openQuickEntryAndCreateTask() throws {
-        let quickEntryItem = try revealMenuItem(
+        let quickEntrySelection = try selectPhysicalMenuCommand(
             topLevelTitles: ["文件", "File"],
             itemTitles: ["快速记录…", "Quick Entry…"],
-            expectedKey: "n",
-            step: "quick-entry-menu"
+            shortcut: .command("n"),
+            description: "Quick Entry menu command"
         )
-        try input.click(
-            frame: target.requiredFrame(quickEntryItem, description: "Quick Entry menu item")
+        try ledger?.pass(
+            "quick-entry-menu",
+            "title=\(quickEntrySelection.itemTitle) shortcut=Command-n "
+                + "source=cghidEventTap pre_mouse_down=exact "
+                + "menu_closed=true left_button_up=true"
         )
 
         let panel = try target.wait(description: "Quick Entry panel and AX anchors") {
@@ -2480,72 +2659,23 @@ private final class Runner {
     }
 
     private func quitThroughAppMenu() throws {
-        let quitItem = try revealMenuItem(
+        let quitSelection = try selectPhysicalMenuCommand(
             topLevelTitles: ["晷迹", "Noonmark"],
             itemTitles: ["退出晷迹", "Quit Noonmark"],
-            expectedKey: "q",
-            step: "quit-menu"
+            shortcut: .command("q"),
+            description: "Quit menu command"
         )
-        try input.click(
-            frame: target.requiredFrame(quitItem, description: "Quit menu item")
+        try ledger?.pass(
+            "quit-menu",
+            "title=\(quitSelection.itemTitle) shortcut=Command-q "
+                + "source=cghidEventTap pre_mouse_down=exact "
+                + "menu_closed=true left_button_up=true"
         )
         let pid = configuration.pid
         _ = try target.wait(seconds: 12, description: "validation app to terminate") {
             kill(pid, 0) == -1 && errno == ESRCH ? true : nil
         }
         try ledger?.pass("quit", "terminated via real App menu click")
-    }
-
-    private func revealMenuItem(
-        topLevelTitles: Set<String>,
-        itemTitles: Set<String>,
-        expectedKey: String,
-        step: String
-    ) throws -> AXTarget.Match {
-        try target.waitUntilFrontmost()
-        let menuBar = try target.menuBar()
-        let topLevel = try uniqueMatch(
-            in: menuBar,
-            roles: [kAXMenuBarItemRole as String],
-            titles: topLevelTitles,
-            identifier: nil,
-            description: "top-level menu \(topLevelTitles.sorted())"
-        )
-        try input.click(
-            frame: target.requiredFrame(topLevel, description: "top-level menu")
-        )
-        let item = try target.wait(description: "menu item \(itemTitles.sorted())") {
-            try uniqueMatchIfPresent(
-                in: menuBar,
-                roles: [kAXMenuItemRole as String],
-                titles: itemTitles,
-                identifier: nil,
-                description: "menu item \(itemTitles.sorted())"
-            )
-        }
-        guard target.boolean(item.element, kAXEnabledAttribute as String) == true else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "menu item \(item.title ?? "unknown") is disabled"
-            )
-        }
-        let key = target.string(item.element, kAXMenuItemCmdCharAttribute as String)
-        let modifiers = target.integer(
-            item.element,
-            kAXMenuItemCmdModifiersAttribute as String
-        )
-        guard key?.lowercased() == expectedKey.lowercased(),
-              let modifiers,
-              modifiers == 0
-        else {
-            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
-                "menu item shortcut was key=\(key ?? "nil") modifiers=\(modifiers.map(String.init) ?? "nil")"
-            )
-        }
-        try ledger?.pass(
-            step,
-            "title=\(item.title ?? "unknown") shortcut=Command-\(expectedKey)"
-        )
-        return item
     }
 
     private func uniqueMatch(

@@ -137,6 +137,44 @@ rg -F 'expectedPassSteps: HarnessLedgerContract.expectedPassSteps(' \
   "$producer" >/dev/null ||
   fail "Swift producer does not enforce its typed ledger contract"
 
+# Every external menu command must use one shared physical-selection seam. The
+# seam owns visibility, an immediate pre-mouseDown identity/frame re-resolution,
+# the complete click, and menu dismissal; returning a mutable AX menu item to a
+# caller recreates the race that the real diagnostic-export gate exposed.
+for required_menu_protocol_literal in \
+  'private func selectPhysicalMenuCommand(' \
+  'private func strictVisibleMenuItem(' \
+  'physical menu command identity or frame changed before mouseDown' \
+  'physical menu command left the global button down' \
+  'diagnosticPreviewStateSummary()'; do
+  rg -F "$required_menu_protocol_literal" "$producer" >/dev/null ||
+    fail "shared physical menu protocol is missing: $required_menu_protocol_literal"
+done
+if rg -F 'revealMenuItem(' "$producer" >/dev/null ||
+  rg -F 'revealMenuItemWithoutShortcut(' "$producer" >/dev/null; then
+  fail "the harness still returns an AX menu item across the physical-click boundary"
+fi
+
+shared_menu_function="$fixture_root/shared-physical-menu.swift"
+sed -n \
+  '/^    private func selectPhysicalMenuCommand(/,/^    }$/p' \
+  "$producer" >"$shared_menu_function"
+previous_line=0
+for ordered_menu_literal in \
+  'let initialItem: AXTarget.Match = try target.wait(' \
+  'let currentItem = try strictVisibleMenuItem(' \
+  'CFEqual(currentItem.element, initialItem.element)' \
+  'try input.click(frame: currentItemFrame)' \
+  'try strictVisibleMenuItem('; do
+  current_line="$(
+    rg -n -F "$ordered_menu_literal" "$shared_menu_function" \
+      | awk -F: -v previous="$previous_line" '$1 > previous { print $1; exit }'
+  )"
+  [[ "$current_line" =~ ^[1-9][0-9]*$ ]] ||
+    fail "shared physical menu protocol is missing ordered step: $ordered_menu_literal"
+  previous_line="$current_line"
+done
+
 scripts/reset-dev-data audit
 swift test --filter HarnessLedgerContractTests
 

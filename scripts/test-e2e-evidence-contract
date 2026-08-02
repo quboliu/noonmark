@@ -823,10 +823,13 @@ require_literal \
   "func performE2EMenuCommand() throws"
 require_literal \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
-  "let topLevelMatches = target.directMatches("
+  "let menuSelection = try selectPhysicalMenuCommand("
 require_literal \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
-  "let menuItem: AXTarget.Match = try target.wait("
+  "private func selectPhysicalMenuCommand("
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  "private func strictVisibleMenuItem("
 require_literal \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
   '"menu-command",'
@@ -849,12 +852,34 @@ sed -n \
   >"$helper_menu_command_function"
 require_order \
   "$helper_menu_command_function" \
-  "try input.click(frame: topLevelFrame)" \
-  "try input.click(frame: menuItemFrame)"
-require_order \
-  "$helper_menu_command_function" \
-  "try input.click(frame: menuItemFrame)" \
+  "let menuSelection = try selectPhysicalMenuCommand(" \
   '"menu-command",'
+
+shared_physical_menu_function="$fixture_root/shared-physical-menu.swift"
+sed -n \
+  '/^    private func selectPhysicalMenuCommand(/,/^    }$/p' \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  >"$shared_physical_menu_function"
+require_order \
+  "$shared_physical_menu_function" \
+  "frame: topLevelFrame" \
+  "let initialItem: AXTarget.Match = try target.wait("
+require_order \
+  "$shared_physical_menu_function" \
+  "let initialItem: AXTarget.Match = try target.wait(" \
+  "let currentItem = try strictVisibleMenuItem("
+require_order \
+  "$shared_physical_menu_function" \
+  "let currentItem = try strictVisibleMenuItem(" \
+  "CFEqual(currentItem.element, initialItem.element)"
+require_order \
+  "$shared_physical_menu_function" \
+  "CFEqual(currentItem.element, initialItem.element)" \
+  "try input.click(frame: currentItemFrame)"
+require_order \
+  "$shared_physical_menu_function" \
+  "try input.click(frame: currentItemFrame)" \
+  "physical menu command left the global button down"
 require_order \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
   'try runner.performE2EMenuCommand()' \

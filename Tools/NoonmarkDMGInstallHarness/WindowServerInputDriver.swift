@@ -208,6 +208,10 @@ final class WindowServerInputDriver {
         CGEventSource.buttonState(.combinedSessionState, button: .left)
     }
 
+    var leftButtonIsDown: Bool {
+        isLeftButtonDown
+    }
+
     private var pointerLocation: CGPoint? {
         CGEvent(source: nil)?.location
     }

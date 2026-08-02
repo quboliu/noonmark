@@ -139,6 +139,7 @@ do {
               "restart",
               "e2e-inspect",
               "e2e-menu-command",
+              "e2e-open-panel",
               "diagnostic-export"
           ].contains(mode),
           let rawPID = environment["NOONMARK_HELPER_PID"],

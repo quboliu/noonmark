@@ -26,3 +26,15 @@ FAIL-2026-08-02-01	release	scripts/test-release-diagnostic-closure	scripts/relea
 FAIL-2026-08-02-02	fast	scripts/test-e2e-evidence-contract	scripts/check	约束共享物理清空／输入协议、GoToWindow suggestion ACK 与 sheet dismissal
 FAIL-2026-08-02-02	symptom	scripts/test-e2e	scripts/test-all	真实 Help 菜单、预览、Save Panel、物理路径与文件名输入
 FAIL-2026-08-02-02	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean HEAD 的独立 worktree 重跑 Save Panel 物理输入及导出对账
+FAIL-2026-08-02-03	fast	scripts/test-e2e-evidence-contract	scripts/check	分离一次性窗口身份发布标题与同一 exact window 的实时就绪标题，并拒绝旧的跨时点相等比较
+FAIL-2026-08-02-03	symptom	scripts/test-e2e	scripts/test-all	真实 changed-target 与 English history header 启动后标题变化、截图及完整场景对账
+FAIL-2026-08-02-03	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	发行前强制同一 run／source 的完整 E2E 与 English 场景证据转绿
+FAIL-2026-08-02-04	fast	scripts/test-e2e-evidence-contract	scripts/check	约束 owner-only ready／completion、独立签名 Helper、exact panel 内唯一 Open、完整 mouse down／up、被动 URL validation 与 modal return 顺序
+FAIL-2026-08-02-04	symptom	scripts/test-e2e	scripts/test-all	正常导入两轮及四个损坏数据包逐一走 File 菜单、物理路径输入、外部 Helper 精确 Open 点击、错误提示、SQLite／journal 不变与重启
+FAIL-2026-08-02-04	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	发行前强制同一 run／source 的完整未过滤 E2E inventory 包含正常导入两轮及四个损坏包的协议、Helper、trace、SQLite 与结果证据
+FAIL-2026-08-02-05	fast	scripts/test-e2e-evidence-contract	scripts/check	强制 PreferencesClock 使用 canonical／private／tmp 临时根、拒绝旧／tmp symlink 路径并保留启动失败退出证据
+FAIL-2026-08-02-05	symptom	scripts/test-e2e	scripts/test-all	隔离真实 E2E App 完成偏好 HLC 远端建立、原生 Settings 输入、同步失败重启与持久化对账
+FAIL-2026-08-02-05	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	发行前强制同一 run／source 的完整 E2E inventory 包含 PreferencesClock SQLite、四阶段结果、输入 trace、同步记录与截图
+FAIL-2026-08-02-06	fast	scripts/test-e2e-evidence-contract	scripts/check	强制诊断 seed／stall／restart 三次 App launch 等待 exact PID／argv identity ready，并保留失败进程证据
+FAIL-2026-08-02-06	symptom	scripts/test-e2e	scripts/test-all	真实失败、锁等待、SIGKILL、重启与 Help 菜单导出覆盖三次 App process identity handshake
+FAIL-2026-08-02-06	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean detached worktree 重跑诊断闭环并阻断任何未 ready 或漂移的 App process identity

@@ -33,6 +33,12 @@ enum HarnessLedgerContract {
                 "activation", "target", "e2e-window", "menu-bar", "menu-item",
                 "menu-command", "completion", "complete"
             ]
+        case .e2eOpenPanel:
+            [
+                "arguments", "process", "exit-observer", "permissions",
+                "activation", "target", "open-panel", "open-button",
+                "open-action", "completion", "complete"
+            ]
         case .diagnosticExport:
             [
                 "arguments", "process", "exit-observer", "permissions",

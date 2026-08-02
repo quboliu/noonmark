@@ -11,6 +11,7 @@ final class HarnessLedgerContractTests: XCTestCase {
             .restart,
             .e2eInspect,
             .e2eMenuCommand,
+            .e2eOpenPanel,
             .diagnosticExport
         ]
 

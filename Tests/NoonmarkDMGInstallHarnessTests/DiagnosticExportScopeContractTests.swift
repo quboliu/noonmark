@@ -459,7 +459,9 @@ private struct DMGScopeFixture {
             databasePath: databaseURL.path,
             repositoryLockPath: repositoryLockURL.path,
             exportPath: exportPath ?? exportURL.path,
-            sentinelsPath: sentinelsURL.path
+            sentinelsPath: sentinelsURL.path,
+            openPanelReadyPath: "",
+            openPanelReady: nil
         )
     }
 

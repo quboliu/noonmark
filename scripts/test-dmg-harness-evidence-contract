@@ -28,7 +28,7 @@ if ! awk -F $'\t' '
   NF != 2 || $1 == "" || $2 == "" { exit 1 }
   { seen[$1] += 1 }
   END {
-    if (NR != 6) exit 1
+    if (NR != 7) exit 1
     for (mode in seen) if (seen[mode] != 1) exit 1
   }
 ' "$contract"; then
@@ -36,7 +36,8 @@ if ! awk -F $'\t' '
 fi
 
 for mode in \
-  preflight exercise restart e2e-inspect e2e-menu-command diagnostic-export; do
+  preflight exercise restart e2e-inspect e2e-menu-command e2e-open-panel \
+  diagnostic-export; do
   steps="$(dmg_harness_expected_steps "$mode")" ||
     fail "missing exact steps for $mode"
   IFS=',' read -r -a step_array <<<"$steps"

@@ -105,6 +105,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     private let stateURL: URL
     private let resultURL: URL
     private let databaseURL: URL
+    private let syncFolderPath: String
     private let syncFolderURL: URL
 
     static func fromCommandLine() -> Self? {
@@ -148,6 +149,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             stateURL: URL(fileURLWithPath: statePath),
             resultURL: URL(fileURLWithPath: resultPath),
             databaseURL: URL(fileURLWithPath: databasePath),
+            syncFolderPath: syncFolderPath,
             syncFolderURL: URL(
                 fileURLWithPath: syncFolderPath,
                 isDirectory: true
@@ -1985,13 +1987,16 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func validateSyncFolderForReplacement() throws {
-        let path = syncFolderURL.standardizedFileURL.path
-        guard path.hasPrefix(
-            "/tmp/noonmark-e2e-preferences-clock-sync-"
-        ), path.count > "/tmp/noonmark-e2e-preferences-clock-sync-".count
+        let path = syncFolderPath
+        let guardedPrefix = "/private/tmp/noonmark-e2e-preferences-clock-sync-"
+        let suffix = path.dropFirst(guardedPrefix.count)
+        guard path == syncFolderURL.path,
+              path.hasPrefix(guardedPrefix),
+              suffix.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              let shellProcessID = Int32(suffix), shellProcessID > 0
         else {
             throw Failure.failed(
-                "preference-clock sync folder is outside its guarded /tmp scope"
+                "preference-clock sync folder is outside its exact guarded /private/tmp scope"
             )
         }
         if FileManager.default.fileExists(atPath: path) {

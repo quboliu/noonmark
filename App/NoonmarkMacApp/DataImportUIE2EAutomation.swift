@@ -3,6 +3,7 @@ import ApplicationServices
 import CryptoKit
 import Foundation
 import NoonmarkCore
+import NoonmarkMacE2ESupport
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
@@ -103,6 +104,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
     private let stateURL: URL
     private let resultURL: URL
     private let databaseURL: URL
+    private let openPanelProtocolDirectory: URL?
 
     static func fromCommandLine() -> Self? {
         guard Bundle.main.bundleIdentifier == e2eBundleIdentifier else {
@@ -137,12 +139,22 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             return nil
         }
 
+        let openPanelProtocolDirectory = AppLaunchArguments.value(
+            after: "--e2e-data-import-open-panel-protocol-directory"
+        ).map { URL(fileURLWithPath: $0) }
+        if [.exercise, .integrityExercise].contains(mode),
+           openPanelProtocolDirectory == nil
+        {
+            return nil
+        }
+
         return Self(
             mode: mode,
             fixtureURL: URL(fileURLWithPath: fixturePath),
             stateURL: URL(fileURLWithPath: statePath),
             resultURL: URL(fileURLWithPath: resultPath),
-            databaseURL: URL(fileURLWithPath: databasePath)
+            databaseURL: URL(fileURLWithPath: databasePath),
+            openPanelProtocolDirectory: openPanelProtocolDirectory
         )
     }
 
@@ -304,7 +316,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("exercise did not start from its persisted baseline")
         }
 
-        try chooseFixtureThroughFileMenu(
+        try await chooseFixtureThroughFileMenu(
             mainWindow: mainWindow,
             panelTraceURL: panelTraceURL,
             interactionLabel: "cancel"
@@ -335,7 +347,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         }
 
         try await activate(mainWindow)
-        try chooseFixtureThroughFileMenu(
+        try await chooseFixtureThroughFileMenu(
             mainWindow: mainWindow,
             panelTraceURL: panelTraceURL,
             interactionLabel: "confirm"
@@ -676,7 +688,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
 
             let previousFailureID = store.operationFailureNotice?.id
             try await activate(mainWindow)
-            try chooseFixtureThroughFileMenu(
+            try await chooseFixtureThroughFileMenu(
                 fixtureURL: scenarioURL,
                 mainWindow: mainWindow,
                 panelTraceURL: panelTraceURL,
@@ -1044,11 +1056,17 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         mainWindow: NSWindow,
         panelTraceURL: URL,
         interactionLabel: String
-    ) throws {
+    ) async throws {
+        guard let openPanelProtocolDirectory else {
+            throw Failure.failed(
+                "data-import exercise lacked its external Open-panel protocol directory"
+            )
+        }
         let interaction = OpenPanelKeyboardSelection(
             fixtureURL: selectedFixtureURL ?? fixtureURL,
             traceURL: panelTraceURL,
-            interactionLabel: interactionLabel
+            interactionLabel: interactionLabel,
+            protocolDirectory: openPanelProtocolDirectory
         )
         interaction.start()
         defer { interaction.stop() }
@@ -1075,11 +1093,41 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         else {
             throw Failure.failed("File > Import keyboard command was unavailable")
         }
+        interaction.recordMenuActionReturned()
         if let failure = interaction.failure {
             throw Failure.failed(failure)
         }
-        guard interaction.didSelectFixtureUsingInput else {
-            throw Failure.failed("NSOpenPanel closed without input selection of the fixture")
+        guard interaction.didTypeExactFixturePathUsingInput,
+              interaction.readyPublicationCount == 1,
+              interaction.exactURLValidationCount == 1
+        else {
+            throw Failure.failed(
+                "NSOpenPanel closed without one exact external Open action"
+            )
+        }
+        try await interaction.waitForHelperCompletion()
+        try await waitForOpenPanelSettlement(mainWindow: mainWindow)
+        interaction.recordPostModalSettlement(mainWindow: mainWindow)
+    }
+
+    private func waitForOpenPanelSettlement(
+        mainWindow: NSWindow
+    ) async throws {
+        try await waitUntil(
+            "NSOpenPanel modal transition did not settle"
+        ) {
+            guard NSApp.modalWindow == nil,
+                  NSApp.isActive,
+                  mainWindow.isVisible,
+                  let keyWindow = NSApp.keyWindow,
+                  keyWindow === mainWindow || keyWindow.sheetParent === mainWindow
+            else {
+                return false
+            }
+            let visibleOpenPanel = NSApp.windows.contains { window in
+                window is NSOpenPanel && window.isVisible
+            }
+            return visibleOpenPanel == false
         }
     }
 
@@ -1286,7 +1334,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
 }
 
 @MainActor
-private final class OpenPanelKeyboardSelection: NSObject {
+private final class OpenPanelKeyboardSelection: NSObject, NSOpenSavePanelDelegate {
     private enum Stage {
         case waitingForPanel
         case waitingForPathEditor
@@ -1300,24 +1348,30 @@ private final class OpenPanelKeyboardSelection: NSObject {
     private let fixtureURL: URL
     private let traceURL: URL
     private let interactionLabel: String
+    private let protocolDirectory: URL
     private var timer: Timer?
     private weak var panel: NSOpenPanel?
     private var inputDriver: WindowServerInputDriver?
     private var pathEditor: AXUIElement?
+    private var ready: OpenPanelPhysicalInputReady?
     private var stage = Stage.waitingForPanel
     private var tickCount = 0
 
     private(set) var failure: String?
-    private(set) var didSelectFixtureUsingInput = false
+    private(set) var didTypeExactFixturePathUsingInput = false
+    private(set) var readyPublicationCount = 0
+    private(set) var exactURLValidationCount = 0
 
     init(
         fixtureURL: URL,
         traceURL: URL,
-        interactionLabel: String
+        interactionLabel: String,
+        protocolDirectory: URL
     ) {
         self.fixtureURL = fixtureURL
         self.traceURL = traceURL
         self.interactionLabel = interactionLabel
+        self.protocolDirectory = protocolDirectory
     }
 
     func start() {
@@ -1337,6 +1391,58 @@ private final class OpenPanelKeyboardSelection: NSObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        if panel?.delegate === self {
+            panel?.delegate = nil
+        }
+    }
+
+    func recordPostModalSettlement(mainWindow: NSWindow) {
+        let keyWindowNumber = NSApp.keyWindow?.windowNumber.description ?? "nil"
+        let visibleOpenPanelCount = NSApp.windows.filter {
+            $0 is NSOpenPanel && $0.isVisible
+        }.count
+        trace(
+            "post-modal-settled main-window=\(mainWindow.windowNumber) "
+                + "key-window=\(keyWindowNumber) "
+                + "visible-open-panels=\(visibleOpenPanelCount)"
+        )
+    }
+
+    func waitForHelperCompletion() async throws {
+        guard let ready else {
+            throw DataImportPanelInputError.missingOpenPanelReady
+        }
+        let completionURL = protocolDirectory.appendingPathComponent(
+            "\(interactionLabel).completion.json"
+        )
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(60))
+        while clock.now < deadline {
+            if FileManager.default.fileExists(atPath: completionURL.path) {
+                let completion = try OpenPanelPhysicalInputProtocolFile
+                    .readCompletion(from: completionURL)
+                guard completion.launchToken == ready.launchToken,
+                      completion.targetPID == ready.targetPID,
+                      completion.panelWindowNumber == ready.panelWindowNumber,
+                      completion.selectedPath == ready.selectedPath,
+                      completion.interactionLabel == ready.interactionLabel,
+                      completion.helperPID != ready.targetPID,
+                      completion.source == "cghidEventTap",
+                      completion.leftButtonUp
+                else {
+                    throw DataImportPanelInputError.helperCompletionMismatch
+                }
+                trace(
+                    "external-helper-completed-physical-open "
+                        + "helper-pid=\(completion.helperPID) "
+                        + "window=\(completion.panelWindowNumber) "
+                        + "button=\(completion.buttonTitle) left-button-up=true"
+                )
+                return
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw DataImportPanelInputError.helperCompletionTimedOut
     }
 
     @objc private func tick() {
@@ -1378,7 +1484,11 @@ private final class OpenPanelKeyboardSelection: NSObject {
         else {
             return
         }
+        guard panel.delegate == nil else {
+            throw DataImportPanelInputError.unexpectedOpenPanelDelegate
+        }
         self.panel = panel
+        panel.delegate = self
         trace(
             "panel-visible title=\(panel.title ?? "") "
                 + "key=\(panel.isKeyWindow) responder="
@@ -1480,7 +1590,7 @@ private final class OpenPanelKeyboardSelection: NSObject {
             }
             return
         }
-        didSelectFixtureUsingInput = true
+        didTypeExactFixturePathUsingInput = true
         try postHIDKey(keyCode: 36)
         stage = .waitingForPathResolution
         trace("verified-entered-path-and-sent-go-return")
@@ -1525,11 +1635,77 @@ private final class OpenPanelKeyboardSelection: NSObject {
             }
             return
         }
-        try postHIDKey(keyCode: 36)
+        guard readyPublicationCount == 0,
+              exactURLValidationCount == 0,
+              NSApp.modalWindow === panel,
+              panel.isVisible,
+              panel.isKeyWindow
+        else {
+            throw DataImportPanelInputError.publicOpenActionStateInvalid
+        }
+        let ready = try OpenPanelPhysicalInputReady(
+            launchToken: UUID().uuidString,
+            targetPID: Int(ProcessInfo.processInfo.processIdentifier),
+            appPath: Bundle.main.bundleURL.standardizedFileURL
+                .resolvingSymlinksInPath().path,
+            panelWindowNumber: panel.windowNumber,
+            panelLayer: Int(panel.level.rawValue),
+            panelTitle: panel.title,
+            selectedPath: canonicalFileURL(fixtureURL).path,
+            interactionLabel: interactionLabel
+        )
+        let readyURL = protocolDirectory.appendingPathComponent(
+            "\(interactionLabel).ready.json"
+        )
+        try OpenPanelPhysicalInputProtocolFile.publish(ready, to: readyURL)
+        self.ready = ready
+        readyPublicationCount = 1
         stage = .waitingForPanelClose
         trace(
-            "exact-file-selected-and-sent-open-return urls="
-                + String(describing: panel.urls.map(\.path))
+            "exact-file-selected-and-published-external-open-ready "
+                + "window=\(panel.windowNumber) "
+                + "token=\(ready.launchToken) "
+                + "urls=\(String(describing: panel.urls.map(\.path)))"
+        )
+    }
+
+    func panel(_ sender: Any, validate url: URL) throws {
+        guard let validatingPanel = sender as? NSOpenPanel,
+              panel === validatingPanel,
+              stage == .waitingForPanelClose,
+              readyPublicationCount == 1,
+              exactURLValidationCount == 0,
+              NSApp.modalWindow === validatingPanel,
+              validatingPanel.isVisible,
+              canonicalFileURL(url) == canonicalFileURL(fixtureURL),
+              Set(validatingPanel.urls.map(canonicalFileURL))
+              == Set([canonicalFileURL(fixtureURL)])
+        else {
+            throw DataImportPanelInputError.publicOpenActionValidationFailed
+        }
+        exactURLValidationCount = 1
+        trace(
+            "external-physical-open-validated-exact-url "
+                + "window=\(validatingPanel.windowNumber) "
+                + "url=\(canonicalFileURL(url).path)"
+        )
+    }
+
+    func recordMenuActionReturned() {
+        guard let panel,
+              readyPublicationCount == 1,
+              exactURLValidationCount == 1,
+              panel.isVisible == false,
+              NSApp.modalWindow !== panel,
+              Set(panel.urls.map(canonicalFileURL))
+              == Set([canonicalFileURL(fixtureURL)])
+        else {
+            failure = "NSOpenPanel external Open action lacked its modal return acknowledgement"
+            return
+        }
+        trace(
+            "external-physical-open-returned-from-modal "
+                + "window=\(panel.windowNumber) validation-count=1"
         )
     }
 
@@ -1604,6 +1780,9 @@ private final class OpenPanelKeyboardSelection: NSObject {
     }
 
     private func fail(_ message: String) {
+        if let panel {
+            traceWindowState(panel: panel)
+        }
         trace("failed \(message)")
         failure = message
         stage = .finished
@@ -1624,11 +1803,16 @@ private final class OpenPanelKeyboardSelection: NSObject {
         }
         let descriptions = windows.map { window in
             "\(String(describing: type(of: window)))"
-                + "[title=\(window.title),key=\(window.isKeyWindow),"
+                + "[title=\(window.title),visible=\(window.isVisible),"
+                + "key=\(window.isKeyWindow),"
                 + "sheetParent=\(window.sheetParent === panel),"
                 + "responder=\(responderDescription(window.firstResponder))]"
         }
-        trace("waiting-path-window " + descriptions.joined(separator: " | "))
+        trace(
+            "waiting-path-window modal=\(NSApp.modalWindow === panel) "
+                + "urls=\(String(describing: panel.urls.map(\.path))) "
+                + descriptions.joined(separator: " | ")
+        )
     }
 
     private func responderDescription(_ responder: NSResponder?) -> String {
@@ -1657,11 +1841,29 @@ private final class OpenPanelKeyboardSelection: NSObject {
 
 private enum DataImportPanelInputError: LocalizedError {
     case inputTargetUnavailable
+    case unexpectedOpenPanelDelegate
+    case publicOpenActionStateInvalid
+    case publicOpenActionValidationFailed
+    case missingOpenPanelReady
+    case helperCompletionMismatch
+    case helperCompletionTimedOut
 
     var errorDescription: String? {
         switch self {
         case .inputTargetUnavailable:
             "NSOpenPanel was not the active key window for real keyboard input"
+        case .unexpectedOpenPanelDelegate:
+            "NSOpenPanel had an unexpected delegate before E2E input"
+        case .publicOpenActionStateInvalid:
+            "NSOpenPanel public Open action was not requested exactly once"
+        case .publicOpenActionValidationFailed:
+            "NSOpenPanel public Open action did not validate the exact fixture URL"
+        case .missingOpenPanelReady:
+            "NSOpenPanel did not publish its exact external-input ready state"
+        case .helperCompletionMismatch:
+            "external Open-panel Helper completion did not match the exact ready state"
+        case .helperCompletionTimedOut:
+            "external Open-panel Helper did not publish completion"
         }
     }
 }

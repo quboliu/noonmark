@@ -160,7 +160,10 @@ let package = Package(
         ),
         .testTarget(
             name: "NoonmarkDMGInstallHarnessTests",
-            dependencies: ["NoonmarkDMGInstallHarness"],
+            dependencies: [
+                "NoonmarkDMGInstallHarness",
+                "NoonmarkMacE2ESupport"
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]

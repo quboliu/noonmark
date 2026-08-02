@@ -191,12 +191,16 @@ cp \
   "$repo_root/scripts/verify-development-validation-evidence" \
   "$fixture_root/scripts/verify-development-validation-evidence"
 cp \
+  "$repo_root/scripts/development-validation-e2e-inventory" \
+  "$fixture_root/scripts/development-validation-e2e-inventory"
+cp \
   "$repo_root/scripts/runtime-evidence" \
   "$fixture_root/scripts/runtime-evidence"
 cp \
   "$repo_root/scripts/verify-english-screenshot-content.swift" \
   "$fixture_root/scripts/verify-english-screenshot-content.swift"
 chmod +x "$fixture_root/scripts/verify-development-validation-evidence"
+source "$fixture_root/scripts/development-validation-e2e-inventory"
 
 cat >"$fixture_root/bin/ditto" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -1141,8 +1145,9 @@ for (scenario, value) in values {
     try data.write(to: root.appendingPathComponent("\(scenario).png"))
 }
 '
+fixture_expected_english_scenarios="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
 IFS=, read -r -a english_fixture_scenarios <<< \
-  "english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
+  "$fixture_expected_english_scenarios"
 for scenario in "${english_fixture_scenarios[@]}"; do
   external_ax=false
   [[ "$scenario" != "english-day" ]] || external_ax=true
@@ -1192,14 +1197,41 @@ windowserver_input_cleanup_result_sha256="$(
     "$fixture_root/artifacts/e2e-runtime/windowserver-input-cleanup-result.txt" |
     awk '{print $1}'
 )"
+fixture_e2e_required_inventory_output="$(
+  development_validation_e2e_required_inventory_paths \
+    "$fixture_root" \
+    "$fixture_root/artifacts/e2e-runtime" \
+    "$fixture_expected_english_scenarios"
+)" || {
+  echo "failed to resolve fixture E2E inventory from the shared contract" >&2
+  exit 1
+}
+fixture_e2e_required_inventory_paths=()
+while IFS= read -r fixture_e2e_required_inventory_path; do
+  if [[ -z "$fixture_e2e_required_inventory_path" ||
+    "$fixture_e2e_required_inventory_path" != "$fixture_root/"* ]]; then
+    echo "shared E2E inventory escaped the DMG contract fixture" >&2
+    exit 1
+  fi
+  if [[ ! -e "$fixture_e2e_required_inventory_path" ]]; then
+    mkdir -p "$(dirname "$fixture_e2e_required_inventory_path")"
+    : >"$fixture_e2e_required_inventory_path"
+  fi
+  fixture_e2e_required_inventory_paths+=(
+    "${fixture_e2e_required_inventory_path#"$fixture_root/"}"
+  )
+done <<<"$fixture_e2e_required_inventory_output"
+if (( ${#fixture_e2e_required_inventory_paths[@]} == 0 )); then
+  echo "shared E2E inventory produced no DMG contract fixture paths" >&2
+  exit 1
+fi
 (
   cd "$fixture_root"
   source scripts/evidence-common
   evidence_inventory \
     "$PWD" \
     artifacts/e2e-runtime/artifact-inventory.sha256 \
-    artifacts/e2e-runtime \
-    artifacts/e2e
+    "${fixture_e2e_required_inventory_paths[@]}"
   evidence_inventory \
     "$PWD" \
     artifacts/dmg-install-artifact-inventory.sha256 \

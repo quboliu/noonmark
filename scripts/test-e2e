@@ -377,6 +377,8 @@ if [[ "$screenshots_only" != "1" ]] && {
     [[ "$only_mode" == "native-commands" ]] ||
     [[ "$only_mode" == "english-native-commands" ]] ||
     [[ "$only_mode" == "completion-sequence" ]] ||
+    [[ "$only_mode" == "data-import-ui" ]] ||
+    [[ "$only_mode" == "data-import-integrity" ]] ||
     [[ "$only_mode" == "diagnostic-closure" ]];
 }; then
   helper_requested=1
@@ -504,6 +506,7 @@ native_command_helper_process_matches() {
 
   if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]] ||
     { [[ "$mode" != "e2e-menu-command" ]] &&
+      [[ "$mode" != "e2e-open-panel" ]] &&
       [[ "$mode" != "diagnostic-export" ]]; } ||
     [[ ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     return 2
@@ -588,6 +591,7 @@ else {
     fputs("ready App process identity was invalid\n", stderr)
     exit(1)
 }
+
 let expectedPath = URL(fileURLWithPath: expectedApp)
     .standardizedFileURL.resolvingSymlinksInPath().path
 let actualPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
@@ -619,6 +623,66 @@ guard actualPath == expectedPath else {
     .is_onscreen == true and
     (.title == null or .title == $expected_title)' \
     <<<"$snapshot" >/dev/null
+}
+
+open_panel_app_ready_identity_matches() {
+  local pid="$1"
+  local app_bundle_path="$2"
+  local window_number="$3"
+  local window_title="$4"
+  local window_layer="$5"
+  local snapshot
+
+  if ! NOONMARK_E2E_READY_PID="$pid" \
+    NOONMARK_E2E_READY_APP="$app_bundle_path" \
+    swift -e '
+import AppKit
+import Darwin
+import Foundation
+
+let environment = ProcessInfo.processInfo.environment
+guard let rawPID = environment["NOONMARK_E2E_READY_PID"],
+      let pid = Int32(rawPID), pid > 0,
+      let expectedApp = environment["NOONMARK_E2E_READY_APP"],
+      let app = NSRunningApplication(processIdentifier: pid),
+      app.isTerminated == false,
+      app.bundleIdentifier == "app.noonmark.mac.e2e",
+      let bundleURL = app.bundleURL
+else { exit(1) }
+let expectedPath = URL(fileURLWithPath: expectedApp)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+let actualPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
+guard actualPath == expectedPath else { exit(1) }
+'; then
+    echo "Open-panel ready App PID, bundle, or canonical path was invalid" >&2
+    return 1
+  fi
+  if ! snapshot="$(
+    "$window_probe_executable_path" --window-number "$window_number" 2>/dev/null
+  )"; then
+    echo "Open-panel ready exact WindowServer ID was unavailable: $window_number" >&2
+    return 1
+  fi
+  if ! jq -e \
+    --argjson expected_window_number "$window_number" \
+    --argjson expected_layer "$window_layer" \
+    --arg expected_title "$window_title" '
+      keys == [
+        "alpha", "frame", "is_onscreen", "layer",
+        "owner_process_identifier", "schema_version", "title", "window_number"
+      ] and
+      .schema_version == 1 and
+      .window_number == $expected_window_number and
+      (.owner_process_identifier | type) == "number" and
+      .owner_process_identifier > 0 and
+      .layer == $expected_layer and
+      .is_onscreen == true and
+      (.title == null or .title == $expected_title)' \
+    <<<"$snapshot" >/dev/null; then
+    echo "Open-panel ready WindowServer snapshot did not match exact ID/title/layer" >&2
+    printf '%s\n' "$snapshot" >&2
+    return 1
+  fi
 }
 
 cleanup_native_command_helper() {
@@ -1107,7 +1171,7 @@ finish_e2e_session() {
   if ! run_windowserver_input_cleanup; then
     suite_status=1
   fi
-  rm -rf "/tmp/noonmark-e2e-preferences-clock-sync-$$"
+  rm -rf "/private/tmp/noonmark-e2e-preferences-clock-sync-$$"
   if kill -0 "$display_assertion_pid" >/dev/null 2>&1; then
     kill "$display_assertion_pid" >/dev/null 2>&1 || true
     wait "$display_assertion_pid" 2>/dev/null || true
@@ -1195,7 +1259,7 @@ resolve_exact_e2e_window_id() {
   local identity_path="$1"
   local launch_token="$2"
   local expected_process_id="$3"
-  local expected_title="$4"
+  local expected_ready_title="$4"
   local expected_width="${5:-$expected_window_width}"
   local expected_height="${6:-$expected_window_height}"
   local identity_window_number
@@ -1205,7 +1269,6 @@ resolve_exact_e2e_window_id() {
     NOONMARK_E2E_WINDOW_IDENTITY_PATH="$identity_path" \
     NOONMARK_E2E_WINDOW_LAUNCH_TOKEN="$launch_token" \
     NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" \
-    NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
     NOONMARK_E2E_EXPECTED_APP_PATH="$PWD/$app_path" swift -e '
 import AppKit
 import Darwin
@@ -1268,8 +1331,6 @@ guard let identityPath = environment["NOONMARK_E2E_WINDOW_IDENTITY_PATH"],
       UUID(uuidString: launchToken)?.uuidString == launchToken,
       let rawProcessID = environment["NOONMARK_E2E_EXPECTED_PROCESS_ID"],
       let expectedProcessID = Int32(rawProcessID), expectedProcessID > 0,
-      let expectedTitle = environment["NOONMARK_E2E_EXPECTED_WINDOW_TITLE"],
-      expectedTitle.isEmpty == false,
       let expectedAppPath = environment["NOONMARK_E2E_EXPECTED_APP_PATH"]
 else { exit(2) }
 let identityURL = URL(fileURLWithPath: identityPath)
@@ -1356,7 +1417,11 @@ guard let canonicalData = try? encoder.encode(identity),
       identity.processIdentifier == Int(expectedProcessID),
       identity.bundleIdentifier == "app.noonmark.mac.e2e",
       identity.windowNumber > 0,
-      identity.title == expectedTitle,
+      identity.title.isEmpty == false,
+      identity.title.utf8.count <= 512,
+      identity.title.unicodeScalars.allSatisfy({
+          CharacterSet.controlCharacters.contains($0) == false
+      }),
       let runningApp = NSRunningApplication(processIdentifier: expectedProcessID),
       runningApp.isTerminated == false,
       runningApp.isActive,
@@ -1381,7 +1446,7 @@ print(identity.windowNumber)
   if ! jq -e \
     --argjson expected_window_number "$identity_window_number" \
     --argjson expected_pid "$expected_process_id" \
-    --arg expected_title "$expected_title" \
+    --arg expected_title "$expected_ready_title" \
     --argjson expected_width "$expected_width" \
     --argjson expected_height "$expected_height" \
     'keys == [
@@ -4073,24 +4138,57 @@ run_workspace_productivity_probe() {
   echo "E2E workspace selection, bulk actions, Day Todo drag rejection, Future Plans native drag, atomic save failure, and restart: $productivity_db (probe=$sqlite_probe capability=$completion_capability_probe)"
 }
 
+assert_open_panel_trace_ack() {
+  local panel_trace="$1"
+  local interaction_label
+  shift
+
+  for interaction_label in "$@"; do
+    if ! awk -v interaction="$interaction_label" '
+      $1 == interaction && index($0, "typed-fixture-path ") { typed = 1 }
+      $1 == interaction &&
+        index($0, "exact-file-selected-and-published-external-open-ready") {
+          ready = 1
+        }
+      $1 == interaction &&
+        index($0, "external-physical-open-validated-exact-url ") {
+          validated = 1
+        }
+      $1 == interaction &&
+        index($0, "external-physical-open-returned-from-modal ") { returned = 1 }
+      $1 == interaction &&
+        index($0, "external-helper-completed-physical-open ") { helper = 1 }
+      $1 == interaction && index($0, "post-modal-settled ") { settled = 1 }
+      END { exit !(typed && ready && validated && returned && helper && settled) }
+    ' "$panel_trace"; then
+      echo "data-import interaction lacked exact NSOpenPanel input, external physical Open acknowledgement, or modal settlement: $interaction_label" >&2
+      return 1
+    fi
+  done
+}
+
 run_data_import_ui_probe() {
   local import_dir="artifacts/e2e-data-import-ui"
   local import_db="${import_dir}/Noonmark.sqlite"
   local fixture_dir="/tmp/noonmark-e2e-import-ui"
   local fixture_json="${fixture_dir}/fixture.json"
   local state_file="${import_dir}/state.json"
+  local panel_trace="${import_dir}/panel-events.txt"
   local setup_result="${import_dir}/setup-result.txt"
   local exercise_result="${import_dir}/exercise-result.txt"
   local restart_result="${import_dir}/restart-result.txt"
   local setup_log="${import_dir}/setup.log"
   local exercise_log="${import_dir}/exercise.log"
   local restart_log="${import_dir}/restart.log"
+  local open_panel_protocol_dir="${import_dir}/open-panel-protocol"
+  local open_panel_helper_evidence="${import_dir}/open-panel-helper-evidence"
   local sqlite_probe
 
   rm -rf "$import_dir"
   rm -rf "$fixture_dir"
   mkdir -p "$fixture_dir"
   mkdir -p "$import_dir"
+  mkdir -m 700 "$open_panel_protocol_dir"
 
   run_terminating_ui_probe \
     "data-import UI fixture setup" \
@@ -4114,7 +4212,11 @@ run_data_import_ui_probe() {
     exit 1
   fi
 
-  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 \
+    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$PWD/$open_panel_protocol_dir" \
+    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$PWD/$open_panel_helper_evidence" \
+    NOONMARK_E2E_OPEN_PANEL_INTERACTIONS="cancel confirm" \
+    run_terminating_ui_probe \
     "data-import real File menu and NSOpenPanel" \
     "$exercise_result" \
     "$exercise_log" \
@@ -4125,7 +4227,11 @@ run_data_import_ui_probe() {
     --e2e-data-import-ui-exercise \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
     --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$exercise_result"
+    --e2e-data-import-ui-result-url "$PWD/$exercise_result" \
+    --e2e-data-import-open-panel-protocol-directory \
+    "$PWD/$open_panel_protocol_dir"
+
+  assert_open_panel_trace_ack "$panel_trace" cancel confirm
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "data-import UI restart" \
@@ -4242,6 +4348,8 @@ run_data_import_integrity_probe() {
   local setup_log="${import_dir}/setup.log"
   local exercise_log="${import_dir}/exercise.log"
   local restart_log="${import_dir}/restart.log"
+  local open_panel_protocol_dir="${import_dir}/open-panel-protocol"
+  local open_panel_helper_evidence="${import_dir}/open-panel-helper-evidence"
   local baseline_database_sha256
   local exercise_database_sha256
   local restart_database_sha256
@@ -4274,6 +4382,7 @@ run_data_import_integrity_probe() {
   rm -rf "$fixture_dir"
   mkdir -p "$fixture_dir"
   mkdir -p "$import_dir"
+  mkdir -m 700 "$open_panel_protocol_dir"
 
   run_terminating_ui_probe \
     "data-import integrity fixture setup" \
@@ -4295,7 +4404,11 @@ run_data_import_integrity_probe() {
   fixture_format_version="$(/usr/bin/plutil -extract formatVersion raw -o - \
     "$fixture_json")"
 
-  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 \
+    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$PWD/$open_panel_protocol_dir" \
+    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$PWD/$open_panel_helper_evidence" \
+    NOONMARK_E2E_OPEN_PANEL_INTERACTIONS="${scenarios[*]}" \
+    run_terminating_ui_probe \
     "data-import malformed Snapshot fail-closed UI" \
     "$exercise_result" \
     "$exercise_log" \
@@ -4306,7 +4419,9 @@ run_data_import_integrity_probe() {
     --e2e-data-import-integrity-exercise \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
     --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$exercise_result"
+    --e2e-data-import-ui-result-url "$PWD/$exercise_result" \
+    --e2e-data-import-open-panel-protocol-directory \
+    "$PWD/$open_panel_protocol_dir"
 
   exercise_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
   exercise_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
@@ -4375,15 +4490,7 @@ run_data_import_integrity_probe() {
       echo "data-import integrity scenario was not completed: $scenario" >&2
       exit 1
     fi
-    if ! awk -v scenario="$scenario" '
-      $1 == scenario && index($0, "typed-fixture-path ") { typed = 1 }
-      $1 == scenario &&
-        index($0, "exact-file-selected-and-sent-open-return") { selected = 1 }
-      END { exit !(typed && selected) }
-    ' "$panel_trace"; then
-      echo "data-import integrity scenario lacked real NSOpenPanel input: $scenario" >&2
-      exit 1
-    fi
+    assert_open_panel_trace_ack "$panel_trace" "$scenario"
     fixture_sha256="$(shasum -a 256 "${fixture_dir}/${scenario}.json" \
       | awk '{print $1}')"
     state_fixture_sha256="$(/usr/bin/plutil \
@@ -5711,7 +5818,7 @@ run_preferences_clock_probe() {
   local restart_log="${preferences_dir}/restart.log"
   local failure_restart_result="${preferences_dir}/failure-restart-result.txt"
   local failure_restart_log="${preferences_dir}/failure-restart.log"
-  local sync_root="/tmp/noonmark-e2e-preferences-clock-sync-$$"
+  local sync_root="/private/tmp/noonmark-e2e-preferences-clock-sync-$$"
   local remote_bits
   local theme_bits
   local language_bits
@@ -9388,6 +9495,297 @@ run_native_command_menu_helper() {
   active_native_command_helper_mode=""
 }
 
+parse_open_panel_ready() {
+  local ready_path="$1"
+  local expected_label="$2"
+  local parent_path="${ready_path%/*}"
+
+  OPEN_PANEL_READY_TOKEN=""
+  OPEN_PANEL_READY_PID=""
+  OPEN_PANEL_READY_APP_PATH=""
+  OPEN_PANEL_READY_WINDOW_NUMBER=""
+  OPEN_PANEL_READY_WINDOW_LAYER=""
+  OPEN_PANEL_READY_WINDOW_TITLE=""
+  OPEN_PANEL_READY_SELECTED_PATH=""
+
+  if [[ ! -f "$ready_path" || -L "$ready_path" ]] ||
+    [[ "$(stat -f '%Lp' "$ready_path" 2>/dev/null || printf '0')" != "600" ]] ||
+    [[ "$(stat -f '%u' "$ready_path" 2>/dev/null || printf 'missing')" != "$(id -u)" ]] ||
+    [[ ! -d "$parent_path" || -L "$parent_path" ]] ||
+    [[ "$(stat -f '%Lp' "$parent_path" 2>/dev/null || printf '0')" != "700" ]] ||
+    ! jq -e --arg label "$expected_label" --arg app "$PWD/$app_path" '
+      keys == [
+        "appPath", "interactionLabel", "launchToken", "panelLayer",
+        "panelTitle", "panelWindowNumber", "schemaVersion", "selectedPath",
+        "status", "targetPID"
+      ] and
+      .schemaVersion == 1 and
+      .status == "ready" and
+      .interactionLabel == $label and
+      (.launchToken | type) == "string" and
+      (.targetPID | type) == "number" and
+      .targetPID >= 1 and .targetPID <= 2147483647 and
+      .appPath == $app and
+      (.panelWindowNumber | type) == "number" and
+      .panelWindowNumber >= 1 and .panelWindowNumber <= 4294967295 and
+      (.panelLayer | type) == "number" and
+      .panelLayer >= -2147483648 and .panelLayer <= 2147483647 and
+      (.panelTitle | type) == "string" and (.panelTitle | length) > 0 and
+      (.selectedPath | type) == "string" and
+      (.selectedPath | startswith("/"))
+    ' "$ready_path" >/dev/null; then
+    echo "Open-panel ready artifact violated its exact owner-only schema: $ready_path" >&2
+    return 1
+  fi
+
+  OPEN_PANEL_READY_TOKEN="$(jq -r '.launchToken' "$ready_path")"
+  OPEN_PANEL_READY_PID="$(jq -r '.targetPID' "$ready_path")"
+  OPEN_PANEL_READY_APP_PATH="$(jq -r '.appPath' "$ready_path")"
+  OPEN_PANEL_READY_WINDOW_NUMBER="$(jq -r '.panelWindowNumber' "$ready_path")"
+  OPEN_PANEL_READY_WINDOW_LAYER="$(jq -r '.panelLayer' "$ready_path")"
+  OPEN_PANEL_READY_WINDOW_TITLE="$(jq -r '.panelTitle' "$ready_path")"
+  OPEN_PANEL_READY_SELECTED_PATH="$(jq -r '.selectedPath' "$ready_path")"
+  if [[ ! "$OPEN_PANEL_READY_TOKEN" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]] ||
+    [[ ! -f "$OPEN_PANEL_READY_SELECTED_PATH" || -L "$OPEN_PANEL_READY_SELECTED_PATH" ]] ||
+    [[ "$OPEN_PANEL_READY_WINDOW_TITLE" == *$'\n'* ||
+      "$OPEN_PANEL_READY_WINDOW_TITLE" == *$'\r'* ]]; then
+    echo "Open-panel ready artifact contained an invalid exact identity" >&2
+    return 1
+  fi
+  open_panel_app_ready_identity_matches \
+    "$OPEN_PANEL_READY_PID" \
+    "$OPEN_PANEL_READY_APP_PATH" \
+    "$OPEN_PANEL_READY_WINDOW_NUMBER" \
+    "$OPEN_PANEL_READY_WINDOW_TITLE" \
+    "$OPEN_PANEL_READY_WINDOW_LAYER"
+}
+
+assert_open_panel_completion() {
+  local completion_path="$1"
+  local token="$2"
+  local helper_pid="$3"
+  local target_pid="$4"
+  local window_number="$5"
+  local selected_path="$6"
+  local interaction_label="$7"
+
+  [[ -f "$completion_path" && ! -L "$completion_path" ]] &&
+    [[ "$(stat -f '%Lp' "$completion_path" 2>/dev/null || printf '0')" == "600" ]] &&
+    jq -e \
+      --arg token "$token" \
+      --argjson helper_pid "$helper_pid" \
+      --argjson target_pid "$target_pid" \
+      --argjson window_number "$window_number" \
+      --arg selected_path "$selected_path" \
+      --arg interaction_label "$interaction_label" '
+        keys == [
+          "buttonTitle", "helperPID", "interactionLabel", "launchToken",
+          "leftButtonUp", "panelWindowNumber", "schemaVersion", "selectedPath",
+          "source", "status", "targetPID"
+        ] and
+        .schemaVersion == 1 and
+        .status == "complete" and
+        .launchToken == $token and
+        .helperPID == $helper_pid and
+        .targetPID == $target_pid and
+        .panelWindowNumber == $window_number and
+        .selectedPath == $selected_path and
+        .interactionLabel == $interaction_label and
+        (.buttonTitle == "打开" or .buttonTitle == "Open") and
+        .source == "cghidEventTap" and
+        .leftButtonUp == true
+      ' "$completion_path" >/dev/null
+}
+
+run_open_panel_helper() {
+  local ready_path="$1"
+  local completion_path="$2"
+  local evidence_dir="$3"
+  local ledger_path="$evidence_dir/ledger.tsv"
+  local stdout_path="$evidence_dir/stdout.log"
+  local stderr_path="$evidence_dir/stderr.log"
+  local launch_path="$evidence_dir/open.log"
+  local observer_log_path="$evidence_dir/exit-observer.log"
+  local observer_gate_path="$evidence_dir/exit-observer-gate.txt"
+  local exit_result_path="$evidence_dir/exit-status.txt"
+  local helper_pid live_pids activation_detail argument_detail
+
+  if [[ "$helper_requested" != "1" || ! -x "$helper_executable_path" ]] ||
+    ! codesign --verify --deep --strict "$helper_bundle" >/dev/null 2>&1; then
+    echo "Open-panel exercise lacks its verified signed Helper bundle" >&2
+    return 1
+  fi
+  if [[ -e "$completion_path" || -L "$completion_path" ||
+    "$ready_path" != /* || "$completion_path" != /* || "$evidence_dir" != /* ]]; then
+    echo "Open-panel Helper received an invalid fresh protocol boundary" >&2
+    return 1
+  fi
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if [[ -n "$live_pids" ]]; then
+    echo "Open-panel Helper refuses live Helper overlap: $live_pids" >&2
+    return 1
+  fi
+  if [[ -e "$evidence_dir" || -L "$evidence_dir" ]] ||
+    ! mkdir -m 700 "$evidence_dir"; then
+    echo "Open-panel Helper evidence directory was not fresh owner-only" >&2
+    return 1
+  fi
+  : >"$stdout_path"
+  : >"$stderr_path"
+  : >"$launch_path"
+  : >"$observer_log_path"
+
+  active_native_command_helper_pid=""
+  active_native_command_helper_token="$OPEN_PANEL_READY_TOKEN"
+  active_native_command_helper_mode="e2e-open-panel"
+  if ! /usr/bin/open \
+    -n \
+    -g \
+    --stdout "$stdout_path" \
+    --stderr "$stderr_path" \
+    "$PWD/$helper_bundle" \
+    --args \
+    --mode e2e-open-panel \
+    --ledger "$ledger_path" \
+    --launch-token "$OPEN_PANEL_READY_TOKEN" \
+    --start-gate "$observer_gate_path" \
+    --ready "$ready_path" \
+    --completion "$completion_path" \
+    >"$launch_path" 2>&1; then
+    echo "LaunchServices rejected the Open-panel Helper launch" >&2
+    return 1
+  fi
+  if [[ -s "$launch_path" ]] ||
+    ! wait_for_native_command_helper_process_record \
+      "$ledger_path" \
+      "$OPEN_PANEL_READY_TOKEN" \
+      "e2e-open-panel"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path"
+    return 1
+  fi
+  helper_pid="$NATIVE_COMMAND_HELPER_PID"
+  active_native_command_helper_pid="$helper_pid"
+  if ! start_helper_exit_observer_process \
+    "e2e-open-panel" \
+    "$helper_pid" \
+    "$OPEN_PANEL_READY_TOKEN" \
+    "$observer_gate_path" \
+    "$exit_result_path" \
+    "$observer_log_path" \
+    30 \
+    "$repo_root/scripts/dmg-install-exit-observer.swift" ||
+    ! wait_for_helper_observer_gate \
+      "e2e-open-panel" \
+      "$helper_pid" \
+      "$OPEN_PANEL_READY_TOKEN" \
+      "$observer_gate_path" \
+      "$exit_result_path" ||
+    ! wait_for_helper_exit_result \
+      "$helper_pid" \
+      "e2e-open-panel" \
+      "$OPEN_PANEL_READY_TOKEN" \
+      "$exit_result_path"; then
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stderr_path" "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  if ! helper_exit_result_matches \
+    "$exit_result_path" \
+    "e2e-open-panel" \
+    "$helper_pid" \
+    "$OPEN_PANEL_READY_TOKEN" ||
+    [[ ! -s "$ledger_path" ]] || ! cmp -s "$ledger_path" "$stdout_path" ||
+    [[ -s "$stderr_path" || -s "$launch_path" || -s "$observer_log_path" ]] ||
+    grep -F $'\tFAIL\t' "$ledger_path" >/dev/null 2>&1 ||
+    ! dmg_harness_require_exact_steps "e2e-open-panel" "$ledger_path" ||
+    ! dmg_harness_process_observer_evidence_matches \
+      "e2e-open-panel" "$ledger_path" "$helper_pid" "$OPEN_PANEL_READY_TOKEN"; then
+    echo "Open-panel Helper output or ordered ledger was invalid" >&2
+    dump_native_command_helper_evidence \
+      "$ledger_path" "$stdout_path" "$stderr_path" "$launch_path" \
+      "$observer_log_path" "$exit_result_path"
+    return 1
+  fi
+  activation_detail="$(awk -F $'\t' '$3 == "activation" { print $4 }' "$ledger_path")"
+  if ! dmg_harness_activation_evidence_matches \
+    "$activation_detail" \
+    "app.noonmark.mac.e2e" \
+    "$OPEN_PANEL_READY_APP_PATH" \
+    "$OPEN_PANEL_READY_PID"; then
+    echo "Open-panel Helper activation evidence was invalid" >&2
+    return 1
+  fi
+  argument_detail="mode=e2e-open-panel pid=$OPEN_PANEL_READY_PID app=$OPEN_PANEL_READY_APP_PATH window_number=$OPEN_PANEL_READY_WINDOW_NUMBER window=$OPEN_PANEL_READY_WINDOW_TITLE ready=$ready_path completion=$completion_path"
+  if ! awk -F $'\t' -v detail="$argument_detail" '
+    NR == 1 && $2 == "PASS" && $3 == "arguments" && $4 == detail { found = 1 }
+    END { exit !found }
+  ' "$ledger_path" ||
+    ! assert_open_panel_completion \
+      "$completion_path" \
+      "$OPEN_PANEL_READY_TOKEN" \
+      "$helper_pid" \
+      "$OPEN_PANEL_READY_PID" \
+      "$OPEN_PANEL_READY_WINDOW_NUMBER" \
+      "$OPEN_PANEL_READY_SELECTED_PATH" \
+      "$(jq -r '.interactionLabel' "$ready_path")"; then
+    echo "Open-panel Helper completion did not bind the exact ready payload" >&2
+    return 1
+  fi
+  for _ in {1..160}; do
+    if ! kill -0 "$helper_pid" 2>/dev/null; then break; fi
+    sleep 0.025
+  done
+  live_pids="$(pgrep -x "$helper_process_name" 2>/dev/null || true)"
+  if kill -0 "$helper_pid" 2>/dev/null || [[ -n "$live_pids" ]]; then
+    echo "Open-panel Helper remained after verified exit: ${live_pids:-$helper_pid}" >&2
+    return 1
+  fi
+  active_native_command_helper_pid=""
+  active_native_command_helper_token=""
+  active_native_command_helper_mode=""
+}
+
+drive_open_panel_helpers() {
+  local launcher_pid="$1"
+  local result_path="$2"
+  local protocol_directory="$3"
+  local evidence_root="$4"
+  shift 4
+  local interaction_label ready_path completion_path
+
+  if [[ -e "$evidence_root" || -L "$evidence_root" ]] ||
+    ! mkdir -m 700 "$evidence_root"; then
+    echo "external Open-panel evidence root was not fresh owner-only" >&2
+    return 1
+  fi
+
+  for interaction_label in "$@"; do
+    if [[ ! "$interaction_label" =~ ^[a-z0-9-]+$ ]]; then
+      echo "external Open-panel interaction label was invalid" >&2
+      return 1
+    fi
+    ready_path="$protocol_directory/${interaction_label}.ready.json"
+    completion_path="$protocol_directory/${interaction_label}.completion.json"
+    for _ in {1..1600}; do
+      if [[ -f "$ready_path" || -f "$result_path" ]] ||
+        ! kill -0 "$launcher_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.025
+    done
+    if [[ ! -f "$ready_path" ]] ||
+      ! parse_open_panel_ready "$ready_path" "$interaction_label" ||
+      ! run_open_panel_helper \
+        "$ready_path" \
+        "$completion_path" \
+        "$evidence_root/$interaction_label"; then
+      echo "external Open-panel interaction failed: $interaction_label" >&2
+      return 1
+    fi
+  done
+}
+
 diagnostic_control_directory_is_owner_only() {
   local directory="$1"
   local expected_parent="$2"
@@ -9743,6 +10141,41 @@ diagnostic_closure_app_process_matches() {
     [[ " $command_line " == *" --sync-folder-url $sync_root "* ]]
 }
 
+wait_for_diagnostic_closure_app_process_identity() {
+  local pid="$1"
+  local token="$2"
+  local mode="$3"
+  local database_path="$4"
+  local sync_root="$5"
+  local match_status=0
+  local process_state="exited"
+  local observed_command=""
+
+  for _ in {1..200}; do
+    if diagnostic_closure_app_process_matches \
+      "$pid" "$token" "$mode" "$database_path" "$sync_root"; then
+      return 0
+    else
+      match_status=$?
+    fi
+    if [[ "$match_status" == "2" ]]; then
+      return 2
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    process_state="live"
+  fi
+  observed_command="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+  printf \
+    'diagnostic App process identity was not ready: mode=%s pid=%s process_state=%s observed_command=%q\n' \
+    "$mode" "$pid" "$process_state" "$observed_command" >&2
+  return 1
+}
+
 run_diagnostic_evidence_closure_probe() {
   local closure_dir="artifacts/e2e-diagnostic-closure"
   local closure_root="$PWD/$closure_dir"
@@ -9848,7 +10281,7 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-diagnostic-evidence-launch-token "$seed_token" \
     >"$closure_dir/seed-app.log" 2>&1 &
   seed_pid=$!
-  if ! diagnostic_closure_app_process_matches \
+  if ! wait_for_diagnostic_closure_app_process_identity \
     "$seed_pid" "$seed_token" "seed-failure" "$database" "$sync_root"; then
     echo "diagnostic seed App identity did not match its exact launch" >&2
     return 1
@@ -9920,7 +10353,7 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-diagnostic-evidence-launch-token "$stall_token" \
     >"$closure_dir/stall-app.log" 2>&1 &
   stall_pid=$!
-  if ! diagnostic_closure_app_process_matches \
+  if ! wait_for_diagnostic_closure_app_process_identity \
     "$stall_pid" "$stall_token" "stall" "$database" "$sync_root"; then
     echo "diagnostic stalled App identity did not match its exact launch" >&2
     return 1
@@ -10012,7 +10445,7 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-main-window-launch-token "$restart_token" \
     >"$closure_dir/restart-app.log" 2>&1 &
   restart_pid=$!
-  if ! diagnostic_closure_app_process_matches \
+  if ! wait_for_diagnostic_closure_app_process_identity \
     "$restart_pid" "$restart_token" "restart" "$database" "$sync_root"; then
     echo "diagnostic restart App identity did not match its exact launch" >&2
     return 1
@@ -10150,6 +10583,12 @@ run_terminating_ui_probe() {
   local result="$2"
   local log="$3"
   local pid
+  local missing_result_process_state
+  local missing_result_exit_status
+  local protocol_directory="${NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY:-}"
+  local helper_evidence_root="${NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT:-}"
+  local interaction_labels="${NOONMARK_E2E_OPEN_PANEL_INTERACTIONS:-}"
+  local -a interactions=()
   shift 3
 
   rm -f "$result"
@@ -10160,6 +10599,35 @@ run_terminating_ui_probe() {
   fi
   pid=$!
 
+  if [[ -n "$protocol_directory" || -n "$helper_evidence_root" ||
+    -n "$interaction_labels" ]]; then
+    if [[ -z "$protocol_directory" || -z "$helper_evidence_root" ||
+      -z "$interaction_labels" ||
+      ! -d "$protocol_directory" || -L "$protocol_directory" ||
+      "$(stat -f '%Lp' "$protocol_directory" 2>/dev/null || printf '0')" != "700" ||
+      -e "$helper_evidence_root" || -L "$helper_evidence_root" ]]; then
+      terminate_e2e_app
+      wait "$pid" 2>/dev/null || true
+      echo "$label had an invalid external Open-panel boundary" >&2
+      exit 1
+    fi
+    read -r -a interactions <<<"$interaction_labels"
+    if (( ${#interactions[@]} == 0 )) ||
+      ! drive_open_panel_helpers \
+        "$pid" \
+        "$result" \
+        "$protocol_directory" \
+        "$helper_evidence_root" \
+        "${interactions[@]}"; then
+      cleanup_native_command_helper >/dev/null 2>&1 || true
+      terminate_e2e_app
+      wait "$pid" 2>/dev/null || true
+      echo "$label external Open-panel protocol failed" >&2
+      cat "$log" >&2
+      exit 1
+    fi
+  fi
+
   for _ in {1..400}; do
     if [[ -f "$result" ]] || ! kill -0 "$pid" 2>/dev/null; then
       break
@@ -10168,9 +10636,22 @@ run_terminating_ui_probe() {
   done
 
   if [[ ! -f "$result" ]]; then
-    terminate_e2e_app
-    wait "$pid" 2>/dev/null || true
-    echo "$label result was not created: $result" >&2
+    if kill -0 "$pid" 2>/dev/null; then
+      missing_result_process_state="running"
+      if ! terminate_e2e_app; then
+        missing_result_process_state="running-termination-failed"
+      fi
+    else
+      missing_result_process_state="exited"
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      missing_result_exit_status="unavailable-running"
+    elif wait "$pid" 2>/dev/null; then
+      missing_result_exit_status=0
+    else
+      missing_result_exit_status=$?
+    fi
+    echo "$label result was not created: $result (process_state=$missing_result_process_state exit_status=$missing_result_exit_status)" >&2
     cat "$log" >&2
     exit 1
   fi

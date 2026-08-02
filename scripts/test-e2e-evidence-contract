@@ -176,6 +176,254 @@ require_literal \
   App/NoonmarkMacApp/TaskNoteE2EUIInteractionDriver.swift \
   "try input.typeUnicode(editedBody)"
 require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  ') async throws {'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'try await waitForOpenPanelSettlement(mainWindow: mainWindow)'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'NSApp.modalWindow == nil'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'window is NSOpenPanel && window.isVisible'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'interaction.recordPostModalSettlement(mainWindow: mainWindow)'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'private final class OpenPanelKeyboardSelection: NSObject, NSOpenSavePanelDelegate'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'let ready = try OpenPanelPhysicalInputReady('
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'try OpenPanelPhysicalInputProtocolFile.publish(ready, to: readyURL)'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'panelLayer: Int(panel.level.rawValue)'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'func panel(_ sender: Any, validate url: URL) throws'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'exactURLValidationCount == 1'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'interaction.recordMenuActionReturned()'
+require_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'try await interaction.waitForHelperCompletion()'
+require_literal \
+  Sources/NoonmarkMacE2ESupport/OpenPanelPhysicalInputProtocol.swift \
+  'O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC'
+require_literal \
+  Sources/NoonmarkMacE2ESupport/OpenPanelPhysicalInputProtocol.swift \
+  'renamex_np(source, target, UInt32(RENAME_EXCL))'
+require_literal \
+  Sources/NoonmarkMacE2ESupport/OpenPanelPhysicalInputProtocol.swift \
+  'O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'case e2eOpenPanel = "e2e-open-panel"'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'func performE2EOpenPanelPhysicalInput() throws -> String'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'target.windowNumber(window) == configuration.windowNumber'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'snapshot.layer == ready.panelLayer'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'ownerPID == configuration.pid'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'try input.click(frame: buttonFrame)'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'currentButtonMatches.count == 1'
+require_literal \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'guard input.leftButtonIsDown == false else'
+require_literal \
+  scripts/dmg-harness-ledger-contract.tsv \
+  $'e2e-open-panel\t'
+require_literal scripts/test-e2e 'parse_open_panel_ready()'
+require_literal scripts/test-e2e 'assert_open_panel_completion()'
+require_literal scripts/test-e2e 'run_open_panel_helper()'
+require_literal scripts/test-e2e 'drive_open_panel_helpers()'
+require_literal scripts/test-e2e 'assert_open_panel_trace_ack()'
+require_literal scripts/test-e2e '.layer == $expected_layer and'
+require_literal \
+  scripts/dmg-install-exit-observer.swift \
+  '"e2e-open-panel",'
+require_literal \
+  scripts/test-dmg-harness-evidence-contract \
+  'preflight exercise restart e2e-inspect e2e-menu-command e2e-open-panel \'
+full_e2e_entry="$({
+  sed -n \
+    '/^run_task_pool_note_persistence_probe$/,/^data_package_dir=/p' \
+    scripts/test-e2e
+})"
+for required_full_open_panel_probe in \
+  run_data_import_ui_probe \
+  run_data_import_integrity_probe; do
+  if [[ "$(grep -cxF "$required_full_open_panel_probe" <<<"$full_e2e_entry")" != "1" ]]; then
+    echo "full E2E does not call the required Open-panel symptom probe exactly once: $required_full_open_panel_probe" >&2
+    exit 1
+  fi
+done
+if [[ "$(grep -cxF run_preferences_clock_probe <<<"$full_e2e_entry")" != "1" ]]; then
+  echo "full E2E does not call the PreferencesClock symptom probe exactly once" >&2
+  exit 1
+fi
+require_literal \
+  scripts/test-e2e \
+  'local sync_root="/private/tmp/noonmark-e2e-preferences-clock-sync-$$"'
+require_literal \
+  scripts/test-e2e \
+  'rm -rf "/private/tmp/noonmark-e2e-preferences-clock-sync-$$"'
+require_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  'let guardedPrefix = "/private/tmp/noonmark-e2e-preferences-clock-sync-"'
+require_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  'let path = syncFolderPath'
+require_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  'suffix.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 })'
+require_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  'let shellProcessID = Int32(suffix), shellProcessID > 0'
+forbid_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  'syncFolderURL.standardizedFileURL.path'
+forbid_literal \
+  scripts/test-e2e \
+  '"/tmp/noonmark-e2e-preferences-clock-sync-'
+forbid_literal \
+  App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
+  '"/tmp/noonmark-e2e-preferences-clock-sync-'
+terminating_ui_probe_function="$({
+  sed -n \
+    '/^run_terminating_ui_probe() {$/,/^run_task_pool_note_persistence_probe$/p' \
+    scripts/test-e2e
+})"
+for required_missing_result_evidence in \
+  'missing_result_process_state="exited"' \
+  'missing_result_exit_status=$?' \
+  'process_state=$missing_result_process_state exit_status=$missing_result_exit_status'; do
+  if ! grep -F -- "$required_missing_result_evidence" \
+    <<<"$terminating_ui_probe_function" >/dev/null; then
+    echo "terminating UI probe lacks missing-result process evidence: $required_missing_result_evidence" >&2
+    exit 1
+  fi
+done
+for required_preferences_clock_inventory in \
+  Noonmark.sqlite \
+  state.json \
+  setup-result.txt \
+  exercise-result.txt \
+  restart-result.txt \
+  failure-restart-result.txt \
+  input-trace.txt \
+  sync-task-summary.png \
+  remote-future-preferences.json \
+  remote-before-local-settings.json \
+  stale-remote-reintroduced.json \
+  stale-remote-before-restart-sync.json \
+  final-local-winner-preferences.json \
+  final-local-winner-snapshot.json \
+  probe.txt; do
+  require_literal \
+    scripts/development-validation-e2e-inventory \
+    "artifacts/e2e-preferences-clock/$required_preferences_clock_inventory"
+done
+require_literal \
+  scripts/verify-development-validation-evidence \
+  'source scripts/development-validation-e2e-inventory'
+require_literal \
+  scripts/verify-development-validation-evidence \
+  'development_validation_e2e_required_inventory_paths'
+require_literal \
+  scripts/test-dmg-evidence-contract \
+  'source "$fixture_root/scripts/development-validation-e2e-inventory"'
+require_literal \
+  scripts/test-dmg-evidence-contract \
+  'development_validation_e2e_required_inventory_paths'
+forbid_literal \
+  scripts/verify-development-validation-evidence \
+  'artifacts/e2e-preferences-clock/'
+forbid_literal \
+  scripts/verify-development-validation-evidence \
+  'artifacts/e2e-data-import-ui/'
+forbid_literal \
+  scripts/verify-development-validation-evidence \
+  'artifacts/e2e-data-import-integrity/'
+for required_release_open_panel_inventory in \
+  'artifacts/e2e-data-import-ui/panel-events.txt' \
+  'open-panel-protocol/${validation_interaction}.completion.json' \
+  'artifacts/e2e-data-import-ui/open-panel-helper-evidence/%s/%s' \
+  'artifacts/e2e-data-import-integrity/integrity-probe.txt' \
+  'artifacts/e2e-data-import-integrity/open-panel-helper-evidence/%s/%s'; do
+  require_literal \
+    scripts/development-validation-e2e-inventory \
+    "$required_release_open_panel_inventory"
+done
+require_literal \
+  scripts/development-validation-e2e-inventory \
+  'for validation_interaction in cancel confirm; do'
+for required_integrity_open_panel_inventory in \
+  duplicate-subtask-identity \
+  dangling-subtask-parent \
+  invalid-subtask-terminal-facts \
+  invalid-planned-subtask-position; do
+  require_literal \
+    scripts/development-validation-e2e-inventory \
+    "$required_integrity_open_panel_inventory"
+done
+forbid_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'exact-file-selected-and-sent-open-return'
+forbid_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'panel.ok(nil)'
+forbid_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  '.stableDefaultButton(in: panel)'
+forbid_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'self.stage == .clickingDefaultOpenButton'
+forbid_literal \
+  App/NoonmarkMacApp/DataImportUIE2EAutomation.swift \
+  'try await driver.postClick('
+open_panel_modal_driver="$({
+  sed -n \
+    '/^    private func waitForPathResolution() throws {$/,/^    func panel(_ sender: Any, validate url: URL) throws {$/p' \
+    App/NoonmarkMacApp/DataImportUIE2EAutomation.swift
+})"
+if grep -E '\b(Task[[:space:]]*\{|await)\b' <<<"$open_panel_modal_driver" >/dev/null; then
+  echo "NSOpenPanel modal driver contains asynchronous work that cannot complete inside runModal" >&2
+  exit 1
+fi
+require_literal \
+  scripts/test-e2e \
+  'index($0, "post-modal-settled ") { settled = 1 }'
+require_literal \
+  scripts/test-e2e \
+  'index($0, "external-physical-open-validated-exact-url ") {'
+require_literal \
+  scripts/test-e2e \
+  'index($0, "external-physical-open-returned-from-modal ") { returned = 1 }'
+require_literal \
+  scripts/test-e2e \
+  'index($0, "external-helper-completed-physical-open ") { helper = 1 }'
+require_literal \
+  scripts/test-e2e \
+  'END { exit !(typed && ready && validated && returned && helper && settled) }'
+require_literal \
   scripts/test-e2e \
   'NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \'
 require_literal \
@@ -202,6 +450,53 @@ require_literal \
 require_literal \
   scripts/test-e2e \
   '"$app_pid" 2>/dev/null'
+resolve_exact_window_function="$(
+  sed -n \
+    '/^resolve_exact_e2e_window_id() {$/,/^exact_auxiliary_window_matches() {$/p' \
+    scripts/test-e2e
+)"
+for required_identity_boundary in \
+  'local expected_ready_title="$4"' \
+  'identity.title.isEmpty == false' \
+  'identity.title.utf8.count <= 512' \
+  'identity.title.unicodeScalars.allSatisfy({' \
+  'CharacterSet.controlCharacters.contains($0) == false' \
+  '"$window_probe_executable_path"' \
+  '--arg expected_title "$expected_ready_title"' \
+  '(.title == null or .title == $expected_title)'; do
+  if ! grep -F -- "$required_identity_boundary" \
+    <<<"$resolve_exact_window_function" >/dev/null; then
+    echo "exact E2E window resolver lacks its publication/readiness boundary: $required_identity_boundary" >&2
+    exit 1
+  fi
+done
+if grep -F 'NOONMARK_E2E_EXPECTED_WINDOW_TITLE' \
+  <<<"$resolve_exact_window_function" >/dev/null ||
+  grep -E 'identity\.title[[:space:]]*==[[:space:]]*expected' \
+    <<<"$resolve_exact_window_function" >/dev/null; then
+  echo "exact E2E window resolver still treats publication title as readiness state" >&2
+  exit 1
+fi
+identity_reader_swift="$fixture_root/e2e-window-identity-reader.swift"
+awk '
+  /NOONMARK_E2E_EXPECTED_APP_PATH=.*swift -e '\''$/ {
+    capture = 1
+    next
+  }
+  capture && $0 == "'\''" { exit }
+  capture { print }
+' scripts/test-e2e >"$identity_reader_swift"
+if [[ ! -s "$identity_reader_swift" ]] ||
+  ! xcrun swiftc -typecheck "$identity_reader_swift"; then
+  echo "exact E2E window identity reader does not typecheck" >&2
+  exit 1
+fi
+require_literal \
+  scripts/test-e2e \
+  '"day-changed-target|day|--select changed"'
+require_literal \
+  scripts/test-e2e \
+  '--e2e-english-history-header'
 capture_app_screenshot_function="$(
   sed -n '/^capture_app_screenshot() {$/,/^}$/p' scripts/test-e2e
 )"
@@ -648,6 +943,8 @@ forbid_literal \
 
 diagnostic_export_function="$fixture_root/diagnostic-export.swift"
 diagnostic_text_replacement_function="$fixture_root/diagnostic-text-replacement.swift"
+diagnostic_process_wait_function="$fixture_root/diagnostic-process-wait.sh"
+diagnostic_closure_runner_function="$fixture_root/diagnostic-closure-runner.sh"
 sed -n \
   '/^    func performDiagnosticExport() throws {$/,/^    private func requireDiagnosticExportDestination(/p' \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
@@ -656,6 +953,36 @@ sed -n \
   '/^    private func replaceFocusedTextField(/,/^    private func requireDiagnosticExportDestination(/p' \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
   | tr -d '[:space:]' >"$diagnostic_text_replacement_function"
+sed -n \
+  '/^wait_for_diagnostic_closure_app_process_identity() {$/,/^}$/p' \
+  scripts/test-e2e \
+  >"$diagnostic_process_wait_function"
+sed -n \
+  '/^run_diagnostic_evidence_closure_probe() {$/,/^}$/p' \
+  scripts/test-e2e \
+  >"$diagnostic_closure_runner_function"
+require_literal \
+  scripts/test-e2e \
+  'wait_for_diagnostic_closure_app_process_identity()'
+require_literal \
+  "$diagnostic_process_wait_function" \
+  'diagnostic_closure_app_process_matches'
+require_literal \
+  "$diagnostic_process_wait_function" \
+  'kill -0 "$pid"'
+require_literal \
+  "$diagnostic_process_wait_function" \
+  'observed_command='
+if [[ "$(grep -oF 'wait_for_diagnostic_closure_app_process_identity' \
+  "$diagnostic_closure_runner_function" | wc -l | tr -d ' ')" != "3" ]]; then
+  echo "diagnostic closure does not wait for all three exact App process identities" >&2
+  exit 1
+fi
+if [[ "$(grep -oF 'diagnostic_closure_app_process_matches' \
+  "$diagnostic_closure_runner_function" | wc -l | tr -d ' ')" != "1" ]]; then
+  echo "diagnostic closure still performs an immediate launch identity assertion" >&2
+  exit 1
+fi
 if [[ "$(grep -oF 'tryreplaceFocusedTextField(' \
   "$diagnostic_export_function" | wc -l | tr -d ' ')" != "2" ]]; then
   echo "diagnostic export does not share one exact text replacement protocol" >&2
@@ -694,7 +1021,44 @@ require_literal \
   'identifier=="GoToWindow"'
 require_literal \
   "$diagnostic_export_function" \
+  'description:"focusedapp-owneddiagnosticsavepanel"'
+require_literal \
+  "$diagnostic_export_function" \
+  'letgoToContext:(sheet:AXUIElement,locationField:AXUIElement)'
+require_literal \
+  "$diagnostic_export_function" \
+  'goToContext=trytarget.wait('
+require_literal \
+  "$diagnostic_export_function" \
+  'description:"exactfocusedsave-panelGoToWindowcontext"'
+require_literal \
+  "$diagnostic_export_function" \
+  'CFEqual(focusedWindow,sheet)'
+require_literal \
+  "$diagnostic_export_function" \
+  'CFEqual(sheetParent,savePanel)'
+require_literal \
+  "$diagnostic_export_function" \
+  'diagnosticGoToContextSummary(savePanel:savePanel)'
+if [[ "$(grep -oF 'CFEqual(focusedWindow,savePanel)' \
+  "$diagnostic_export_function" | wc -l | tr -d ' ')" != "2" ]]; then
+  echo "diagnostic export does not separate save-panel and GoToWindow focus phases" >&2
+  exit 1
+fi
+forbid_literal \
+  "$diagnostic_export_function" \
+  'description:"save-panellocationfield"'
+require_literal \
+  "$diagnostic_export_function" \
   'kAXSelectedAttributeasString'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'description: "focused app-owned diagnostic save panel"' \
+  'flags: [.maskCommand, .maskShift]'
+require_order \
+  Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
+  'flags: [.maskCommand, .maskShift]' \
+  'description: "exact focused save-panel GoToWindow context"'
 require_order \
   Tools/NoonmarkDMGInstallHarness/NoonmarkDMGInstallHarness.swift \
   'description: "selected save-panel location suggestion"' \

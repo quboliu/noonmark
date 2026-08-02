@@ -3,4 +3,5 @@ exercise	arguments,process,exit-observer,permissions,activation,target,main-wind
 restart	arguments,process,exit-observer,permissions,activation,target,main-window,restart-title-visible,quit-menu,quit,complete
 e2e-inspect	arguments,process,exit-observer,permissions,activation,target,e2e-window,e2e-remove-buttons,complete
 e2e-menu-command	arguments,process,exit-observer,permissions,activation,target,e2e-window,menu-bar,menu-item,menu-command,completion,complete
+e2e-open-panel	arguments,process,exit-observer,permissions,activation,target,open-panel,open-button,open-action,completion,complete
 diagnostic-export	arguments,process,exit-observer,permissions,activation,target,diagnostic-locks-before-export,diagnostic-window,diagnostic-menu,diagnostic-preview,diagnostic-export-ui,diagnostic-locks-after-export,diagnostic-package,diagnostic-lock-holder-exit,complete

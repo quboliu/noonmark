@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+
+development_validation_e2e_required_inventory_paths() {
+  if [[ $# -ne 3 || -z "$1" || -z "$2" || -z "$3" ||
+    "$1" != /* || "$2" != /* || "$1" == *$'\n'* || "$2" == *$'\n'* ]]; then
+    echo "development-validation E2E inventory requires absolute newline-free roots and an English scenario set" >&2
+    return 2
+  fi
+
+  local validation_repo_root="${1%/}"
+  local validation_e2e_evidence_root="${2%/}"
+  local validation_english_scenario_set="$3"
+  local validation_relative_path
+  local validation_scenario
+  local validation_interaction
+  local validation_helper_file
+  local -a validation_english_scenarios=()
+
+  for validation_relative_path in \
+    unified.log \
+    runtime-manifest.txt \
+    windowserver-input-cleanup-result.txt \
+    windowserver-input-cleanup.log \
+    english-scenario-ledger.tsv \
+    diagnostic-baseline.txt \
+    diagnostic-baseline.txt.current \
+    diagnostic-baseline.txt.new \
+    diagnostic-result.txt \
+    helper-diagnostic-baseline.txt \
+    helper-diagnostic-baseline.txt.current \
+    helper-diagnostic-baseline.txt.new \
+    helper-diagnostic-result.txt \
+    app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E \
+    helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness; do
+    printf '%s/%s\n' \
+      "$validation_e2e_evidence_root" \
+      "$validation_relative_path"
+  done
+
+  for validation_relative_path in \
+    artifacts/e2e-preferences-clock/Noonmark.sqlite \
+    artifacts/e2e-preferences-clock/state.json \
+    artifacts/e2e-preferences-clock/setup-result.txt \
+    artifacts/e2e-preferences-clock/setup.log \
+    artifacts/e2e-preferences-clock/exercise-result.txt \
+    artifacts/e2e-preferences-clock/exercise.log \
+    artifacts/e2e-preferences-clock/restart-result.txt \
+    artifacts/e2e-preferences-clock/restart.log \
+    artifacts/e2e-preferences-clock/failure-restart-result.txt \
+    artifacts/e2e-preferences-clock/failure-restart.log \
+    artifacts/e2e-preferences-clock/input-trace.txt \
+    artifacts/e2e-preferences-clock/sync-task-summary.png \
+    artifacts/e2e-preferences-clock/remote-future-preferences.json \
+    artifacts/e2e-preferences-clock/remote-before-local-settings.json \
+    artifacts/e2e-preferences-clock/stale-remote-reintroduced.json \
+    artifacts/e2e-preferences-clock/stale-remote-before-restart-sync.json \
+    artifacts/e2e-preferences-clock/final-local-winner-preferences.json \
+    artifacts/e2e-preferences-clock/final-local-winner-snapshot.json \
+    artifacts/e2e-preferences-clock/probe.txt \
+    artifacts/e2e-data-import-ui/Noonmark.sqlite \
+    artifacts/e2e-data-import-ui/panel-events.txt \
+    artifacts/e2e-data-import-ui/setup-result.txt \
+    artifacts/e2e-data-import-ui/exercise-result.txt \
+    artifacts/e2e-data-import-ui/restart-result.txt \
+    artifacts/e2e-data-import-ui/state.json \
+    artifacts/e2e-data-import-integrity/Noonmark.sqlite \
+    artifacts/e2e-data-import-integrity/panel-events.txt \
+    artifacts/e2e-data-import-integrity/setup-result.txt \
+    artifacts/e2e-data-import-integrity/exercise-result.txt \
+    artifacts/e2e-data-import-integrity/restart-result.txt \
+    artifacts/e2e-data-import-integrity/state.json \
+    artifacts/e2e-data-import-integrity/integrity-probe.txt; do
+    printf '%s/%s\n' "$validation_repo_root" "$validation_relative_path"
+  done
+
+  IFS=, read -r -a validation_english_scenarios <<< \
+    "$validation_english_scenario_set"
+  if (( ${#validation_english_scenarios[@]} == 0 )); then
+    echo "development-validation E2E inventory has no English scenarios" >&2
+    return 2
+  fi
+  for validation_scenario in "${validation_english_scenarios[@]}"; do
+    if [[ ! "$validation_scenario" =~ ^[a-z0-9-]+$ ]]; then
+      echo "development-validation E2E inventory has an invalid English scenario" >&2
+      return 2
+    fi
+    printf '%s/artifacts/e2e/%s.png\n' \
+      "$validation_repo_root" \
+      "$validation_scenario"
+  done
+
+  for validation_interaction in cancel confirm; do
+    for validation_relative_path in \
+      "open-panel-protocol/${validation_interaction}.ready.json" \
+      "open-panel-protocol/${validation_interaction}.completion.json"; do
+      printf '%s/artifacts/e2e-data-import-ui/%s\n' \
+        "$validation_repo_root" \
+        "$validation_relative_path"
+    done
+    for validation_helper_file in \
+      ledger.tsv stdout.log stderr.log open.log exit-observer-gate.txt \
+      exit-observer.log exit-status.txt; do
+      printf '%s/artifacts/e2e-data-import-ui/open-panel-helper-evidence/%s/%s\n' \
+        "$validation_repo_root" \
+        "$validation_interaction" \
+        "$validation_helper_file"
+    done
+  done
+
+  for validation_interaction in \
+    duplicate-subtask-identity \
+    dangling-subtask-parent \
+    invalid-subtask-terminal-facts \
+    invalid-planned-subtask-position; do
+    for validation_relative_path in \
+      "open-panel-protocol/${validation_interaction}.ready.json" \
+      "open-panel-protocol/${validation_interaction}.completion.json"; do
+      printf '%s/artifacts/e2e-data-import-integrity/%s\n' \
+        "$validation_repo_root" \
+        "$validation_relative_path"
+    done
+    for validation_helper_file in \
+      ledger.tsv stdout.log stderr.log open.log exit-observer-gate.txt \
+      exit-observer.log exit-status.txt; do
+      printf '%s/artifacts/e2e-data-import-integrity/open-panel-helper-evidence/%s/%s\n' \
+        "$validation_repo_root" \
+        "$validation_interaction" \
+        "$validation_helper_file"
+    done
+  done
+}

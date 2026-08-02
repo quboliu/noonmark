@@ -16,6 +16,7 @@ enum NoonmarkDMGInstallHarness {
         case restart
         case e2eInspect = "e2e-inspect"
         case e2eMenuCommand = "e2e-menu-command"
+        case e2eOpenPanel = "e2e-open-panel"
         case diagnosticExport = "diagnostic-export"
         case diagnosticExportScope = "diagnostic-export-scope"
     }
@@ -39,6 +40,8 @@ enum NoonmarkDMGInstallHarness {
         let repositoryLockPath: String
         let exportPath: String
         let sentinelsPath: String
+        let openPanelReadyPath: String
+        let openPanelReady: OpenPanelPhysicalInputReady?
 
         static func parse(_ arguments: [String]) throws -> Self {
             var values: [String: String] = [:]
@@ -68,6 +71,7 @@ enum NoonmarkDMGInstallHarness {
                 "--expectations",
                 "--menu-title",
                 "--menu-item-title",
+                "--ready",
                 "--completion",
                 "--target-profile",
                 "--database",
@@ -86,6 +90,7 @@ enum NoonmarkDMGInstallHarness {
                 throw HarnessFailure.invalidArguments(
                     "required: --mode preflight|exercise|restart|e2e-inspect|"
                         + "e2e-menu-command|diagnostic-export|"
+                        + "e2e-open-panel|"
                         + "diagnostic-export-scope"
                 )
             }
@@ -102,6 +107,7 @@ enum NoonmarkDMGInstallHarness {
                 throw HarnessFailure.invalidArguments(
                     "required: --mode preflight|exercise|restart|e2e-inspect|"
                         + "e2e-menu-command|diagnostic-export --ledger PATH "
+                        + "e2e-open-panel|"
                         + "--launch-token UUID "
                         + "--start-gate ABSOLUTE_PATH"
                 )
@@ -131,7 +137,9 @@ enum NoonmarkDMGInstallHarness {
                     databasePath: "",
                     repositoryLockPath: "",
                     exportPath: "",
-                    sentinelsPath: ""
+                    sentinelsPath: "",
+                    openPanelReadyPath: "",
+                    openPanelReady: nil
                 )
             }
             if mode == .e2eInspect {
@@ -172,7 +180,9 @@ enum NoonmarkDMGInstallHarness {
                     databasePath: "",
                     repositoryLockPath: "",
                     exportPath: "",
-                    sentinelsPath: ""
+                    sentinelsPath: "",
+                    openPanelReadyPath: "",
+                    openPanelReady: nil
                 )
             }
             if mode == .e2eMenuCommand {
@@ -221,7 +231,63 @@ enum NoonmarkDMGInstallHarness {
                     databasePath: "",
                     repositoryLockPath: "",
                     exportPath: "",
-                    sentinelsPath: ""
+                    sentinelsPath: "",
+                    openPanelReadyPath: "",
+                    openPanelReady: nil
+                )
+            }
+            if mode == .e2eOpenPanel {
+                guard values.count == 6,
+                      let readyPath = values["--ready"],
+                      Self.isAbsoluteSingleLinePath(readyPath),
+                      let completionPath = values["--completion"],
+                      Self.isAbsoluteSingleLinePath(completionPath),
+                      readyPath != completionPath
+                else {
+                    throw HarnessFailure.invalidArguments(
+                        "e2e-open-panel requires exact --ready and --completion paths"
+                    )
+                }
+                let readyURL = URL(fileURLWithPath: readyPath)
+                let completionURL = URL(fileURLWithPath: completionPath)
+                let ready = try OpenPanelPhysicalInputProtocolFile.readReady(
+                    from: readyURL
+                )
+                guard ready.launchToken == launchToken,
+                      readyURL.deletingLastPathComponent()
+                      == completionURL.deletingLastPathComponent(),
+                      readyURL.lastPathComponent
+                      == "\(ready.interactionLabel).ready.json",
+                      completionURL.lastPathComponent
+                      == "\(ready.interactionLabel).completion.json",
+                      let parsedPID = Int32(exactly: ready.targetPID),
+                      let windowNumber = CGWindowID(exactly: ready.panelWindowNumber)
+                else {
+                    throw HarnessFailure.invalidArguments(
+                        "e2e-open-panel ready identity did not bind every argument"
+                    )
+                }
+                return Self(
+                    mode: mode,
+                    pid: parsedPID,
+                    appPath: ready.appPath,
+                    taskTitle: "",
+                    ledgerPath: ledgerPath,
+                    launchToken: launchToken,
+                    startGatePath: startGatePath,
+                    windowNumber: windowNumber,
+                    windowTitle: ready.panelTitle,
+                    expectationsPath: "",
+                    menuTitle: "",
+                    menuItemTitle: "",
+                    completionPath: completionPath,
+                    targetProfile: "",
+                    databasePath: "",
+                    repositoryLockPath: "",
+                    exportPath: "",
+                    sentinelsPath: "",
+                    openPanelReadyPath: readyPath,
+                    openPanelReady: ready
                 )
             }
             if mode == .diagnosticExport {
@@ -280,7 +346,9 @@ enum NoonmarkDMGInstallHarness {
                     databasePath: databasePath,
                     repositoryLockPath: repositoryLockPath,
                     exportPath: exportPath,
-                    sentinelsPath: sentinelsPath
+                    sentinelsPath: sentinelsPath,
+                    openPanelReadyPath: "",
+                    openPanelReady: nil
                 )
                 try DiagnosticExportScopeContract.validate(configuration)
                 return configuration
@@ -319,7 +387,9 @@ enum NoonmarkDMGInstallHarness {
                 databasePath: "",
                 repositoryLockPath: "",
                 exportPath: "",
-                sentinelsPath: ""
+                sentinelsPath: "",
+                openPanelReadyPath: "",
+                openPanelReady: nil
             )
         }
 
@@ -346,7 +416,7 @@ enum NoonmarkDMGInstallHarness {
         ) throws -> Self {
             guard values.count == 3,
                   let appPath = values["--app-path"],
-                  Self.isAbsoluteSingleLinePath(appPath),
+                  isAbsoluteSingleLinePath(appPath),
                   let targetProfile = values["--target-profile"],
                   ["e2e", "dmg-validation"].contains(targetProfile)
             else {
@@ -373,7 +443,9 @@ enum NoonmarkDMGInstallHarness {
                 databasePath: "",
                 repositoryLockPath: "",
                 exportPath: "",
-                sentinelsPath: ""
+                sentinelsPath: "",
+                openPanelReadyPath: "",
+                openPanelReady: nil
             )
         }
     }
@@ -524,6 +596,32 @@ enum NoonmarkDMGInstallHarness {
                 "path=\(configuration.completionPath) atomic=true "
                     + "exact=true lines=7"
             )
+        case .e2eOpenPanel:
+            let buttonTitle = try runner.performE2EOpenPanelPhysicalInput()
+            guard let ready = configuration.openPanelReady else {
+                throw HarnessFailure.contract(
+                    "E2E Open panel runner lost its parsed ready payload"
+                )
+            }
+            let completion = try OpenPanelPhysicalInputCompletion(
+                launchToken: configuration.launchToken,
+                helperPID: Int(helperPID),
+                targetPID: Int(configuration.pid),
+                panelWindowNumber: Int(configuration.windowNumber),
+                selectedPath: ready.selectedPath,
+                interactionLabel: ready.interactionLabel,
+                buttonTitle: buttonTitle,
+                leftButtonUp: true
+            )
+            try OpenPanelPhysicalInputProtocolFile.publish(
+                completion,
+                to: URL(fileURLWithPath: configuration.completionPath)
+            )
+            try ledger?.pass(
+                "completion",
+                "path=\(configuration.completionPath) atomic=true exact=true "
+                    + "schema=1 left_button_up=true"
+            )
         case .diagnosticExport:
             try runDiagnosticExport(
                 configuration: configuration,
@@ -645,7 +743,7 @@ enum NoonmarkDMGInstallHarness {
         ledger: HarnessLedger?
     ) throws -> AXTarget {
         let expectedBundleIdentifier = switch configuration.mode {
-        case .e2eInspect, .e2eMenuCommand:
+        case .e2eInspect, .e2eMenuCommand, .e2eOpenPanel:
             expectedE2EBundleIdentifier
         case .diagnosticExport:
             configuration.targetProfile == "e2e"
@@ -719,6 +817,11 @@ private extension NoonmarkDMGInstallHarness.Configuration {
                 + "window_number=\(windowNumber) window=\(windowTitle) "
                 + "menu=\(menuTitle) item=\(menuItemTitle) "
                 + "completion=\(completionPath)"
+        }
+        if mode == .e2eOpenPanel {
+            return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath) "
+                + "window_number=\(windowNumber) window=\(windowTitle) "
+                + "ready=\(openPanelReadyPath) completion=\(completionPath)"
         }
         if mode == .diagnosticExport {
             return "mode=\(mode.rawValue) pid=\(pid) app=\(appPath) "
@@ -1339,6 +1442,134 @@ private final class Runner {
         )
     }
 
+    func performE2EOpenPanelPhysicalInput() throws -> String {
+        guard let expectedReady = configuration.openPanelReady else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E Open panel mode had no parsed ready payload"
+            )
+        }
+        let cgWindow = try exactOpenPanelCGWindow()
+        let panelMatches = target.windows().filter { window in
+            target.string(window, kAXRoleAttribute as String)
+                == kAXWindowRole as String
+                && target.string(window, kAXTitleAttribute as String)
+                == configuration.windowTitle
+                && target.windowNumber(window) == configuration.windowNumber
+                && target.frame(window) == cgWindow.frame
+        }
+        guard panelMatches.count == 1,
+              let panel = panelMatches.first,
+              let focusedWindow = target.element(
+                  target.application,
+                  kAXFocusedWindowAttribute as String
+              ),
+              CFEqual(focusedWindow, panel)
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E Open panel was not the unique focused exact WindowServer window"
+            )
+        }
+        try ledger?.pass(
+            "open-panel",
+            "window_number=\(configuration.windowNumber) "
+                + "title=\(configuration.windowTitle) focused=true "
+                + "windowserver_owner_pid=\(cgWindow.ownerPID) "
+                + "layer=\(expectedReady.panelLayer) "
+                + "cg_frame=\(cgWindow.frame) ax_cg_correlation=exact"
+        )
+
+        let buttonMatches = try target.strictDescendants(of: panel).filter { match in
+            match.role == kAXButtonRole as String
+                && ["打开", "Open"].contains(match.title ?? "")
+                && match.enabled == true
+                && match.hidden != true
+        }
+        guard buttonMatches.count == 1,
+              let button = buttonMatches.first,
+              let buttonTitle = button.title
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E Open panel did not expose one enabled localized Open button"
+            )
+        }
+        let buttonFrame = try target.requiredFrame(
+            button,
+            description: "E2E Open panel exact Open button"
+        )
+        try ledger?.pass(
+            "open-button",
+            "title=\(buttonTitle) role=AXButton enabled=true hidden=false "
+                + "unique=exact frame=\(buttonFrame)"
+        )
+
+        let currentReady = try OpenPanelPhysicalInputProtocolFile.readReady(
+            from: URL(fileURLWithPath: configuration.openPanelReadyPath)
+        )
+        let currentCGWindow = try exactOpenPanelCGWindow()
+        let currentMatches = target.windows().filter { window in
+            target.string(window, kAXRoleAttribute as String)
+                == kAXWindowRole as String
+                && target.string(window, kAXTitleAttribute as String)
+                == configuration.windowTitle
+                && target.windowNumber(window) == configuration.windowNumber
+                && target.frame(window) == currentCGWindow.frame
+        }
+        let currentButtonMatches = try target.strictDescendants(of: panel).filter {
+            match in
+            match.role == kAXButtonRole as String
+                && match.title == buttonTitle
+                && match.enabled == true
+                && match.hidden != true
+        }
+        guard currentReady == expectedReady,
+              currentMatches.count == 1,
+              let currentPanel = currentMatches.first,
+              CFEqual(currentPanel, panel),
+              currentCGWindow.frame == cgWindow.frame,
+              let currentFocusedWindow = target.element(
+                  target.application,
+                  kAXFocusedWindowAttribute as String
+              ),
+              CFEqual(currentFocusedWindow, panel),
+              currentButtonMatches.count == 1,
+              let currentButton = currentButtonMatches.first,
+              CFEqual(currentButton.element, button.element),
+              target.requiredFrameOrNil(currentButton.element) == buttonFrame
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E Open panel identity or exact Open button changed before mouseDown"
+            )
+        }
+
+        try input.click(frame: buttonFrame)
+        let _: Bool = try target.wait(
+            description: "the exact E2E Open panel to close after its physical click"
+        ) {
+            let focused = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            )
+            guard focused.map({ CFEqual($0, panel) }) != true else { return nil }
+            if let snapshot = ScopedWindowServerLookup.snapshot(
+                windowNumber: configuration.windowNumber
+            ), snapshot.isOnscreen {
+                return nil
+            }
+            return true
+        }
+        guard input.leftButtonIsDown == false else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "E2E Open panel physical click left the global button down"
+            )
+        }
+        try ledger?.pass(
+            "open-action",
+            "source=cghidEventTap clicks=1 panel_closed=true "
+                + "left_button_up=true selected_path=\(expectedReady.selectedPath)"
+        )
+        return buttonTitle
+    }
+
     func performDiagnosticExport() throws {
         guard let diagnosticScope else {
             throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
@@ -1452,42 +1683,65 @@ private final class Runner {
                     + diagnosticWindowSummary()
             )
         }
+        let focusedSavePanel: AXUIElement = try target.wait(
+            description: "focused app-owned diagnostic save panel"
+        ) {
+            guard let focusedWindow = target.element(
+                target.application,
+                kAXFocusedWindowAttribute as String
+            ), CFEqual(focusedWindow, savePanel) else { return nil }
+            return focusedWindow
+        }
+        guard CFEqual(focusedSavePanel, savePanel) else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic save panel lost its exact focused identity"
+            )
+        }
         try input.keyStroke(
             virtualKey: 5,
             flags: [.maskCommand, .maskShift]
         )
-        let locationField: AXUIElement = try target.wait(
-            description: "save-panel location field"
-        ) {
-            guard let focused = target.element(
-                target.application,
-                kAXFocusedUIElementAttribute as String
-            ),
-                target.string(focused, kAXRoleAttribute as String)
-                == kAXTextFieldRole as String
-            else { return nil }
-            return focused
+        let goToContext: (sheet: AXUIElement, locationField: AXUIElement)
+        do {
+            goToContext = try target.wait(
+                description: "exact focused save-panel GoToWindow context"
+            ) {
+                guard let focusedWindow = target.element(
+                    target.application,
+                    kAXFocusedWindowAttribute as String
+                ),
+                    let focused = target.element(
+                        target.application,
+                        kAXFocusedUIElementAttribute as String
+                    ),
+                    target.string(focused, kAXRoleAttribute as String)
+                    == kAXTextFieldRole as String,
+                    let sheet = target.element(
+                        focused,
+                        kAXParentAttribute as String
+                    ),
+                    CFEqual(focusedWindow, sheet),
+                    let sheetParent = target.element(
+                        sheet,
+                        kAXParentAttribute as String
+                    ), CFEqual(sheetParent, savePanel),
+                    let identifier = target.string(
+                        sheet,
+                        kAXIdentifierAttribute as String
+                    ), identifier == "GoToWindow",
+                    target.string(sheet, kAXRoleAttribute as String)
+                    == kAXSheetRole as String
+                else { return nil }
+                return (sheet: sheet, locationField: focused)
+            }
+        } catch {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "diagnostic GoToWindow AX context mismatch; observed="
+                    + diagnosticGoToContextSummary(savePanel: savePanel)
+            )
         }
-        let goToSheet: AXUIElement = try target.wait(
-            description: "exact save-panel GoToWindow sheet"
-        ) {
-            guard let sheet = target.element(
-                locationField,
-                kAXParentAttribute as String
-            ),
-                let sheetParent = target.element(
-                    sheet,
-                    kAXParentAttribute as String
-                ), CFEqual(sheetParent, savePanel),
-                let identifier = target.string(
-                    sheet,
-                    kAXIdentifierAttribute as String
-                ), identifier == "GoToWindow",
-                target.string(sheet, kAXRoleAttribute as String)
-                == kAXSheetRole as String
-            else { return nil }
-            return sheet
-        }
+        let locationField = goToContext.locationField
+        let goToSheet = goToContext.sheet
         let exportParent = exportURL.deletingLastPathComponent().path
         try replaceFocusedTextField(
             locationField,
@@ -1737,6 +1991,62 @@ private final class Runner {
         }.joined(separator: " | ")
     }
 
+    private func diagnosticGoToContextSummary(savePanel: AXUIElement) -> String {
+        let windows = target.windows()
+        let focusedWindow = target.element(
+            target.application,
+            kAXFocusedWindowAttribute as String
+        )
+        let focusedUI = target.element(
+            target.application,
+            kAXFocusedUIElementAttribute as String
+        )
+        var focusChain: [String] = []
+        var current = focusedUI
+        for depth in 0 ..< 6 {
+            guard let element = current else { break }
+            focusChain.append(
+                "depth=\(depth){\(diagnosticElementIdentity(element, savePanel: savePanel, windows: windows))}"
+            )
+            current = target.element(element, kAXParentAttribute as String)
+        }
+
+        var goToCandidates: [AXUIElement] = []
+        for window in windows {
+            let elements = [window] + target.descendants(
+                of: window,
+                maximumDepth: 12,
+                maximumCount: 512
+            ).map(\.element)
+            goToCandidates += elements.filter {
+                target.string($0, kAXIdentifierAttribute as String) == "GoToWindow"
+            }
+        }
+        let candidateSummary = goToCandidates.enumerated().map { index, candidate in
+            "candidate=\(index){\(diagnosticElementIdentity(candidate, savePanel: savePanel, windows: windows))}"
+        }.joined(separator: ",")
+        let focusedWindowSummary = focusedWindow.map {
+            diagnosticElementIdentity($0, savePanel: savePanel, windows: windows)
+        } ?? "nil"
+        return "focused_window={\(focusedWindowSummary)} "
+            + "focus_chain=[\(focusChain.joined(separator: ","))] "
+            + "goto_count=\(goToCandidates.count) goto=[\(candidateSummary)]"
+    }
+
+    private func diagnosticElementIdentity(
+        _ element: AXUIElement,
+        savePanel: AXUIElement,
+        windows: [AXUIElement]
+    ) -> String {
+        let windowIndex = windows.firstIndex { CFEqual($0, element) }
+            .map(String.init) ?? "none"
+        return "role=\(target.string(element, kAXRoleAttribute as String) ?? "nil") "
+            + "subrole=\(target.string(element, kAXSubroleAttribute as String) ?? "nil") "
+            + "identifier=\(target.string(element, kAXIdentifierAttribute as String) ?? "nil") "
+            + "focused=\(target.boolean(element, kAXFocusedAttribute as String).map(String.init) ?? "nil") "
+            + "is_save_panel=\(CFEqual(element, savePanel)) window_index=\(windowIndex)"
+    }
+
     private func revealMenuItemWithoutShortcut(
         topLevelTitles: Set<String>,
         itemTitles: Set<String>,
@@ -1941,6 +2251,37 @@ private final class Runner {
             )
         }
         return (frame: frame, title: snapshot.title)
+    }
+
+    private func exactOpenPanelCGWindow() throws -> (
+        frame: CGRect,
+        title: String?,
+        ownerPID: pid_t
+    ) {
+        guard let ready = configuration.openPanelReady,
+              let snapshot = ScopedWindowServerLookup.snapshot(
+                  windowNumber: configuration.windowNumber
+              ),
+            let frame = snapshot.frame,
+            let ownerPID = snapshot.ownerProcessID,
+            ownerPID > 0,
+            ownerPID == configuration.pid,
+            snapshot.windowNumber == configuration.windowNumber,
+            snapshot.title == nil || snapshot.title == configuration.windowTitle,
+            snapshot.layer == ready.panelLayer,
+            snapshot.isOnscreen,
+            let alpha = snapshot.alpha,
+            alpha > 0,
+            frame.isNull == false,
+            frame.isInfinite == false,
+            frame.width >= 2,
+            frame.height >= 2
+        else {
+            throw NoonmarkDMGInstallHarness.HarnessFailure.contract(
+                "exact remote Open panel WindowServer identity was unavailable"
+            )
+        }
+        return (frame: frame, title: snapshot.title, ownerPID: ownerPID)
     }
 
     private func assertMainWindow() throws {

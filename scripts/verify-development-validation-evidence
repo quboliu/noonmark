@@ -17,6 +17,8 @@ source scripts/diagnostic-lock-evidence
 source scripts/dmg-harness-evidence
 # shellcheck source=scripts/dmg-install-observer-common
 source scripts/dmg-install-observer-common
+# shellcheck source=scripts/development-validation-e2e-inventory
+source scripts/development-validation-e2e-inventory
 
 scope="full"
 if [[ "${1:-}" == "--scope" ]]; then
@@ -1569,28 +1571,27 @@ require_file_sha256 \
   "lease artifact inventory"
 evidence_verify_inventory "$repo_root" "$e2e_inventory"
 evidence_verify_inventory "$repo_root" "$lease_inventory"
-e2e_required_inventory_paths=(
-  "$e2e_evidence_absolute/unified.log"
-  "$e2e_evidence_absolute/runtime-manifest.txt"
-  "$e2e_evidence_absolute/windowserver-input-cleanup-result.txt"
-  "$e2e_evidence_absolute/windowserver-input-cleanup.log"
-  "$e2e_evidence_absolute/english-scenario-ledger.tsv"
-  "$e2e_evidence_absolute/diagnostic-baseline.txt"
-  "$e2e_evidence_absolute/diagnostic-baseline.txt.current"
-  "$e2e_evidence_absolute/diagnostic-baseline.txt.new"
-  "$e2e_evidence_absolute/diagnostic-result.txt"
-  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt"
-  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.current"
-  "$e2e_evidence_absolute/helper-diagnostic-baseline.txt.new"
-  "$e2e_evidence_absolute/helper-diagnostic-result.txt"
-  "$e2e_evidence_absolute/app-snapshot/NoonmarkE2E.app/Contents/MacOS/NoonmarkMacAppE2E"
-  "$e2e_evidence_absolute/helper-snapshot/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
-)
-IFS=, read -r -a english_scenario_inventory_names <<< \
-  "$expected_english_scenarios"
-for scenario in "${english_scenario_inventory_names[@]}"; do
-  e2e_required_inventory_paths+=("$repo_root/artifacts/e2e/${scenario}.png")
-done
+e2e_required_inventory_output="$(
+  development_validation_e2e_required_inventory_paths \
+    "$repo_root" \
+    "$e2e_evidence_absolute" \
+    "$expected_english_scenarios"
+)" || {
+  echo "failed to resolve the shared development-validation E2E inventory" >&2
+  exit 1
+}
+e2e_required_inventory_paths=()
+while IFS= read -r e2e_required_inventory_path; do
+  if [[ -z "$e2e_required_inventory_path" ]]; then
+    echo "shared development-validation E2E inventory contains an empty path" >&2
+    exit 1
+  fi
+  e2e_required_inventory_paths+=("$e2e_required_inventory_path")
+done <<<"$e2e_required_inventory_output"
+if (( ${#e2e_required_inventory_paths[@]} == 0 )); then
+  echo "shared development-validation E2E inventory is empty" >&2
+  exit 1
+fi
 evidence_require_inventory_paths \
   "$repo_root" \
   "$e2e_inventory" \

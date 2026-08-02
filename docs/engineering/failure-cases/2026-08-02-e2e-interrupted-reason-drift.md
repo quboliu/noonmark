@@ -60,6 +60,7 @@ NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e debug
 - Fast 红：阶段特定原因 contract 在实现修改前判红。
 - Fast 绿：`scripts/test-e2e-evidence-contract` 已验证 seed 两次读取、restart 一次读取及 reader 的 exact reason equality。
 - 症状绿：修复后 `NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e debug` 连续三轮完成失败、锁等待、修改拒绝、SIGKILL、重启、Help 菜单导出与持久化对账。
+- 完整 symptom 绿：run `local-20260802-full-e2e-dirty-3` 从 fresh `e2e` reset 后完成未过滤的 `scripts/test-e2e`；诊断闭环在完整套件中再次走完失败、锁等待、修改拒绝、SIGKILL、重启、Help 菜单导出与持久化对账，suite exit status 为 0。
 - Release 配置绿：同一 targeted closure 以 `scripts/test-e2e release` 完成一次；随后 pre-commit review 证明不得在主工作树直接重跑，否则会把 full E2E manifest 改成 only mode。
 - Release：待 clean repair commit 的正式发行门禁回填。
 - 修复 commit：待回填。

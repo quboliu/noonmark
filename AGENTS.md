@@ -148,6 +148,8 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 - 案例必须如实记录：用户症状与影响范围、首次发现时间、引入故障的精确 commit、Git author／committer、实际修改者是否可由证据确认、错误改动及其破坏机制、复现与定位证据、排除过的假设、根因修复、回归测试、发行／回滚处置和可执行教训。
 - 「谁改坏的」只能依据 Git、PR、agent session 或其他可核验证据归因；Git identity 与实际操作者必须分开记录。无法证明时明确写「未知」，不得猜测、模糊归因或替任何人隐藏责任事实。
 - 案例状态只有在原始症状级复现由红转绿、相关受害路径回归通过、修复 commit 已确定后才能标记为「已修复」。若验证或修复 commit 尚未完成，必须保持「处理中」并在同一任务闭环前回填。
+- 所有已经发生的故障和问题都必须转化为自动化门禁：修复前能够捕获原始故障并判红，修复后转绿；只写案例、注释或人工检查步骤不算门禁。每个「已修复」案例至少同时绑定一个进入 `make check` 的 fast gate 和一个真实用户路径的 symptom gate；涉及安装、签名、启动、退出或发行产物时还必须绑定 release gate。
+- 门禁映射统一登记于 `docs/engineering/failure-cases/gates.tsv`，并由 `scripts/test-failure-case-gates` 在 `make check` 中 fail-closed 校验。门禁入口必须真实存在并被登记的聚合入口强制调用；环境特定的真实 App／WindowServer 门禁可以由专用 runner 执行，但不得 `skip`、伪造结果或用静态 contract 冒充症状级验证。
 - 案例不得落盘用户任务正文、文件路径、账号、凭证、同步 payload 或诊断包中的隐私资料；证据只记录最小必要摘要、仓库内相对路径、命令和无敏感信息的结果。
 - 新案例以 `docs/engineering/failure-cases/README.md` 的模板和命名规则为准。修复 commit 正文必须引用对应案例 ID。
 

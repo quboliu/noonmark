@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/release-private-dmg" >&2
+  exit 64
+fi
+
+scripts/package-dmg release
+scripts/verify-dmg dist/Noonmark.dmg
+scripts/test-dmg-install dist/Noonmark.dmg
+
+echo "Private DMG package, static verification, and isolated runtime gate passed"

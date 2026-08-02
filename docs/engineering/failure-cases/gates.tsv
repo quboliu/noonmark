@@ -1,0 +1,5 @@
+case_id	tier	gate_entry	required_by	catches
+FAIL-2026-08-01-01	fast	scripts/test-e2e-evidence-contract	scripts/check	拒绝 async App 入口并要求同步 main 架构不变量
+FAIL-2026-08-01-01	symptom	scripts/test-e2e	scripts/test-all	真实 File Import、NSOpenPanel、确认、SQLite 与重启回读
+FAIL-2026-08-01-01	symptom	scripts/test-tencent-ime-termination-persistence	scripts/test-all	持久化启动后的退出握手、保存与重启回读
+FAIL-2026-08-01-01	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的真实退出、进程消失与重启持久化

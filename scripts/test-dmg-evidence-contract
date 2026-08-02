@@ -2573,6 +2573,22 @@ require_literal "$repo_root/scripts/package-dmg" \
   'release package requires a clean, committed source tree'
 require_literal "$repo_root/scripts/verify-dmg" 'evidence_verify_release_symbols'
 require_literal "$repo_root/scripts/test-dmg-install" 'release_symbols_unchanged'
+require_literal "$repo_root/scripts/release-private-dmg" \
+  'scripts/package-dmg release'
+require_literal "$repo_root/scripts/release-private-dmg" \
+  'scripts/verify-dmg dist/Noonmark.dmg'
+require_literal "$repo_root/scripts/release-private-dmg" \
+  'scripts/test-dmg-install dist/Noonmark.dmg'
+require_order \
+  "$repo_root/scripts/release-private-dmg" \
+  'scripts/package-dmg release' \
+  'scripts/verify-dmg dist/Noonmark.dmg'
+require_order \
+  "$repo_root/scripts/release-private-dmg" \
+  'scripts/verify-dmg dist/Noonmark.dmg' \
+  'scripts/test-dmg-install dist/Noonmark.dmg'
+require_literal "$repo_root/.github/workflows/release.yml" \
+  'scripts/release-private-dmg'
 require_literal "$repo_root/.github/workflows/release.yml" 'dist/Noonmark.app.dSYM'
 require_order \
   "$repo_root/scripts/test-dmg-install" \

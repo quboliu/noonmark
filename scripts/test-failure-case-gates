@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+case_root="docs/engineering/failure-cases"
+registry="$case_root/gates.tsv"
+
+fail() {
+  echo "failure-case gate contract: $*" >&2
+  exit 1
+}
+
+[[ -d "$case_root" ]] || fail "missing case library: $case_root"
+[[ -r "$registry" ]] || fail "missing gate registry: $registry"
+
+expected_header=$'case_id\ttier\tgate_entry\trequired_by\tcatches'
+[[ "$(sed -n '1p' "$registry")" == "$expected_header" ]] ||
+  fail "invalid registry header"
+
+case_ids_file="$(mktemp "${TMPDIR:-/tmp}/noonmark-failure-case-ids.XXXXXX")"
+registry_rows_file="$(mktemp "${TMPDIR:-/tmp}/noonmark-failure-gates.XXXXXX")"
+required_tiers_file="$(mktemp "${TMPDIR:-/tmp}/noonmark-failure-required-tiers.XXXXXX")"
+cleanup() {
+  rm -f "$case_ids_file" "$registry_rows_file" "$required_tiers_file"
+}
+trap cleanup EXIT
+
+case_count=0
+for case_path in "$case_root"/*.md; do
+  [[ "$case_path" != "$case_root/README.md" ]] || continue
+  case_count=$((case_count + 1))
+  case_filename="${case_path##*/}"
+  [[ "$case_filename" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*\.md$ ]] ||
+    fail "invalid case filename: $case_filename"
+  case_id="$(
+    sed -En \
+      '1s/^# (FAIL-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2})：.+$/\1/p' \
+      "$case_path"
+  )"
+  [[ -n "$case_id" ]] || fail "$case_path has no valid case ID heading"
+  case_date="${case_id#FAIL-}"
+  case_date="${case_date%-??}"
+  [[ "$case_filename" == "$case_date-"* ]] ||
+    fail "$case_id does not match case filename: $case_filename"
+  if grep -Fqx "$case_id" "$case_ids_file"; then
+    fail "duplicate case ID: $case_id"
+  fi
+  printf '%s\n' "$case_id" >>"$case_ids_file"
+  grep -Fqx '## 永久门禁' "$case_path" ||
+    fail "$case_id has no permanent gate section"
+  required_tiers="$(sed -n 's/^- 必需门禁：//p' "$case_path")"
+  [[ -n "$required_tiers" && "$(
+    grep -Fc -- '- 必需门禁：' "$case_path"
+  )" -eq 1 ]] || fail "$case_id must declare exactly one required tier list"
+  printf '%s\t%s\n' "$case_id" "$required_tiers" >>"$required_tiers_file"
+
+  if grep -Fqx -- '- 状态：已修复' "$case_path"; then
+    grep -Eq '^- 修复提交：`[0-9a-f]{40}`' "$case_path" ||
+      fail "$case_id is fixed without an exact repair commit"
+  fi
+done
+((case_count > 0)) || fail "case library contains no cases"
+
+tail -n +2 "$registry" >"$registry_rows_file"
+[[ -s "$registry_rows_file" ]] || fail "gate registry has no rows"
+duplicate_row="$(sort "$registry_rows_file" | uniq -d | sed -n '1p')"
+[[ -z "$duplicate_row" ]] || fail "duplicate registry row: $duplicate_row"
+
+while IFS=$'\t' read -r case_id tier gate_entry required_by catches extra; do
+  [[ -n "$case_id" && -n "$tier" && -n "$gate_entry" \
+      && -n "$required_by" && -n "$catches" && -z "${extra:-}" ]] ||
+    fail "registry row must contain exactly five non-empty columns"
+  grep -Fqx "$case_id" "$case_ids_file" ||
+    fail "registry references unknown case: $case_id"
+  case "$tier" in
+    fast | symptom | release) ;;
+    *) fail "$case_id uses unsupported gate tier: $tier" ;;
+  esac
+  case "$gate_entry" in
+    scripts/*) ;;
+    *) fail "$case_id gate entry must be a repository script: $gate_entry" ;;
+  esac
+  case "$required_by" in
+    scripts/*) ;;
+    *) fail "$case_id gate owner must be a repository script: $required_by" ;;
+  esac
+  [[ "$gate_entry" != *..* && "$required_by" != *..* ]] ||
+    fail "$case_id gate paths may not traverse directories"
+  [[ -x "$gate_entry" ]] || fail "$case_id gate is not executable: $gate_entry"
+  [[ -x "$required_by" ]] ||
+    fail "$case_id gate owner is not executable: $required_by"
+  [[ "$gate_entry" != "$required_by" ]] ||
+    fail "$case_id gate may not require itself: $gate_entry"
+  if ! awk -v gate="$gate_entry" '
+    $0 !~ /^[[:space:]]*#/ && index($0, gate) > 0 { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$required_by"; then
+    fail "$required_by does not enforce $gate_entry for $case_id"
+  fi
+done <"$registry_rows_file"
+
+while IFS= read -r case_id; do
+  required_tiers="$(
+    awk -F '\t' -v id="$case_id" '$1 == id { print $2 }' \
+      "$required_tiers_file"
+  )"
+  IFS=',' read -r -a required_tier_list <<<"$required_tiers"
+  seen_fast=0
+  seen_symptom=0
+  seen_release=0
+  for required_tier in "${required_tier_list[@]}"; do
+    case "$required_tier" in
+      fast)
+        ((seen_fast == 0)) ||
+          fail "$case_id declares duplicate required tier: $required_tier"
+        seen_fast=1
+        ;;
+      symptom)
+        ((seen_symptom == 0)) ||
+          fail "$case_id declares duplicate required tier: $required_tier"
+        seen_symptom=1
+        ;;
+      release)
+        ((seen_release == 0)) ||
+          fail "$case_id declares duplicate required tier: $required_tier"
+        seen_release=1
+        ;;
+      *) fail "$case_id declares unsupported required tier: $required_tier" ;;
+    esac
+    if ! awk -F '\t' -v id="$case_id" -v tier="$required_tier" '
+      $1 == id && $2 == tier { found = 1 }
+      END { exit(found ? 0 : 1) }
+    ' "$registry_rows_file"; then
+      fail "$case_id has no $required_tier gate"
+    fi
+  done
+  ((seen_fast == 1)) || fail "$case_id must require a fast gate"
+  ((seen_symptom == 1)) || fail "$case_id must require a symptom gate"
+done <"$case_ids_file"
+
+echo "Failure-case gate contract passed ($case_count cases)"

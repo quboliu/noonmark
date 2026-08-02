@@ -47,9 +47,7 @@ jobs:
         run: scripts/verify-development-validation-evidence --scope runtime
       - name: Package artifact
         run: |
-          scripts/package-dmg release
-          scripts/verify-dmg dist/Noonmark.dmg
-          scripts/test-dmg-install dist/Noonmark.dmg
+          scripts/release-private-dmg
           scripts/verify-development-validation-evidence --scope full
           ditto -c -k --keepParent dist/Noonmark.app dist/Noonmark.app.zip
           shasum -a 256 dist/Noonmark.app.zip > dist/Noonmark.app.zip.sha256

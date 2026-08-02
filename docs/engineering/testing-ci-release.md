@@ -131,6 +131,7 @@ make test-integration
 make test-system
 make test-deterministic-sim
 make test-e2e
+make test-failure-case-gates
 make test-tencent-ime-input-contract
 make test-tencent-ime-input-matrix
 make test-tencent-ime-termination-persistence
@@ -140,6 +141,7 @@ make test-ai-provider-live
 NOONMARK_LIVE_ICLOUD_PACKAGE_PATH=/absolute/current-package.json scripts/test-icloud-sync-live
 make test-cloudkit-sync-live
 make test-all
+make release-private-dmg
 make package-dmg
 make verify-dmg
 make test-dmg-install

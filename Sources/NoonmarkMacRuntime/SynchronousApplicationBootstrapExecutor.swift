@@ -7,7 +7,6 @@ import Foundation
 /// keeps the main thread outside Swift concurrency until preparation finishes.
 package enum SynchronousApplicationBootstrapExecutor {
     package static func run<Success: Sendable>(
-        priority: TaskPriority = .utility,
         operation: @escaping @Sendable () async throws -> Success
     ) throws -> Success {
         precondition(
@@ -16,7 +15,7 @@ package enum SynchronousApplicationBootstrapExecutor {
         )
 
         let state = SynchronousApplicationBootstrapState<Success>()
-        Task.detached(priority: priority) {
+        Task.detached(priority: .utility) {
             do {
                 let prepared = try await operation()
                 state.publish(.success(prepared))

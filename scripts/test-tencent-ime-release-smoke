@@ -5,8 +5,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 configuration="${1:-debug}"
+if [[ "${1:-}" == "--contract" && "$#" -eq 1 ]]; then
+  cat <<'EOF'
+surface=day-title
+input_source=com.tencent.inputmethod.wetype.pinyin
+behavior=composition-commit,immediate-exit,restart-sqlite-readback
+EOF
+  exit 0
+fi
 if [[ "$#" -gt 1 ]]; then
-  echo "usage: scripts/test-tencent-ime-release-smoke [debug|release]" >&2
+  echo "usage: scripts/test-tencent-ime-release-smoke [debug|release] | --contract" >&2
   exit 64
 fi
 case "$configuration" in
@@ -26,9 +34,14 @@ NOONMARK_TENCENT_IME_TERMINATION_SURFACES=day-title \
 
 summary_path="artifacts/e2e-tencent-ime-termination/results.tsv"
 if ! awk -F $'\t' '
-  NR == 2 && $1 == "day-title" && $2 == "PASS" && $4 == "false" &&
-    $5 == "true" && $6 == "true" { passed = 1 }
-  END { exit(passed ? 0 : 1) }
+  NR == 1 { next }
+  $1 == "day-title" {
+    count += 1
+    if ($2 == "PASS" && $4 == "false" && $5 == "true" && $6 == "true") {
+      passed = 1
+    }
+  }
+  END { exit(count == 1 && passed ? 0 : 1) }
 ' "$summary_path"; then
   echo "Tencent IME release smoke did not prove the day-title restart path" >&2
   exit 1

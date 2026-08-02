@@ -11,7 +11,7 @@
 - 诊断导出、DMG 派生运行身份、WindowServer 前台所有权和 Help 菜单物理选择先后暴露出真实跨边界问题；每一项都曾以真实隔离 App／DMG validation 的运行证据定位。
 - 修复过程中，若干测试失败来自 E2E 操作协议、fixture 或 evidence consumer 对同一概念各自定义，而不是用户功能本身回归。
 - 腾讯输入 53 面矩阵出现两次一次性输入法长尾；分段时序显示瓶颈位于输入法 `super.keyDown`，持久化和领域 mutation 正常。对同一路径的三轮定点复现转绿，因此没有放宽 100ms／250ms 预算，也没有错误宣布新的产品故障。
-- 新 release smoke 首次执行时，测试把 `nihaoshijie` 错设为“你好世界”；真实腾讯拼音的默认候选为“你好师姐”。view-tree 运行证据确认组合、提交与编辑器状态正常后，修正了测试期望，未修改产品逻辑或放宽断言。
+- 新 release smoke 首次执行时，测试把 `nihaoshijie` 错设为固定候选文字；随后又错误地比较 marked-text 阶段与提交后的 `NSTextView.string`。view-tree 运行证据表明两者分别是组合表示与输入法提交候选，不能相等。最终只断言产品可证明的事实：观察到组合态、提交后的最终编辑器文本进入退出前状态，并在重启后的 App 与 SQLite 精确回读；候选词典本身不归产品控制。
 - 其后发现发行入口可以绕过所有真实腾讯输入验证。最初的修法计划将完整矩阵、退出矩阵、source 起止、bundle 身份和结果 hash 全部塞进发行 manifest。这个方案能阻止绕过，但会把质量覆盖工具变成脆弱的发行依赖，因此被撤回并收敛。
 
 ## 做对了、必须保留的部分
@@ -38,7 +38,7 @@
 | release smoke | 少量不可替代的真实用户承诺 | `scripts/release-private-dmg` 内的 `scripts/test-tencent-ime-release-smoke release` | 阻断 |
 | quality matrix | 广覆盖、性能分布、页面与输入面的回归侦测 | `.github/workflows/tencent-ime-quality.yml` 或手动矩阵入口 | 不阻断当次 DMG；失败必须调查 |
 
-腾讯输入 release smoke 固定为 Day Todo 标题：真实腾讯拼音进入 marked text、`你好世界测试输入任务描述` 精确提交、自动保存尚 pending 时发起退出、重启后 App 与 SQLite 都读取同一精确值。它保护用户真正会感知的输入不丢失／不重复承诺，而不是要求所有页面在每次发行都维持相同的测试布局。
+腾讯输入 release smoke 固定为 Day Todo 标题：真实腾讯拼音进入 marked text，提交后的最终编辑器文本在自动保存尚 pending 时发起退出，并在重启后由 App 与 SQLite 读取同一精确值。它保护产品可控制的输入持久化承诺，而不是要求所有页面在每次发行都维持相同的测试布局，或把输入法词典变化误判为产品回归。
 
 ## 后续工作准则
 

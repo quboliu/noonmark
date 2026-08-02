@@ -40,7 +40,7 @@
 
 ## 根因修复
 
-- 新增 `scripts/test-tencent-ime-release-smoke`；它只运行 Day Todo 标题这个稳定用户路径：真实腾讯拼音组合态、精确文本提交、自动保存仍 pending 时立即退出、重启后 App 与 SQLite 精确回读。
+- 新增 `scripts/test-tencent-ime-release-smoke`；它只运行 Day Todo 标题这个稳定用户路径：真实腾讯拼音组合态、提交后的最终编辑器文本、自动保存仍 pending 时立即退出、重启后 App 与 SQLite 精确回读。
 - `scripts/release-private-dmg` 在诊断闭环后、打包前强制执行该 smoke；GitHub release workflow 不再另行拥有输入法步骤。
 - 53 面年度性能矩阵和 24 面退出／重启矩阵保留为 scheduled／manual 的质量工作流，不进入 DMG 发行对账。
 - `scripts/test-release-gate-contract` 只检查发布入口拥有 smoke 且顺序在 package 前，避免重建多方 manifest 依赖。
@@ -48,7 +48,7 @@
 ## 验证结果
 
 - 原始真实 symptom：完整矩阵 51／53；失败已按细分时序记录，未被忽略或重试掩盖。
-- 定点真实 symptom：两个受影响输入面合共三轮均通过；release smoke 首次执行还以 view-tree 证实腾讯拼音默认候选为“你好师姐”，并据此修正测试期望；完整质量矩阵会在 scheduled／manual runner 继续保留该覆盖。
+- 定点真实 symptom：两个受影响输入面合共三轮均通过；release smoke 首次执行还以 view-tree 证实腾讯拼音候选不可固定，且 marked-text 与提交文本属于不同 AppKit 表示；smoke 只对账产品可控制的最终编辑器文本、退出和重启回读。完整质量矩阵会在 scheduled／manual runner 继续保留该覆盖。
 - Fast：`scripts/test-release-gate-contract` 和 `scripts/test-tencent-ime-input-contract` 已在实现中转绿；仍待最终 `scripts/check`。
 - Release：待修复提交后的 `scripts/test-tencent-ime-release-smoke release` 与 `scripts/release-private-dmg` 转绿。
 

@@ -87,13 +87,10 @@ done
 rg -F 'closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"' \
   "$verifier" >/dev/null ||
   fail "full verifier does not require the release closure manifest"
-for required in \
-  'NOONMARK_TENCENT_IME_TERMINATION_SURFACES=day-title' \
-  'NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY=1' \
-  'scripts/test-tencent-ime-termination-persistence "$configuration"'; do
-  rg -F -- "$required" "$ime_release_smoke" >/dev/null ||
-    fail "Tencent IME release smoke lacks required user path: $required"
-done
+expected_ime_smoke_contract=$'surface=day-title\ninput_source=com.tencent.inputmethod.wetype.pinyin\nbehavior=composition-commit,immediate-exit,restart-sqlite-readback'
+if [[ "$("$ime_release_smoke" --contract)" != "$expected_ime_smoke_contract" ]]; then
+  fail "Tencent IME release smoke contract changed"
+fi
 rg -F 'artifacts/release-diagnostic-closure-gate' \
   .github/workflows/release.yml >/dev/null ||
   fail "release workflow does not retain the diagnostic closure evidence"

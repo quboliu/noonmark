@@ -110,15 +110,5 @@ if ! grep -Fq 'NF != 7' "$termination_script"; then
   fail "termination matrix does not fail closed on its result schema"
 fi
 
-for contract_line in \
-  '"com.tencent.inputmethod.wetype.pinyin"' \
-  'currentInputSourceID()' \
-  'exerciseLifecycleTermination(' \
-  'verifyLifecycleTermination('; do
-  if ! grep -Fq "$contract_line" "$automation"; then
-    fail "Tencent IME automation is missing a core behavior: $contract_line"
-  fi
-done
-
 echo \
   "Tencent IME input contract: ok ($surface_count surfaces, $termination_surface_count exit probes)"

@@ -1,16 +1,18 @@
 # FAIL-2026-08-01-01：异步 App 入口饿死 MainActor 任务
 
-- 状态：处理中
+- 状态：已修复
 - 首次发现：2026-08-01，安装构建执行数据导入时
 - 影响版本／构建：Noonmark 0.1.1 (2)，source commit `9ca5b44f47179ec04da76147d2b0b81d7fdb0f45`
 - 引入提交：`688d9b0bfbf4d4d212663a0a3f7734c436bdb985`，`fix(diagnostics): 收紧启动与错误映射边界`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 记录只能证明 author／committer identity，不能证明内容由本人还是 agent 实际编写
-- 修复提交：待回填
+- 修复提交：`7a9887ddf00a56454dac60d58b7057701fce86fc`，`fix(runtime): 恢复 AppKit 同步启动边界`
 
 ## 用户症状与影响
 
 在真实安装构建中选择有效的 Noonmark JSON 后，`NSOpenPanel` 正常关闭，但不出现「替换当前所有数据」确认页，界面仍为空，SQLite 没有写入，应用也没有显示失败提示。转换后的 JSON 已由当前 decoder、隔离 SQLite replace 及重启回读验证有效，因此数据包不是原因。
+
+同一安装构建还无法正常退出。用户发出 Quit 后应用继续存活；进程可用精确 executable 名 `NoonmarkMacApp` 查到，大小写敏感地搜索 `noonmark` 会漏掉。宿主机只读取证确认该正式进程为 0.1.1 (2)、source commit `9ca5b44`，并在用户报告后仍持续存活。
 
 影响面不局限于导入。启动后的 `Task { @MainActor in ... }` 均无法开始，包括退出前输入 flush、部分同步 automation 与自动分类 worker；导入只是最先被稳定观察到的受害路径。原始 0.1.0 同步故障是否具有相同根因仍未得到证据证明，不在本案例中合并归因。
 
@@ -21,6 +23,8 @@
 - 2026-08-01：包含该提交的 0.1.1 (2) 安装构建复现静默导入失败。
 - 2026-08-01：LLDB、SQLite 与诊断资料完成交叉取证；Kimi K3 独立复核根因。
 - 2026-08-01：隔离真实 App 数据导入 E2E 在修复前稳定失败、修复后转绿。
+- 2026-08-01：宿主机正式进程无法退出；进程、bundle metadata 与采样栈把该症状对账到同一构建及同一根因。
+- 2026-08-01：隔离真实 App 最小退出测试证明持久化 bootstrap 是必要条件，并在修复提交上完成红绿差分。
 
 ## 复现与证据
 
@@ -31,6 +35,7 @@
 3. Task closure 入口、`prepareDataImport`、`NoonmarkDataPackage.read` 与 `showOperationFailure` 断点均为零次命中。
 4. Main thread 停在 `NSApplication.run()` 的 AppKit event loop；SQLite 核心表在操作前后均为空。
 5. 诊断记录没有导入事件，证明执行在业务操作开始前已经中断，也暴露了 MainActor 活性证据缺口。
+6. 宿主机正式进程采样的 174／174 个主线程样本均为 `completeTaskAndRelease → NoonmarkMacApp.main → NSApplication.run`；这证明 AppKit event loop 正运行在尚未完成的 Swift async task 中，不是 LaunchServices 残留。
 
 可重复的隔离红测命令：
 
@@ -39,6 +44,8 @@ NOONMARK_E2E_DATA_IMPORT_UI_ONLY=1 scripts/test-e2e debug
 ```
 
 修复前结果：fixture setup 的 MainActor Task 无法执行，`artifacts/e2e-data-import-ui/setup-result.txt` 不会生成，套件 fail-closed。
+
+退出路径另以同一个真实 E2E bundle 做 3 秒最小差分：只保留空 Store、隔离 SQLite 持久化 bootstrap、启动后标准 `NSApp.terminate` 三项。故障提交的进程在 Quit 后仍存活；仅把持久化启动替换成 `--ephemeral` 后可退出，证明 bootstrap 中的 async suspension 是必要条件。修复提交在完全相同的持久化场景下退出，3 秒检查时进程已不存在。
 
 ## 排除的假设
 
@@ -68,7 +75,8 @@ AppKit event loop 因此仍能处理窗口、菜单与 `NSOpenPanel`，造成应
 - 真实数据导入 E2E：File menu、真实 NSOpenPanel、取消、再次选择、破坏性确认、SQLite 精确对账和重启回读通过；probe 为 `0 1 1 2 1 1 0 2 1 0 0 0 1 6 3`。
 - malformed import integrity E2E：错误数据 fail-closed、SQLite／journal 不变及重启回读通过。
 - 退出持久化 focused E2E：`review-summary` 输入在退出请求后 3.489 ms 完成，live 与 durable readback 均通过。
-- 完整 `make check`、代码审查、最终修复 commit 与 DMG 门禁：处理中，完成后回填。
+- 最小持久化启动退出差分：`9ca5b44` 判红，`7a9887d` 判绿；故障构建的 60 秒完整退出套件另以 `immediate termination did not complete` fail-closed。
+- 完整 `make check`：退出码 0；代码审查与 DMG 门禁由发行流程继续保存独立证据。
 
 ## 发行与回滚
 

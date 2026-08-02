@@ -79,7 +79,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         super.init()
     }
 
-    static func main() async {
+    static func main() {
         let mainWindowIdentityPublisher: MainWindowIdentityPublisher?
         do {
             mainWindowIdentityPublisher = try prepareWindowIdentityPublisher()
@@ -134,12 +134,17 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 bundleIdentifier: Bundle.main.bundleIdentifier
             )
             let dayContext = NaturalDayContext(environment: environment)
-            let persistentBootstrap: NoonmarkPersistentStoreBootstrap? =
-                if AppLaunchArguments.contains("--ephemeral") {
-                    nil
-                } else {
-                    try await NoonmarkStore.preparePersistentBootstrap()
+            let persistentBootstrap: NoonmarkPersistentStoreBootstrap?
+            if AppLaunchArguments.contains("--ephemeral") {
+                persistentBootstrap = nil
+            } else {
+                let databaseURL = NoonmarkStore.configuredDatabaseURL()
+                persistentBootstrap = try SynchronousApplicationBootstrapExecutor.run {
+                    try await NoonmarkStore.preparePersistentBootstrap(
+                        databaseURL: databaseURL
+                    )
                 }
+            }
             delegate = NoonmarkMacApp(
                 store: try NoonmarkStore(
                     dayContext: dayContext,

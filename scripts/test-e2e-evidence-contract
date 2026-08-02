@@ -126,6 +126,8 @@ require_order() {
 
 # Integration checks supplement the public seam above: these guard the exact
 # suites/workflows without coupling the fixture to real App launch internals.
+forbid_literal App/NoonmarkMacApp/NoonmarkMacApp.swift 'static func main() async'
+require_literal App/NoonmarkMacApp/NoonmarkMacApp.swift 'static func main() {'
 forbid_literal scripts/test-dmg-install 'ps -axww -o pid=,command='
 require_literal scripts/test-dmg-install 'pgrep -x "$helper_executable_name"'
 require_literal scripts/test-e2e "source scripts/evidence-common"
@@ -636,7 +638,7 @@ require_order \
 require_order \
   App/NoonmarkMacApp/NoonmarkMacApp.swift \
   "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()" \
-  "try await NoonmarkStore.preparePersistentBootstrap()"
+  "try await NoonmarkStore.preparePersistentBootstrap("
 require_order \
   App/NoonmarkMacApp/NoonmarkMacApp.swift \
   "if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine()" \

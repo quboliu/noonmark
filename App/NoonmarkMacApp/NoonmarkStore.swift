@@ -846,10 +846,11 @@ final class NoonmarkStore: ObservableObject {
     var pendingZhulongEngineWriteAuthorized = false
     var didRecordCleanDiagnosticShutdown = false
 
-    static func preparePersistentBootstrap() async throws
+    nonisolated static func preparePersistentBootstrap(
+        databaseURL: URL
+    ) async throws
         -> NoonmarkPersistentStoreBootstrap
     {
-        let databaseURL = configuredDatabaseURL()
         let dataRootURL = databaseURL.deletingLastPathComponent()
         let dataRootProcessLease = try await Task.detached(
             priority: .utility

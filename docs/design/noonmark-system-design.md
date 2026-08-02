@@ -1770,7 +1770,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 当前版本字段：
 
 - `CFBundleShortVersionString = 0.1.1`
-- `CFBundleVersion = 2`
+- `CFBundleVersion = 3`
 - `LSMinimumSystemVersion = 14.0`
 
 ### 17.2 CloudKit 签名

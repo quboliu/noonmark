@@ -1682,7 +1682,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 | 命令 | 用途 |
 |---|---|
-| `make build` | 清理开发数据并 Swift build |
+| `make build` | Swift build；纯产物，不 reset 或启动 App |
 | `make test` | Swift tests |
 | `make check` | build、分层测试、lint、format 和证据门禁 |
 | `make run-demo-app` | 一年中段状态的交互验收 |
@@ -1759,18 +1759,19 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 构建脚本：
 
-1. 重置开发数据；
-2. `swift build -c release --product NoonmarkMacApp`；
-3. 创建 `.app/Contents/MacOS` 和 `Resources`；
-4. 复制 executable 和 `.icns`；
-5. 生成 `Info.plist`；
-6. 设置 bundle identifier、版本和最低系统；
-7. codesign。
+1. `swift build -c release --product NoonmarkMacApp`；
+2. 创建 `.app/Contents/MacOS` 和 `Resources`；
+3. 复制 executable 和 `.icns`；
+4. 生成 `Info.plist`；
+5. 设置 bundle identifier、版本和最低系统；
+6. codesign。
+
+build 与 package 只产生档案，不 reset 或启动任何 profile；需要运行 App 的调用方负责先 reset 自己拥有的非生产 profile。
 
 当前版本字段：
 
 - `CFBundleShortVersionString = 0.1.1`
-- `CFBundleVersion = 3`
+- `CFBundleVersion = 4`
 - `LSMinimumSystemVersion = 14.0`
 
 ### 17.2 CloudKit 签名
@@ -2358,6 +2359,7 @@ Windows 客户端应该按平台原生重写 UI 和 persistence adapter。
 - `.github/workflows/release.yml`
 - `Sources/NoonmarkDemoSupport/NoonmarkDemoFixture.swift`
 - `Tools/NoonmarkDMGInstallHarness`
+- `Tools/NoonmarkWindowProbe`
 
 ### 领域与决策文档
 

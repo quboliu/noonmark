@@ -35,6 +35,104 @@ window_title="晷迹 · Day Todo — 8月1日"
 mkdir -p "$application_support_root"
 mkdir -m 700 "$validation_data_root"
 mkdir -m 700 "$runtime_evidence_root"
+
+failure_evidence_path="${fixture_root}/window-identity-failure.txt"
+failure_expected_path="${fixture_root}/window-identity-failure.expected"
+if ! scripts/test-dmg-install \
+  --record-window-failure-fixture \
+  "$fixture_root" \
+  true \
+  true \
+  true \
+  query-count-0 \
+  >"${fixture_root}/failure-writer.stdout" \
+  2>"${fixture_root}/failure-writer.stderr"; then
+  echo "valid window failure evidence injection failed" >&2
+  cat "${fixture_root}/failure-writer.stderr" >&2
+  exit 1
+fi
+printf '%s\n' \
+  'evidence_schema_version=1' \
+  'profile=dmg-validation' \
+  'app_running=true' \
+  'response_seen=true' \
+  'response_validated=true' \
+  'windowserver_verification=query-count-0' \
+  >"$failure_expected_path"
+if [[ ! -f "$failure_evidence_path" || -L "$failure_evidence_path" ||
+  "$(stat -f '%Lp' "$failure_evidence_path")" != "600" ]] ||
+  ! cmp -s "$failure_expected_path" "$failure_evidence_path"; then
+  echo "window failure evidence was not exact owner-only stage evidence" >&2
+  exit 1
+fi
+
+invalid_failure_root="${fixture_root}/noonmark-dmg-window-identity.invalid"
+mkdir -m 700 "$invalid_failure_root"
+if scripts/test-dmg-install \
+  --record-window-failure-fixture \
+  "$invalid_failure_root" \
+  true \
+  true \
+  false \
+  arbitrary-free-text \
+  >"${fixture_root}/invalid-failure.stdout" \
+  2>"${fixture_root}/invalid-failure.stderr"; then
+  echo "window failure evidence accepted an unbounded reason" >&2
+  exit 1
+fi
+if [[ -e "${invalid_failure_root}/window-identity-failure.txt" ||
+  -L "${invalid_failure_root}/window-identity-failure.txt" ]]; then
+  echo "invalid failure injection published evidence" >&2
+  exit 1
+fi
+
+existing_failure_root="${fixture_root}/noonmark-dmg-window-identity.existing"
+mkdir -m 700 "$existing_failure_root"
+printf '%s' 'failure-canary' \
+  >"${existing_failure_root}/window-identity-failure.txt"
+chmod 600 "${existing_failure_root}/window-identity-failure.txt"
+if scripts/test-dmg-install \
+  --record-window-failure-fixture \
+  "$existing_failure_root" \
+  false \
+  false \
+  false \
+  not-attempted \
+  >"${fixture_root}/existing-failure.stdout" \
+  2>"${fixture_root}/existing-failure.stderr"; then
+  echo "window failure evidence overwrote an existing destination" >&2
+  exit 1
+fi
+if [[ "$(<"${existing_failure_root}/window-identity-failure.txt")" != \
+  "failure-canary" ]]; then
+  echo "existing window failure evidence changed" >&2
+  exit 1
+fi
+
+symlink_failure_root="${fixture_root}/noonmark-dmg-window-identity.symlink"
+symlink_failure_target="${fixture_root}/failure-symlink-canary.txt"
+mkdir -m 700 "$symlink_failure_root"
+printf '%s' 'symlink-canary' >"$symlink_failure_target"
+ln -s \
+  "$symlink_failure_target" \
+  "${symlink_failure_root}/window-identity-failure.txt"
+if scripts/test-dmg-install \
+  --record-window-failure-fixture \
+  "$symlink_failure_root" \
+  true \
+  false \
+  false \
+  not-attempted \
+  >"${fixture_root}/symlink-failure.stdout" \
+  2>"${fixture_root}/symlink-failure.stderr"; then
+  echo "window failure evidence followed a symlink destination" >&2
+  exit 1
+fi
+if [[ "$(<"$symlink_failure_target")" != "symlink-canary" ]]; then
+  echo "window failure evidence changed a symlink target" >&2
+  exit 1
+fi
+
 printf '%s' \
   '{"bundle_identifier":"app.noonmark.mac.dmg-validation","launch_token":"4F47608A-F1E1-45A9-B8C9-21F4D9063327","process_identifier":4242,"profile":"dmg-validation","schema_version":1,"title":"晷迹 · Day Todo — 8月1日","window_number":73}' \
   >"$response_path"
@@ -342,35 +440,28 @@ if [[ ! -f "$request_path" || -L "$request_path" ||
 fi
 
 if rg -n \
-  'optionOnScreenOnly|kCGNullWindowID|find_main_window_metadata|dump_process_windows' \
+  'optionOnScreenOnly|optionAll|optionOnScreenAboveWindow|optionOnScreenBelowWindow|kCGNullWindowID|find_main_window_metadata|dump_process_windows|CGWindowListCopyWindowInfo|CGWindowListCreateDescriptionFromArray' \
   scripts/test-dmg-install >"${fixture_root}/global-window-list.txt"; then
-  echo "DMG install still contains a global WindowServer enumeration path" >&2
+  echo "DMG install still contains a direct WindowServer query path" >&2
   cat "${fixture_root}/global-window-list.txt" >&2
   exit 1
 fi
-enumerating_window_query='CGWindowList''CopyWindowInfo'
-relative_window_option='.option''IncludingWindow'
-if rg -Fq "$enumerating_window_query" scripts/test-dmg-install ||
-  rg -Fq "$relative_window_option" scripts/test-dmg-install; then
-  echo "DMG install still uses an enumerating WindowServer query" >&2
-  exit 1
-fi
-if ! rg -Fq \
-  'CGWindowListCreateDescriptionFromArray' \
-  scripts/test-dmg-install; then
-  echo "DMG install lacks an exact-ID WindowServer description query" >&2
-  exit 1
-fi
-window_query_count="$({
-  rg -F 'CGWindowListCreateDescriptionFromArray(' scripts/test-dmg-install || true
-} | wc -l | tr -d '[:space:]')"
-if [[ "$window_query_count" != "1" ]] ||
+if ! rg -Fq 'window_probe_executable' scripts/test-dmg-install ||
   ! rg -Fq \
-    '[NSNumber(value: rawWindowNumber)] as CFArray' \
+    '"$window_probe_executable" --window-number' \
     scripts/test-dmg-install; then
-  echo "DMG install did not reduce WindowServer inspection to one exact ID query" >&2
+  echo "DMG install does not route exact-ID lookup through the shared probe" >&2
   exit 1
 fi
+for required_manifest_key in \
+  window_identity_failure_evidence_present \
+  window_identity_failure_evidence_path \
+  window_identity_failure_evidence_sha256; do
+  if ! rg -Fq "$required_manifest_key" scripts/test-dmg-install; then
+    echo "DMG failure manifest omits stage evidence binding: $required_manifest_key" >&2
+    exit 1
+  fi
+done
 installed_open_count="$({
   rg -F '/usr/bin/open -n "$installed_app"' scripts/test-dmg-install || true
 } | wc -l | tr -d '[:space:]')"

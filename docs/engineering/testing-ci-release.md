@@ -66,6 +66,8 @@ build 与 package 是纯产物操作，不 reset、不启动 App、不读取运�
 
 正式 `Noonmark.dmg` 在当前宿主账户只接受静态验收：checksum、只读挂载、Applications shortcut、`Info.plist` 版本／Commit／Build Date、strict code signature、最终 executable SHA、Mach-O UUID、同 UUID dSYM 与 source-linked SHA。脚本不得启动 `app.noonmark.mac`，不得读取、建立或清理正式 `noonmark`／`Noonmark/SyncRepository` 数据。`scripts/test-dmg-install` 会从已经通过上述核验的 mounted production App 复制 executable，受控地只改变 bundle／executable 名称与签名，生成 `app.noonmark.mac.dmg-validation`；随后仅在 `noonmark-dmg-validation` 与 `Noonmark-DMGValidation/SyncRepository` scope 做 WindowServer 交互、SQLite 重启回读、日志与 DiagnosticReports 验收。runtime manifest 必须记录 DMG／package SHA、派生前 executable SHA、签名前 executable SHA、UUID／dSYM／release identity、允许的派生差异，并固定写明 `production_app_executed=false`；不得把 validation 结果描述成正式 bundle 已运行。
 
+App、E2E 与 DMG validation 对已知窗口号的 WindowServer 读取统一由 `NoonmarkMacE2ESupport.ScopedWindowServerLookup` 实现；只有该 seam 可以调用 `CGWindowListCopyWindowInfo([.optionIncludingWindow], exactID)`。shell 门禁不得内嵌另一份 CoreGraphics 查询，而是调用不进入 production DMG 的 test-only `NoonmarkWindowProbe`，消费固定 canonical JSON 后继续校验 handshake、PID、bundle、path、title、layer、onscreen 与 bounds。源码与 binary gate 同时禁止全局窗口选项、已知失效 API 和 Probe 进入 production staging，并在 E2E／DMG runtime manifest 对账 Probe SHA。
+
 CI／开发签名发行验收 runner 继续通过受保护的 GitHub variable 显式指定身份；拥有多个开发 Team 的本机也应使用显式选择。证书或私钥不得提交、不得以明文导出到仓库，也不得为了绕过 TCC 改为给 Terminal 注入真实 App 行为。该身份只服务真实 UI 与安装路径验收，不构成公开分发签名。
 
 ## 有界诊断与真实故障闭环
@@ -90,7 +92,7 @@ DMG 门禁与上述故障闭环分层：production package 只做静态来源、
 
 每个 App build 的 `Info.plist` 都包含一组供诊断导出与 About 页直接读取的非敏感身份字段；release package 会逐字段回读并 fail-closed 对账：
 
-- `CFBundleShortVersionString`／`CFBundleVersion`：当前候选默认 `0.1.1`／`3`，正式流水线可分别以 `NOONMARK_MARKETING_VERSION`／`NOONMARK_BUILD_NUMBER` 注入，且必须符合 Apple 数字版本格式。
+- `CFBundleShortVersionString`／`CFBundleVersion`：当前候选默认 `0.1.1`／`4`，正式流水线可分别以 `NOONMARK_MARKETING_VERSION`／`NOONMARK_BUILD_NUMBER` 注入，且必须符合 Apple 数字版本格式。
 - `NoonmarkGitCommit`：build 时 `HEAD` 的完整 40 位 Git SHA。
 - `NoonmarkBuildDate`：build 时的 UTC ISO 8601 秒级时间，例如 `2026-07-31T12:34:56Z`。
 - `NoonmarkRuntime`：当前固定为 `Swift-native`；`NoonmarkMinimumOSVersion` 与 `LSMinimumSystemVersion` 必须一致。诊断中的实际 OS 版本仍由运行时 `ProcessInfo` 取得，不能用最低系统版本冒充。

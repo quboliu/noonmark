@@ -3,3 +3,7 @@ FAIL-2026-08-01-01	fast	scripts/test-e2e-evidence-contract	scripts/check	拒绝 
 FAIL-2026-08-01-01	symptom	scripts/test-e2e	scripts/test-all	真实 File Import、NSOpenPanel、确认、SQLite 与重启回读
 FAIL-2026-08-01-01	symptom	scripts/test-tencent-ime-termination-persistence	scripts/test-all	持久化启动后的退出握手、保存与重启回读
 FAIL-2026-08-01-01	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的真实退出、进程消失与重启持久化
+FAIL-2026-08-01-02	fast	scripts/test-window-lookup-boundary	scripts/check	限制 exact-ID WindowServer 查询只能存在于唯一共享 seam，并校验二进制符号
+FAIL-2026-08-01-02	fast	scripts/test-dmg-window-identity-contract	scripts/check	约束 owner-only handshake、单窗口查询与阶段化失败证据
+FAIL-2026-08-01-02	symptom	scripts/test-e2e	scripts/test-all	真实 E2E 主窗口与辅助窗口 exact-ID WindowServer 复核
+FAIL-2026-08-01-02	release	scripts/test-dmg-install	scripts/release-private-dmg	派生 DMG App 的真实安装、窗口、退出、重启与持久化

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+configuration="${1:-debug}"
+product="NoonmarkWindowProbe"
+artifact_root="artifacts/window-probe"
+artifact_path="${artifact_root}/${product}"
+
+case "$configuration" in
+  debug | release) ;;
+  *)
+    echo "configuration must be debug or release" >&2
+    exit 1
+    ;;
+esac
+
+swift build -c "$configuration" --product "$product"
+
+binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
+if [[ ! -x "$binary_path" ]]; then
+  binary_path=".build/${configuration}/${product}"
+fi
+if [[ ! -x "$binary_path" ]]; then
+  echo "built window probe executable was not found: $binary_path" >&2
+  exit 1
+fi
+
+rm -rf "$artifact_root"
+mkdir -p "$artifact_root"
+cp "$binary_path" "$artifact_path"
+chmod 500 "$artifact_path"
+scripts/verify-window-lookup-boundary probe-binary "$artifact_path"
+
+echo "$artifact_path"

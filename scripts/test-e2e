@@ -60,11 +60,13 @@ helper_process_name="NoonmarkDMGInstallHarness"
 helper_bundle="artifacts/dmg-install-harness/${helper_process_name}.app"
 helper_executable_path="${repo_root}/${helper_bundle}/Contents/MacOS/${helper_process_name}"
 helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
+window_probe_executable_path="${repo_root}/artifacts/window-probe/NoonmarkWindowProbe"
 helper_diagnostic_baseline="${runtime_evidence_dir}/helper-diagnostic-baseline.txt"
 helper_diagnostic_result="${runtime_evidence_dir}/helper-diagnostic-result.txt"
 evidence_helper_start="${runtime_evidence_dir}/helper-start.fragment"
 evidence_helper_end="${runtime_evidence_dir}/helper-end.fragment"
 evidence_helper_snapshot="${runtime_evidence_dir}/helper-snapshot/NoonmarkDMGInstallHarness.app"
+evidence_window_probe_snapshot="${runtime_evidence_dir}/probe-snapshot/NoonmarkWindowProbe"
 windowserver_input_cleanup_result="${runtime_evidence_dir}/windowserver-input-cleanup-result.txt"
 windowserver_input_cleanup_log="${runtime_evidence_dir}/windowserver-input-cleanup.log"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
@@ -72,6 +74,7 @@ suite_mode="full"
 only_mode=""
 app_binary_sha256_before=""
 helper_binary_sha256_before=""
+window_probe_binary_sha256_before=""
 english_helper_requested=0
 helper_requested=0
 active_native_command_helper_pid=""
@@ -412,6 +415,24 @@ printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' 
 
 scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e
+scripts/build-window-probe "$configuration" >/dev/null
+if [[ ! -f "$window_probe_executable_path" ||
+  -L "$window_probe_executable_path" ||
+  ! -x "$window_probe_executable_path" ]]; then
+  echo "E2E window probe build did not create its fixed executable" >&2
+  exit 1
+fi
+window_probe_binary_sha256_before="$(
+  shasum -a 256 "$window_probe_executable_path" | awk '{print $1}'
+)"
+if [[ ! "$window_probe_binary_sha256_before" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "E2E window probe SHA-256 was unavailable" >&2
+  exit 1
+fi
+evidence_append \
+  "$evidence_manifest" \
+  "window_probe_binary_sha256_before" \
+  "$window_probe_binary_sha256_before"
 evidence_capture_bundle "$app_path" 1 "app" "$evidence_app_start"
 evidence_append_snapshot "$evidence_manifest" "$evidence_app_start"
 app_binary_sha256_before="$(evidence_read "$evidence_app_start" "app_binary_sha256")"
@@ -536,14 +557,14 @@ native_command_app_ready_identity_matches() {
   local app_bundle_path="$2"
   local window_number="$3"
   local window_title="$4"
+  local snapshot
 
-  NOONMARK_E2E_READY_PID="$pid" \
+  if ! NOONMARK_E2E_READY_PID="$pid" \
     NOONMARK_E2E_READY_APP="$app_bundle_path" \
     NOONMARK_E2E_READY_WINDOW_NUMBER="$window_number" \
     NOONMARK_E2E_READY_WINDOW_TITLE="$window_title" \
     swift -e '
 import AppKit
-import CoreGraphics
 import Darwin
 import Foundation
 
@@ -567,33 +588,34 @@ else {
 let expectedPath = URL(fileURLWithPath: expectedApp)
     .standardizedFileURL.resolvingSymlinksInPath().path
 let actualPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
-let windowIdentifiers = [NSNumber(value: windowNumber)] as CFArray
-guard actualPath == expectedPath,
-      let records = CGWindowListCreateDescriptionFromArray(
-          windowIdentifiers
-      ) as? [[String: Any]],
-      records.count == 1,
-      let returnedWindowNumber = (
-          records[0][kCGWindowNumber as String] as? NSNumber
-      )?.uint32Value,
-      returnedWindowNumber == windowNumber,
-      let ownerPID = (records[0][kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
-      ownerPID == pid,
-      let layer = (records[0][kCGWindowLayer as String] as? NSNumber)?.intValue,
-      layer == 0,
-      let isOnscreen = (records[0][kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue,
-      isOnscreen
-else {
-    fputs("ready App bundle or CGWindow identity was invalid\n", stderr)
-    exit(1)
-}
-if let title = records[0][kCGWindowName as String] as? String,
-   title != expectedWindowTitle
-{
-    fputs("ready CGWindow title did not match\n", stderr)
+guard actualPath == expectedPath else {
+    fputs("ready App bundle identity was invalid\n", stderr)
     exit(1)
 }
 '
+  then
+    return 1
+  fi
+  if ! snapshot="$(
+    "$window_probe_executable_path" --window-number "$window_number" 2>/dev/null
+  )"; then
+    return 1
+  fi
+  jq -e \
+    --argjson expected_window_number "$window_number" \
+    --argjson expected_pid "$pid" \
+    --arg expected_title "$window_title" \
+    'keys == [
+      "alpha", "frame", "is_onscreen", "layer",
+      "owner_process_identifier", "schema_version", "title", "window_number"
+    ] and
+    .schema_version == 1 and
+    .window_number == $expected_window_number and
+    .owner_process_identifier == $expected_pid and
+    .layer == 0 and
+    .is_onscreen == true and
+    (.title == null or .title == $expected_title)' \
+    <<<"$snapshot" >/dev/null
 }
 
 cleanup_native_command_helper() {
@@ -796,6 +818,7 @@ finish_e2e_evidence() {
   local suite_status="$1"
   local app_binary_sha256_after=""
   local helper_binary_sha256_after=""
+  local window_probe_binary_sha256_after=""
   local inventory_sha256
   local -a artifact_paths=()
   local -a required_keys=(
@@ -809,6 +832,9 @@ finish_e2e_evidence() {
     app_binary_sha256_before
     app_binary_sha256_after
     app_binary_unchanged
+    window_probe_binary_sha256_before
+    window_probe_binary_sha256_after
+    window_probe_binary_unchanged
     artifact_inventory_sha256
     diagnostic_baseline_path
     diagnostic_final_path
@@ -851,6 +877,38 @@ finish_e2e_evidence() {
   mkdir -p "$(dirname "$evidence_app_snapshot")"
   if ! ditto "$app_path" "$evidence_app_snapshot"; then
     echo "could not preserve the exact E2E App bundle snapshot" >&2
+    suite_status=1
+  fi
+  if [[ -f "$window_probe_executable_path" &&
+    ! -L "$window_probe_executable_path" &&
+    -x "$window_probe_executable_path" ]]; then
+    window_probe_binary_sha256_after="$(
+      shasum -a 256 "$window_probe_executable_path" | awk '{print $1}'
+    )"
+  fi
+  evidence_append \
+    "$evidence_manifest" \
+    "window_probe_binary_sha256_after" \
+    "${window_probe_binary_sha256_after:-missing}" || suite_status=1
+  if [[ -n "$window_probe_binary_sha256_after" &&
+    "$window_probe_binary_sha256_after" == \
+      "$window_probe_binary_sha256_before" ]]; then
+    evidence_append \
+      "$evidence_manifest" \
+      "window_probe_binary_unchanged" \
+      "true" || suite_status=1
+  else
+    evidence_append \
+      "$evidence_manifest" \
+      "window_probe_binary_unchanged" \
+      "false" || true
+    suite_status=1
+  fi
+  rm -f "$evidence_window_probe_snapshot"
+  mkdir -p "$(dirname "$evidence_window_probe_snapshot")"
+  if ! cp -p "$window_probe_executable_path" \
+    "$evidence_window_probe_snapshot"; then
+    echo "could not preserve the exact E2E window probe snapshot" >&2
     suite_status=1
   fi
   if [[ "$helper_requested" == "1" ]]; then
@@ -982,6 +1040,7 @@ finish_e2e_evidence() {
     "$evidence_app_start"
     "$evidence_app_end"
     "$evidence_app_snapshot"
+    "$evidence_window_probe_snapshot"
   )
   if [[ -d "${runtime_evidence_dir}/DiagnosticReports" ]]; then
     artifact_paths+=("${runtime_evidence_dir}/DiagnosticReports")
@@ -1136,16 +1195,16 @@ resolve_exact_e2e_window_id() {
   local expected_title="$4"
   local expected_width="${5:-$expected_window_width}"
   local expected_height="${6:-$expected_window_height}"
+  local identity_window_number
+  local snapshot
 
-  NOONMARK_E2E_WINDOW_IDENTITY_PATH="$identity_path" \
+  if ! identity_window_number="$(
+    NOONMARK_E2E_WINDOW_IDENTITY_PATH="$identity_path" \
     NOONMARK_E2E_WINDOW_LAUNCH_TOKEN="$launch_token" \
     NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" \
     NOONMARK_E2E_EXPECTED_WINDOW_TITLE="$expected_title" \
-    NOONMARK_E2E_EXPECTED_WINDOW_WIDTH="$expected_width" \
-    NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT="$expected_height" \
     NOONMARK_E2E_EXPECTED_APP_PATH="$PWD/$app_path" swift -e '
 import AppKit
-import CoreGraphics
 import Darwin
 import Foundation
 
@@ -1210,8 +1269,6 @@ guard let identityPath = environment["NOONMARK_E2E_WINDOW_IDENTITY_PATH"],
       expectedTitle.isEmpty == false,
       let expectedAppPath = environment["NOONMARK_E2E_EXPECTED_APP_PATH"]
 else { exit(2) }
-let expectedWidth = Double(environment["NOONMARK_E2E_EXPECTED_WINDOW_WIDTH"] ?? "") ?? 0
-let expectedHeight = Double(environment["NOONMARK_E2E_EXPECTED_WINDOW_HEIGHT"] ?? "") ?? 0
 let identityURL = URL(fileURLWithPath: identityPath)
 guard identityURL.lastPathComponent == "main-window-identity.json" else { exit(2) }
 guard let directoryDescriptor = openDirectoryWithoutFollowingLinks(
@@ -1306,43 +1363,54 @@ else { exit(1) }
 let actualAppPath = bundleURL.standardizedFileURL.resolvingSymlinksInPath().path
 let normalizedExpectedAppPath = URL(fileURLWithPath: expectedAppPath)
     .standardizedFileURL.resolvingSymlinksInPath().path
-let windowIdentifiers = [NSNumber(value: identity.windowNumber)] as CFArray
-guard actualAppPath == normalizedExpectedAppPath,
-      let records = CGWindowListCreateDescriptionFromArray(
-          windowIdentifiers
-      ) as? [[String: Any]],
-      records.count == 1,
-      let record = records.first,
-      (record[kCGWindowNumber as String] as? NSNumber)?.intValue
-        == identity.windowNumber,
-      (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
-        == expectedProcessID,
-      (record[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-      (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
-      let bounds = record[kCGWindowBounds as String] as? [String: Any],
-      let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-      let height = (bounds["Height"] as? NSNumber)?.doubleValue,
-      expectedWidth <= 0 || expectedHeight <= 0
-        || (width == expectedWidth && height == expectedHeight)
-else { exit(1) }
-if let windowTitle = record[kCGWindowName as String] as? String,
-   windowTitle != identity.title
-{
-    exit(1)
-}
+guard actualAppPath == normalizedExpectedAppPath else { exit(1) }
 print(identity.windowNumber)
 '
+  )"; then
+    return 1
+  fi
+  if ! snapshot="$(
+    "$window_probe_executable_path" \
+      --window-number "$identity_window_number" 2>/dev/null
+  )"; then
+    return 1
+  fi
+  if ! jq -e \
+    --argjson expected_window_number "$identity_window_number" \
+    --argjson expected_pid "$expected_process_id" \
+    --arg expected_title "$expected_title" \
+    --argjson expected_width "$expected_width" \
+    --argjson expected_height "$expected_height" \
+    'keys == [
+      "alpha", "frame", "is_onscreen", "layer",
+      "owner_process_identifier", "schema_version", "title", "window_number"
+    ] and
+    .schema_version == 1 and
+    .window_number == $expected_window_number and
+    .owner_process_identifier == $expected_pid and
+    .layer == 0 and
+    .is_onscreen == true and
+    (.title == null or .title == $expected_title) and
+    (.frame != null) and
+    (($expected_width <= 0 or $expected_height <= 0) or
+      (.frame.width == $expected_width and
+       .frame.height == $expected_height))' \
+    <<<"$snapshot" >/dev/null; then
+    return 1
+  fi
+  printf '%s\n' "$identity_window_number"
 }
 
 exact_auxiliary_window_matches() {
   local main_window_id="$1"
   local auxiliary_window_id="$2"
   local expected_process_id="$3"
-  NOONMARK_E2E_MAIN_WINDOW_ID="$main_window_id" \
+  local main_snapshot
+  local auxiliary_snapshot
+  if ! NOONMARK_E2E_MAIN_WINDOW_ID="$main_window_id" \
     NOONMARK_E2E_AUXILIARY_WINDOW_ID="$auxiliary_window_id" \
     NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" swift -e '
 import AppKit
-import CoreGraphics
 import Darwin
 import Foundation
 
@@ -1356,39 +1424,38 @@ guard let mainID = UInt32(environment["NOONMARK_E2E_MAIN_WINDOW_ID"] ?? ""), mai
       app.isTerminated == false,
       app.bundleIdentifier == "app.noonmark.mac.e2e"
 else { exit(2) }
-
-func exactWindow(_ identifier: UInt32) -> [String: Any]? {
-    let windowIdentifiers = [NSNumber(value: identifier)] as CFArray
-    guard let records = CGWindowListCreateDescriptionFromArray(
-        windowIdentifiers
-    ) as? [[String: Any]], records.count == 1,
-        let record = records.first,
-        (record[kCGWindowNumber as String] as? NSNumber)?.uint32Value == identifier,
-        (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processID,
-        (record[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-        (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true
-    else { return nil }
-    return record
-}
-
-guard let main = exactWindow(mainID),
-      let auxiliary = exactWindow(auxiliaryID),
-      let mainBounds = main[kCGWindowBounds as String] as? [String: Any],
-      let auxiliaryBounds = auxiliary[kCGWindowBounds as String] as? [String: Any],
-      let mainX = (mainBounds["X"] as? NSNumber)?.doubleValue,
-      let mainY = (mainBounds["Y"] as? NSNumber)?.doubleValue,
-      let mainWidth = (mainBounds["Width"] as? NSNumber)?.doubleValue,
-      let mainHeight = (mainBounds["Height"] as? NSNumber)?.doubleValue,
-      let x = (auxiliaryBounds["X"] as? NSNumber)?.doubleValue,
-      let y = (auxiliaryBounds["Y"] as? NSNumber)?.doubleValue,
-      let width = (auxiliaryBounds["Width"] as? NSNumber)?.doubleValue,
-      let height = (auxiliaryBounds["Height"] as? NSNumber)?.doubleValue,
-      width >= 40, height >= 40,
-      width < mainWidth, height < mainHeight,
-      x < mainX + mainWidth, x + width > mainX,
-      y < mainY + mainHeight, y + height > mainY
-else { exit(1) }
 '
+  then
+    return 1
+  fi
+  if ! main_snapshot="$(
+    "$window_probe_executable_path" --window-number "$main_window_id" 2>/dev/null
+  )" || ! auxiliary_snapshot="$(
+    "$window_probe_executable_path" \
+      --window-number "$auxiliary_window_id" 2>/dev/null
+  )"; then
+    return 1
+  fi
+  printf '%s\n%s\n' "$main_snapshot" "$auxiliary_snapshot" | jq -s -e \
+    --argjson main_window_id "$main_window_id" \
+    --argjson auxiliary_window_id "$auxiliary_window_id" \
+    --argjson expected_pid "$expected_process_id" \
+    'length == 2 and
+    .[0].window_number == $main_window_id and
+    .[1].window_number == $auxiliary_window_id and
+    (.[0].owner_process_identifier == $expected_pid) and
+    (.[1].owner_process_identifier == $expected_pid) and
+    (.[0].layer == 0 and .[1].layer == 0) and
+    (.[0].is_onscreen == true and .[1].is_onscreen == true) and
+    (.[0].frame != null and .[1].frame != null) and
+    (.[1].frame.width >= 40 and .[1].frame.height >= 40) and
+    (.[1].frame.width < .[0].frame.width) and
+    (.[1].frame.height < .[0].frame.height) and
+    (.[1].frame.x < (.[0].frame.x + .[0].frame.width)) and
+    ((.[1].frame.x + .[1].frame.width) > .[0].frame.x) and
+    (.[1].frame.y < (.[0].frame.y + .[0].frame.height)) and
+    ((.[1].frame.y + .[1].frame.height) > .[0].frame.y)' \
+    >/dev/null
 }
 
 dump_exact_e2e_window_evidence() {

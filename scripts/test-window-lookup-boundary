@@ -11,9 +11,10 @@ if [[ ! -x "$debug_root/NoonmarkMacApp" ]]; then
 fi
 app_binary="$debug_root/NoonmarkMacApp"
 helper_binary="$debug_root/NoonmarkDMGInstallHarness"
+probe_binary="$debug_root/NoonmarkWindowProbe"
 
-if [[ ! -x "$app_binary" || ! -x "$helper_binary" ]]; then
-  echo "window lookup boundary test requires both debug executables" >&2
+if [[ ! -x "$app_binary" || ! -x "$helper_binary" || ! -x "$probe_binary" ]]; then
+  echo "window lookup boundary test requires App, helper, and probe executables" >&2
   exit 1
 fi
 if [[ ! -x "$verifier" ]]; then
@@ -22,8 +23,26 @@ if [[ ! -x "$verifier" ]]; then
 fi
 
 private_symbol="_AXUIElementGetWindow"
-enumerating_source_token='CGWindowList''CopyWindowInfo'
-relative_window_option='option''IncludingWindow'
+reject_source_literal() {
+  local literal="$1"
+  local message="$2"
+  shift 2
+  local scan_status=0
+
+  /usr/bin/grep -R -Fq "$literal" "$@" || scan_status=$?
+  case "$scan_status" in
+    0)
+      echo "$message" >&2
+      return 1
+      ;;
+    1) return 0 ;;
+    *)
+      echo "could not scan runtime source for forbidden literal: $literal" >&2
+      return 1
+      ;;
+  esac
+}
+
 runtime_sources=(
   "$repo_root/App"
   "$repo_root/Sources"
@@ -31,42 +50,87 @@ runtime_sources=(
   "$repo_root/scripts/test-e2e"
   "$repo_root/scripts/test-dmg-install"
 )
-if /usr/bin/grep -R -Fq "$enumerating_source_token" \
-  "${runtime_sources[@]}"; then
-  echo "runtime source contains forbidden WindowServer enumeration" >&2
+window_query_sources=(
+  "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift"
+)
+reject_source_literal \
+  'CGWindowListCreateDescriptionFromArray' \
+  'runtime source contains the known-broken exact-window query' \
+  "${runtime_sources[@]}" || exit 1
+for source in "${window_query_sources[@]}"; do
+  for forbidden_option in \
+    '.optionOnScreenOnly' \
+    '.optionAll' \
+    '.optionOnScreenAboveWindow' \
+    '.optionOnScreenBelowWindow' \
+    'kCGNullWindowID'; do
+    reject_source_literal \
+      "$forbidden_option" \
+      "runtime source contains a WindowServer enumeration option: $source" \
+      "$source" || exit 1
+  done
+done
+if ! query_source_output="$(
+  /usr/bin/grep -R -l -F 'CGWindowListCopyWindowInfo' \
+    "${runtime_sources[@]}"
+)"; then
+  echo "could not locate the canonical WindowServer query source" >&2
   exit 1
 fi
-if /usr/bin/grep -R -Fq "$relative_window_option" \
-  "${runtime_sources[@]}"; then
-  echo "runtime source relies on a non-exact relative-window option" >&2
-  exit 1
-fi
-if ! /usr/bin/grep -Fq 'CGWindowListCreateDescriptionFromArray' \
+while IFS= read -r source; do
+  [[ -n "$source" ]] || continue
+  case "$source" in
+    "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift")
+      ;;
+    *)
+      echo "WindowServer query escaped its reviewed choke points: $source" >&2
+      exit 1
+      ;;
+  esac
+done <<<"$query_source_output"
+if ! /usr/bin/grep -Fq 'CGWindowListCopyWindowInfo' \
+  "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift" ||
+  ! /usr/bin/grep -Fq '[.optionIncludingWindow]' \
   "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift"; then
-  echo "runtime source lacks exact-ID WindowServer descriptions" >&2
+  echo "shared window lookup lacks published exact-ID semantics" >&2
   exit 1
 fi
-if /usr/bin/grep -R -Fq "$private_symbol" \
-  "$repo_root/App" "$repo_root/Sources"; then
-  echo "production source contains the helper-only private SPI literal" >&2
+if ! exact_query_count="$(
+  /usr/bin/grep -c -F 'CGWindowListCopyWindowInfo(' \
+    "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift"
+)" || ! exact_option_count="$(
+  /usr/bin/grep -c -F '[.optionIncludingWindow]' \
+    "$repo_root/Sources/NoonmarkMacE2ESupport/ScopedWindowServerLookup.swift"
+)"; then
+  echo "could not count the canonical exact-ID query implementation" >&2
   exit 1
 fi
-if /usr/bin/grep -Fq '@_silgen_name' \
-  "$repo_root/Tools/NoonmarkDMGInstallHarness/AXTarget.swift"; then
-  echo "DMG helper directly declares a private SPI symbol" >&2
+if [[ "$exact_query_count" != "1" || "$exact_option_count" != "1" ]]; then
+  echo "shared window lookup must own exactly one exact-ID query implementation" >&2
   exit 1
 fi
+reject_source_literal \
+  "$private_symbol" \
+  'production source contains the helper-only private SPI literal' \
+  "$repo_root/App" "$repo_root/Sources" || exit 1
+reject_source_literal \
+  '@_silgen_name' \
+  'DMG helper directly declares a private SPI symbol' \
+  "$repo_root/Tools/NoonmarkDMGInstallHarness/AXTarget.swift" || exit 1
 if ! /usr/bin/grep -Fq \
   'dlsym(defaultHandle, "_AXUIElementGetWindow")' \
   "$repo_root/Tools/NoonmarkDMGInstallHarness/AXTarget.swift"; then
   echo "DMG helper has no fail-closed dynamic private SPI lookup" >&2
   exit 1
 fi
-if /usr/bin/grep -Fq 'NoonmarkDMGInstallHarness' \
-  "$repo_root/scripts/package-dmg"; then
-  echo "production package script names the test-only DMG helper" >&2
-  exit 1
-fi
+reject_source_literal \
+  'NoonmarkDMGInstallHarness' \
+  'production package script names the test-only DMG helper' \
+  "$repo_root/scripts/package-dmg" || exit 1
+reject_source_literal \
+  'NoonmarkWindowProbe' \
+  'production package script names the test-only window probe' \
+  "$repo_root/scripts/package-dmg" || exit 1
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-window-boundary.XXXXXX")"
 cleanup() {
@@ -76,6 +140,18 @@ trap cleanup EXIT
 
 "$verifier" production-binary "$app_binary"
 "$verifier" helper-binary "$helper_binary"
+"$verifier" probe-binary "$probe_binary"
+if "$probe_binary" --window-number 0 \
+  >"$fixture_root/probe-invalid.stdout" \
+  2>"$fixture_root/probe-invalid.stderr"; then
+  echo "window probe accepted a non-positive exact window ID" >&2
+  exit 1
+fi
+if [[ -s "$fixture_root/probe-invalid.stdout" ||
+  "$(<"$fixture_root/probe-invalid.stderr")" != "invalid-input" ]]; then
+  echo "window probe invalid-input contract drifted" >&2
+  exit 1
+fi
 
 malicious_app="$fixture_root/NoonmarkMacApp"
 cp "$app_binary" "$malicious_app"
@@ -103,6 +179,17 @@ mkdir -p "$staging_root/NoonmarkDMGInstallHarness.app"
 if "$verifier" dmg-staging-root "$staging_root" \
   >/dev/null 2>&1; then
   echo "DMG staging boundary accepted the install harness" >&2
+  exit 1
+fi
+rm -rf "$staging_root/NoonmarkDMGInstallHarness.app"
+mkdir -p "$staging_root/Noonmark.app/Contents/Resources"
+cp \
+  "$probe_binary" \
+  "$staging_root/Noonmark.app/Contents/Resources/window-metadata"
+chmod 644 "$staging_root/Noonmark.app/Contents/Resources/window-metadata"
+if "$verifier" dmg-staging-root "$staging_root" \
+  >/dev/null 2>&1; then
+  echo "DMG staging boundary accepted the test-only window probe" >&2
   exit 1
 fi
 

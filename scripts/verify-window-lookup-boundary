@@ -2,12 +2,33 @@
 set -euo pipefail
 
 private_symbol="_AXUIElementGetWindow"
-exact_window_symbol="_CGWindowListCreateDescriptionFromArray"
-enumerating_window_symbol="_CGWindowList""CopyWindowInfo"
+exact_window_symbol="_CGWindowListCopyWindowInfo"
+known_broken_window_symbol="_CGWindowListCreateDescriptionFromArray"
 
 usage() {
-  echo "usage: scripts/verify-window-lookup-boundary <production-binary|helper-binary|dmg-staging-root> <path>" >&2
+  echo "usage: scripts/verify-window-lookup-boundary <production-binary|helper-binary|probe-binary|dmg-staging-root> <path>" >&2
   exit 1
+}
+
+verify_probe_binary() {
+  local path="$1"
+  local symbols
+  require_regular_executable "$path"
+  symbols="$(undefined_symbols "$path")"
+
+  if /usr/bin/grep -Fq "$private_symbol" <<<"$symbols" ||
+    contains_private_symbol "$path"; then
+    echo "window probe contains helper-only private SPI" >&2
+    exit 1
+  fi
+  if /usr/bin/grep -Fq "$known_broken_window_symbol" <<<"$symbols"; then
+    echo "window probe links the known-broken exact-window API" >&2
+    exit 1
+  fi
+  if ! /usr/bin/grep -Fq "$exact_window_symbol" <<<"$symbols"; then
+    echo "window probe lacks the proven exact-ID WindowServer lookup" >&2
+    exit 1
+  fi
 }
 
 require_regular_executable() {
@@ -61,12 +82,12 @@ verify_production_binary() {
     echo "production App contains private SPI resolver literal $private_symbol" >&2
     exit 1
   fi
-  if /usr/bin/grep -Fq "$enumerating_window_symbol" <<<"$symbols"; then
-    echo "production App links the forbidden WindowServer enumeration API" >&2
+  if /usr/bin/grep -Fq "$known_broken_window_symbol" <<<"$symbols"; then
+    echo "production App links the known-broken exact-window API" >&2
     exit 1
   fi
   if ! /usr/bin/grep -Fq "$exact_window_symbol" <<<"$symbols"; then
-    echo "production App lacks exact-ID WindowServer description lookup" >&2
+    echo "production App lacks the proven exact-ID WindowServer lookup" >&2
     exit 1
   fi
 }
@@ -89,12 +110,12 @@ verify_helper_binary() {
     echo "DMG helper does not resolve its private SPI dynamically" >&2
     exit 1
   fi
-  if /usr/bin/grep -Fq "$enumerating_window_symbol" <<<"$symbols"; then
-    echo "DMG helper links the forbidden WindowServer enumeration API" >&2
+  if /usr/bin/grep -Fq "$known_broken_window_symbol" <<<"$symbols"; then
+    echo "DMG helper links the known-broken exact-window API" >&2
     exit 1
   fi
   if ! /usr/bin/grep -Fq "$exact_window_symbol" <<<"$symbols"; then
-    echo "DMG helper lacks exact-ID WindowServer description lookup" >&2
+    echo "DMG helper lacks the proven exact-ID WindowServer lookup" >&2
     exit 1
   fi
 }
@@ -105,6 +126,8 @@ verify_dmg_staging_root() {
   local app="$root/Noonmark.app"
   local app_binary="$app/Contents/MacOS/NoonmarkMacApp"
   local entry
+  local file_description
+  local named_test_payload
   local -a entries=()
 
   if [[ ! -d "$root" || -L "$root" ]]; then
@@ -134,9 +157,22 @@ verify_dmg_staging_root() {
       exit 1
     fi
   done
-  if /usr/bin/find -P "$root" -name '*NoonmarkDMGInstallHarness*' -print -quit \
-    | /usr/bin/grep -q .; then
+  if ! named_test_payload="$(
+    /usr/bin/find -P "$root" \
+      \( -name '*NoonmarkDMGInstallHarness*' -o \
+      -name '*NoonmarkWindowProbe*' \) \
+      -print -quit
+  )"; then
+    echo "DMG staging test-payload scan failed" >&2
+    exit 1
+  fi
+  if [[ -n "$named_test_payload" &&
+    "$named_test_payload" == *NoonmarkDMGInstallHarness* ]]; then
     echo "DMG staging contains the install harness" >&2
+    exit 1
+  fi
+  if [[ -n "$named_test_payload" ]]; then
+    echo "DMG staging contains the test-only window probe" >&2
     exit 1
   fi
   verify_production_binary "$app_binary"
@@ -145,6 +181,15 @@ verify_dmg_staging_root() {
     exit 1
   fi
   while IFS= read -r -d '' entry; do
+    if ! file_description="$(/usr/bin/file -b "$entry")"; then
+      echo "DMG staging file type could not be inspected: $entry" >&2
+      exit 1
+    fi
+    if [[ "$entry" != "$app_binary" &&
+      "$file_description" == *Mach-O* ]]; then
+      echo "DMG staging contains an unexpected Mach-O payload: $entry" >&2
+      exit 1
+    fi
     if contains_private_symbol "$entry"; then
       echo "DMG staging contains private SPI material: $entry" >&2
       exit 1
@@ -162,6 +207,9 @@ case "$mode" in
     ;;
   helper-binary)
     verify_helper_binary "$path"
+    ;;
+  probe-binary)
+    verify_probe_binary "$path"
     ;;
   dmg-staging-root)
     verify_dmg_staging_root "$path"

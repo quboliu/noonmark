@@ -11,7 +11,7 @@ configuration="${1:-debug}"
 profile="${2:-}"
 product="NoonmarkMacApp"
 marketing_version="${NOONMARK_MARKETING_VERSION:-0.1.1}"
-build_number="${NOONMARK_BUILD_NUMBER:-3}"
+build_number="${NOONMARK_BUILD_NUMBER:-4}"
 minimum_os_version="14.0"
 runtime_description="Swift-native"
 

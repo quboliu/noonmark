@@ -530,6 +530,238 @@ else {
 '
 }
 
+dmg_window_identity_write_failure_evidence() {
+  local root="$1"
+  local app_running="$2"
+  local response_seen="$3"
+  local response_validated="$4"
+  local verification="$5"
+  local scope="$6"
+  local repository_root="${7:-}"
+
+  NOONMARK_DMG_WINDOW_FAILURE_ROOT="$root" \
+    NOONMARK_DMG_WINDOW_FAILURE_APP_RUNNING="$app_running" \
+    NOONMARK_DMG_WINDOW_FAILURE_RESPONSE_SEEN="$response_seen" \
+    NOONMARK_DMG_WINDOW_FAILURE_RESPONSE_VALIDATED="$response_validated" \
+    NOONMARK_DMG_WINDOW_FAILURE_VERIFICATION="$verification" \
+    NOONMARK_DMG_WINDOW_FAILURE_SCOPE="$scope" \
+    NOONMARK_DMG_WINDOW_FAILURE_REPOSITORY_ROOT="$repository_root" \
+    swift -e '
+import Darwin
+import Foundation
+
+func fail() -> Never { exit(1) }
+
+func lexicalComponents(_ path: String) -> [Substring]? {
+    guard path.hasPrefix("/"),
+          path.contains("//") == false,
+          path.contains("\n") == false,
+          path.contains("\r") == false,
+          path.contains("\0") == false
+    else { return nil }
+    let pieces = path.split(separator: "/", omittingEmptySubsequences: false)
+    guard pieces.first?.isEmpty == true else { return nil }
+    let components = Array(pieces.dropFirst())
+    guard components.isEmpty == false,
+          components.allSatisfy({ $0.isEmpty == false && $0 != "." && $0 != ".." })
+    else { return nil }
+    return components
+}
+
+func openDirectoryChain(_ components: [Substring]) -> Int32 {
+    var descriptor = open(
+        "/",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { fail() }
+    for component in components {
+        let nextDescriptor = openat(
+            descriptor,
+            String(component),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        _ = close(descriptor)
+        guard nextDescriptor >= 0 else { fail() }
+        descriptor = nextDescriptor
+    }
+    return descriptor
+}
+
+func sameIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+    lhs.st_dev == rhs.st_dev
+        && lhs.st_ino == rhs.st_ino
+        && lhs.st_size == rhs.st_size
+        && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+        && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+        && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+        && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+}
+
+let environment = ProcessInfo.processInfo.environment
+guard let root = environment["NOONMARK_DMG_WINDOW_FAILURE_ROOT"],
+      let rootComponents = lexicalComponents(root),
+      let appRunning = environment["NOONMARK_DMG_WINDOW_FAILURE_APP_RUNNING"],
+      let responseSeen = environment["NOONMARK_DMG_WINDOW_FAILURE_RESPONSE_SEEN"],
+      let responseValidated = environment[
+          "NOONMARK_DMG_WINDOW_FAILURE_RESPONSE_VALIDATED"
+      ],
+      [appRunning, responseSeen, responseValidated].allSatisfy({
+          $0 == "true" || $0 == "false"
+      }),
+      let verification = environment[
+          "NOONMARK_DMG_WINDOW_FAILURE_VERIFICATION"
+      ],
+      verification.contains("\n") == false,
+      verification.contains("\r") == false,
+      let scope = environment["NOONMARK_DMG_WINDOW_FAILURE_SCOPE"],
+      scope == "live" || scope == "fixture"
+else { fail() }
+
+let fixedReasons: Set<String> = [
+    "invalid-input",
+    "not-attempted",
+    "query-unavailable",
+    "query-empty",
+    "window-number-mismatch",
+    "owner-pid-mismatch",
+    "title-mismatch",
+    "layer-mismatch",
+    "onscreen-mismatch",
+    "bounds-missing",
+    "width-below-minimum",
+    "height-below-minimum",
+    "snapshot-invalid",
+    "probe-failure",
+    "unknown-failure",
+]
+let queryCountRange = verification.range(
+    of: #"^query-count-[0-9]+$"#,
+    options: .regularExpression
+)
+guard fixedReasons.contains(verification) || queryCountRange != nil else { fail() }
+
+if scope == "live" {
+    guard let repositoryRoot = environment[
+              "NOONMARK_DMG_WINDOW_FAILURE_REPOSITORY_ROOT"
+          ],
+          lexicalComponents(repositoryRoot) != nil,
+          root == repositoryRoot + "/artifacts/dmg-install"
+    else { fail() }
+} else {
+    guard rootComponents.last?.hasPrefix(
+        "noonmark-dmg-window-identity."
+    ) == true else { fail() }
+}
+
+let rootFD = openDirectoryChain(rootComponents)
+defer { _ = close(rootFD) }
+var rootStatus = stat()
+guard fstat(rootFD, &rootStatus) == 0,
+      (rootStatus.st_mode & S_IFMT) == S_IFDIR,
+      rootStatus.st_uid == geteuid(),
+      (rootStatus.st_mode & 0o022) == 0
+else { fail() }
+
+let content = [
+    "evidence_schema_version=1",
+    "profile=dmg-validation",
+    "app_running=\(appRunning)",
+    "response_seen=\(responseSeen)",
+    "response_validated=\(responseValidated)",
+    "windowserver_verification=\(verification)",
+].joined(separator: "\n") + "\n"
+let data = Data(content.utf8)
+guard data.count <= 1024 else { fail() }
+
+let destinationName = "window-identity-failure.txt"
+var destinationStatus = stat()
+guard fstatat(
+          rootFD,
+          destinationName,
+          &destinationStatus,
+          AT_SYMLINK_NOFOLLOW
+      ) != 0,
+      errno == ENOENT
+else { fail() }
+
+let temporaryName = ".window-identity-failure.\(UUID().uuidString).tmp"
+var temporaryFD = openat(
+    rootFD,
+    temporaryName,
+    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+    0o600
+)
+guard temporaryFD >= 0 else { fail() }
+var temporaryPublished = false
+defer {
+    if temporaryFD >= 0 { _ = close(temporaryFD) }
+    if temporaryPublished == false {
+        _ = unlinkat(rootFD, temporaryName, 0)
+    }
+}
+
+var offset = 0
+let wroteAll = data.withUnsafeBytes { rawBuffer -> Bool in
+    guard let baseAddress = rawBuffer.baseAddress else { return false }
+    while offset < data.count {
+        let count = write(
+            temporaryFD,
+            baseAddress.advanced(by: offset),
+            data.count - offset
+        )
+        if count < 0 {
+            if errno == EINTR { continue }
+            return false
+        }
+        guard count > 0 else { return false }
+        offset += count
+    }
+    return true
+}
+guard wroteAll,
+      fchmod(temporaryFD, 0o600) == 0,
+      fsync(temporaryFD) == 0
+else { fail() }
+
+var temporaryStatus = stat()
+guard fstat(temporaryFD, &temporaryStatus) == 0,
+      (temporaryStatus.st_mode & S_IFMT) == S_IFREG,
+      temporaryStatus.st_uid == geteuid(),
+      temporaryStatus.st_nlink == 1,
+      (temporaryStatus.st_mode & 0o777) == 0o600,
+      temporaryStatus.st_size == data.count
+else { fail() }
+
+guard renameatx_np(
+          rootFD,
+          temporaryName,
+          rootFD,
+          destinationName,
+          UInt32(RENAME_EXCL)
+      ) == 0
+else { fail() }
+temporaryPublished = true
+guard fsync(rootFD) == 0 else { fail() }
+
+var publishedFDStatus = stat()
+var publishedStatus = stat()
+guard fstat(temporaryFD, &publishedFDStatus) == 0,
+      fstatat(
+          rootFD,
+          destinationName,
+          &publishedStatus,
+          AT_SYMLINK_NOFOLLOW
+      ) == 0,
+      sameIdentity(publishedFDStatus, publishedStatus),
+      (publishedStatus.st_mode & S_IFMT) == S_IFREG,
+      publishedStatus.st_uid == geteuid(),
+      publishedStatus.st_nlink == 1,
+      (publishedStatus.st_mode & 0o777) == 0o600,
+      publishedStatus.st_size == data.count
+else { fail() }
+'
+}
+
 if [[ "${1:-}" == "--verify-window-identity-fixture" ]]; then
   if [[ "$#" -ne 6 ]]; then
     echo "usage: scripts/test-dmg-install --verify-window-identity-fixture ROOT TOKEN PID BUNDLE TITLE" >&2
@@ -544,6 +776,15 @@ if [[ "${1:-}" == "--prepare-window-identity-fixture" ]]; then
     exit 64
   fi
   dmg_window_identity_prepare_request "$2" "$3" fixture
+  exit $?
+fi
+if [[ "${1:-}" == "--record-window-failure-fixture" ]]; then
+  if [[ "$#" -ne 6 ]]; then
+    echo "usage: scripts/test-dmg-install --record-window-failure-fixture ROOT APP_RUNNING RESPONSE_SEEN RESPONSE_VALIDATED VERIFICATION" >&2
+    exit 64
+  fi
+  dmg_window_identity_write_failure_evidence \
+    "$2" "$3" "$4" "$5" "$6" fixture
   exit $?
 fi
 
@@ -573,6 +814,7 @@ helper_evidence_root="${repo_root}/artifacts/dmg-install-harness"
 helper_app="${repo_root}/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
 helper_executable_name="NoonmarkDMGInstallHarness"
 helper_executable="${helper_app}/Contents/MacOS/${helper_executable_name}"
+window_probe_executable="${repo_root}/artifacts/window-probe/NoonmarkWindowProbe"
 helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
 production_bundle_identifier="app.noonmark.mac"
 validation_bundle_identifier="app.noonmark.mac.dmg-validation"
@@ -585,6 +827,7 @@ task_title="dmgvalidationtask"
 database_path=""
 screenshot_path="${work_dir}/installed-day.png"
 window_metadata_path="${work_dir}/installed-day-window.txt"
+window_failure_evidence_path="${work_dir}/window-identity-failure.txt"
 initial_launch_log="${work_dir}/initial-launch.log"
 initial_console_log="${work_dir}/initial-console.log"
 permission_ledger="${work_dir}/permission-preflight-ledger.tsv"
@@ -670,6 +913,7 @@ validation_source_linked_binary_sha256=""
 validation_source_linked_binary_sha256_scope=""
 validation_source_linked_binary_uuid_set=""
 validation_signed_binary_sha256=""
+window_probe_binary_sha256=""
 
 noonmark_runtime_validate_all_profiles
 noonmark_runtime_profile_load dmg-validation
@@ -1159,6 +1403,7 @@ cleanup() {
   local diagnostic_wait_attempts=30
   local diagnostic_status=missing
   local helper_unchanged=true
+  local window_probe_unchanged=true
   local installed_app_unchanged=true
   local source_tree_unchanged=true
   local exact_pids=""
@@ -1168,6 +1413,12 @@ cleanup() {
   local diagnostic_inventory_digest=""
   local diagnostic_inventory_size=""
   local diagnostic_inventory_relative=""
+  local window_failure_evidence_present=false
+  local window_failure_evidence_relative=none
+  local window_failure_evidence_sha256=none
+  local window_failure_mode=""
+  local window_failure_owner=""
+  local window_failure_links=""
 
   trap - EXIT
   set +e
@@ -1294,6 +1545,14 @@ cleanup() {
         final_status=1
       fi
     fi
+    if [[ ! -f "$window_probe_executable" ||
+      -L "$window_probe_executable" ||
+      ! -x "$window_probe_executable" ||
+      "$(shasum -a 256 "$window_probe_executable" | awk '{print $1}')" != \
+        "$window_probe_binary_sha256" ]]; then
+      window_probe_unchanged=false
+      final_status=1
+    fi
     if ! evidence_capture_bundle \
       "$helper_app" \
       1 \
@@ -1333,6 +1592,68 @@ cleanup() {
       "$runtime_manifest_path" \
       "helper_signature_unchanged" \
       "$helper_unchanged"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "window_probe_binary_unchanged" \
+      "$window_probe_unchanged"
+    if [[ -L "$window_failure_evidence_path" ]] ||
+      { [[ -e "$window_failure_evidence_path" ]] &&
+        [[ ! -f "$window_failure_evidence_path" ]]; }; then
+      echo "window failure evidence is not a regular non-symlink file" >&2
+      window_failure_evidence_present=true
+      window_failure_evidence_relative="artifacts/dmg-install/window-identity-failure.txt"
+      window_failure_evidence_sha256=invalid
+      final_status=1
+    elif [[ -f "$window_failure_evidence_path" ]]; then
+      window_failure_evidence_present=true
+      window_failure_evidence_relative="artifacts/dmg-install/window-identity-failure.txt"
+      if ! window_failure_mode="$(
+        stat -f '%Lp' "$window_failure_evidence_path"
+      )" || ! window_failure_owner="$(
+        stat -f '%u' "$window_failure_evidence_path"
+      )" || ! window_failure_links="$(
+        stat -f '%l' "$window_failure_evidence_path"
+      )" || [[ "$window_failure_mode" != "600" ||
+        "$window_failure_owner" != "$(id -u)" ||
+        "$window_failure_links" != "1" ]] ||
+        ! awk '
+          NR == 1 && $0 != "evidence_schema_version=1" { exit 1 }
+          NR == 2 && $0 != "profile=dmg-validation" { exit 1 }
+          NR == 3 && $0 !~ /^app_running=(true|false)$/ { exit 1 }
+          NR == 4 && $0 !~ /^response_seen=(true|false)$/ { exit 1 }
+          NR == 5 && $0 !~ /^response_validated=(true|false)$/ { exit 1 }
+          NR == 6 && $0 !~ /^windowserver_verification=(invalid-input|not-attempted|query-unavailable|query-empty|window-number-mismatch|owner-pid-mismatch|title-mismatch|layer-mismatch|onscreen-mismatch|bounds-missing|width-below-minimum|height-below-minimum|snapshot-invalid|probe-failure|unknown-failure|query-count-[0-9]+)$/ { exit 1 }
+          END { exit !(NR == 6) }
+        ' "$window_failure_evidence_path"; then
+        echo "window failure evidence failed its final schema or identity check" >&2
+        window_failure_evidence_sha256=invalid
+        final_status=1
+      else
+        window_failure_evidence_sha256="$(
+          shasum -a 256 "$window_failure_evidence_path" | awk '{print $1}'
+        )"
+        if [[ ! "$window_failure_evidence_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+          window_failure_evidence_sha256=invalid
+          final_status=1
+        fi
+      fi
+      if [[ "$original_status" -eq 0 ]]; then
+        echo "successful DMG validation left stale window failure evidence" >&2
+        final_status=1
+      fi
+    fi
+    evidence_append \
+      "$runtime_manifest_path" \
+      "window_identity_failure_evidence_present" \
+      "$window_failure_evidence_present"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "window_identity_failure_evidence_path" \
+      "$window_failure_evidence_relative"
+    evidence_append \
+      "$runtime_manifest_path" \
+      "window_identity_failure_evidence_sha256" \
+      "$window_failure_evidence_sha256"
     if [[ -f "$app_diagnostic_baseline" &&
       -f "$app_diagnostic_final" &&
       -f "$app_diagnostic_diff" &&
@@ -1419,6 +1740,7 @@ cleanup() {
         "$release_dsym_inventory_path" \
         "$release_identity_provenance_path" \
         "$helper_app" \
+        "$window_probe_executable" \
         "$install_dir" \
         "$validation_derivation_fragment" \
         "$screenshot_path" \
@@ -1578,6 +1900,11 @@ cleanup() {
       "installed_app_signature_unchanged" \
       "helper_binary_unchanged" \
       "helper_signature_unchanged" \
+      "window_probe_binary_sha256" \
+      "window_probe_binary_unchanged" \
+      "window_identity_failure_evidence_present" \
+      "window_identity_failure_evidence_path" \
+      "window_identity_failure_evidence_sha256" \
       "diagnostic_diff_status"; then
       final_status=1
     fi
@@ -2332,52 +2659,97 @@ verify_exact_main_window() {
   local pid="$1"
   local window_number="$2"
   local window_title="$3"
+  local snapshot
+  local probe_failure
 
-  NOONMARK_DMG_APP_PID="$pid" \
-    NOONMARK_DMG_WINDOW_NUMBER="$window_number" \
-    NOONMARK_DMG_WINDOW_TITLE="$window_title" \
-    swift -e '
-import CoreGraphics
-import Darwin
-import Foundation
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ||
+    ! "$window_number" =~ ^[1-9][0-9]*$ ||
+    -z "$window_title" || "$window_title" == *$'\n'* ||
+    "$window_title" == *$'\r'* ]]; then
+    echo "invalid-input" >&2
+    return 1
+  fi
+  if ! snapshot="$(
+    "$window_probe_executable" --window-number "$window_number" 2>&1
+  )"; then
+    probe_failure="$snapshot"
+    case "$probe_failure" in
+      query-unavailable | window-number-mismatch | query-count-[0-9]*) ;;
+      *) probe_failure=probe-failure ;;
+    esac
+    echo "$probe_failure" >&2
+    return 1
+  fi
+  if ! jq -e \
+    'keys == [
+      "alpha", "frame", "is_onscreen", "layer",
+      "owner_process_identifier", "schema_version", "title", "window_number"
+    ] and .schema_version == 1' <<<"$snapshot" >/dev/null; then
+    echo "snapshot-invalid" >&2
+    return 1
+  fi
+  if ! jq -e --argjson expected "$window_number" \
+    '.window_number == $expected' <<<"$snapshot" >/dev/null; then
+    echo "window-number-mismatch" >&2
+    return 1
+  fi
+  if ! jq -e --argjson expected "$pid" \
+    '.owner_process_identifier == $expected' <<<"$snapshot" >/dev/null; then
+    echo "owner-pid-mismatch" >&2
+    return 1
+  fi
+  if ! jq -e --arg expected "$window_title" \
+    '.title == $expected' <<<"$snapshot" >/dev/null; then
+    echo "title-mismatch" >&2
+    return 1
+  fi
+  if ! jq -e '.layer == 0' <<<"$snapshot" >/dev/null; then
+    echo "layer-mismatch" >&2
+    return 1
+  fi
+  if ! jq -e '.is_onscreen == true' <<<"$snapshot" >/dev/null; then
+    echo "onscreen-mismatch" >&2
+    return 1
+  fi
+  if ! jq -e \
+    '.frame != null and
+     (.frame.x | type == "number") and
+     (.frame.y | type == "number") and
+     (.frame.width | type == "number") and
+     (.frame.height | type == "number")' \
+    <<<"$snapshot" >/dev/null; then
+    echo "bounds-missing" >&2
+    return 1
+  fi
+  if ! jq -e '.frame.width >= 960' <<<"$snapshot" >/dev/null; then
+    echo "width-below-minimum" >&2
+    return 1
+  fi
+  if ! jq -e '.frame.height >= 720' <<<"$snapshot" >/dev/null; then
+    echo "height-below-minimum" >&2
+    return 1
+  fi
+}
 
-let environment = ProcessInfo.processInfo.environment
-guard let expectedPID = Int(environment["NOONMARK_DMG_APP_PID"] ?? ""),
-      expectedPID > 0,
-      let rawWindowNumber = UInt32(
-          environment["NOONMARK_DMG_WINDOW_NUMBER"] ?? ""
-      ),
-      rawWindowNumber > 0,
-      let expectedTitle = environment["NOONMARK_DMG_WINDOW_TITLE"],
-      expectedTitle.isEmpty == false
-else {
-    exit(1)
-}
-let windowIdentifiers = [NSNumber(value: rawWindowNumber)] as CFArray
-guard let windows = CGWindowListCreateDescriptionFromArray(
-          windowIdentifiers
-      ) as? [[String: Any]],
-      windows.count == 1,
-      let window = windows.first,
-      let windowNumber = window[kCGWindowNumber as String] as? NSNumber,
-      windowNumber.uint32Value == rawWindowNumber,
-      let ownerPID = window[kCGWindowOwnerPID as String] as? NSNumber,
-      ownerPID.intValue == expectedPID,
-      let title = window[kCGWindowName as String] as? String,
-      title == expectedTitle,
-      let layer = window[kCGWindowLayer as String] as? NSNumber,
-      layer.intValue == 0,
-      let isOnscreen = window[kCGWindowIsOnscreen as String] as? NSNumber,
-      isOnscreen.boolValue,
-      let bounds = window[kCGWindowBounds as String] as? [String: Any],
-      let width = bounds["Width"] as? NSNumber,
-      width.doubleValue >= 960,
-      let height = bounds["Height"] as? NSNumber,
-      height.doubleValue >= 720
-else {
-    exit(1)
-}
-'
+record_main_window_failure_evidence() {
+  local app_running="$1"
+  local response_seen="$2"
+  local response_validated="$3"
+  local windowserver_verification="$4"
+
+  if [[ "$window_failure_evidence_path" != \
+    "$work_dir/window-identity-failure.txt" ]]; then
+    echo "refusing an unexpected window failure evidence destination" >&2
+    return 1
+  fi
+  dmg_window_identity_write_failure_evidence \
+    "$work_dir" \
+    "$app_running" \
+    "$response_seen" \
+    "$response_validated" \
+    "$windowserver_verification" \
+    live \
+    "$repo_root"
 }
 
 wait_for_main_window_metadata() {
@@ -2388,6 +2760,10 @@ wait_for_main_window_metadata() {
   local response=""
   local window_number=""
   local response_title=""
+  local response_seen=false
+  local response_validated=false
+  local windowserver_verification=not-attempted
+  local verification_reason=""
 
   if [[ ! "$launch_token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     echo "main-window launch token was invalid" >&2
@@ -2401,8 +2777,16 @@ wait_for_main_window_metadata() {
 
   for _ in {1..80}; do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
+      record_main_window_failure_evidence \
+        false \
+        "$response_seen" \
+        "$response_validated" \
+        "$windowserver_verification"
       echo "dmg-validation App exited before its scoped window response: profile=dmg-validation pid=$pid token=$launch_token" >&2
       return 1
+    fi
+    if [[ -e "${window_runtime_evidence_root}/main-window-identity.json" ]]; then
+      response_seen=true
     fi
     if response="$(
       dmg_window_identity_read_response \
@@ -2414,20 +2798,44 @@ wait_for_main_window_metadata() {
         live \
         2>/dev/null
     )"; then
+      response_validated=true
       IFS='|' read -r window_number response_title <<<"$response"
-      if [[ "$response_title" == "$expected_title" ]] &&
-        verify_exact_main_window \
-          "$pid" \
-          "$window_number" \
-          "$response_title" \
-          2>/dev/null; then
-        printf '%s|%s|%s\n' "$window_number" "$natural_day" "$response_title"
-        return 0
+      if [[ "$response_title" == "$expected_title" ]]; then
+        if verification_reason="$(
+          verify_exact_main_window \
+            "$pid" \
+            "$window_number" \
+            "$response_title" \
+            2>&1
+        )"; then
+          printf '%s|%s|%s\n' \
+            "$window_number" \
+            "$natural_day" \
+            "$response_title"
+          return 0
+        fi
+        case "$verification_reason" in
+          invalid-input | query-unavailable | query-empty | \
+            window-number-mismatch | owner-pid-mismatch | title-mismatch | \
+            layer-mismatch | onscreen-mismatch | bounds-missing | \
+            width-below-minimum | height-below-minimum | snapshot-invalid | \
+            probe-failure | query-count-[0-9]*)
+            windowserver_verification="$verification_reason"
+            ;;
+          *)
+            windowserver_verification=unknown-failure
+            ;;
+        esac
       fi
     fi
     sleep 0.1
   done
-  echo "dmg-validation scoped main window was not verified: profile=dmg-validation pid=$pid token=$launch_token response=RuntimeEvidence/main-window-identity.json" >&2
+  record_main_window_failure_evidence \
+    true \
+    "$response_seen" \
+    "$response_validated" \
+    "$windowserver_verification"
+  echo "dmg-validation scoped main window was not verified: profile=dmg-validation pid=$pid token=$launch_token response=RuntimeEvidence/main-window-identity.json stages=response_seen=$response_seen response_validated=$response_validated windowserver_verification=$windowserver_verification" >&2
   return 1
 }
 
@@ -3216,6 +3624,20 @@ if [[ ! -d "$helper_app" || ! -x "$helper_executable" ]]; then
   echo "DMG install harness build did not create its fixed app bundle: $helper_app" >&2
   exit 1
 fi
+scripts/build-window-probe release >/dev/null
+if [[ ! -f "$window_probe_executable" ||
+  -L "$window_probe_executable" ||
+  ! -x "$window_probe_executable" ]]; then
+  echo "DMG install window probe build did not create its fixed executable" >&2
+  exit 1
+fi
+window_probe_binary_sha256="$(
+  shasum -a 256 "$window_probe_executable" | awk '{print $1}'
+)"
+if [[ ! "$window_probe_binary_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "DMG install window probe SHA-256 was unavailable" >&2
+  exit 1
+fi
 helper_info_plist="${helper_app}/Contents/Info.plist"
 actual_helper_identifier="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$helper_info_plist"
@@ -3496,6 +3918,10 @@ evidence_append \
   "helper_bundle_identifier" \
   "$helper_bundle_identifier"
 evidence_append "$runtime_manifest_path" "helper_bundle" "$helper_app"
+evidence_append \
+  "$runtime_manifest_path" \
+  "window_probe_binary_sha256" \
+  "$window_probe_binary_sha256"
 runtime_manifest_started=1
 
 scripts/reset-dev-data dmg-validation

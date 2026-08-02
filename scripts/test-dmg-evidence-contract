@@ -25,11 +25,12 @@ cat >"$window_boundary_source" <<'SOURCE'
 #include <CoreGraphics/CoreGraphics.h>
 
 int main(void) {
-  CFArrayRef identifiers = CFArrayCreate(NULL, NULL, 0, NULL);
   CFArrayRef descriptions =
-    CGWindowListCreateDescriptionFromArray(identifiers);
+    CGWindowListCopyWindowInfo(
+      kCGWindowListOptionIncludingWindow,
+      (CGWindowID)1
+    );
   if (descriptions != NULL) CFRelease(descriptions);
-  CFRelease(identifiers);
   return 0;
 }
 SOURCE

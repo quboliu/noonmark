@@ -11,31 +11,56 @@ public struct ScopedWindowServerSnapshot: Equatable {
     public let frame: CGRect?
 }
 
+public enum ScopedWindowServerLookupFailure: Error, Equatable {
+    case invalidWindowNumber
+    case queryUnavailable
+    case unexpectedRecordCount(Int)
+    case windowNumberMismatch
+}
+
 /// Reads WindowServer metadata only after the caller has obtained one exact
 /// window number from its already-scoped AX or AppKit target.
 public enum ScopedWindowServerLookup {
-    public typealias Query = ([CGWindowID]) -> [[String: Any]]?
+    public typealias Query = (CGWindowID) -> [[String: Any]]?
 
     public static func snapshot(
         windowNumber: CGWindowID
     ) -> ScopedWindowServerSnapshot? {
-        snapshot(windowNumber: windowNumber) { exactWindowIDs in
-            let identifiers = exactWindowIDs.map(NSNumber.init(value:)) as CFArray
-            return CGWindowListCreateDescriptionFromArray(
-                identifiers
-            ) as? [[String: Any]]
-        }
+        try? exactSnapshot(windowNumber: windowNumber)
     }
 
     public static func snapshot(
         windowNumber: CGWindowID,
         query: Query
     ) -> ScopedWindowServerSnapshot? {
-        guard windowNumber > 0,
-              let records = query([windowNumber]),
-              records.count == 1
-        else {
-            return nil
+        try? exactSnapshot(windowNumber: windowNumber, query: query)
+    }
+
+    public static func exactSnapshot(
+        windowNumber: CGWindowID
+    ) throws -> ScopedWindowServerSnapshot {
+        try exactSnapshot(windowNumber: windowNumber) { exactWindowID in
+            CGWindowListCopyWindowInfo(
+                [.optionIncludingWindow],
+                exactWindowID
+            ) as? [[String: Any]]
+        }
+    }
+
+    public static func exactSnapshot(
+        windowNumber: CGWindowID,
+        query: Query
+    ) throws -> ScopedWindowServerSnapshot {
+        guard windowNumber > 0 else {
+            throw ScopedWindowServerLookupFailure.invalidWindowNumber
+        }
+        guard let records = query(windowNumber) else {
+            throw ScopedWindowServerLookupFailure.queryUnavailable
+        }
+        guard records.count == 1 else {
+            throw ScopedWindowServerLookupFailure.unexpectedRecordCount(
+                records.count
+            )
         }
         let record = records[0]
         guard let returnedNumber = (
@@ -43,7 +68,7 @@ public enum ScopedWindowServerLookup {
         )?.uint32Value,
             returnedNumber == windowNumber
         else {
-            return nil
+            throw ScopedWindowServerLookupFailure.windowNumberMismatch
         }
         return ScopedWindowServerSnapshot(
             windowNumber: returnedNumber,

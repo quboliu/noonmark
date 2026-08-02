@@ -17,6 +17,10 @@ let package = Package(
             name: "NoonmarkDMGInstallHarness",
             targets: ["NoonmarkDMGInstallHarness"]
         ),
+        .executable(
+            name: "NoonmarkWindowProbe",
+            targets: ["NoonmarkWindowProbe"]
+        ),
         .library(name: "NoonmarkCore", targets: ["NoonmarkCore"]),
         .library(name: "NoonmarkDayContext", targets: ["NoonmarkDayContext"]),
         .library(name: "NoonmarkMacRuntime", targets: ["NoonmarkMacRuntime"]),
@@ -50,6 +54,11 @@ let package = Package(
                 "NoonmarkMacRuntime"
             ],
             path: "Tools/NoonmarkDMGInstallHarness"
+        ),
+        .executableTarget(
+            name: "NoonmarkWindowProbe",
+            dependencies: ["NoonmarkMacE2ESupport"],
+            path: "Tools/NoonmarkWindowProbe"
         ),
         .executableTarget(
             name: "NoonmarkAIProviderLiveSmoke",

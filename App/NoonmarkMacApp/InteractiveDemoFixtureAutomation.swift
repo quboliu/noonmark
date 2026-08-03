@@ -282,6 +282,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 taskPoolProviderReportPresentationVerified:
                 analysisReportContractVerified,
                 taskCollectionCategoryVisibilityVerified: false,
+                ideasPresentationVerified: false,
                 calendarRecurringBoundaryVerified: false,
                 taskCyclePresentationVerified: false,
                 zhulongHeaderComposerHierarchyVerified: true
@@ -412,7 +413,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let nextIndex = index + 1
         guard context.cases.indices.contains(nextIndex) else {
             guard AppViewTreeE2E.click(
-                identifier: "sidebar.nav.calendar"
+                identifier: "sidebar.nav.ideas"
             )
             else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
@@ -423,7 +424,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 )
                 return
             }
-            retryCalendarRecurringBoundary(
+            verifyIdeasPresentation(
                 context: context,
                 remainingAttempts: 100
             )
@@ -462,7 +463,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.identifiers(
                 withPrefix: "task-cycle-track."
             )?.isEmpty == true
-        case .recurring, .calendar, .zhulong, .settings:
+        case .recurring, .calendar, .zhulong, .settings, .ideas:
             true
         }
     }
@@ -521,6 +522,319 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             && Set(visibleRecurringRowIDs).isSubset(
                 of: Set(recurringTraceIDs)
             )
+    }
+
+    @MainActor
+    private func verifyIdeasPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let timelineGroups = context.store.ideaTimelineGroups
+        let projectedIdeas = context.engine.ideaTimeline()
+        let pinnedIdeas = context.engine.pinnedIdeas()
+        let projectedPlusPinned = projectedIdeas + pinnedIdeas
+        let expectedCardIdentifiers = Set(projectedPlusPinned.map {
+            "ideas.card.\($0.id)"
+        })
+        let timelineGroupIdeaIDs = Set(timelineGroups.flatMap { group in
+            group.ideas.map(\.id)
+        })
+        let tombstonedIdeaIDs = context.engine.ideas.values
+            .filter { $0.isDeleted }
+            .map(\.id)
+        let topGroupIsFullyVisible = timelineGroups.first.map { group in
+            AppViewTreeE2E.view(identifier: "ideas.day.\(group.date)")
+                != nil
+                && group.ideas.allSatisfy { idea in
+                    AppViewTreeE2E.view(
+                        identifier: "ideas.card.\(idea.id)"
+                    )
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+                }
+        } ?? false
+        // Card sub-anchors (overflow menu, inline edit field, classification
+        // filter buttons and actions) extend the card identifier with a
+        // dotted suffix; the projection check only concerns the cards
+        // themselves.
+        let visibleCardIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix: "ideas.card."
+        ).map { identifiers in
+            Set(identifiers.filter { identifier in
+                identifier.dropFirst("ideas.card.".count)
+                    .contains(".") == false
+            })
+        } ?? []
+        let visibleCardsMatchProjection = visibleCardIdentifiers
+            .isEmpty == false
+            && visibleCardIdentifiers.isSubset(
+                of: expectedCardIdentifiers
+            )
+            && visibleCardIdentifiers.allSatisfy { identifier in
+                guard let idea = projectedPlusPinned.first(where: {
+                    identifier == "ideas.card.\($0.id)"
+                }) else {
+                    return false
+                }
+                return AppViewTreeE2E.view(identifier: identifier)
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        let pinnedSectionIsValid = pinnedIdeas.isEmpty == false
+            && AppViewTreeE2E.view(identifier: "ideas.pinned")
+            .flatMap(AppViewTreeE2E.verificationText)
+            == "\(pinnedIdeas.count)"
+            && pinnedIdeas.allSatisfy { idea in
+                timelineGroupIdeaIDs.contains(idea.id) == false
+                    && AppViewTreeE2E.view(
+                        identifier: "ideas.card.\(idea.id)"
+                    )
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        let tombstonesStayHidden = tombstonedIdeaIDs.allSatisfy {
+            AppViewTreeE2E.hasNoVisibleView(
+                identifier: "ideas.card.\($0)"
+            )
+        }
+        guard context.store.page == .ideas,
+              timelineGroups.isEmpty == false,
+              tombstonedIdeaIDs.isEmpty == false,
+              AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(identifier: "ideas.page")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == context.store.copy.navIdeas,
+              AppViewTreeE2E.view(identifier: "ideas.composer") != nil,
+              AppViewTreeE2E.view(identifier: "ideas.filter")
+              .flatMap(AppViewTreeE2E.verificationText) == "",
+              AppViewTreeE2E.view(identifier: "ideas.timeline")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(projectedPlusPinned.count)",
+              topGroupIsFullyVisible,
+              visibleCardsMatchProjection,
+              pinnedSectionIsValid,
+              tombstonesStayHidden
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(page: .ideas)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        // The trash section sits at the bottom of the timeline LazyVStack;
+        // with a full year of foreground content it is not instantiated
+        // until the page is scrolled to the bottom.
+        scrollIdeasContentToBottom()
+        verifyIdeasTrashSection(context: context, remainingAttempts: 100)
+    }
+
+    @MainActor
+    private func scrollIdeasContentToBottom() {
+        guard let timelineAnchor = AppViewTreeE2E.view(
+            identifier: "ideas.timeline"
+        ) ?? AppViewTreeE2E.attachedView(identifier: "ideas.timeline"),
+              let scrollView = timelineAnchor.enclosingScrollView,
+              let documentView = scrollView.documentView
+        else {
+            return
+        }
+        let bottomRect = NSRect(
+            x: 0,
+            y: max(0, documentView.bounds.height - 1),
+            width: 1,
+            height: 1
+        )
+        documentView.scrollToVisible(bottomRect)
+        scrollView.window?.displayIfNeeded()
+    }
+
+    @MainActor
+    private func scrollIdeasAnchorIntoView(_ identifier: String) -> Bool {
+        guard let anchor = AppViewTreeE2E.attachedView(
+            identifier: identifier
+        ) else {
+            return false
+        }
+        anchor.scrollToVisible(anchor.bounds)
+        anchor.window?.displayIfNeeded()
+        return AppViewTreeE2E.view(identifier: identifier) != nil
+    }
+
+    @MainActor
+    private func verifyIdeasTrashSection(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let trashItems = context.engine.ideaTrash()
+        let trashSectionMatches = AppViewTreeE2E.view(
+            identifier: "ideas.trash"
+        )
+        .flatMap(AppViewTreeE2E.verificationText) == "\(trashItems.count)"
+        let toggleCollapsed = AppViewTreeE2E.view(
+            identifier: "ideas.trash.toggle"
+        )
+        .flatMap(AppViewTreeE2E.verificationText) == "collapsed"
+        guard context.store.page == .ideas,
+              trashItems.isEmpty == false,
+              trashSectionMatches,
+              toggleCollapsed
+        else {
+            scrollIdeasContentToBottom()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasTrashSection(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard AppViewTreeE2E.click(identifier: "ideas.trash.toggle")
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        verifyIdeasTrashExpanded(context: context, remainingAttempts: 100)
+    }
+
+    @MainActor
+    private func verifyIdeasTrashExpanded(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let trashItems = context.engine.ideaTrash()
+        let expandedStateMatches = AppViewTreeE2E.view(
+            identifier: "ideas.trash.toggle"
+        )
+        .flatMap(AppViewTreeE2E.verificationText) == "expanded"
+        let visibleItemIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix: "ideas.trash.item."
+        ) ?? []
+        let trashItemsMatchProjection =
+            visibleItemIdentifiers.count == trashItems.count
+            && trashItems.allSatisfy { idea in
+                AppViewTreeE2E.view(
+                    identifier: "ideas.trash.item.\(idea.id)"
+                )
+                .flatMap(AppViewTreeE2E.verificationText) == "deleted"
+            }
+        guard context.store.page == .ideas,
+              trashItems.isEmpty == false,
+              expandedStateMatches,
+              trashItemsMatchProjection
+        else {
+            scrollIdeasContentToBottom()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasTrashExpanded(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard scrollIdeasAnchorIntoView("ideas.trash.toggle"),
+              AppViewTreeE2E.click(identifier: "ideas.trash.toggle")
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        verifyIdeasTrashCollapsed(context: context, remainingAttempts: 100)
+    }
+
+    @MainActor
+    private func verifyIdeasTrashCollapsed(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        let collapsedStateMatches = AppViewTreeE2E.view(
+            identifier: "ideas.trash.toggle"
+        )
+        .flatMap(AppViewTreeE2E.verificationText) == "collapsed"
+        let trashItemsHidden = (AppViewTreeE2E.identifiers(
+            withPrefix: "ideas.trash.item."
+        ) ?? []).isEmpty
+        guard context.store.page == .ideas,
+              collapsedStateMatches,
+              trashItemsHidden
+        else {
+            _ = scrollIdeasAnchorIntoView("ideas.trash.toggle")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasTrashCollapsed(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        let calendarContext = DemoCollectionCheckContext(
+            fixture: context.fixture,
+            engine: context.engine,
+            sessions: context.sessions,
+            store: context.store,
+            presentationVerification:
+            context.presentationVerification
+                .verifyingIdeasPresentation(),
+            cases: context.cases
+        )
+        guard AppViewTreeE2E.click(
+            identifier: "sidebar.nav.calendar"
+        )
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.presentationContractFailed,
+                on: context.store
+            )
+            return
+        }
+        retryCalendarRecurringBoundary(
+            context: calendarContext,
+            remainingAttempts: 100
+        )
     }
 
     @MainActor
@@ -2389,6 +2703,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               presentationVerification
               .taskCollectionCategoryVisibilityVerified,
               presentationVerification
+              .ideasPresentationVerified,
+              presentationVerification
               .calendarRecurringBoundaryVerified,
               presentationVerification
               .taskCyclePresentationVerified,
@@ -2444,6 +2760,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             taskCollectionCategoryVisibilityVerified:
             presentationVerification
                 .taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            presentationVerification
+                .ideasPresentationVerified,
             calendarRecurringBoundaryVerified:
             presentationVerification
                 .calendarRecurringBoundaryVerified,
@@ -2495,6 +2814,7 @@ private struct InteractiveDemoPresentationVerification {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let ideasPresentationVerified: Bool
     let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
@@ -2510,6 +2830,30 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified:
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified: true,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
+            calendarRecurringBoundaryVerified:
+            calendarRecurringBoundaryVerified,
+            taskCyclePresentationVerified:
+            taskCyclePresentationVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+
+    func verifyingIdeasPresentation() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified: true,
             calendarRecurringBoundaryVerified:
             calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified:
@@ -2531,6 +2875,8 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified:
             taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
             calendarRecurringBoundaryVerified: true,
             taskCyclePresentationVerified:
             taskCyclePresentationVerified,
@@ -2551,6 +2897,8 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified:
             taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
             calendarRecurringBoundaryVerified:
             calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified: true,
@@ -2676,6 +3024,7 @@ private struct InteractiveDemoManifest: Codable {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let ideasPresentationVerified: Bool
     let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool

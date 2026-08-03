@@ -5,6 +5,7 @@ readonly NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT=900
 readonly -a NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS=(
   pool
   day
+  ideas
   future
   recurring
   unfinished

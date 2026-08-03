@@ -17,7 +17,9 @@ final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelega
     init(
         store: NoonmarkStore,
         globalQuickEntryShortcutCoordinator:
-            GlobalQuickEntryShortcutCoordinator
+            GlobalQuickEntryShortcutCoordinator,
+        globalIdeaCaptureShortcutCoordinator:
+            GlobalIdeaCaptureShortcutCoordinator
     ) {
         self.store = store
 
@@ -26,6 +28,7 @@ final class NoonmarkSettingsWindowController: NSWindowController, NSWindowDelega
         )
             .environmentObject(store)
             .environmentObject(globalQuickEntryShortcutCoordinator)
+            .environmentObject(globalIdeaCaptureShortcutCoordinator)
             .preferredColorScheme(.light)
 
         let window = NSWindow(

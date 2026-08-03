@@ -15,10 +15,11 @@ final class DataPackageTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(Set(object.keys), ["formatVersion", "snapshot"])
-        XCTAssertEqual(object["formatVersion"] as? Int, 6)
+        XCTAssertEqual(object["formatVersion"] as? Int, 7)
         let snapshotObject = try XCTUnwrap(
             object["snapshot"] as? [String: Any]
         )
+        XCTAssertNotNil(snapshotObject["ideas"])
         let preferencesObject = try XCTUnwrap(
             snapshotObject["preferences"] as? [String: Any]
         )
@@ -168,6 +169,130 @@ final class DataPackageTests: XCTestCase {
             categoryID
         )
         XCTAssertNoThrow(try restored.validateIntegrity())
+    }
+
+    func testDataPackagePreservesIdeasWithClassificationAndTombstone() throws {
+        let engine = try makeEngine()
+        let categoryID = try XCTUnwrap(
+            engine.snapshot().classifications.categories.keys.first
+        )
+        let labelIDs = Array(engine.snapshot().classifications.labels.keys)
+        XCTAssertGreaterThanOrEqual(labelIDs.count, 2)
+
+        let classified = try engine.appendIdea(
+            body: "导出带归类的想法",
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now.addingTimeInterval(10)
+        )
+        let plain = try engine.appendIdea(
+            body: "导出普通想法",
+            now: now.addingTimeInterval(11)
+        )
+        let doomed = try engine.appendIdea(
+            body: "导出前删除的想法",
+            now: now.addingTimeInterval(12)
+        )
+        try engine.deleteIdea(id: doomed.id, now: now.addingTimeInterval(13))
+        let pinned = try engine.appendIdea(
+            body: "导出置顶想法",
+            now: now.addingTimeInterval(14)
+        )
+        try engine.pinIdea(id: pinned.id, now: now.addingTimeInterval(15))
+
+        let restored = try NoonmarkDataPackage.decode(
+            NoonmarkDataPackage.encode(engine.snapshot())
+        )
+
+        XCTAssertEqual(restored, engine.snapshot())
+        let restoredIdeas = Dictionary(
+            uniqueKeysWithValues: restored.ideas.map { ($0.id, $0) }
+        )
+        XCTAssertEqual(restoredIdeas[classified.id]?.categoryID, categoryID)
+        XCTAssertEqual(restoredIdeas[classified.id]?.labelIDs, labelIDs)
+        XCTAssertEqual(restoredIdeas[plain.id]?.body, "导出普通想法")
+        XCTAssertTrue(restoredIdeas[doomed.id]?.isDeleted == true)
+        XCTAssertEqual(
+            restoredIdeas[doomed.id]?.deletedAt,
+            now.addingTimeInterval(13)
+        )
+        XCTAssertEqual(
+            restoredIdeas[pinned.id]?.pinnedAt,
+            now.addingTimeInterval(15)
+        )
+        XCTAssertNoThrow(try restored.validateIntegrity())
+    }
+
+    func testJSONDataPackageRejectsSnapshotMissingRequiredIdeasPayload() throws {
+        let encoded = try NoonmarkDataPackage.encode(try makeEngine().snapshot())
+        var envelope = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        var snapshot = try XCTUnwrap(envelope["snapshot"] as? [String: Any])
+        snapshot.removeValue(forKey: "ideas")
+        envelope["snapshot"] = snapshot
+        let data = try JSONSerialization.data(withJSONObject: envelope)
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .malformedDataPackage("snapshot 缺少必需字段：ideas")
+            )
+        }
+    }
+
+    func testJSONDataPackageRejectsDuplicateIdeaIdentities() throws {
+        var snapshot = try makeEngine().snapshot()
+        let ideaID = IdeaID()
+        snapshot.ideas.append(
+            try IdeaEntry(id: ideaID, body: "重复想法甲", now: now)
+        )
+        snapshot.ideas.append(
+            try IdeaEntry(id: ideaID, body: "重复想法乙", now: now)
+        )
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.encode(snapshot)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .duplicateField("idea_entries.id")
+            )
+        }
+    }
+
+    func testJSONDataPackageRejectsIdeaReferencingMissingCategory() throws {
+        var snapshot = try makeEngine().snapshot()
+        snapshot.ideas.append(
+            try IdeaEntry(
+                body: "引用缺失分组的想法",
+                categoryID: TaskCategoryID(),
+                now: now
+            )
+        )
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.encode(snapshot)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .missingReference("idea references missing category")
+            )
+        }
+    }
+
+    func testJSONDataPackageRejectsIdeaReferencingMissingLabel() throws {
+        var snapshot = try makeEngine().snapshot()
+        snapshot.ideas.append(
+            try IdeaEntry(
+                body: "引用缺失标签的想法",
+                labelIDs: [TaskLabelID()],
+                now: now
+            )
+        )
+
+        XCTAssertThrowsError(try NoonmarkDataPackage.encode(snapshot)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .missingReference("idea references missing label")
+            )
+        }
     }
 
     func testDataPackagePreservesSnapshotUndoCancellationWitnesses() throws {
@@ -324,17 +449,17 @@ final class DataPackageTests: XCTestCase {
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
                 error as? DataPackageError,
-                .malformedDataPackage("数据包不符合 current v6 的 canonical 结构与编码")
+                .malformedDataPackage("数据包不符合 current v7 的 canonical 结构与编码")
             )
         }
     }
 
     func testJSONDataPackageRejectsUnsupportedFormatVersionBeforePayloadDecode() {
-        let data = Data(#"{"formatVersion":7,"snapshot":{}}"#.utf8)
+        let data = Data(#"{"formatVersion":8,"snapshot":{}}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
-            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(7))
-            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 7。")
+            XCTAssertEqual(error as? DataPackageError, .unsupportedFormatVersion(8))
+            XCTAssertEqual(error.localizedDescription, "无法导入数据包：不支持格式版本 8。")
         }
     }
 
@@ -367,7 +492,7 @@ final class DataPackageTests: XCTestCase {
     }
 
     func testJSONDataPackageRejectsCurrentEnvelopeWithoutSnapshot() {
-        let data = Data(#"{"formatVersion":6}"#.utf8)
+        let data = Data(#"{"formatVersion":7}"#.utf8)
 
         XCTAssertThrowsError(try NoonmarkDataPackage.decode(data)) { error in
             XCTAssertEqual(
@@ -737,7 +862,7 @@ final class DataPackageTests: XCTestCase {
             var container = encoder.singleValueContainer()
             try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
         }
-        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 6, snapshot: snapshot))
+        return try encoder.encode(CurrentDataPackageFixture(formatVersion: 7, snapshot: snapshot))
     }
 
     private func canonicalJSON(_ data: Data) throws -> Data {

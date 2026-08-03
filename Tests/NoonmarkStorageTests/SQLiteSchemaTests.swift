@@ -1,4 +1,4 @@
-import NoonmarkCore
+@testable import NoonmarkCore
 @testable import NoonmarkStorage
 import NoonmarkSync
 import SQLite3
@@ -26,6 +26,9 @@ final class SQLiteSchemaTests: XCTestCase {
         )
         let subtaskTable = try XCTUnwrap(
             SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS subtasks") }
+        )
+        let ideaTable = try XCTUnwrap(
+            SQLiteSchema.statements.first { $0.contains("CREATE TABLE IF NOT EXISTS idea_entries") }
         )
         let changeJournalTable = try XCTUnwrap(
             SQLiteSchema.statements.first {
@@ -64,7 +67,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 15)
+        XCTAssertEqual(SQLiteSchema.version, 17)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -135,6 +138,25 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(subtaskTable.contains("draft_cancellation_id TEXT"))
         XCTAssertTrue(dayTraceTable.contains("draft_cancellation_id TEXT"))
         XCTAssertTrue(dayTraceTable.contains("draft_cancelled_on TEXT"))
+        XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS idea_entries"))
+        XCTAssertTrue(ideaTable.contains("body TEXT NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("category_id TEXT"))
+        XCTAssertTrue(ideaTable.contains("label_ids_json TEXT NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("json_type(label_ids_json) = 'array'"))
+        XCTAssertTrue(ideaTable.contains("created_at TEXT NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("created_at_bits INTEGER NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("updated_at TEXT NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("updated_at_bits INTEGER NOT NULL"))
+        XCTAssertTrue(ideaTable.contains("deleted_at TEXT"))
+        XCTAssertTrue(ideaTable.contains("deleted_at_bits INTEGER"))
+        XCTAssertTrue(ideaTable.contains(
+            "CHECK ((deleted_at IS NULL) = (deleted_at_bits IS NULL))"
+        ))
+        XCTAssertTrue(ideaTable.contains("pinned_at TEXT"))
+        XCTAssertTrue(ideaTable.contains("pinned_at_bits INTEGER"))
+        XCTAssertTrue(ideaTable.contains(
+            "CHECK ((pinned_at IS NULL) = (pinned_at_bits IS NULL))"
+        ))
         XCTAssertTrue(schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_draft_cancellation_id"))
         XCTAssertTrue(schema.contains(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_subtask_draft_cancellation_id"
@@ -170,7 +192,7 @@ final class SQLiteSchemaTests: XCTestCase {
             )
         )
         XCTAssertTrue(compactPendingDownloadTable.contains(
-            "entity_type IN ( 'day', 'taskCycleSeries', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'appPreferences', 'classificationBaseline', 'classificationCommit', 'traceClassificationEvent' )"
+            "entity_type IN ( 'day', 'taskCycleSeries', 'taskChain', 'taskDefinition', 'dayTrace', 'subtask', 'ideaEntry', 'appPreferences', 'classificationBaseline', 'classificationCommit', 'traceClassificationEvent' )"
         ))
         XCTAssertTrue(schema.contains("operation TEXT NOT NULL CHECK (operation = 'upsert')"))
         XCTAssertTrue(schema.contains("modified_at_bits INTEGER NOT NULL CHECK (typeof(modified_at_bits) = 'integer')"))
@@ -361,6 +383,95 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertEqual(
             restored.traces[continuedTraceID]?.noteEntries.first(where: { $0.id == deletedNoteID })?.body,
             ""
+        )
+    }
+
+    func testSQLiteRepositoryRoundTripsIdeaEntries() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noonmark-storage-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let engine = NoonmarkEngine()
+        let categoryPlan = try engine.prepareClassification(
+            .createCategory(name: "灵感分类", colorHex: "#2A6FDB"),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now
+        )
+        _ = try engine.commitClassification(
+            categoryPlan,
+            confirmation: .user(decisionID: UUID()),
+            now: now
+        )
+        let labelPlan = try engine.prepareClassification(
+            .createLabel(name: "灵感标签", colorHex: "#7C5CFF"),
+            source: .userDirect,
+            interactionID: UUID(),
+            now: now.addingTimeInterval(1)
+        )
+        _ = try engine.commitClassification(
+            labelPlan,
+            confirmation: .user(decisionID: UUID()),
+            now: now.addingTimeInterval(1)
+        )
+        let classifications = engine.snapshot().classifications
+        let categoryID = try XCTUnwrap(
+            classifications.categories.values.first { $0.name == "灵感分类" }?.id
+        )
+        let labelID = try XCTUnwrap(
+            classifications.labels.values.first { $0.name == "灵感标签" }?.id
+        )
+
+        let plainIdea = try engine.appendIdea(
+            body: "没有分类的想法。",
+            now: now.addingTimeInterval(2)
+        )
+        let classifiedIdea = try engine.appendIdea(
+            body: "带分类和标签的想法。",
+            categoryID: categoryID,
+            labelIDs: [labelID],
+            now: now.addingTimeInterval(3)
+        )
+        let deletedIdea = try engine.appendIdea(
+            body: "这条想法会被删除。",
+            now: now.addingTimeInterval(4)
+        )
+        try engine.deleteIdea(id: deletedIdea.id, now: now.addingTimeInterval(5))
+        try engine.editIdea(
+            id: plainIdea.id,
+            body: "编辑后的想法。",
+            now: now.addingTimeInterval(6)
+        )
+        let pinnedIdea = try engine.appendIdea(
+            body: "置顶的想法。",
+            now: now.addingTimeInterval(7)
+        )
+        try engine.pinIdea(id: pinnedIdea.id, now: now.addingTimeInterval(8))
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        try repository.save(engine)
+        let restored = try repository.load()
+
+        XCTAssertEqual(restored.snapshot(), engine.snapshot())
+        XCTAssertEqual(restored.ideas.count, 4)
+        XCTAssertEqual(restored.ideas[plainIdea.id]?.body, "编辑后的想法。")
+        XCTAssertEqual(restored.ideas[classifiedIdea.id]?.categoryID, categoryID)
+        XCTAssertEqual(restored.ideas[classifiedIdea.id]?.labelIDs, [labelID])
+        XCTAssertEqual(
+            restored.ideas[pinnedIdea.id]?.pinnedAt,
+            now.addingTimeInterval(8)
+        )
+        XCTAssertEqual(restored.pinnedIdeas().map(\.id), [pinnedIdea.id])
+        let restoredTombstone = try XCTUnwrap(restored.ideas[deletedIdea.id])
+        XCTAssertTrue(restoredTombstone.isDeleted)
+        XCTAssertEqual(restoredTombstone.body, "")
+        XCTAssertNil(restoredTombstone.categoryID)
+        XCTAssertEqual(restoredTombstone.labelIDs, [])
+        XCTAssertEqual(
+            restored.ideaTimeline().map(\.id),
+            [classifiedIdea.id, plainIdea.id]
         )
     }
 

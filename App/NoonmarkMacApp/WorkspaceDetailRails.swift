@@ -655,7 +655,7 @@ struct SidebarAnalysisModel {
                 zhulongIntent: store.copy.completionReviewIntent,
                 zhulongScopes: [.completedPool]
             )
-        case .day, .recurring, .calendar, .zhulong, .settings:
+        case .day, .recurring, .calendar, .zhulong, .settings, .ideas:
             return nil
         }
     }

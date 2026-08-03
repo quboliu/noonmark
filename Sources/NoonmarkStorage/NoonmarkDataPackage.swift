@@ -13,7 +13,7 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    public static let currentFormatVersion = 6
+    public static let currentFormatVersion = 7
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
         try validate(snapshot)
@@ -36,7 +36,7 @@ public enum NoonmarkDataPackage {
               try jsonShape(of: inputJSON.object) == jsonShape(of: encodedJSON.object)
         else {
             throw DataPackageError.malformedDataPackage(
-                "数据包不符合 current v6 的 canonical 结构与编码"
+                "数据包不符合 current v7 的 canonical 结构与编码"
             )
         }
         return snapshot
@@ -207,6 +207,7 @@ private struct DataPackageSnapshot: Decodable {
         case subtasks
         case preferences
         case classifications
+        case ideas
     }
 
     let snapshot: NoonmarkSnapshot
@@ -229,7 +230,8 @@ private struct DataPackageSnapshot: Decodable {
             traces: container.decode([DayTrace].self, forKey: .traces),
             subtasks: container.decode([Subtask].self, forKey: .subtasks),
             preferences: container.decode(AppPreferences.self, forKey: .preferences),
-            classifications: container.decode(TaskClassificationState.self, forKey: .classifications)
+            classifications: container.decode(TaskClassificationState.self, forKey: .classifications),
+            ideas: container.decode([IdeaEntry].self, forKey: .ideas)
         )
     }
 }
@@ -242,6 +244,7 @@ private extension NoonmarkDataPackage {
         let traceIDs = Set(snapshot.traces.map(\.id))
         try validateClassificationManagementFacts(snapshot.classifications, chainIDs: chainIDs)
         try validateTodoReferences(snapshot)
+        try validateIdeaReferences(snapshot)
         try validateCurrentClassifications(snapshot, chainIDs: chainIDs)
         try validateClassificationSnapshots(snapshot, traceIDs: traceIDs)
         try validateClassificationEvents(snapshot, traceIDs: traceIDs)
@@ -265,6 +268,7 @@ private extension NoonmarkDataPackage {
         try requireUnique(snapshot.definitions.map(\.id), label: "task_definitions.id")
         try requireUnique(snapshot.traces.map(\.id), label: "day_traces.id")
         try requireUnique(snapshot.subtasks.map(\.id), label: "subtasks.id")
+        try requireUnique(snapshot.ideas.map(\.id), label: "idea_entries.id")
         let classificationEvents = snapshot.classifications.snapshotEventsByTraceID.values.flatMap { $0 }
         try requireUnique(classificationEvents.map(\.id), label: "trace_classification_events.id")
     }
@@ -297,6 +301,22 @@ private extension NoonmarkDataPackage {
             try require(traceIDs.contains(subtask.traceID), "subtask references missing trace")
             if let carriedFromSubtaskID = subtask.carriedFromSubtaskID {
                 try require(subtaskIDs.contains(carriedFromSubtaskID), "subtask references missing continued-from subtask")
+            }
+        }
+    }
+
+    static func validateIdeaReferences(_ snapshot: NoonmarkSnapshot) throws {
+        let categoryIDs = Set(snapshot.classifications.categories.keys)
+        let labelIDs = Set(snapshot.classifications.labels.keys)
+        for idea in snapshot.ideas where idea.isDeleted == false {
+            if let categoryID = idea.categoryID {
+                try require(
+                    categoryIDs.contains(categoryID),
+                    "idea references missing category"
+                )
+            }
+            for labelID in idea.labelIDs {
+                try require(labelIDs.contains(labelID), "idea references missing label")
             }
         }
     }

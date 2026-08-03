@@ -187,6 +187,7 @@ enum Theme {
     static let warnSoft = Color(red: 1.0, green: 0.937, blue: 0.922)
     static let noteBackground = Color(red: 1.0, green: 0.984, blue: 0.937)
     static let navDay = hex(0x2A6FDB)
+    static let navIdeas = hex(0xCA8A04)
     static let navPool = hex(0x0E9488)
     static let navFuture = hex(0x7C5CFF)
     static let navRecurring = hex(0xB86A16)

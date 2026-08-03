@@ -69,6 +69,14 @@ public struct SyncSnapshotBaselineBuilder: Sendable {
                 deviceID: deviceID
             )
         }
+        entries += snapshot.ideas.map {
+            SyncJournalEntry(
+                entityType: .ideaEntry,
+                entityID: $0.id.description,
+                changedAt: $0.updatedAt,
+                deviceID: deviceID
+            )
+        }
 
         let preferencesRecord = try mapper.record(
             for: AppPreferencesEnvelope(preferences: snapshot.preferences),
@@ -181,6 +189,9 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
             }
             + snapshot.subtasks.map {
                 EntityKey(type: .subtask, id: $0.id.description)
+            }
+            + snapshot.ideas.map {
+                EntityKey(type: .ideaEntry, id: $0.id.description)
             }
         )
         if containsNondefaultPreferences(snapshot.preferences) {
@@ -305,6 +316,12 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
             }.flatMap {
                 try? mapper.record(for: $0, modifiedBy: deviceID)
             }
+        case .ideaEntry:
+            snapshot.ideas.first {
+                $0.id.description == remoteRecord.entityID
+            }.flatMap {
+                try? mapper.record(for: $0, modifiedBy: deviceID)
+            }
         case .appPreferences:
             try? mapper.record(
                 for: AppPreferencesEnvelope(
@@ -376,7 +393,7 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
                 return item.record
             case .classificationBaseline, .day, .taskCycleSeries,
                  .taskChain, .taskDefinition, .dayTrace, .subtask,
-                 .appPreferences:
+                 .ideaEntry, .appPreferences:
                 return nil
             }
         }
@@ -447,7 +464,7 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
                 return nil
             }
         case .day, .taskCycleSeries, .taskChain, .taskDefinition,
-             .dayTrace, .subtask, .appPreferences:
+             .dayTrace, .subtask, .ideaEntry, .appPreferences:
             return nil
         }
         return ClassificationEvidence(record: record)
@@ -620,7 +637,7 @@ private extension SyncEntityType {
              .traceClassificationEvent:
             true
         case .day, .taskCycleSeries, .taskChain, .taskDefinition,
-             .dayTrace, .subtask, .appPreferences:
+             .dayTrace, .subtask, .ideaEntry, .appPreferences:
             false
         }
     }

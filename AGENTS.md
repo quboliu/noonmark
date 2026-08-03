@@ -24,6 +24,7 @@
   - `NoonmarkDiagnostics`：有界强类型诊断、隐私过滤、跨重启关联与用户主动导出。
   - `NoonmarkMacRuntime`：签名运行身份、数据 scope 与 Mac runtime 协调器。
   - `NoonmarkMacUIContract`：Mac UI 设计契约的代码化约束。
+- 想法记录（Idea Capture）已成为当前能力：`NoonmarkCore` 承载一等领域实体想法条目（`IdeaEntry`）与想法时间线投影，`NoonmarkStorage` 以 `idea_entries` 表持久化并纳入同步，Mac App 提供侧边栏「想法 / Ideas」页面与全局速记浮窗；想法记录不依赖 AI Provider，领域词汇与产品规格见 `CONTEXT.md` 与 `docs/product/idea-capture-spec.md`。
 - 当前测试模块：
   - `NoonmarkMacApp` 的真实 App E2E 脚本验证
   - `NoonmarkCoreTests`

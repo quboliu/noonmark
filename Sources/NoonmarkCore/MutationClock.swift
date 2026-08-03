@@ -42,6 +42,7 @@ public extension NoonmarkEngine {
             + definitionMutationDates()
             + traceMutationDates()
             + subtaskMutationDates()
+            + ideaMutationDates()
             + classificationMutationDates()
             + [preferences.themeLanguageUpdatedAt]
     }
@@ -86,6 +87,13 @@ public extension NoonmarkEngine {
         subtasks.values.flatMap { subtask in
             [subtask.createdAt, subtask.updatedAt]
                 + [subtask.completedAt, subtask.settledAt].compactMap { $0 }
+        }
+    }
+
+    private func ideaMutationDates() -> [Date] {
+        ideas.values.flatMap { idea in
+            [idea.createdAt, idea.updatedAt]
+                + [idea.deletedAt, idea.pinnedAt].compactMap { $0 }
         }
     }
 

@@ -3,6 +3,7 @@ import NoonmarkCore
 public enum AppOperationFailureContext: CaseIterable, Hashable, Sendable {
     case taskMutation
     case noteMutation
+    case ideaMutation
     case dailyReview
     case preferences
     case persistence
@@ -38,6 +39,10 @@ private extension AppOperationFailureContext {
         .noteMutation: .init(
             chinese: "附言修改未完成，请刷新后重试。",
             english: "The note could not be changed. Refresh and try again."
+        ),
+        .ideaMutation: .init(
+            chinese: "想法修改未完成，请刷新后重试。",
+            english: "The idea could not be changed. Refresh and try again."
         ),
         .dailyReview: .init(
             chinese: "每日复盘暂时无法保存，请稍后重试。",

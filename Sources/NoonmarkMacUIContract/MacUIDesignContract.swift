@@ -427,6 +427,7 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
 
 public enum MacUIPage: String, CaseIterable, Sendable {
     case dayTodo
+    case ideas
     case taskPool
     case futurePlans
     case recurringPlans
@@ -450,6 +451,59 @@ public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case specialistAssistantEntrances
     case directWorkflowStart
     case noDecorativeComposerAction
+}
+
+public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
+    case persistentComposer
+    case composerSavesOnCommandReturn
+    case composerClearsOnEscape
+    case composerClassificationTokens
+    case composerClassificationSuggestions
+    case secondCategoryTokenBlocked
+    case filterField
+    case substringFiltering
+    case reverseChronologicalTimeline
+    case naturalDaySections
+    case daySectionHeader
+    case ideaCard
+    case ideaCardTimestamp
+    case ideaCardClassificationLine
+    case ideaCardOverflowMenu
+    case ideaCardEditAction
+    case ideaCardDeleteAction
+    case inlineEditField
+    case inlineEditEmptySaveDeletes
+    case singleLineEmptyState
+    case pinnedSectionAboveTimeline
+    case pinnedSectionUsesDayHeaderTypography
+    case ideaCardPinAction
+    case ideaCardUnpinAction
+    case classificationLineClickToFilter
+    case activeClassificationFilterIndicator
+    case singleFilterIndicatorVisualUnit
+    case trashSectionCollapsedByDefault
+    case trashRestoreRequiresNewBody
+}
+
+public enum MacUIIdeasPageLayout {
+    public static let composerMinimumHeight = 54.0
+    public static let composerMaximumHeight = 132.0
+    public static let composerCornerRadius = 8.0
+    public static let composerFilterSpacing = 10.0
+    public static let timelineSectionSpacing = 18.0
+    public static let sectionHeaderBottomPadding = 4.0
+    public static let cardHorizontalPadding = 12.0
+    public static let cardVerticalPadding = 10.0
+    public static let cardMetadataSpacing = 6.0
+    public static let cardSeparatesWithSingleDivider = true
+    public static let classificationLineOnlyWhenClassified = true
+    public static let emptyStateVisualUnitCount = 1
+    public static let pinnedSectionFloatsAboveTimeline = true
+    public static let pinnedSectionShowsCountOnly = true
+    public static let trashCollapsedByDefault = true
+    public static let trashHasNoHardDelete = true
+    public static let filterIndicatorVisualUnitCount = 1
+    public static let classificationFilterCombinesWithSubstringFilter = true
 }
 
 public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
@@ -935,6 +989,7 @@ public struct MacUIDesignContract: Sendable {
     public let navigationElements: [MacUINavigationElement]
     public let pages: [MacUIPage]
     public let zhulongHomeElements: [MacUIZhulongHomeElement]
+    public let ideasPageElements: [MacUIIdeasPageElement]
     public let dayTodoElements: [MacUIDayTodoElement]
     public let taskPoolElements: [MacUITaskPoolElement]
     public let futurePlanElements: [MacUIFuturePlanElement]
@@ -958,6 +1013,7 @@ public struct MacUIDesignContract: Sendable {
         navigationElements: [MacUINavigationElement] = MacUINavigationElement.allCases,
         pages: [MacUIPage] = MacUIPage.allCases,
         zhulongHomeElements: [MacUIZhulongHomeElement] = MacUIZhulongHomeElement.allCases,
+        ideasPageElements: [MacUIIdeasPageElement] = MacUIIdeasPageElement.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
         taskPoolElements: [MacUITaskPoolElement] = MacUITaskPoolElement.allCases,
         futurePlanElements: [MacUIFuturePlanElement] = MacUIFuturePlanElement.allCases,
@@ -980,6 +1036,7 @@ public struct MacUIDesignContract: Sendable {
         self.navigationElements = navigationElements
         self.pages = pages
         self.zhulongHomeElements = zhulongHomeElements
+        self.ideasPageElements = ideasPageElements
         self.dayTodoElements = dayTodoElements
         self.taskPoolElements = taskPoolElements
         self.futurePlanElements = futurePlanElements

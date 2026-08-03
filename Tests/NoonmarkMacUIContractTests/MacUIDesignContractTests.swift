@@ -368,6 +368,7 @@ final class MacUIDesignContractTests: XCTestCase {
             contract.pages,
             [
                 .dayTodo,
+                .ideas,
                 .taskPool,
                 .futurePlans,
                 .recurringPlans,
@@ -376,6 +377,65 @@ final class MacUIDesignContractTests: XCTestCase {
                 .calendar,
                 .zhulong
             ]
+        )
+    }
+
+    func testIdeasPageKeepsComposerTimelineAndMinimalCards() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(
+            contract.ideasPageElements,
+            [
+                .persistentComposer,
+                .composerSavesOnCommandReturn,
+                .composerClearsOnEscape,
+                .composerClassificationTokens,
+                .composerClassificationSuggestions,
+                .secondCategoryTokenBlocked,
+                .filterField,
+                .substringFiltering,
+                .reverseChronologicalTimeline,
+                .naturalDaySections,
+                .daySectionHeader,
+                .ideaCard,
+                .ideaCardTimestamp,
+                .ideaCardClassificationLine,
+                .ideaCardOverflowMenu,
+                .ideaCardEditAction,
+                .ideaCardDeleteAction,
+                .inlineEditField,
+                .inlineEditEmptySaveDeletes,
+                .singleLineEmptyState,
+                .pinnedSectionAboveTimeline,
+                .pinnedSectionUsesDayHeaderTypography,
+                .ideaCardPinAction,
+                .ideaCardUnpinAction,
+                .classificationLineClickToFilter,
+                .activeClassificationFilterIndicator,
+                .singleFilterIndicatorVisualUnit,
+                .trashSectionCollapsedByDefault,
+                .trashRestoreRequiresNewBody
+            ]
+        )
+        XCTAssertEqual(MacUIIdeasPageLayout.composerMinimumHeight, 54)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerMaximumHeight, 132)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerCornerRadius, 8)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerFilterSpacing, 10)
+        XCTAssertEqual(MacUIIdeasPageLayout.timelineSectionSpacing, 18)
+        XCTAssertEqual(MacUIIdeasPageLayout.sectionHeaderBottomPadding, 4)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardHorizontalPadding, 12)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardVerticalPadding, 10)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardMetadataSpacing, 6)
+        XCTAssertTrue(MacUIIdeasPageLayout.cardSeparatesWithSingleDivider)
+        XCTAssertTrue(MacUIIdeasPageLayout.classificationLineOnlyWhenClassified)
+        XCTAssertEqual(MacUIIdeasPageLayout.emptyStateVisualUnitCount, 1)
+        XCTAssertTrue(MacUIIdeasPageLayout.pinnedSectionFloatsAboveTimeline)
+        XCTAssertTrue(MacUIIdeasPageLayout.pinnedSectionShowsCountOnly)
+        XCTAssertTrue(MacUIIdeasPageLayout.trashCollapsedByDefault)
+        XCTAssertTrue(MacUIIdeasPageLayout.trashHasNoHardDelete)
+        XCTAssertEqual(MacUIIdeasPageLayout.filterIndicatorVisualUnitCount, 1)
+        XCTAssertTrue(
+            MacUIIdeasPageLayout.classificationFilterCombinesWithSubstringFilter
         )
     }
 

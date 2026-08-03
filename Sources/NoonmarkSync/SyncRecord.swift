@@ -45,6 +45,7 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
     case taskDefinition
     case dayTrace
     case subtask
+    case ideaEntry
     case appPreferences
     case classificationBaseline
     case classificationCommit
@@ -78,6 +79,8 @@ public enum SyncEntityType: String, Codable, CaseIterable, Hashable, Sendable {
             8
         case .appPreferences:
             9
+        case .ideaEntry:
+            10
         }
     }
 }
@@ -273,6 +276,7 @@ public enum SyncRecordPayload: Equatable, Sendable {
     case taskDefinition(TaskDefinition)
     case dayTrace(DayTrace)
     case subtask(Subtask)
+    case ideaEntry(IdeaEntry)
     case appPreferences(AppPreferencesEnvelope)
     case classificationBaseline(ClassificationBaselineEnvelope)
     case classificationCommit(ClassificationCommitEnvelope)

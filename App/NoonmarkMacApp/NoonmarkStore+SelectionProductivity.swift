@@ -437,7 +437,7 @@ extension NoonmarkStore {
                     }
                 return parent + children
             }
-        case .calendar, .zhulong, .settings:
+        case .calendar, .zhulong, .settings, .ideas:
             return []
         }
     }
@@ -504,7 +504,7 @@ extension NoonmarkStore {
             selectLaunchUnfinishedItem()
         case .completed:
             selectLaunchCompletedItem()
-        case .calendar, .zhulong, .settings:
+        case .calendar, .zhulong, .settings, .ideas:
             break
         }
     }

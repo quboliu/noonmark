@@ -261,6 +261,7 @@ extension NoonmarkStore {
     var visibleNavigationPages: [Page] {
         var pages: [Page] = [
             .day,
+            .ideas,
             .pool,
             .future,
             .recurring,
@@ -293,6 +294,8 @@ extension NoonmarkStore {
         switch page {
         case .day:
             return copy.navDay
+        case .ideas:
+            return copy.navIdeas
         case .pool:
             return copy.navPool
         case .future:
@@ -326,7 +329,7 @@ extension NoonmarkStore {
             return engine.unfinishedPoolCount()
         case .completed:
             return engine.completedTaskHierarchyCount()
-        case .calendar, .zhulong, .settings:
+        case .calendar, .zhulong, .settings, .ideas:
             return 0
         }
     }
@@ -475,7 +478,7 @@ extension NoonmarkStore {
                 from: selectedCalendarDate,
                 by: offset
             )
-        case .pool, .future, .recurring, .unfinished, .completed, .zhulong,
+        case .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
              .settings:
             return
         }
@@ -513,7 +516,7 @@ extension NoonmarkStore {
             selectedDate = Self.offset(selectedDate, by: days)
         case .calendar:
             selectedCalendarDate = Self.offset(selectedCalendarDate, by: days)
-        case .pool, .future, .recurring, .unfinished, .completed, .zhulong,
+        case .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
              .settings:
             return
         }

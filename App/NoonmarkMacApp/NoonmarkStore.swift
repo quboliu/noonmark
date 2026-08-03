@@ -214,6 +214,12 @@ final class NoonmarkStore: ObservableObject {
         static let updateProgress = Self { $0.updateProgressAction }
         static let addSubtask = Self { $0.addSubtaskAction }
         static let removeSubtask = Self { $0.removeSubtaskAction }
+        static let addIdea = Self { $0.addIdeaAction }
+        static let editIdea = Self { $0.editIdeaAction }
+        static let deleteIdea = Self { $0.deleteIdeaAction }
+        static let pinIdea = Self { $0.pinIdeaAction }
+        static let unpinIdea = Self { $0.unpinIdeaAction }
+        static let restoreIdea = Self { $0.restoreIdeaAction }
 
         static func completeTasks(_ count: Int) -> Self {
             Self { $0.completeTasksAction(count) }
@@ -465,6 +471,7 @@ final class NoonmarkStore: ObservableObject {
 
     enum Page: String, CaseIterable, Identifiable {
         case day
+        case ideas
         case pool
         case future
         case recurring
@@ -480,6 +487,8 @@ final class NoonmarkStore: ObservableObject {
             switch self {
             case .day:
                 return "clock"
+            case .ideas:
+                return "lightbulb"
             case .pool:
                 return "tray"
             case .future:
@@ -503,6 +512,8 @@ final class NoonmarkStore: ObservableObject {
             switch self {
             case .day:
                 return Theme.navDay
+            case .ideas:
+                return Theme.navIdeas
             case .pool:
                 return Theme.navPool
             case .future:
@@ -529,28 +540,7 @@ final class NoonmarkStore: ObservableObject {
         }
 
         init?(commandLineValue: String) {
-            switch commandLineValue {
-            case "day":
-                self = .day
-            case "pool":
-                self = .pool
-            case "future":
-                self = .future
-            case "recurring":
-                self = .recurring
-            case "unfinished":
-                self = .unfinished
-            case "completed":
-                self = .completed
-            case "calendar":
-                self = .calendar
-            case "zhulong":
-                self = .zhulong
-            case "settings":
-                self = .settings
-            default:
-                return nil
-            }
+            self.init(rawValue: commandLineValue)
         }
     }
 
@@ -711,6 +701,9 @@ final class NoonmarkStore: ObservableObject {
     let poolTextDraft = NoonmarkTextInputDraft()
     let detailSubtaskTextDraft = NoonmarkTextInputDraft()
     let detailNoteTextDraft = NoonmarkTextInputDraft()
+    let ideaTextDraft = NoonmarkTextInputDraft()
+    let ideaEditTextDraft = NoonmarkTextInputDraft()
+    let ideaRestoreTextDraft = NoonmarkTextInputDraft()
     let inputDraftFlushCoordinator =
         InputDraftFlushCoordinator()
     let reviewAutosaveStatus = ReviewAutosaveStatus()
@@ -725,6 +718,26 @@ final class NoonmarkStore: ObservableObject {
         set { poolTextDraft.text = newValue }
     }
 
+    var ideaText: String {
+        get { ideaTextDraft.text }
+        set { ideaTextDraft.text = newValue }
+    }
+
+    var ideaEditText: String {
+        get { ideaEditTextDraft.text }
+        set { ideaEditTextDraft.text = newValue }
+    }
+
+    var ideaRestoreText: String {
+        get { ideaRestoreTextDraft.text }
+        set { ideaRestoreTextDraft.text = newValue }
+    }
+
+    @Published var ideaFilterText = ""
+    @Published var ideaClassificationFilter: IdeaClassificationFilterSelection?
+    @Published var isIdeaTrashExpanded = false
+    @Published var restoringIdeaID: IdeaID?
+    @Published var editingIdeaID: IdeaID?
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false

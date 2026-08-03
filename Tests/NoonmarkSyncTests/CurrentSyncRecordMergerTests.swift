@@ -769,6 +769,10 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
             title: "覆盖全部 current 类型",
             now: now
         )
+        _ = try engine.appendIdea(
+            body: "覆盖 idea 类型",
+            now: now
+        )
         _ = try engine.createTaskCycleSeries(
             title: "重复见证边界",
             startDate: today,

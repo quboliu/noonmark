@@ -352,7 +352,7 @@ struct SQLiteSyncTaskChangeAnalyzer {
                   let chainIDs = traceOwners[envelope.event.traceID]
             else { return [] }
             return taskIDs(for: chainIDs)
-        case .day, .appPreferences:
+        case .day, .ideaEntry, .appPreferences:
             return []
         }
     }

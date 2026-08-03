@@ -301,6 +301,8 @@ private extension AppOperationFailureContext {
             .task
         case .noteMutation:
             .note
+        case .ideaMutation:
+            .idea
         case .dailyReview:
             .dailyReview
         case .preferences:
@@ -320,8 +322,8 @@ private extension AppOperationFailureContext {
         switch self {
         case .persistence, .dataTransfer, .databaseLoad:
             true
-        case .taskMutation, .noteMutation, .dailyReview, .preferences,
-             .sync, .provider, .undo, .redo, .naturalDay:
+        case .taskMutation, .noteMutation, .ideaMutation, .dailyReview,
+             .preferences, .sync, .provider, .undo, .redo, .naturalDay:
             false
         }
     }

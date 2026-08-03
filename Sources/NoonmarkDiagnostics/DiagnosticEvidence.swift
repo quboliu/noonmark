@@ -135,6 +135,7 @@ public enum DiagnosticErrorDomain: String, Codable, CaseIterable, Sendable {
 public enum DiagnosticMutationContext: String, Codable, CaseIterable, Sendable {
     case task
     case note
+    case idea
     case preferences
     case undo
     case redo

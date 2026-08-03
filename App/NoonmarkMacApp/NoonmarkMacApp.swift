@@ -29,29 +29,52 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private var didPrepareForTermination = false
     private lazy var globalQuickEntryShortcutRegistrar =
         CarbonGlobalQuickEntryShortcutRegistrar()
-    private lazy var globalQuickEntryShortcutCoordinator =
-        GlobalQuickEntryShortcutCoordinator(
-            repository: GlobalShortcutPreferenceRepository(),
-            registrar: globalQuickEntryShortcutRegistrar,
-            noonmarkShortcutSnapshot: {
-                NoonmarkMainMenuFactory
-                    .globalQuickEntryReservedShortcutSnapshot(
-                        in: NSApp.mainMenu
-                    )
-            },
-            systemShortcutSnapshot: {
-                CarbonSystemShortcutInspector.snapshot()
-            },
-            onTrigger: { [weak self] in
-                self?.showGlobalQuickEntry()
-            }
+    private lazy var globalQuickEntryShortcutCoordinator = GlobalQuickEntryShortcutCoordinator(
+        repository: GlobalShortcutPreferenceRepository(),
+        registrar: globalQuickEntryShortcutRegistrar,
+        noonmarkShortcutSnapshot: { [weak self] in
+            self?.quickEntryConflictSnapshot() ?? .unavailable
+        },
+        systemShortcutSnapshot: {
+            CarbonSystemShortcutInspector.snapshot()
+        },
+        onTrigger: { [weak self] in
+            self?.showGlobalQuickEntry()
+        }
+    )
+    private lazy var globalIdeaCaptureShortcutRegistrar =
+        CarbonGlobalQuickEntryShortcutRegistrar(
+            signature: CarbonGlobalQuickEntryShortcutRegistrar
+                .ideaCaptureSignature
         )
+    private lazy var globalIdeaCaptureShortcutCoordinator = GlobalIdeaCaptureShortcutCoordinator(
+        repository: GlobalShortcutPreferenceRepository(
+            storageKey: GlobalShortcutPreferenceRepository
+                .defaultIdeaCaptureStorageKey,
+            defaultPreference: .ideaCaptureStandard
+        ),
+        registrar: globalIdeaCaptureShortcutRegistrar,
+        noonmarkShortcutSnapshot: { [weak self] in
+            self?.ideaCaptureConflictSnapshot() ?? .unavailable
+        },
+        systemShortcutSnapshot: {
+            CarbonSystemShortcutInspector.snapshot()
+        },
+        onTrigger: { [weak self] in
+            self?.showGlobalIdeaCapture()
+        }
+    )
     private lazy var settingsWindowController = NoonmarkSettingsWindowController(
         store: store,
         globalQuickEntryShortcutCoordinator:
-            globalQuickEntryShortcutCoordinator
+            globalQuickEntryShortcutCoordinator,
+        globalIdeaCaptureShortcutCoordinator:
+            globalIdeaCaptureShortcutCoordinator
     )
     private lazy var quickEntryWindowController = NoonmarkQuickEntryWindowController(
+        store: store
+    )
+    private lazy var ideaCaptureWindowController = NoonmarkIdeaCaptureWindowController(
         store: store
     )
     private lazy var searchWindowController = NoonmarkSearchWindowController(
@@ -271,10 +294,12 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         globalQuickEntryShortcutCoordinator.start()
+        globalIdeaCaptureShortcutCoordinator.start()
         store.onLanguageChange = { [weak self] in
             self?.installMainMenu()
             self?.settingsWindowController.refreshLocalizedChrome()
             self?.quickEntryWindowController.refreshLocalizedChrome()
+            self?.ideaCaptureWindowController.refreshLocalizedChrome()
             self?.searchWindowController.refreshLocalizedChrome()
             self?.helpWindowController.refreshLocalizedChrome()
             self?.aboutWindowController.refreshLocalizedChrome()
@@ -439,11 +464,13 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             return
         }
         globalQuickEntryShortcutCoordinator.stop()
+        globalIdeaCaptureShortcutCoordinator.stop()
         do {
             try store.prepareForTermination()
             didPrepareForTermination = true
         } catch {
             globalQuickEntryShortcutCoordinator.start()
+            globalIdeaCaptureShortcutCoordinator.start()
             throw error
         }
     }
@@ -592,7 +619,8 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         case #selector(selectAllAction(_:)):
             return activeTextResponder != nil
                 || (window?.isKeyWindow == true && store.canSelectAllWorkspaceItems)
-        case NoonmarkMenuAction.showQuickEntry:
+        case NoonmarkMenuAction.showQuickEntry,
+             NoonmarkMenuAction.showIdeaCapture:
             return store.canPerformEngineMutation
         case NoonmarkMenuAction.importData:
             return store.canBeginDataImport
@@ -627,13 +655,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             NSSound.beep()
             return
         }
-        let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
-        let previousApplication = NSWorkspace.shared.frontmostApplication
-            .flatMap { application in
-                application.processIdentifier == currentProcessIdentifier
-                    ? nil
-                    : application
-            }
+        let previousApplication = previouslyFrontmostApplication()
         quickEntryWindowController.showFromGlobalShortcut(
             previousApplication: previousApplication
         ) { [weak self] text in
@@ -644,6 +666,66 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             }
             return didHandle
         }
+    }
+
+    @objc func showIdeaCaptureAction(_ sender: Any?) {
+        ideaCaptureWindowController.show { [weak self] text in
+            guard let self else { return false }
+            let didCreate = store.appendIdea(text: text)
+            if didCreate {
+                openMainWindow()
+            }
+            return didCreate
+        }
+    }
+
+    private func showGlobalIdeaCapture() {
+        guard store.canPerformEngineMutation else {
+            NSSound.beep()
+            return
+        }
+        let previousApplication = previouslyFrontmostApplication()
+        ideaCaptureWindowController.showFromGlobalShortcut(
+            previousApplication: previousApplication
+        ) { [weak self] text in
+            guard let self else { return false }
+            return store.appendIdea(text: text)
+        }
+    }
+
+    private func previouslyFrontmostApplication() -> NSRunningApplication? {
+        let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+        return NSWorkspace.shared.frontmostApplication
+            .flatMap { application in
+                application.processIdentifier == currentProcessIdentifier
+                    ? nil
+                    : application
+            }
+    }
+
+    /// Main-menu command catalog plus the sibling global hotkey while it is
+    /// enabled, so the two global shortcuts cannot be set identically.
+    private func quickEntryConflictSnapshot() -> GlobalShortcutSnapshot {
+        noonmarkReservedShortcutSnapshot(
+            sibling: globalIdeaCaptureShortcutCoordinator.preference
+        )
+    }
+
+    private func ideaCaptureConflictSnapshot() -> GlobalShortcutSnapshot {
+        noonmarkReservedShortcutSnapshot(
+            sibling: globalQuickEntryShortcutCoordinator.preference
+        )
+    }
+
+    private func noonmarkReservedShortcutSnapshot(
+        sibling: GlobalQuickEntryShortcutPreference
+    ) -> GlobalShortcutSnapshot {
+        let snapshot = NoonmarkMainMenuFactory
+            .globalQuickEntryReservedShortcutSnapshot(
+                in: NSApp.mainMenu
+            )
+        guard sibling.isEnabled else { return snapshot }
+        return snapshot.insertingReserved(sibling.shortcut)
     }
 
     @objc func showSearchAction(_ sender: Any?) {

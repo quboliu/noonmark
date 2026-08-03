@@ -342,7 +342,7 @@ public struct SyncRecordMerger: Sendable {
         case .traceClassificationEvent:
             return .traceClassificationEventRejected
         case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
-             .appPreferences:
+             .ideaEntry, .appPreferences:
             return .invalidRecordPayload
         }
     }
@@ -367,6 +367,9 @@ public struct SyncRecordMerger: Sendable {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
         }
         records += snapshot.subtasks.compactMap {
+            try? mapper.record(for: $0, modifiedBy: localDeviceID)
+        }
+        records += snapshot.ideas.compactMap {
             try? mapper.record(for: $0, modifiedBy: localDeviceID)
         }
         records += [
@@ -774,6 +777,8 @@ public struct SyncRecordMerger: Sendable {
                 return try dayTraceStructuralTokens(record)
             case .subtask:
                 return try subtaskStructuralTokens(record)
+            case .ideaEntry:
+                return [.isolated(record.id)]
             case .appPreferences:
                 return [.legacy("preferences:default")]
             case .classificationBaseline, .classificationCommit,
@@ -978,7 +983,8 @@ public struct SyncRecordMerger: Sendable {
                     } else {
                         projection.definitions[incoming.id] = incoming
                     }
-                case .day, .taskCycleSeries, .dayTrace, .subtask, .appPreferences,
+                case .day, .taskCycleSeries, .dayTrace, .subtask, .ideaEntry,
+                     .appPreferences,
                      .classificationBaseline, .classificationCommit,
                      .traceClassificationEvent:
                     break
@@ -1028,7 +1034,8 @@ public struct SyncRecordMerger: Sendable {
                 case .subtask:
                     let subtask = try mapper.decodeSubtask(record)
                     projection.subtasks[subtask.id] = subtask
-                case .day, .taskCycleSeries, .taskChain, .taskDefinition, .appPreferences,
+                case .day, .taskCycleSeries, .taskChain, .taskDefinition, .ideaEntry,
+                     .appPreferences,
                      .classificationBaseline, .classificationCommit,
                      .traceClassificationEvent:
                     break
@@ -1123,7 +1130,7 @@ public struct SyncRecordMerger: Sendable {
                 && issues.allSatisfy(
                     trajectoryIssueIsMissingDependency
                 )
-        case .day, .taskCycleSeries, .appPreferences,
+        case .day, .taskCycleSeries, .ideaEntry, .appPreferences,
              .classificationBaseline, .classificationCommit,
              .traceClassificationEvent:
             return false
@@ -1242,6 +1249,8 @@ public struct SyncRecordMerger: Sendable {
             apply(trace, record: record, context: &context)
         case let .subtask(subtask):
             apply(subtask, record: record, context: &context)
+        case let .ideaEntry(idea):
+            apply(idea, record: record, context: &context)
         case let .appPreferences(envelope):
             apply(envelope, record: record, context: &context)
         case let .classificationBaseline(envelope):
@@ -2731,6 +2740,82 @@ public struct SyncRecordMerger: Sendable {
         } == false
     }
 
+    private func apply(
+        _ idea: IdeaEntry,
+        record: SyncRecord,
+        context: inout MergeContext
+    ) {
+        do {
+            try currentRecordMerger.validate(record)
+        } catch {
+            context.conflicts.append(
+                conflict(
+                    .invalidRecordPayload,
+                    record: record,
+                    detectedAt: context.detectedAt,
+                    message: "idea contains invalid current facts"
+                )
+            )
+            return
+        }
+        let missingClassificationDependencies = ideaClassificationDependencies(
+            missingFrom: idea,
+            in: context.working
+        )
+        guard missingClassificationDependencies.isEmpty else {
+            wait(
+                for: record,
+                dependencies: missingClassificationDependencies,
+                context: &context
+            )
+            return
+        }
+        guard let existing = context.working.ideas[idea.id] else {
+            context.working.ideas[idea.id] = idea
+            markApplied(record, context: &context)
+            return
+        }
+        guard existing != idea else { return }
+        let merged: IdeaEntry
+        do {
+            let localRecord = try mapper.record(
+                for: existing,
+                modifiedBy: SyncDeviceID("local-materialized")
+            )
+            let mergedRecord = try currentRecordMerger.merge(
+                existing: localRecord,
+                incoming: record
+            )
+            merged = try mapper.decodeIdeaEntry(mergedRecord)
+        } catch {
+            context.conflicts.append(
+                conflict(
+                    .invalidRecordPayload,
+                    record: record,
+                    detectedAt: context.detectedAt,
+                    message: "idea current records could not be merged"
+                )
+            )
+            return
+        }
+        guard merged != existing else { return }
+        context.working.ideas[merged.id] = merged
+        markApplied(record, context: &context)
+    }
+
+    private func ideaClassificationDependencies(
+        missingFrom idea: IdeaEntry,
+        in snapshot: SnapshotIndex
+    ) -> [SyncRecordDependency] {
+        let categoryDependencies = Set([idea.categoryID].compactMap { $0 })
+            .subtracting(snapshot.classifications.categories.keys)
+            .map(SyncRecordDependency.category)
+        let labelDependencies = Set(idea.labelIDs)
+            .subtracting(snapshot.classifications.labels.keys)
+            .map(SyncRecordDependency.label)
+        return categoryDependencies + labelDependencies
+    }
+
     private func apply(_ envelope: AppPreferencesEnvelope, record: SyncRecord, context: inout MergeContext) {
         let current = context.working.preferences
         guard let order = AppPreferences.themeLanguageVersionOrder(
@@ -3418,7 +3503,7 @@ public struct SyncRecordMerger: Sendable {
             else { return [] }
             return [.classificationEvent(envelope.event.id)]
         case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
-             .appPreferences:
+             .ideaEntry, .appPreferences:
             return []
         }
     }
@@ -3522,6 +3607,7 @@ private struct SnapshotIndex {
     var definitions: [TaskDefinitionID: TaskDefinition]
     var traces: [DayTraceID: DayTrace]
     var subtasks: [SubtaskID: Subtask]
+    var ideas: [IdeaID: IdeaEntry]
     var preferences: AppPreferences
     var classifications: TaskClassificationState
 
@@ -3536,6 +3622,7 @@ private struct SnapshotIndex {
         definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
         traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
         subtasks = Dictionary(uniqueKeysWithValues: snapshot.subtasks.map { ($0.id, $0) })
+        ideas = Dictionary(uniqueKeysWithValues: snapshot.ideas.map { ($0.id, $0) })
         preferences = snapshot.preferences
         classifications = snapshot.classifications
     }
@@ -3583,7 +3670,13 @@ private struct SnapshotIndex {
                 return $0.traceID.description < $1.traceID.description
             },
             preferences: preferences,
-            classifications: classifications
+            classifications: classifications,
+            ideas: ideas.values.sorted {
+                if $0.createdAt == $1.createdAt {
+                    return $0.id.description < $1.id.description
+                }
+                return $0.createdAt < $1.createdAt
+            }
         )
     }
 }

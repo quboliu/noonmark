@@ -103,6 +103,7 @@ struct MarkdownEditor: View {
     var commitsOnReturn = false
     var defersMarkedTextBindingUpdates = false
     var onCommit: (() -> Void)?
+    var onEscape: (() -> Void)?
     var onEndEditing: (() -> Void)?
     var onNativeSnapshot:
         ((NativeMarkdownEditorSnapshot) -> Void)?
@@ -119,6 +120,7 @@ struct MarkdownEditor: View {
             defersMarkedTextBindingUpdates:
             defersMarkedTextBindingUpdates,
             onCommit: onCommit,
+            onEscape: onEscape,
             onEndEditing: onEndEditing,
             onNativeSnapshot: { snapshot in
                 let isEmpty = snapshot.text.isEmpty
@@ -181,6 +183,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let commitsOnReturn: Bool
     let defersMarkedTextBindingUpdates: Bool
     let onCommit: (() -> Void)?
+    let onEscape: (() -> Void)?
     let onEndEditing: (() -> Void)?
     let onNativeSnapshot:
         ((NativeMarkdownEditorSnapshot) -> Void)?
@@ -234,6 +237,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
+        textView.escapeAction = onEscape
         scrollView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityLabel(accessibilityLabel)
         if let nativeAccessibilityIdentifier {
@@ -270,6 +274,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
+        textView.escapeAction = onEscape
         scrollView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityLabel(accessibilityLabel)
         if let nativeAccessibilityIdentifier {
@@ -509,6 +514,7 @@ enum MarkdownEditorKeyDownTimingProbe {
 private final class MarkdownNSTextView: NSTextView {
     var commitsOnReturn = false
     var commitAction: (() -> Void)?
+    var escapeAction: (() -> Void)?
     var compositionStateDidChange: (() -> Void)?
 
     private var reportedCompositionIsActive = false
@@ -670,6 +676,7 @@ private final class MarkdownNSTextView: NSTextView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
 
+        if handleEscape(event, modifiers: modifiers) { return }
         if handleSelectAll(key: key, modifiers: modifiers) { return }
         if handleReturn(event, modifiers: modifiers) { return }
         if handleFormattingShortcut(key: key, modifiers: modifiers) { return }
@@ -698,6 +705,20 @@ private final class MarkdownNSTextView: NSTextView {
         }
         reportedCompositionIsActive = isActive
         compositionStateDidChange?()
+    }
+
+    private func handleEscape(
+        _ event: NSEvent,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard event.keyCode == 53,
+              modifiers.isDisjoint(with: [.command, .shift, .control, .option]),
+              let escapeAction
+        else {
+            return false
+        }
+        escapeAction()
+        return true
     }
 
     private func handleSelectAll(

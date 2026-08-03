@@ -46,6 +46,8 @@ public struct SyncRecordMaterializer: Sendable {
             return try traceRecord(for: entry, in: snapshot)
         case .subtask:
             return try subtaskRecord(for: entry, in: snapshot)
+        case .ideaEntry:
+            return try ideaRecord(for: entry, in: snapshot)
         case .appPreferences:
             return try preferencesRecord(for: entry)
         case .classificationBaseline:
@@ -125,6 +127,13 @@ public struct SyncRecordMaterializer: Sendable {
             throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
         }
         return try mapper.record(for: subtask, modifiedBy: entry.deviceID)
+    }
+
+    private func ideaRecord(for entry: SyncJournalEntry, in snapshot: NoonmarkSnapshot) throws -> SyncRecord {
+        guard let idea = snapshot.ideas.first(where: { $0.id.rawValue.uuidString == entry.entityID }) else {
+            throw SyncRecordMaterializerError.missingEntity(entry.entityType, entry.entityID)
+        }
+        return try mapper.record(for: idea, modifiedBy: entry.deviceID)
     }
 
     private func preferencesRecord(

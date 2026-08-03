@@ -40,6 +40,27 @@ enum NoonmarkVisualMetrics {
     static let futurePlanMetadataSpacing = CGFloat(
         MacUIFuturePlanDetailLayout.metadataSpacing
     )
+    static let ideasComposerCornerRadius = CGFloat(
+        MacUIIdeasPageLayout.composerCornerRadius
+    )
+    static let ideasComposerFilterSpacing = CGFloat(
+        MacUIIdeasPageLayout.composerFilterSpacing
+    )
+    static let ideasTimelineSectionSpacing = CGFloat(
+        MacUIIdeasPageLayout.timelineSectionSpacing
+    )
+    static let ideasSectionHeaderBottomPadding = CGFloat(
+        MacUIIdeasPageLayout.sectionHeaderBottomPadding
+    )
+    static let ideasCardHorizontalPadding = CGFloat(
+        MacUIIdeasPageLayout.cardHorizontalPadding
+    )
+    static let ideasCardVerticalPadding = CGFloat(
+        MacUIIdeasPageLayout.cardVerticalPadding
+    )
+    static let ideasCardMetadataSpacing = CGFloat(
+        MacUIIdeasPageLayout.cardMetadataSpacing
+    )
 
     static let detailTitleDescriptionSpacing = CGFloat(
         MacUIDetailEditorLayout.titleDescriptionSpacing

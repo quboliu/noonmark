@@ -586,7 +586,7 @@ struct MutationClockE2EAutomation {
                  .traceClassificationEvent:
                 entry.recordPayload?.isEmpty == false
             case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace, .subtask,
-                 .appPreferences:
+                 .ideaEntry, .appPreferences:
                 entry.recordPayload == nil
             }
         }

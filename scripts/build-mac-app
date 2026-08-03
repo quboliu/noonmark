@@ -10,8 +10,8 @@ source scripts/evidence-common
 configuration="${1:-debug}"
 profile="${2:-}"
 product="NoonmarkMacApp"
-marketing_version="${NOONMARK_MARKETING_VERSION:-0.1.1}"
-build_number="${NOONMARK_BUILD_NUMBER:-4}"
+marketing_version="${NOONMARK_MARKETING_VERSION:-0.2.0}"
+build_number="${NOONMARK_BUILD_NUMBER:-5}"
 minimum_os_version="14.0"
 runtime_description="Swift-native"
 

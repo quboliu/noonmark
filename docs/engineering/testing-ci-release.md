@@ -92,7 +92,7 @@ DMG 门禁与上述故障闭环分层：production package 只做静态来源、
 
 每个 App build 的 `Info.plist` 都包含一组供诊断导出与 About 页直接读取的非敏感身份字段；release package 会逐字段回读并 fail-closed 对账：
 
-- `CFBundleShortVersionString`／`CFBundleVersion`：当前候选默认 `0.1.1`／`4`，正式流水线可分别以 `NOONMARK_MARKETING_VERSION`／`NOONMARK_BUILD_NUMBER` 注入，且必须符合 Apple 数字版本格式。
+- `CFBundleShortVersionString`／`CFBundleVersion`：当前候选默认 `0.2.0`／`5`，正式流水线可分别以 `NOONMARK_MARKETING_VERSION`／`NOONMARK_BUILD_NUMBER` 注入，且必须符合 Apple 数字版本格式。
 - `NoonmarkGitCommit`：build 时 `HEAD` 的完整 40 位 Git SHA。
 - `NoonmarkBuildDate`：build 时的 UTC ISO 8601 秒级时间，例如 `2026-07-31T12:34:56Z`。
 - `NoonmarkRuntime`：当前固定为 `Swift-native`；`NoonmarkMinimumOSVersion` 与 `LSMinimumSystemVersion` 必须一致。诊断中的实际 OS 版本仍由运行时 `ProcessInfo` 取得，不能用最低系统版本冒充。

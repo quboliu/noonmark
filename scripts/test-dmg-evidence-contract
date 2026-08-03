@@ -1724,6 +1724,11 @@ refresh_closure_fixture_bindings() {
   sed -i '' \
     "s/^gate_result_sha256=.*/gate_result_sha256=${result_sha256}/" \
     "$closure_manifest"
+  rm -f "$closure_inventory"
+  if [[ -e "$closure_inventory" || -L "$closure_inventory" ]]; then
+    echo "could not clear stale release-closure artifact inventory" >&2
+    return 1
+  fi
   (
     cd "$fixture_root"
     source scripts/evidence-common

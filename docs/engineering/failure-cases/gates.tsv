@@ -45,3 +45,6 @@ FAIL-2026-08-02-07	release	scripts/test-dmg-install	scripts/release-private-dmg	
 FAIL-2026-08-02-08	fast	scripts/test-release-gate-contract	scripts/check	拒绝发行入口绕过真实腾讯拼音 Day Todo 输入、即时退出与重启 smoke
 FAIL-2026-08-02-08	symptom	scripts/test-tencent-ime-input-matrix	scripts/test-all	真实腾讯拼音在 53 个输入面的一年负载回显、组合态、持久化与回读
 FAIL-2026-08-02-08	release	scripts/test-tencent-ime-release-smoke	scripts/release-private-dmg	真实腾讯拼音在 Day Todo 自动保存输入面完成组合提交、即时退出与重启 SQLite 回读
+FAIL-2026-08-02-09	fast	scripts/test-dmg-evidence-contract	scripts/check	拒绝 closure fixture 复用已存在的 inventory 输出，并要求以新鲜文件重建绑定
+FAIL-2026-08-02-09	symptom	scripts/test-dmg-install	scripts/release-private-dmg	受控 dmg-validation 路径真实生成并绑定安装 artifact inventory
+FAIL-2026-08-02-09	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 动态验收在安全 inventory 生成或绑定失败时阻断发行

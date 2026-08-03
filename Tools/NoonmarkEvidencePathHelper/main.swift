@@ -1101,18 +1101,21 @@ private func validateManifestAppend(
 ) throws {
     guard let existingText = String(data: existing, encoding: .utf8),
           let additionText = String(data: addition, encoding: .utf8),
-          existingText.hasSuffix("\n"),
+          (existingText.isEmpty || existingText.hasSuffix("\n")),
           additionText.hasSuffix("\n")
     else {
-        throw EvidencePathHelperError.contract(
+      throw EvidencePathHelperError.contract(
             "manifest append requires newline-terminated UTF-8"
         )
     }
     var keys = Set<String>()
     for text in [existingText, additionText] {
+        if text.isEmpty {
+            continue
+        }
         guard text.contains("\r") == false else {
             throw EvidencePathHelperError.contract(
-                "manifest append contains a carriage return"
+              "manifest append contains a carriage return"
             )
         }
         let body = text.dropLast()

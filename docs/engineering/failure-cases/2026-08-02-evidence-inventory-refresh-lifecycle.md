@@ -7,7 +7,7 @@
 - 引入提交：`29d38c68d61725a681efd713358e4f4a8f7d18db`（`fix(evidence): 加固证据路径与会话生命周期`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git author／committer identity 不能单独证明实际操作者
-- 修复提交：`6746297a0f0b4a5ea5bc6406e2cf5d39e8890d76`（`fix(evidence): 支持空清单启动状态`；配套 fixture 生命周期修复为 `6c8a1a402713f3fd23d5021535da79f1d9e0d621`）
+- 修复提交：`6746297860486c55d0200dd1ccd2dc7225c78cc5`（`fix(evidence): 支持空清单启动状态`；配套 fixture 生命周期修复为 `6c8a1a431b001fd794ef4986d149c602300a9c77`）
 
 ## 用户症状与影响
 
@@ -55,7 +55,7 @@ scripts/test-dmg-window-identity-contract
 
 - 症状红：合入后的 `make check` 与 `bash -x scripts/test-dmg-evidence-contract` 均稳定得到 `artifact inventory output must not already exist`；后续完整门禁稳定得到 `manifest append requires newline-terminated UTF-8`。
 - Fast 红转绿：`scripts/test-dmg-evidence-contract` 与 `scripts/test-dmg-window-identity-contract` 均通过。
-- 完整回归绿：修复提交 `6746297a0f0b4a5ea5bc6406e2cf5d39e8890d76` 上的 `make check` 以 exit 0 完成；包含 build、1,440 项自动测试（2 项环境策略 skip）、确定性模拟、DMG evidence／window identity、failure-case gates、SwiftLint 与 SwiftFormat lint。
+- 完整回归绿：修复提交 `6746297860486c55d0200dd1ccd2dc7225c78cc5` 上的 `make check` 以 exit 0 完成；包含 build、1,440 项自动测试（2 项环境策略 skip）、确定性模拟、DMG evidence／window identity、failure-case gates、SwiftLint 与 SwiftFormat lint。
 - Symptom／release：`scripts/test-dmg-install` 继续由 `scripts/release-private-dmg` 对 exact package 的受控 `dmg-validation` 路径执行；本轮未创建发行物，也未运行 production App。
 
 ## 永久门禁

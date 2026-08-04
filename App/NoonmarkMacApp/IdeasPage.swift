@@ -438,10 +438,10 @@ private struct IdeaDaySectionHeader: View {
         HStack(spacing: 8) {
             Text(store.displayFullDate(group.date))
                 .font(.noonmarkSystem(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.text2)
+                .foregroundStyle(Theme.flylightTemporalText)
             Text("\(group.ideas.count)")
                 .font(.noonmarkSystem(size: 10.5))
-                .foregroundStyle(Theme.text3)
+                .foregroundStyle(Theme.flylightTemporalText)
                 .monospacedDigit()
             Spacer()
         }
@@ -532,7 +532,7 @@ private struct IdeaCardView: View {
             HStack(alignment: .center, spacing: 8) {
                 Text(store.displayTime(idea.createdAt) ?? "")
                     .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text3)
+                    .foregroundStyle(Theme.flylightTemporalText)
                     .monospacedDigit()
                 if editorSession.lastSavedIdeaID == idea.id,
                    editorSession.saveState == .succeeded

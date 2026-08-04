@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-20：Demo 展示进程错误承载自动化权限
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 11:21 -04:00
 - 影响版本／构建：`20d12b5373471b5980be0f9c9234c40106e9e9ef` 构建的隔离 Demo App
 - 引入提交：`f36bd7d894ea6dc87f41d6af2becc0557f7e4587 feat(demo): 固化十天交互验收基线`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`7820f7dbb7ad34da3f4197702559bd2f2cad96f6`（`fix(demo): 分离验收安装与交互展示进程`）
 
 ## 用户症状与影响
 
@@ -19,6 +19,7 @@
 - 2026-08-04：Demo 改为稳定 Apple Development 签名并加入 CG event-posting 权限请求；直接执行的验收入口转绿。
 - 2026-08-04 11:21：最终交付尝试运行 `make run-demo-app`，LaunchServices 进程返回 `eventAccessUnavailable`；相同源码和签名的直接执行验收此前通过。
 - 2026-08-04：对比两个脚本，确认唯一关键差异是 fixture 自动化由测试宿主直接启动，还是由 LaunchServices 最终展示进程承担。
+- 2026-08-04：以两阶段启动修复边界后，直接 installer、LaunchServices 纯展示重开和完整仓库检查全部转绿。
 
 ## 复现与证据
 
@@ -50,9 +51,10 @@ interactive demo fixture did not become ready
 
 ## 验证结果
 
-- 待重跑 `scripts/test-runtime-profile-isolation`。
-- 待重跑 `make test-demo-fixture` 与 `make run-demo-app`。
-- 待重跑完整 `make check`。
+- `scripts/test-runtime-profile-isolation` 通过，确认 installer 生命周期、唯一 fixture 参数和 LaunchServices 展示边界。
+- `make test-demo-fixture` 通过：直接 installer 完成真实交互与资料对账，随后 LaunchServices 纯展示进程稳定存活。
+- `make run-demo-app` 通过，并在飞光页面留下可交互的 `demo` 展示进程。
+- 完整 `make check` 通过：1500 项测试中 2 项既有跳过、0 失败；36 个故障案例门禁、DMG 证据门禁和 SwiftFormat lint 全部通过。
 
 ## 永久门禁
 

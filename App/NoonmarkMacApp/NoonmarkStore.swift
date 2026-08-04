@@ -217,9 +217,8 @@ final class NoonmarkStore: ObservableObject {
         static let addIdea = Self { $0.addIdeaAction }
         static let editIdea = Self { $0.editIdeaAction }
         static let deleteIdea = Self { $0.deleteIdeaAction }
-        static let pinIdea = Self { $0.pinIdeaAction }
-        static let unpinIdea = Self { $0.unpinIdeaAction }
-        static let restoreIdea = Self { $0.restoreIdeaAction }
+        static let pinIdea = Self { $0.addToStickyNotesAction }
+        static let unpinIdea = Self { $0.removeFromStickyNotesAction }
 
         static func completeTasks(_ count: Int) -> Self {
             Self { $0.completeTasksAction(count) }
@@ -471,6 +470,7 @@ final class NoonmarkStore: ObservableObject {
 
     enum Page: String, CaseIterable, Identifiable {
         case day
+        case stickyNotes
         case ideas
         case pool
         case future
@@ -487,6 +487,8 @@ final class NoonmarkStore: ObservableObject {
             switch self {
             case .day:
                 return "clock"
+            case .stickyNotes:
+                return "note.text"
             case .ideas:
                 return "lightbulb"
             case .pool:
@@ -512,6 +514,8 @@ final class NoonmarkStore: ObservableObject {
             switch self {
             case .day:
                 return Theme.navDay
+            case .stickyNotes:
+                return Theme.navStickyNotes
             case .ideas:
                 return Theme.navIdeas
             case .pool:
@@ -705,7 +709,6 @@ final class NoonmarkStore: ObservableObject {
         repository: IdeaComposerDraftRepository()
     )
     let ideaInlineEditorSession = IdeaInlineEditorSession()
-    let ideaRestoreTextDraft = NoonmarkTextInputDraft()
     let inputDraftFlushCoordinator =
         InputDraftFlushCoordinator()
     let reviewAutosaveStatus = ReviewAutosaveStatus()
@@ -730,18 +733,11 @@ final class NoonmarkStore: ObservableObject {
         set { ideaInlineEditorSession.updateText(newValue) }
     }
 
-    var ideaRestoreText: String {
-        get { ideaRestoreTextDraft.text }
-        set { ideaRestoreTextDraft.text = newValue }
-    }
-
     @Published var ideaFilterText = ""
     @Published var ideaClassificationFilter: IdeaClassificationFilterSelection?
     @Published var ideaBrowseMode: IdeaBrowseMode = .recent
     @Published var ideaReviewSeed: UInt64 = 0
     @Published var selectedIdeaID: IdeaID?
-    @Published var isIdeaTrashExpanded = false
-    @Published var restoringIdeaID: IdeaID?
     var editingIdeaID: IdeaID? { ideaInlineEditorSession.ideaID }
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false

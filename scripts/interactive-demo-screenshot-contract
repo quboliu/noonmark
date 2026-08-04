@@ -6,6 +6,9 @@ readonly -a NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS=(
   pool
   day
   ideas
+  stickyNotes
+  stickyNotes-stream
+  stickyNotes-wall
   future
   recurring
   unfinished

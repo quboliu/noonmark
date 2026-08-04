@@ -1,143 +1,112 @@
-# 晷迹想法记录（Idea Capture）产品规格
+# 晷迹札记、飞光与 Sticky Note 产品规格
 
-**状态**：已接受设计，第一阶段已实现
-**日期**：2026-07-30；2026-08-03 补记置顶、回收站与标签点击过滤语义
-**风险等级**：A 级——新增一等领域实体并跨 Core、Storage、Sync 与 Mac UI；项目尚未发布，无既有用户数据
+**状态**：已接受，实施中
+
+**日期**：2026-08-04
+
+**风险等级**：P
 
 ## 目标与成功标准
 
-晷迹新增对标 flomo／Memos／Thino 的原生想法记录能力，让用户把尚未决定是否或如何执行的零散灵感、记录或提醒立即写下来，不打断当前工作，也不强迫当场形成任务承诺。
+晷迹在侧边栏新增与「计划」「轨迹」并列的第三个信息分组「札记」。札记内固定先显示 **Sticky Note**，再显示 **飞光**；原有独立速记能力整体统一为飞光。
 
 成功标准：
 
-- 想法由一等领域实体 **想法条目**（`IdeaEntry`）承载，不依附任务、不进入任务状态机、不投影到任何任务池化视图或统计。
-- App 内「想法 / Ideas」页面与全局快捷键速记浮窗双入口共用同一领域命令与 `#标签`／`@分组` token 解析。
-- 想法条目复用现有任务分组与标签目录，删除留墓碑，并纳入同步，与任务实体同待遇。
-- 无 AI Provider 时想法记录全功能可用，不经过烛龙会话。
-- 真实 `.app` E2E 截图、SQLite 探针、同步乱序／并发测试与 DMG 安装启动全部通过。
+- 侧边栏稳定排序为计划 → 轨迹 → 札记；札记内 Sticky Note → 飞光。
+- 产品文案、页面标题、全局速记与操作只使用飞光／Flylight，不再使用 Memo、想法或 Ideas。
+- 用户可从任意活动飞光条目选择「加入 Sticky Note」，也可从飞光或 Sticky Note 中移出。
+- Sticky Note 不复制正文；源条目仍留在飞光时间线，编辑立即同步，删除自动退出精选投影。
+- Sticky Note 提供清单流与便签墙两种展示视图；视图切换不改变内容、精选关系或同步事实。
+- 飞光继续支持 Markdown、多行共享草稿、双击原位编辑、搜索、分类、回看、全局速记和隐藏墓碑。
 
-## 范围
+## 产品语言与兼容边界
 
-### 第一阶段功能清单（本次实现）
+- **札记** 是侧边栏信息分组，不是新的持久化实体。
+- **飞光** 是完整的 note-first 来源库；一条活动记录称为 **飞光条目**。
+- **Sticky Note** 是飞光条目的精选投影，不是新的内容类型或副本。
+- 现有 `IdeaEntry`、`IdeaID`、`idea_entries`、`pinnedAt`、sync payload key 与相关 API 是已发布兼容标识符。本轮只在领域外观与 App intent seam 使用新语言，不迁移 storage 或 wire format；见 ADR 0044、0045。
 
-- 领域：`IdeaEntry` 实体（含可选 `pinnedAt`）与 `appendIdea`／`editIdea`／`deleteIdea`／`restoreIdea`／`setIdeaClassification`／`pinIdea`／`unpinIdea` 命令；`pinnedIdeas(filter:)`／`ideaTimeline(filter:)`／`ideaTimelineByDay` 投影与 `ideaTrash()` 回收站投影（按 `deletedAt` 倒序）；`IdeaTimelineFilter` 为正文 substring、主分类与标签的 AND 组合。
-- 存储：新表 `idea_entries`（schema version 15→16）与置顶列 `pinned_at`（schema version 16→17），clean-cut 无迁移。
-- 同步：纳入 `change_journal`、`SyncSnapshotDiffer` 与上下行协调器，墓碑与 `pinnedAt` 随同步 payload 传播。
-- UI：侧边栏新页面「想法 / Ideas」——顶部常驻多行速记框（MarkdownEditor，Cmd+Enter 保存），下方过滤框与倒序时间线按自然日分组；时间线上方有「已置顶」分组（复用日分组标题排版，无徽章图标）；卡片呈现正文、时间戳、可点击的分组／标签行与溢出菜单（置顶／取消置顶／编辑／删除），支持行内编辑，置顶操作支持 undo；页底为默认折叠的回收站分区，行内恢复需重新输入正文。
-- 全局快捷键速记浮窗：默认 ⌃⇧I，可在设置改键；Enter 保存、Esc 关闭；沿用 ADR 0033 的非独占 Carbon hotkey 与冲突检查纪律。
+## 信息架构
 
-### 明确不包含
+侧边栏分组与页面顺序固定为：
 
-- 不提供想法→todo／排期转换；该能力属第二阶段，仅完成设计（见下文）。
-- 不提供 agent 自动整理归类；第二阶段设计，用户确认前不落库。
-- 不建立第二套分类库，不为想法建立历史分类快照。
-- 不提供想法硬删除；同步收敛依赖墓碑持续存在，删除只追加 `deletedAt`。
-- 不把想法投影到 Day Todo、任务池、未来计划、未完成池、已完成池、日历、全局搜索或页面统计区。
-- 不提供想法的 AI 摘要、向量化、链接双链、附件或图片；第一阶段正文为纯文本（速记框使用多行 MarkdownEditor，但语义即正文文本）。
-- 不提供旧 schema 迁移、旧数据读取或兼容路径；开发数据按 clean cut 纪律作废。
+1. 计划：Day Todo、任务池、未来计划、重复计划。
+2. 轨迹：未完成、已完成、日历、烛龙。
+3. 札记：Sticky Note、飞光。
 
-## 领域模型
+收起侧边栏时保留三个分组之间的单条分隔线，不显示空标题，也不把 Sticky Note 嵌进飞光页面内部。
 
-```swift
-public struct IdeaEntry: Codable, Equatable, Sendable, Identifiable {
-    public let id: IdeaID
-    public var body: String            // 归一化后非空
-    public var categoryID: TaskCategoryID?
-    public var labelIDs: [TaskLabelID]
-    public let createdAt: Date
-    public var updatedAt: Date
-    public var deletedAt: Date?        // 墓碑删除
-    public var pinnedAt: Date?         // 置顶时间；墓碑时清除
-}
-```
+## 飞光
 
-- 正文归一化：去除首尾 Unicode whitespace 后必须非空，否则拒绝保存；与任务正文纪律一致。
-- 分类复用现有任务分组与标签目录：`categoryID` 至多一个，`labelIDs` 零到多个、无主次顺序；active 分类项才能接受新关联，归档项保留既有关联。想法分类只是当前关系，不形成历史快照，不进入分类关系历史的任务语义。
-- 删除只追加 `deletedAt` 墓碑，与 **任务附言条目** 同纪律；身份不能复用，不能被离线或旧同步副本复活。`ideaTimeline` 只投影未删除条目；已删除条目进入 `ideaTrash()` 回收站投影，按 `deletedAt` 倒序。
-- 删除时正文归一化清空，墓碑不保留正文：回收站只承载身份、分类与时间戳，恢复必须经 `restoreIdea(id:body:now:)` 由用户重新输入非空正文。这一设计让已删除正文不再随同步 payload 与 **数据包** 继续流动，收敛已删除内容的暴露面。
-- 不提供硬删除：跨设备同步收敛依赖墓碑在缺少完整设备确认前持续存在，硬删除会让旧副本在乱序到达时复活。
-- 置顶是当前状态而非历史事实：`pinnedAt` 记录置顶时间，先置顶者排前；tombstone 时同步清除 `pinnedAt`，恢复不复活旧置顶。置顶只改变 `pinnedIdeas(filter:)` 与时间线投影呈现，不产生新的事实类型。
-- 想法条目不依附任务、不形成 **日轨迹**、不参与任务状态机与任何池化视图；与 **任务附言**（依附任务）和 **快速捕获**（落点即任务）的边界以 `CONTEXT.md` 词汇为准。
-- 第二阶段转换溯源字段 `convertedToChainID` 届时追加，不在第一阶段模型中预留。
+### 捕获与编辑
 
-## 交互
+- 页面顶部与全局浮窗共用持久化 Markdown composer session。
+- `Enter` 换行、`⌘Enter` 保存；关闭、失败与 App 重启不丢草稿。
+- 空 composer 基线高 54pt；placeholder 与 caret 使用同一个原生 `NSTextView` 坐标空间。
+- `#标签`／`@分组` 分类 scanner 不得误读 Markdown heading、代码、转义字面量、显式链接目标或裸 URL。
+- 双击旧飞光正文原位编辑；三点菜单只提供辅助编辑入口。
 
-### App 内「想法 / Ideas」页面
+### 浏览
 
-- 侧边栏新增一级页面「想法 / Ideas」，与既有页面同级。
-- 顶部常驻速记框：多行 MarkdownEditor，Cmd+Enter 保存；保存成功后清空并保留焦点，时间线顶部即时出现新卡片。
-- 速记框支持 `#标签`／`@分组` token：复用与任务快速输入相同的解析器、词边界规则、候选排序与引号形式（`#"Deep Focus"`／`@"Client Work"`）；第二个 `@分组` 阻止提交并明确提示。
-- 速记框下方为过滤框：substring 匹配正文，过滤只改变展示，不改变任何事实。
-- 卡片上的 `@分组`／`#标签` 组件可点击：点击即把该分类设为过滤条件，与过滤框正文组成 `IdeaTimelineFilter` 的 AND 组合；过滤激活时，时间线上方显示单条可清除的过滤指示。
-- 时间线按创建时间倒序、按自然日分组；置顶条目汇集在时间线上方的「已置顶」分组，复用日分组标题排版，不新增徽章或图标等视觉单位；卡片 = 正文 + 时间戳 + 可点击标签行 + 溢出菜单（置顶／取消置顶／编辑／删除），置顶操作支持 undo。
-- 编辑为行内编辑：保存走 `editIdea`，清空保存等同删除并留墓碑（与附言编辑纪律一致）；取消恢复原正文。
-- 删除走溢出菜单，留墓碑后卡片从时间线消失；tombstone 同时清除置顶。
-- 页底为默认折叠的回收站分区，展示 `ideaTrash()` 投影；恢复为行内编辑态，用户重新输入正文后保存，走 `restoreIdea(id:body:now:)`。
-- 视觉遵循 **Mac UI 设计契约**：不新增视觉单位堆砌，卡片层级以字号、字重、留白与单条分隔线建立；全局唯一 DOM id 纪律同样适用于 SwiftUI 标识。
+- 最近集合按创建时间倒序、按自然日分组；所有活动飞光都留在时间线，包括已经加入 Sticky Note 的条目。
+- 宽窗为时间线＋右侧详情，窄窗为同一投影的连续流。
+- 卡片与详情使用同一个块级 Markdown renderer。
+- 搜索、分组／标签过滤与回看继续是互斥主集合，不堆叠多段列表。
 
-### 全局快捷键速记浮窗
+### 操作
 
-- 默认 ⌃⇧I 唤起，可在设置改键；改键沿用 ADR 0033 的事务性注册、物理 virtual key、主菜单与系统 symbolic hotkeys 冲突检查，第三方冲突只能明确披露。
-- 浮窗 Enter 保存、Esc 关闭；保存或关闭后恢复此前前台 App，不打开已关闭的主窗口。
-- 浮窗与页面速记框写入同一 `appendIdea` 命令，使用同一 token 解析器；重复触发保留草稿。
-- 快捷键偏好只保存在本机 `UserDefaults`，不进入任务数据库、数据包或同步。
+- 活动飞光提供编辑、删除、加入／移出 Sticky Note。
+- 「加入 Sticky Note」只建立精选关系；不得改创建时间、复制正文或把条目移出飞光。
+- 删除清空正文并保留同步墓碑，同时清除精选关系。
 
-### 归类
+## Sticky Note
 
-- 第一阶段归类是手动操作：速记 token 或卡片溢出菜单／编辑态选择分组与标签，走 `setIdeaClassification`。
-- 任何 agent 建议都不在第一阶段出现；第二阶段归类建议必须经用户确认才落库（见下文）。
+### 内容投影
 
-## 持久化与同步行为
+- 只显示当前仍活动且已被用户选中的飞光条目。
+- 按加入 Sticky Note 的时间倒序；相同时间以稳定身份排序。
+- 编辑源飞光后，所有 Sticky Note 视图立即读取同一正文。
+- 移出后源飞光不变；删除源飞光后 Sticky Note 不得残留幽灵卡片。
+- 空状态引导用户前往飞光选择内容，不提供独立新建输入框。
 
-- SQLite 新增 `idea_entries` 表（schema version 15→16），随后追加 `pinned_at` 列（schema version 16→17）；只接受空白数据库或精确匹配当前版本的数据库，其余 fail-closed，不提供迁移。
-- 写路径由同一 SQLite `BEGIN IMMEDIATE` 事务覆盖：实体写入与 sync outbox 原子提交，任何失败不得留下半成品条目。
-- 想法条目是首类同步事实：纳入 `change_journal`、`SyncSnapshotDiffer` 与上下行协调器，与任务实体同待遇；payload 使用与既有实体一致的 canonical current envelope 纪律，`pinnedAt` 随 payload 传播。
-- 乱序到达按既有 journal 纪律合并；编辑与删除竞争不产生复活，墓碑在缺少完整设备确认前不做 GC。
-- 数据包与导入导出沿用当前契约：想法条目（含 `pinnedAt` 与墓碑状态）随任务事实一同进出 **数据包**；非当前 envelope 一律拒绝。
-- 想法分类引用不阻断分类归档与合并的既有语义；被引用分类的 **分组删除**／合并按既有影响预览与原子迁移处理，想法条目作为引用方计入影响范围。
+### 展示视图
 
-## 演示基线与 E2E 验收
+- **清单流**：稳定可扫读的单列布局，正文优先，保留时间与分类摘要。
+- **便签墙**：自适应多列布局，使用独立 presentation container；首版只建立轻量暖色便签基线，不固定未来纸张颜色、尺寸、旋转或自由排布规则。
+- 页面提供明确的视图切换操作；选择属于 profile 隔离的本机偏好，不进入 SQLite snapshot、数据包或同步。
+- 两种布局复用同一个条目内容组件与操作模型；新增第三种视图不得修改领域实体或精选 mutation。
 
-- 交互演示沿用 `make run-demo-app` 十天中段用户状态；想法记录属于需要历史才能体验的功能，十天用户故事、机器可检查报告与 `docs/engineering/interactive-demo-fixture.md` 覆盖表由演示基线改动在同一轮补齐（本规格只定义覆盖契约，不改该文件）。
-- 演示覆盖契约：时间线跨多个自然日、含带分组／标签与未归类的条目、含可验证的墓碑删除结果；速记框与过滤框可交互。
-- 真实 `.app` E2E：页面速记 Cmd+Enter 保存、`#`／`@` token 候选与引号形式、第二个 `@分组` 阻断、过滤、行内编辑、删除后时间线消失；全局热键浮窗打开、Enter 保存、Esc 关闭、焦点恢复与主窗口不重开。
-- SQLite 探针验证落库、编辑、`deletedAt` 墓碑与重启后回读；同步乱序／并发测试覆盖墓碑不复活。
-- 完整 `scripts/test-e2e`、`make check` 与 DMG 安装启动继续作为发布门禁；无 frontend-verify skill 时，以真实 `.app` 截图、交互断言、console 与持久化探针补齐。
+## 删除与墓碑
 
-## 第二阶段 agent 能力设计（仅设计，不落代码）
+- 删除后的飞光立即退出飞光、Sticky Note 与详情，正文清空并留下同步墓碑。
+- 侧边栏、札记页面、菜单与任何用户可达 route 都不显示回收站、墓碑数量或恢复操作。
+- 底层兼容恢复命令不属于开放产品能力，生产 App 层不提供调用入口。
 
-### 想法 → todo／排期
+## 持久化与同步
 
-- 用户在想法卡片手动触发转换；不存在后台或批量自动转换。
-- 转换走烛龙 **对话产物** 通道（ADR 0028）：想法正文作为输入形成 taskPlan，产出 `ZhulongTodoDiffDraft`，用户可在会话内编辑。
-- 用户一次性授权后由 `ZhulongTodoDiffApplier` 通过普通领域接口原子应用；部分成功不存在。
-- 应用成功后想法记录 `convertedToChainID` 溯源字段（届时追加），时间线卡片展示已转换关系；原想法条目保留，不被删除或改写。
-- 未确认前不产生任何任务事实；Provider 不可用时转换入口按烛龙本地模式纪律不可用并明示原因，想法记录其余功能不受影响。
+- 继续使用 `idea_entries.pinned_at` 作为 Sticky Note 精选时间的兼容载体，不新增 schema、不双写。
+- 加入、移出、编辑与删除继续通过现有原子 engine mutation、SQLite 事务与 sync outbox。
+- LWW／乱序同步不得复活墓碑或已移出的精选关系。
+- 展示视图偏好不进入任务数据库、同步或 Provider scope。
 
-### 想法整理归类
+## 明确不包含
 
-- agent 基于现有分组／标签目录为单条想法建议一个分组与一至三个标签，prompt 与解析复用 `AutomaticTaskClassificationPromptBuilder`／`Decoder` 的严格 JSON handle 契约。
-- 手动触发；建议以可审查形式呈现（建议值 + 理由），用户确认前不落库；确认后走 `setIdeaClassification`，来源按分类来源纪律可追溯。
-- 用户随后手动归类永远优先，任何用户分类变化使旧建议作废。
+- 不提供独立 Sticky Note 正文、新建便签、拖拽自由画布、任意旋转、纸张颜色编辑或空间坐标同步。
+- 不提供飞光转任务、归档、回收站、恢复、附件、图片、双链、知识图谱或 AI 自动归类。
+- 不把飞光或 Sticky Note 投影进 Day Todo、任务池、未来计划、日历或任务统计。
 
-### 回顾与再发现
+## 风险、回滚与监控
 
-- 竞品调研结论：flomo／Memos／Thino 的回顾／再发现类能力——每日回顾、随机漫步、相关想法、想法洞察——本质依赖语义关联与个性化判断，统一归入烛龙第二阶段，与上述两条能力同样遵守用户确认与白盒纪律；第一阶段不提供。
+- 风险：旧 `pinnedAt` 与新产品语言不一致。通过 ADR、intent wrapper 和静态文案门禁隔离兼容标识符，禁止生产 UI 再暴露置顶。
+- 风险：同一条目在飞光与 Sticky Note 同时出现时出现重复编辑状态。Sticky Note 首版只展示和跳转，唯一 inline editor 仍由飞光持有。
+- 风险：便签墙被写死为一种卡片。布局模式、容器和条目内容组件必须拆分，并由两种真实视图验收。
+- 回滚：本轮不迁移 schema；若 UI cutover 失败，可回滚页面与文案代码，非生产 profile clean cut 后重建，不处理 production 数据。
+- 监控：只记录有界 mutation 结果码和展示模式枚举，不记录正文、分类名、搜索词或其他自由文本。
 
-### 硬边界
+## 验证
 
-- AI 未经确认不写任何数据的边界不变：第二阶段两条能力都只产生产物或建议，写入必须经用户显式确认，并继续走普通领域接口与 **AI 应用批次** 纪律。
-
-## 验收门槛
-
-- 运行期源码、schema、fixture 与产品 UI 只存在当前一套想法模型；无 adapter、双写、兼容 decoder 或迁移路径。
-- `make check`、`NoonmarkCoreTests`／`NoonmarkStorageTests` 想法用例、同步乱序／并发测试、真实 `.app` E2E、SQLite 探针与 DMG 安装启动全部通过。
-- 无 Provider 环境下想法记录全功能路径由 E2E 实证；烛龙与 Provider 相关入口不出现於想法页面。
-- `CONTEXT.md` 想法词汇、`docs/adr/0040` 与本规格一致；演示基线覆盖契约由对应改动同步落地。
-
-## 风险与回滚
-
-- 风险：想法与任务附言边界混淆。CONTEXT.md 已固化三方边界，UI 上想法不投影到任何任务列表；后续实现评审必须核对这一隔离。
-- 风险：token 解析与任务快速输入漂移。两条入口强制共用同一解析器，E2E 对两侧做同一组 token 断言。
-- 风险：同步乱序下编辑与墓碑竞争。由既有 journal 合并纪律与墓碑防复活覆盖，乱序／并发测试为门禁。
-- 回滚：代码回滚以本改动前的 Git commit 为唯一边界，随后执行 `scripts/reset-dev-data`；不保留旧 schema 读路，不让旧二进制读取新开发数据。
+- fast gate：侧边栏三分组顺序、飞光语言、Sticky Note 操作、两种布局 seam、隐藏墓碑与 Markdown contract。
+- domain／storage：精选加入／移出、源条目继续出现在飞光、编辑同步、删除清除精选、SQLite round-trip 与 sync 收敛。
+- symptom gate：真实 `.app` 物理点击飞光加入 Sticky Note，切换两种展示视图，返回飞光仍可见，重启后关系与视图正确。
+- Demo：一年期 fixture 至少包含多条精选飞光，并由同一真实 Demo App 截取 Sticky Note 清单流、便签墙与飞光页面。
+- 最终运行 `make check`、隔离真实 App E2E 与 `make test-demo-fixture`；不得启动或读取 production App／资料。

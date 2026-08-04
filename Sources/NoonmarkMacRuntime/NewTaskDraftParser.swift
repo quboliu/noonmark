@@ -59,7 +59,7 @@ public enum IdeaDraftIssue: Equatable, Sendable {
 }
 
 /// Parsed idea input keeps authored line breaks while separating the optional
-/// classification tokens from the memo body. Task titles deliberately use a
+/// classification tokens from the Flylight body. Task titles deliberately use a
 /// different, single-line normalization policy.
 public struct IdeaDraft: Equatable, Sendable {
     public let body: String
@@ -92,9 +92,14 @@ public enum IdeaDraftParser {
             )
         }
 
+        let protectedRanges = markdownProtectedRanges(in: raw)
         let occurrences = NewTaskDraftParser.classificationTokenOccurrences(
             in: raw
-        )
+        ).filter { occurrence in
+            protectedRanges.contains { range in
+                range.contains(occurrence.range.lowerBound)
+            } == false
+        }
         let categoryNames = occurrences
             .filter { $0.kind == .category }
             .map(\.name)
@@ -109,6 +114,33 @@ public enum IdeaDraftParser {
                 .filter { $0.kind == .label }
                 .map(\.name),
             issue: issue
+        )
+    }
+
+    public static func activeToken(
+        in rawText: String
+    ) -> NewTaskClassificationToken? {
+        guard let token = NewTaskDraftParser.activeToken(in: rawText),
+              let markerIndex = NewTaskDraftParser.lastBoundaryMarkerIndex(
+                  in: rawText
+              ),
+              markdownProtectedRanges(in: rawText).contains(where: {
+                  $0.contains(markerIndex)
+              }) == false
+        else {
+            return nil
+        }
+        return token
+    }
+
+    public static func completingActiveToken(
+        in rawText: String,
+        with name: String
+    ) -> String {
+        guard activeToken(in: rawText) != nil else { return rawText }
+        return NewTaskDraftParser.completingActiveToken(
+            in: rawText,
+            with: name
         )
     }
 
@@ -131,6 +163,173 @@ public enum IdeaDraftParser {
         }
         result.append(contentsOf: raw[cursor...])
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func markdownProtectedRanges(
+        in source: String
+    ) -> [Range<String.Index>] {
+        var ranges = backtickCodeRanges(in: source)
+        ranges.append(contentsOf: headingMarkerRanges(in: source))
+        ranges.append(contentsOf: escapedClassificationMarkerRanges(in: source))
+        ranges.append(contentsOf: URLLikeRanges(in: source))
+        var cursor = source.startIndex
+        while cursor < source.endIndex {
+            guard let linkStart = source.range(
+                of: "](",
+                range: cursor ..< source.endIndex
+            ) else {
+                break
+            }
+            var index = linkStart.upperBound
+            var depth = 1
+            var escaped = false
+            while index < source.endIndex, depth > 0 {
+                let character = source[index]
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth -= 1
+                }
+                index = source.index(after: index)
+            }
+            let upperBound = depth == 0 ? index : source.endIndex
+            ranges.append(linkStart.lowerBound ..< upperBound)
+            cursor = upperBound
+        }
+        return ranges
+    }
+
+    private static func escapedClassificationMarkerRanges(
+        in source: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var index = source.startIndex
+        while index < source.endIndex {
+            defer { index = source.index(after: index) }
+            guard source[index] == "#" || source[index] == "@" else {
+                continue
+            }
+            var slashCount = 0
+            var cursor = index
+            while cursor > source.startIndex {
+                let preceding = source.index(before: cursor)
+                guard source[preceding] == "\\" else { break }
+                slashCount += 1
+                cursor = preceding
+            }
+            guard slashCount.isMultiple(of: 2) == false else { continue }
+            ranges.append(index ..< source.index(after: index))
+        }
+        return ranges
+    }
+
+    /// Bare URLs are not CommonMark link destinations, but users reasonably
+    /// expect their path, fragment, and user-info markers to remain literal.
+    private static func URLLikeRanges(
+        in source: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var searchStart = source.startIndex
+        while searchStart < source.endIndex,
+              let separator = source.range(
+                  of: "://",
+                  range: searchStart ..< source.endIndex
+              )
+        {
+            var schemeStart = separator.lowerBound
+            while schemeStart > source.startIndex {
+                let preceding = source.index(before: schemeStart)
+                let character = source[preceding]
+                guard character.isLetter || character.isNumber
+                    || character == "+" || character == "-" || character == "."
+                else {
+                    break
+                }
+                schemeStart = preceding
+            }
+            let scheme = source[schemeStart ..< separator.lowerBound]
+            guard scheme.first?.isLetter == true,
+                  scheme.dropFirst().allSatisfy({ character in
+                      character.isLetter || character.isNumber
+                          || character == "+" || character == "-"
+                          || character == "."
+                  })
+            else {
+                searchStart = separator.upperBound
+                continue
+            }
+            var upperBound = separator.upperBound
+            while upperBound < source.endIndex,
+                  source[upperBound].isWhitespace == false
+            {
+                upperBound = source.index(after: upperBound)
+            }
+            ranges.append(schemeStart ..< upperBound)
+            searchStart = upperBound
+        }
+        return ranges
+    }
+
+    private static func headingMarkerRanges(
+        in source: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var lineStart = source.startIndex
+        while lineStart < source.endIndex {
+            var markerEnd = lineStart
+            var count = 0
+            while markerEnd < source.endIndex,
+                  source[markerEnd] == "#",
+                  count < 6
+            {
+                markerEnd = source.index(after: markerEnd)
+                count += 1
+            }
+            if count > 0,
+               markerEnd < source.endIndex,
+               source[markerEnd].isWhitespace
+            {
+                ranges.append(lineStart ..< markerEnd)
+            }
+            guard let newline = source[lineStart...].firstIndex(of: "\n")
+            else {
+                break
+            }
+            lineStart = source.index(after: newline)
+        }
+        return ranges
+    }
+
+    private static func backtickCodeRanges(
+        in source: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var cursor = source.startIndex
+        while cursor < source.endIndex {
+            guard source[cursor] == "`" else {
+                cursor = source.index(after: cursor)
+                continue
+            }
+            let opener = cursor
+            while cursor < source.endIndex, source[cursor] == "`" {
+                cursor = source.index(after: cursor)
+            }
+            let delimiter = String(source[opener ..< cursor])
+            guard let closer = source.range(
+                of: delimiter,
+                range: cursor ..< source.endIndex
+            ) else {
+                ranges.append(opener ..< source.endIndex)
+                break
+            }
+            ranges.append(opener ..< closer.upperBound)
+            cursor = closer.upperBound
+        }
+        return ranges
     }
 }
 
@@ -331,7 +530,7 @@ public enum NewTaskDraftParser {
         )
     }
 
-    private static func lastBoundaryMarkerIndex(in text: String) -> String.Index? {
+    fileprivate static func lastBoundaryMarkerIndex(in text: String) -> String.Index? {
         var result: String.Index?
         var index = text.startIndex
         while index < text.endIndex {

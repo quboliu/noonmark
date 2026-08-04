@@ -41,8 +41,8 @@ private extension AppOperationFailureContext {
             english: "The note could not be changed. Refresh and try again."
         ),
         .ideaMutation: .init(
-            chinese: "想法修改未完成，请刷新后重试。",
-            english: "The idea could not be changed. Refresh and try again."
+            chinese: "飞光修改未完成，请刷新后重试。",
+            english: "The Flylight could not be changed. Refresh and try again."
         ),
         .dailyReview: .init(
             chinese: "每日复盘暂时无法保存，请稍后重试。",

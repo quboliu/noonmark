@@ -162,7 +162,10 @@ require_literal \
   "height: fixedHeight.map"
 require_literal \
   App/NoonmarkMacApp/MarkdownEditing.swift \
-  'identifier: "\(nativeAccessibilityIdentifier).placeholder"'
+  '"\($0).placeholder"'
+require_literal \
+  App/NoonmarkMacApp/MarkdownEditing.swift \
+  "private lazy var placeholderField: MarkdownPlaceholderTextField"
 require_literal \
   App/NoonmarkMacApp/ReviewEditorLayoutE2EAutomation.swift \
   "try input.typeUnicode(sentinel)"

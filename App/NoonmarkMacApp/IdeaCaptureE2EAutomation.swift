@@ -3,7 +3,7 @@ import Foundation
 import NoonmarkCore
 import NoonmarkMacRuntime
 
-/// Drives the Ideas page and the global idea-capture panel through the signed
+/// Drives Flylight, Sticky Note, and global capture through the signed
 /// App and physical WindowServer input. Store access is limited to assertions;
 /// every idea mutation goes through the real composer, the card overflow menu,
 /// the File menu command, or the Carbon hotkey path.
@@ -14,22 +14,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         case verify
     }
 
-    private static let alphaDraft = "e2e idea alpha\nsecond line #SwiftUI @工程"
-    private static let alphaBody = "e2e idea alpha\nsecond line"
+    private static let alphaDraft = "## e2e Flylight alpha\n- second line https://example.com/@user #SwiftUI @工程"
+    private static let alphaBody = "## e2e Flylight alpha\n- second line https://example.com/@user"
     private static let alphaCategoryName = "工程"
     private static let alphaLabelName = "SwiftUI"
     private static let betaBody = "e2e idea beta marker"
     private static let betaEditedBody = "e2e idea beta edited"
     private static let betaAutosavedBody = "e2e idea beta autosaved"
     private static let betaCancelledBody = "e2e idea beta must cancel"
-    private static let betaRestoredBody = "e2e idea beta restored"
     private static let epsilonBody = "e2e idea epsilon marker"
     private static let discardedDraft = "e2e draft discarded"
     private static let gammaBody = "e2e panel idea gamma"
     private static let deltaBody = "e2e hotkey idea delta"
     private static let restartDraft = "e2e draft survives process restart"
 
-    // Card overflow menu order is pin/unpin, edit, delete; the first down
+    // Card overflow menu order is Sticky Note intent, edit, delete; the first down
     // arrow highlights the first item once tracking begins.
     private static let cardMenuPinArrowCount = 1
     private static let cardMenuDeleteArrowCount = 3
@@ -86,7 +85,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try await openIdeasPageFromSidebar(
             store: store,
             mainWindow: mainWindow,
-            input: input
+            input: input,
+            expectEmpty: true
         )
         try await captureScreenshot("ideas-empty.png", of: mainWindow)
 
@@ -94,13 +94,24 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ComposerDraft(
                 text: Self.alphaDraft,
                 body: Self.alphaBody,
-                suggestionsCheckpoint: "e2e idea alpha\nsecond line #"
+                suggestionsCheckpoint: "## e2e Flylight alpha\n- second line https://example.com/@user #"
             ),
             store: store,
             mainWindow: mainWindow,
             input: input
         )
         try assertAlphaClassification(alpha, store: store)
+        guard AppViewTreeE2E.view(
+            identifier: "ideas.card.markdown.\(alpha.id).0",
+            in: mainWindow
+        ).flatMap(AppViewTreeE2E.verificationText) == "heading-2",
+            AppViewTreeE2E.view(
+                identifier: "ideas.card.markdown.\(alpha.id).1",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "list"
+        else {
+            throw Failure.failed("Flylight card did not render Markdown blocks")
+        }
         try await captureScreenshot("ideas-composer-saved.png", of: mainWindow)
 
         let beta = try await saveComposerIdea(
@@ -147,13 +158,12 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
-        try await exerciseTrashRestore(
+        try await exerciseHiddenTrash(
             betaID: beta.id,
             store: store,
-            mainWindow: mainWindow,
-            input: input
+            mainWindow: mainWindow
         )
-        try await exercisePinLifecycle(
+        try await exerciseStickyNoteLifecycle(
             alphaID: alpha.id,
             store: store,
             mainWindow: mainWindow,
@@ -167,7 +177,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         )
         try await exerciseDelete(
             betaID: epsilon.id,
-            expectedTimelineCount: 2,
+            expectedTimelineCount: 1,
             store: store,
             mainWindow: mainWindow,
             input: input
@@ -177,7 +187,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
-        try await exercisePinGamma(
+        try await exerciseStickyNoteGamma(
             store: store,
             mainWindow: mainWindow,
             input: input
@@ -235,11 +245,10 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func verify(on store: NoonmarkStore) async throws {
-        let input = try WindowServerInputDriver()
         let mainWindow = try await visibleMainWindow()
         try await activate(mainWindow)
-        try await waitUntil("ideas page did not render four cards after restart") {
-            store.page == .ideas && timelineCount(in: mainWindow) == 4
+        try await waitUntil("Flylight page did not render three cards after restart") {
+            store.page == .ideas && timelineCount(in: mainWindow) == 3
         }
         try await waitUntil("idea composer draft did not survive process restart") {
             guard let editor = AppViewTreeE2E.view(
@@ -250,7 +259,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && editor.string == Self.restartDraft
         }
 
-        for body in [Self.alphaBody, Self.betaRestoredBody, Self.deltaBody] {
+        for body in [Self.alphaBody, Self.deltaBody] {
             guard let idea = store.engine.ideaTimeline().first(where: {
                 $0.body == body
             }), let card = AppViewTreeE2E.view(
@@ -262,36 +271,57 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             }
         }
 
-        let pinned = store.engine.pinnedIdeas()
-        guard pinned.count == 1, let gamma = pinned.first,
+        let stickyNotes = store.stickyNoteIdeas
+        guard stickyNotes.count == 1, let gamma = stickyNotes.first,
               gamma.body == Self.gammaBody,
               gamma.pinnedAt != nil,
               store.ideaTimelineGroups.flatMap(\.ideas)
-                  .contains(where: { $0.id == gamma.id }) == false,
-              AppViewTreeE2E.view(
-                  identifier: "ideas.pinned",
-                  in: mainWindow
-              ).flatMap(AppViewTreeE2E.verificationText) == "1",
+                  .contains(where: { $0.id == gamma.id }),
               let gammaCard = AppViewTreeE2E.view(
                   identifier: "ideas.card.\(gamma.id)",
                   in: mainWindow
               ),
               AppViewTreeE2E.verificationText(for: gammaCard) == Self.gammaBody
         else {
-            throw Failure.failed("pinned idea did not survive restart")
+            throw Failure.failed("Sticky Note projection did not survive restart")
         }
 
+        try await openStickyNotesPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: try WindowServerInputDriver()
+        )
+        try await waitUntil("Sticky Note page or wall mode did not survive restart") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.item.\(gamma.id)",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == Self.gammaBody
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.presentation",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "wall"
+        }
+        try await captureScreenshot("sticky-notes-restart.png", of: mainWindow)
+        try await openIdeasPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: try WindowServerInputDriver()
+        )
+
         let tombstones = store.engine.ideas.values.filter(\.isDeleted)
-        guard tombstones.count == 1, let tombstone = tombstones.first,
-              tombstone.body == "",
-              let deletedAt = tombstone.deletedAt,
-              tombstone.updatedAt == deletedAt,
-              AppViewTreeE2E.view(
-                  identifier: "ideas.card.\(tombstone.id)",
-                  in: mainWindow
-              ) == nil
+        guard tombstones.count == 2,
+              tombstones.allSatisfy({ tombstone in
+                  tombstone.body == ""
+                      && tombstone.deletedAt.map {
+                          tombstone.updatedAt == $0
+                      } == true
+                      && AppViewTreeE2E.view(
+                          identifier: "ideas.card.\(tombstone.id)",
+                          in: mainWindow
+                      ) == nil
+              })
         else {
-            throw Failure.failed("idea tombstone did not survive restart")
+            throw Failure.failed("Flylight tombstones did not survive restart")
         }
         guard store.engine.ideaTimeline().contains(where: {
             $0.body == Self.betaEditedBody || $0.body == Self.betaAutosavedBody
@@ -302,21 +332,18 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
 
         guard AppViewTreeE2E.view(
-            identifier: "ideas.trash.item.\(tombstone.id)",
+            identifier: "sidebar.nav.memoTrash",
             in: mainWindow
-        ) == nil else {
-            throw Failure.failed("collapsed trash leaked a tombstone row")
-        }
-        try await click("ideas.trash.toggle", in: mainWindow, input: input)
-        try await waitUntil("idea trash did not expand after restart") {
+        ) == nil,
             AppViewTreeE2E.view(
                 identifier: "ideas.trash",
                 in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "1"
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.trash.item.\(tombstone.id)",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "deleted"
+            ) == nil,
+            AppViewTreeE2E.identifiers(
+                withPrefix: "ideas.trash.item."
+            )?.isEmpty != false
+        else {
+            throw Failure.failed("Flylight trash UI became visible after restart")
         }
 
         guard let alpha = store.engine.ideaTimeline().first(where: {
@@ -331,35 +358,42 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     private func openIdeasPageFromSidebar(
         store: NoonmarkStore,
         mainWindow: NSWindow,
-        input: WindowServerInputDriver
+        input: WindowServerInputDriver,
+        expectEmpty: Bool = false
     ) async throws {
-        try await waitUntil("sidebar Ideas row did not render") {
+        try await waitUntil("sidebar Flylight row did not render") {
             AppViewTreeE2E.view(identifier: "sidebar.nav.ideas", in: mainWindow)
                 != nil
         }
         try await click("sidebar.nav.ideas", in: mainWindow, input: input)
-        try await waitUntil("sidebar navigation did not open the Ideas page") {
+        try await waitUntil("sidebar navigation did not open the Flylight page") {
             guard store.page == .ideas,
                   let pageAnchor = AppViewTreeE2E.view(
                       identifier: "ideas.page",
-                      in: mainWindow
-                  ),
-                  let emptyAnchor = AppViewTreeE2E.view(
-                      identifier: "ideas.empty",
                       in: mainWindow
                   )
             else {
                 return false
             }
-            return AppViewTreeE2E.verificationText(for: pageAnchor)
-                == store.copy.navIdeas
-                && AppViewTreeE2E.verificationText(for: emptyAnchor) == "empty"
+            guard AppViewTreeE2E.verificationText(for: pageAnchor)
+                == store.copy.navIdeas else { return false }
+            guard expectEmpty else { return true }
+            return AppViewTreeE2E.view(
+                identifier: "ideas.empty",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "empty"
         }
-        guard AppViewTreeE2E.view(
-            identifier: "ideas.composer.placeholder",
-            in: mainWindow
-        ) != nil else {
-            throw Failure.failed("ideas composer placeholder was missing")
+        if expectEmpty {
+            guard AppViewTreeE2E.view(
+                identifier: "ideas.composer.placeholder",
+                in: mainWindow
+            ) != nil else {
+                throw Failure.failed("Flylight composer placeholder was missing")
+            }
+            try await assertEmptyComposerGeometry(
+                mainWindow: mainWindow,
+                input: input
+            )
         }
         guard AppViewTreeE2E.view(
             identifier: "ideas.layout",
@@ -371,7 +405,105 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ) != nil
         else {
             throw Failure.failed(
-                "default Ideas window did not use the wide timeline-inspector skeleton"
+                "default Flylight window did not use the wide timeline-inspector skeleton"
+            )
+        }
+    }
+
+    private func openStickyNotesPageFromSidebar(
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await waitUntil("sidebar Sticky Note row did not render") {
+            AppViewTreeE2E.view(
+                identifier: "sidebar.nav.stickyNotes",
+                in: mainWindow
+            ) != nil
+        }
+        try await click("sidebar.nav.stickyNotes", in: mainWindow, input: input)
+        try await waitUntil("sidebar navigation did not open Sticky Note") {
+            store.page == .stickyNotes
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.page",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText)
+                == "\(store.stickyNoteIdeas.count)"
+        }
+    }
+
+    private func assertEmptyComposerGeometry(
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let editor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView,
+            let placeholder = AppViewTreeE2E.view(
+                identifier: "ideas.composer.placeholder",
+                in: mainWindow
+            ),
+            let surface = AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            )
+        else {
+            throw Failure.failed("empty composer geometry targets were missing")
+        }
+        if mainWindow.firstResponder !== editor {
+            _ = mainWindow.makeFirstResponder(editor)
+        }
+        try await waitUntil("empty composer did not take focus") {
+            mainWindow.firstResponder === editor
+        }
+        let focusedCaretFrame = editor.firstRect(
+            forCharacterRange: NSRange(location: 0, length: 0),
+            actualRange: nil
+        )
+        try await click("ideas.composer.input", in: mainWindow, input: input)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        let editorFrame = AppViewTreeE2E.frameInWindow(for: editor)
+        let surfaceFrame = AppViewTreeE2E.frameInWindow(for: surface)
+        let placeholderFrame = mainWindow.convertToScreen(
+            AppViewTreeE2E.frameInWindow(for: placeholder)
+        )
+        let caretFrame = editor.firstRect(
+            forCharacterRange: NSRange(location: 0, length: 0),
+            actualRange: nil
+        )
+        let focusedOffset = abs(
+            focusedCaretFrame.midY - placeholderFrame.midY
+        )
+        let verticalOffset = abs(caretFrame.midY - placeholderFrame.midY)
+        let extraLineFrame = editor.layoutManager?.extraLineFragmentRect ?? .zero
+        let extraLineInEditor = extraLineFrame.offsetBy(
+            dx: editor.textContainerOrigin.x,
+            dy: editor.textContainerOrigin.y
+        )
+        let extraLineInScreen = mainWindow.convertToScreen(
+            editor.convert(extraLineInEditor, to: nil)
+        )
+        try await captureScreenshot("ideas-empty-focused.png", of: mainWindow)
+        guard editorFrame.height <= 60,
+              surfaceFrame.height <= 60,
+              abs(editorFrame.minY - surfaceFrame.minY) <= 1,
+              verticalOffset <= 6
+        else {
+            let scrollView = editor.enclosingScrollView
+            let clipView = scrollView?.contentView
+            let extraLine = editor.layoutManager?.extraLineFragmentRect
+            let editorTop = editor.convert(
+                NSRect(x: 0, y: 0, width: 1, height: 1),
+                to: nil
+            )
+            let editorBottom = editor.convert(
+                NSRect(x: 0, y: editor.bounds.height - 1, width: 1, height: 1),
+                to: nil
+            )
+            throw Failure.failed(
+                "empty composer left phantom space: editor=\(editorFrame), surface=\(surfaceFrame), focusedOffset=\(focusedOffset), caretOffset=\(verticalOffset), editorBounds=\(editor.bounds), visible=\(editor.visibleRect), flipped=\(editor.isFlipped), editorTop=\(editorTop), editorBottom=\(editorBottom), inset=\(editor.textContainerInset), containerOrigin=\(editor.textContainerOrigin), extraLine=\(String(describing: extraLine)), extraLineScreen=\(extraLineInScreen), placeholder=\(placeholderFrame), focusedCaret=\(focusedCaretFrame), caret=\(caretFrame), scrollFrame=\(String(describing: scrollView?.frame)), scrollBounds=\(String(describing: scrollView?.bounds)), clipFrame=\(String(describing: clipView?.frame)), clipBounds=\(String(describing: clipView?.bounds)), clipFlipped=\(String(describing: clipView?.isFlipped))"
             )
         }
     }
@@ -389,7 +521,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         mainWindow.setFrame(compactFrame, display: true)
 
         do {
-            try await waitUntil("Ideas window did not enter compact continuous flow") {
+            try await waitUntil("Flylight window did not enter compact continuous flow") {
                 mainWindow.contentView?.layoutSubtreeIfNeeded()
                 let cards = expectedIdeaIDs.compactMap { id in
                     AppViewTreeE2E.view(
@@ -424,7 +556,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
 
         mainWindow.setFrame(originalFrame, display: true)
-        try await waitUntil("Ideas window did not restore its wide inspector layout") {
+        try await waitUntil("Flylight window did not restore its wide inspector layout") {
             mainWindow.contentView?.layoutSubtreeIfNeeded()
             return AppViewTreeE2E.view(
                 identifier: "ideas.layout",
@@ -839,86 +971,33 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func exerciseTrashRestore(
+    private func exerciseHiddenTrash(
         betaID: IdeaID,
         store: NoonmarkStore,
-        mainWindow: NSWindow,
-        input: WindowServerInputDriver
+        mainWindow: NSWindow
     ) async throws {
-        try await waitUntil("idea trash did not register the tombstone") {
+        try await waitUntil("Flylight deletion did not register a tombstone") {
             store.engine.ideaTrash().map(\.id) == [betaID]
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.trash",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "1"
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.trash.item.\(betaID)",
-                    in: mainWindow
-                ) == nil
         }
-        try await click("ideas.trash.toggle", in: mainWindow, input: input)
-        try await waitUntil("idea trash toggle did not expand the list") {
-            AppViewTreeE2E.view(
-                identifier: "ideas.trash.toggle",
-                in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "expanded"
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.trash.item.\(betaID)",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "deleted"
-        }
-        try await captureScreenshot("ideas-trash-expanded.png", of: mainWindow)
-
-        try await click(
-            "ideas.trash.restore.\(betaID)",
-            in: mainWindow,
-            input: input
-        )
-        var editor: NSTextView?
-        try await waitUntil("idea restore field did not take focus") {
-            guard store.restoringIdeaID == betaID else { return false }
-            editor = AppViewTreeE2E.view(
-                identifier: "ideas.trash.restore.field.\(betaID).input",
-                in: mainWindow
-            ) as? NSTextView
-            return editor != nil && editor?.window?.firstResponder === editor
-        }
-        guard let editor else {
-            throw Failure.failed("idea restore field disappeared")
-        }
-        try input.typeUnicode(Self.betaRestoredBody)
-        try await waitUntil("idea restore field did not receive typed text") {
-            editor.string == Self.betaRestoredBody
-                && store.ideaRestoreText == Self.betaRestoredBody
-        }
-        try input.postKey(keyCode: 36, modifiers: [.command])
-        try await waitUntil(
-            "idea restore did not return the card to the timeline"
-        ) {
-            guard store.restoringIdeaID == nil,
-                  store.engine.ideaTrash().isEmpty,
-                  let restored = store.engine.ideas[betaID],
-                  restored.isDeleted == false,
-                  restored.deletedAt == nil,
-                  restored.body == Self.betaRestoredBody,
-                  let card = AppViewTreeE2E.view(
-                      identifier: "ideas.card.\(betaID)",
-                      in: mainWindow
-                  )
-            else {
-                return false
-            }
-            return AppViewTreeE2E.verificationText(for: card)
-                == Self.betaRestoredBody
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.trash",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "0"
-                && timelineCount(in: mainWindow) == 2
+        guard store.page == .ideas,
+              AppViewTreeE2E.view(
+                  identifier: "sidebar.nav.memoTrash",
+                  in: mainWindow
+              ) == nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.trash",
+                  in: mainWindow
+              ) == nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.trash.item.\(betaID)",
+                  in: mainWindow
+              ) == nil
+        else {
+            throw Failure.failed("Flylight trash or restore UI was exposed")
         }
     }
 
-    private func exercisePinLifecycle(
+    private func exerciseStickyNoteLifecycle(
         alphaID: IdeaID,
         store: NoonmarkStore,
         mainWindow: NSWindow,
@@ -935,27 +1014,70 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await waitUntil(
-            "idea pin did not move the card into the pinned section"
+            "Flylight did not join Sticky Note while remaining in its source timeline"
         ) {
             store.engine.ideas[alphaID]?.pinnedAt != nil
-                && store.pinnedIdeas.map(\.id) == [alphaID]
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.pinned",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "1"
+                && store.stickyNoteIdeas.map(\.id) == [alphaID]
                 && AppViewTreeE2E.view(
                     identifier: "ideas.card.\(alphaID)",
                     in: mainWindow
                 ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
                 && store.ideaTimelineGroups.flatMap(\.ideas).contains {
                     $0.id == alphaID
-                } == false
+                }
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.pinned",
+                    in: mainWindow
+                ) == nil
+                && timelineCount(in: mainWindow) == 1
         }
-        try await waitUntil("pinned card menu view did not re-render") {
+        try await waitUntil("Sticky membership did not refresh the card menu") {
             AppViewTreeE2E.view(
                 identifier: "ideas.card.menu.\(alphaID)",
                 in: mainWindow
             ) !== prePinMenuView
+        }
+
+        try await openStickyNotesPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await waitUntil("selected Flylight did not appear in Sticky Note") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.item.\(alphaID)",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
+        }
+        try await click("sticky-notes.mode.wall", in: mainWindow, input: input)
+        try await waitUntil("Sticky Note did not switch to note wall") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.presentation",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "wall"
+        }
+        try await captureScreenshot("sticky-notes-wall.png", of: mainWindow)
+        try await click("sticky-notes.mode.stream", in: mainWindow, input: input)
+        try await waitUntil("Sticky Note did not switch back to stream") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.presentation",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "stream"
+        }
+        try await doubleClick(
+            "sticky-notes.item.\(alphaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil(
+            "Sticky Note source navigation did not reveal its Flylight card"
+        ) {
+            store.page == .ideas
+                && store.selectedIdeaID == alphaID
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(alphaID)",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
         }
         try await chooseCardMenuItem(
             cardID: alphaID,
@@ -964,10 +1086,10 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await waitUntil(
-            "idea unpin did not return the card to its day group"
+            "removing Sticky Note also removed or hid its Flylight source"
         ) {
             store.engine.ideas[alphaID]?.pinnedAt == nil
-                && store.pinnedIdeas.isEmpty
+                && store.stickyNoteIdeas.isEmpty
                 && AppViewTreeE2E.view(
                     identifier: "ideas.pinned",
                     in: mainWindow
@@ -975,7 +1097,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && store.ideaTimelineGroups.flatMap(\.ideas).contains {
                     $0.id == alphaID
                 }
-                && timelineCount(in: mainWindow) == 2
+                && timelineCount(in: mainWindow) == 1
         }
     }
 
@@ -1005,7 +1127,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && store.engine.ideaTimeline().contains {
                     $0.body == Self.discardedDraft
                 } == false
-                && store.engine.ideaTimeline().count == 2
+                && store.engine.ideaTimeline().count == 1
         }
 
         NSApp.sendAction(
@@ -1033,11 +1155,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && store.engine.ideaTimeline().contains {
                     $0.body == Self.gammaBody
                 }
-                && timelineCount(in: mainWindow) == 3
+                && timelineCount(in: mainWindow) == 2
         }
     }
 
-    private func exercisePinGamma(
+    private func exerciseStickyNoteGamma(
         store: NoonmarkStore,
         mainWindow: NSWindow,
         input: WindowServerInputDriver
@@ -1045,7 +1167,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         guard let gamma = store.engine.ideaTimeline().first(where: {
             $0.body == Self.gammaBody
         }) else {
-            throw Failure.failed("panel idea was missing before pinning")
+            throw Failure.failed("panel Flylight was missing before Sticky selection")
         }
         try await chooseCardMenuItem(
             cardID: gamma.id,
@@ -1053,23 +1175,40 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             in: mainWindow,
             input: input
         )
-        try await waitUntil("panel idea pin did not stick") {
+        try await waitUntil("panel Flylight did not join Sticky Note") {
             store.engine.ideas[gamma.id]?.pinnedAt != nil
-                && store.pinnedIdeas.map(\.id) == [gamma.id]
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.pinned",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "1"
+                && store.stickyNoteIdeas.map(\.id) == [gamma.id]
                 && AppViewTreeE2E.view(
                     identifier: "ideas.card.\(gamma.id)",
                     in: mainWindow
                 ).flatMap(AppViewTreeE2E.verificationText) == Self.gammaBody
                 && store.ideaTimelineGroups.flatMap(\.ideas).contains {
                     $0.id == gamma.id
-                } == false
-                && timelineCount(in: mainWindow) == 3
+                }
+                && timelineCount(in: mainWindow) == 2
         }
-        try await captureScreenshot("ideas-pinned.png", of: mainWindow)
+        try await openStickyNotesPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await click("sticky-notes.mode.wall", in: mainWindow, input: input)
+        try await waitUntil("Sticky Note wall did not render the panel Flylight") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.presentation",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "wall"
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.item.\(gamma.id)",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == Self.gammaBody
+        }
+        try await captureScreenshot("sticky-notes-selected.png", of: mainWindow)
+        try await openIdeasPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
     }
 
     private func exerciseGlobalHotkey(

@@ -13,6 +13,62 @@ final class NewTaskDraftParserTests: XCTestCase {
         XCTAssertNil(draft.issue)
     }
 
+    func testIdeaDraftPreservesMarkdownCodeAndLinkDestinations() {
+        let draft = IdeaDraftParser.parse(
+            """
+            ## API note
+            Use `#define @value` and [profile](https://example.com/@user).
+            ```c
+            #include <stdio.h>
+            @main
+            ```
+            #reference @Engineering
+            """
+        )
+
+        XCTAssertEqual(
+            draft.body,
+            """
+            ## API note
+            Use `#define @value` and [profile](https://example.com/@user).
+            ```c
+            #include <stdio.h>
+            @main
+            ```
+            """
+        )
+        XCTAssertEqual(draft.categoryName, "Engineering")
+        XCTAssertEqual(draft.labelNames, ["reference"])
+    }
+
+    func testIdeaDraftPreservesEscapedMarkersAndBareURLFragments() {
+        let draft = IdeaDraftParser.parse(
+            "Keep \\#literal and https://example.com/@user plus #reference @Engineering"
+        )
+
+        XCTAssertEqual(
+            draft.body,
+            "Keep \\#literal and https://example.com/@user plus"
+        )
+        XCTAssertEqual(draft.categoryName, "Engineering")
+        XCTAssertEqual(draft.labelNames, ["reference"])
+    }
+
+    func testIdeaActiveTokenIgnoresMarkdownCode() {
+        XCTAssertNil(IdeaDraftParser.activeToken(in: "Use `#define"))
+        XCTAssertEqual(
+            IdeaDraftParser.activeToken(in: "Use `#define` #ref"),
+            NewTaskClassificationToken(kind: .label, query: "ref")
+        )
+    }
+
+    func testIdeaActiveTokenIgnoresEscapedMarkerAndBareURLFragment() {
+        XCTAssertNil(IdeaDraftParser.activeToken(in: "Keep \\#literal"))
+        XCTAssertNil(
+            IdeaDraftParser.activeToken(in: "https://example.com/@user")
+        )
+    }
+
     func testParsesLabelsAndOneCategoryWithoutLeakingTokensIntoTitle() {
         let draft = NewTaskDraftParser.parse(
             "准备发布 @工作 #紧急 #本周"

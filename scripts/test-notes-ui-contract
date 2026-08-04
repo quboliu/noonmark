@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+markdown_editor="App/NoonmarkMacApp/MarkdownEditing.swift"
+flylight_page="App/NoonmarkMacApp/IdeasPage.swift"
+sticky_page="App/NoonmarkMacApp/StickyNotesPage.swift"
+flylight_e2e="App/NoonmarkMacApp/IdeaCaptureE2EAutomation.swift"
+notes_copy="App/NoonmarkMacApp/AppCopy+Ideas.swift"
+store="App/NoonmarkMacApp/NoonmarkStore.swift"
+store_ideas="App/NoonmarkMacApp/NoonmarkStore+Ideas.swift"
+sidebar="App/NoonmarkMacApp/WorkspaceShellViews.swift"
+workspace="Sources/NoonmarkCore/IdeaWorkspace.swift"
+
+require_literal() {
+  local literal="$1"
+  local file="$2"
+  local message="$3"
+  if ! /usr/bin/grep -Fq "$literal" "$file"; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
+
+require_literal \
+  '.fixedSize(horizontal: false, vertical: true)' \
+  "$markdown_editor" \
+  'shared Markdown editor can expand beyond its measured native height'
+require_literal \
+  'private lazy var placeholderField: MarkdownPlaceholderTextField' \
+  "$markdown_editor" \
+  'Markdown placeholder escaped the native editor coordinate space'
+require_literal \
+  'identifier: "ideas.composer.surface"' \
+  "$flylight_page" \
+  'Flylight composer has no measurable surface boundary'
+require_literal \
+  'surfaceFrame.height <= 60' \
+  "$flylight_e2e" \
+  'Flylight E2E no longer rejects a vertically inflated empty composer'
+require_literal \
+  'verticalOffset <= 6' \
+  "$flylight_e2e" \
+  'Flylight E2E no longer rejects placeholder/caret drift'
+require_literal \
+  'Sticky Note source navigation did not reveal its Flylight card' \
+  "$flylight_e2e" \
+  'real App E2E no longer exercises Sticky Note source reveal'
+require_literal \
+  '[.day, .pool, .future, .recurring]' \
+  "$sidebar" \
+  'Plan navigation order drifted'
+require_literal \
+  '[.stickyNotes, .ideas]' \
+  "$sidebar" \
+  'Notes navigation must keep Sticky Note above Flylight'
+require_literal \
+  'NavGroupTitle(store.copy.notesGroup)' \
+  "$sidebar" \
+  'Notes navigation group disappeared'
+require_literal \
+  'MarkdownText(' \
+  "$flylight_page" \
+  'Flylight browse surfaces do not use the block Markdown renderer'
+require_literal \
+  'ScrollViewReader { proxy in' \
+  "$flylight_page" \
+  'Flylight cannot reveal a Sticky Note source outside the current viewport'
+require_literal \
+  'proxy.scrollTo(targetID, anchor: .center)' \
+  "$flylight_page" \
+  'Flylight source reveal no longer centers the selected entry'
+require_literal \
+  'var navIdeas: String { language == .chinese ? "飞光" : "Flylight" }' \
+  "$notes_copy" \
+  'Flylight is not the canonical navigation language'
+require_literal \
+  'enum StickyNotePresentationMode' \
+  "$sticky_page" \
+  'Sticky Note presentation is not separated from content'
+require_literal \
+  'private struct StickyNotePresentationControl' \
+  "$sticky_page" \
+  'Sticky Note presentation modes lost their app-owned hit targets'
+require_literal \
+  'identifier: "sticky-notes.mode.\(mode.rawValue)"' \
+  "$sticky_page" \
+  'Sticky Note mode controls have no stable per-mode evidence anchor'
+require_literal \
+  'identifier: "sticky-notes.presentation"' \
+  "$sticky_page" \
+  'Sticky Note presentation modes have no runtime evidence anchor'
+require_literal \
+  '(pinned + timeline)' \
+  "$workspace" \
+  'Sticky Note selection removes the source from Flylight'
+
+if /usr/bin/grep -Eq '"[^"\n]*(Memo|Ideas|Idea details|Capture Idea|想法)[^"\n]*"' \
+  "$notes_copy"; then
+  echo 'Notes user copy reintroduced a retired product name' >&2
+  exit 1
+fi
+
+if /usr/bin/grep -Eq \
+  'IdeaPinnedSectionHeader|ideasPinnedSectionTitle|identifier: "ideas\.pinned"' \
+  "$flylight_page" "$notes_copy"; then
+  echo 'Flylight reintroduced a separate pinned collection' >&2
+  exit 1
+fi
+
+if /usr/bin/grep -Eq 'Picker\(' "$sticky_page"; then
+  echo 'Sticky Note modes returned to a transient Picker label hierarchy' >&2
+  exit 1
+fi
+
+if /usr/bin/grep -Eq \
+  'MemoTrashPage|IdeaTrashRow|IdeaRestoreComposer|sidebar\.nav\.memoTrash|ideas\.trash\.(restore|toggle)|ideasTrashSectionTitle|ideaRestore|beginIdeaRestore|commitIdeaRestore|ideaTrashItems|restoringIdeaID' \
+  "$flylight_page" "$sidebar" "$notes_copy" "$store" "$store_ideas"; then
+  echo 'Flylight trash or restore UI became user reachable' >&2
+  exit 1
+fi
+
+echo 'Notes navigation, Flylight source, Sticky Note modes, hidden tombstones, composer geometry, and Markdown contract passed'

@@ -463,7 +463,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.identifiers(
                 withPrefix: "task-cycle-track."
             )?.isEmpty == true
-        case .recurring, .calendar, .zhulong, .settings, .ideas:
+        case .recurring, .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             true
         }
     }
@@ -533,17 +533,19 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 最近集合骨架未稳定"
+                    "飞光最近集合骨架未稳定"
                 ),
                 on: context.store
             )
             return
         }
         let timelineGroups = context.store.ideaTimelineGroups
-        let projectedIdeas = context.engine.ideaTimeline()
-        let pinnedIdeas = context.engine.pinnedIdeas()
-        let projectedPlusPinned = projectedIdeas + pinnedIdeas
-        let expectedCardIdentifiers = Set(projectedPlusPinned.map {
+        let projectedIdeas = context.engine.ideaCollection(
+            .recent,
+            today: context.store.today
+        ).ideas
+        let stickyNotes = context.engine.pinnedIdeas()
+        let expectedCardIdentifiers = Set(projectedIdeas.map {
             "ideas.card.\($0.id)"
         })
         let timelineGroupIdeaIDs = Set(timelineGroups.flatMap { group in
@@ -580,7 +582,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 of: expectedCardIdentifiers
             )
             && visibleCardIdentifiers.allSatisfy { identifier in
-                guard let idea = projectedPlusPinned.first(where: {
+                guard let idea = projectedIdeas.first(where: {
                     identifier == "ideas.card.\($0.id)"
                 }) else {
                     return false
@@ -588,12 +590,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 return AppViewTreeE2E.view(identifier: identifier)
                     .flatMap(AppViewTreeE2E.verificationText) == idea.body
             }
-        let pinnedSectionIsValid = pinnedIdeas.isEmpty == false
-            && AppViewTreeE2E.view(identifier: "ideas.pinned")
-            .flatMap(AppViewTreeE2E.verificationText)
-            == "\(pinnedIdeas.count)"
-            && pinnedIdeas.allSatisfy { idea in
-                timelineGroupIdeaIDs.contains(idea.id) == false
+        let stickySourcesStayInFlylight = stickyNotes.count >= 3
+            && AppViewTreeE2E.view(identifier: "ideas.pinned") == nil
+            && stickyNotes.allSatisfy { idea in
+                timelineGroupIdeaIDs.contains(idea.id)
                     && AppViewTreeE2E.view(
                         identifier: "ideas.card.\(idea.id)"
                     )
@@ -626,10 +626,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               AppViewTreeE2E.view(identifier: "ideas.filter") == nil,
               AppViewTreeE2E.view(identifier: "ideas.timeline")
               .flatMap(AppViewTreeE2E.verificationText)
-              == "\(projectedPlusPinned.count)",
+              == "\(projectedIdeas.count)",
               topGroupIsFullyVisible,
               visibleCardsMatchProjection,
-              pinnedSectionIsValid,
+              stickySourcesStayInFlylight,
               tombstonesStayHidden
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -644,7 +644,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 搜索动作无法点击"
+                    "飞光搜索动作无法点击"
                 ),
                 on: context.store
             )
@@ -652,7 +652,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         verifyIdeasSearchPresentation(
             context: context,
-            expectedRecentCount: projectedPlusPinned.count,
+            expectedRecentCount: projectedIdeas.count,
             remainingAttempts: 100
         )
     }
@@ -667,7 +667,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 搜索输入面未展开"
+                    "飞光搜索输入面未展开"
                 ),
                 on: context.store
             )
@@ -691,7 +691,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 搜索收起动作无法点击"
+                    "飞光搜索收起动作无法点击"
                 ),
                 on: context.store
             )
@@ -714,7 +714,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 搜索输入面未收起"
+                    "飞光搜索输入面未收起"
                 ),
                 on: context.store
             )
@@ -736,7 +736,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回看动作无法点击"
+                    "飞光回看动作无法点击"
                 ),
                 on: context.store
             )
@@ -759,7 +759,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回看集合未与领域投影对齐"
+                    "飞光回看集合未与领域投影对齐"
                 ),
                 on: context.store
             )
@@ -807,7 +807,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 无法从回看返回最近集合"
+                    "飞光无法从回看返回最近集合"
                 ),
                 on: context.store
             )
@@ -830,7 +830,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 最近集合没有在回看后恢复"
+                    "飞光最近集合没有在回看后恢复"
                 ),
                 on: context.store
             )
@@ -859,235 +859,24 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             finishWithFailure(error, on: context.store)
             return
         }
-        // The trash section sits at the bottom of the timeline LazyVStack;
-        // with a full year of foreground content it is not instantiated
-        // until the page is scrolled to the bottom.
-        scrollIdeasContentToBottom()
-        verifyIdeasTrashSection(context: context, remainingAttempts: 100)
-    }
-
-    @MainActor
-    private func scrollIdeasContentToBottom() {
-        guard let timelineAnchor = AppViewTreeE2E.view(
-            identifier: "ideas.timeline"
-        ) ?? AppViewTreeE2E.attachedView(identifier: "ideas.timeline"),
-              let scrollView = timelineAnchor.enclosingScrollView,
-              let documentView = scrollView.documentView
+        let tombstones = context.engine.ideaTrash()
+        guard tombstones.isEmpty == false,
+              AppViewTreeE2E.view(identifier: "sidebar.nav.memoTrash") == nil,
+              AppViewTreeE2E.view(identifier: "ideas.trash") == nil,
+              (AppViewTreeE2E.identifiers(
+                  withPrefix: "ideas.trash.item."
+              ) ?? []).isEmpty
         else {
-            return
-        }
-        let bottomRect = NSRect(
-            x: 0,
-            y: max(0, documentView.bounds.height - 1),
-            width: 1,
-            height: 1
-        )
-        documentView.scrollToVisible(bottomRect)
-        scrollView.window?.displayIfNeeded()
-    }
-
-    @MainActor
-    private func scrollIdeasAnchorIntoView(_ identifier: String) -> Bool {
-        guard let anchor = AppViewTreeE2E.attachedView(
-            identifier: identifier
-        ) else {
-            return false
-        }
-        anchor.scrollToVisible(anchor.bounds)
-        anchor.window?.displayIfNeeded()
-        return AppViewTreeE2E.view(identifier: identifier) != nil
-    }
-
-    @MainActor
-    private func verifyIdeasTrashSection(
-        context: DemoCollectionCheckContext,
-        remainingAttempts: Int
-    ) {
-        guard remainingAttempts > 0 else {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回收站收起状态未呈现"
+                    "飞光墓碑不应暴露回收站或恢复 UI"
                 ),
                 on: context.store
             )
             return
         }
-        let trashItems = context.engine.ideaTrash()
-        let trashSectionMatches = AppViewTreeE2E.view(
-            identifier: "ideas.trash"
-        )
-        .flatMap(AppViewTreeE2E.verificationText) == "\(trashItems.count)"
-        let toggleCollapsed = AppViewTreeE2E.view(
-            identifier: "ideas.trash.toggle"
-        )
-        .flatMap(AppViewTreeE2E.verificationText) == "collapsed"
-        guard context.store.page == .ideas,
-              trashItems.isEmpty == false,
-              trashSectionMatches,
-              toggleCollapsed
-        else {
-            scrollIdeasContentToBottom()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                verifyIdeasTrashSection(
-                    context: context,
-                    remainingAttempts: remainingAttempts - 1
-                )
-            }
-            return
-        }
-        guard scrollIdeasAnchorIntoView("ideas.trash.toggle") else {
-            AppViewTreeE2E.writeDump(beside: resultURL)
-            finishWithFailure(
-                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回收站展开动作无法滚入可见区"
-                ),
-                on: context.store
-            )
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard let anchor = AppViewTreeE2E.view(
-                identifier: "ideas.trash.toggle"
-            ),
-                let button = AppViewTreeE2E.button(overlapping: anchor)
-            else {
-                AppViewTreeE2E.writeDump(beside: resultURL)
-                finishWithFailure(
-                    InteractiveDemoFixtureError
-                        .taskCollectionPresentationFailed(
-                            "Ideas 回收站展开动作无法点击"
-                        ),
-                    on: context.store
-                )
-                return
-            }
-            button.performClick(nil)
-            verifyIdeasTrashExpanded(
-                context: context,
-                remainingAttempts: 100
-            )
-        }
-    }
-
-    @MainActor
-    private func verifyIdeasTrashExpanded(
-        context: DemoCollectionCheckContext,
-        remainingAttempts: Int
-    ) {
-        let trashItems = context.engine.ideaTrash()
-        let expandedStateMatches = AppViewTreeE2E.view(
-            identifier: "ideas.trash.toggle"
-        )
-        .flatMap(AppViewTreeE2E.verificationText) == "expanded"
-        let visibleItemIdentifiers = AppViewTreeE2E.identifiers(
-            withPrefix: "ideas.trash.item."
-        ) ?? []
-        let trashItemsMatchProjection =
-            visibleItemIdentifiers.count == trashItems.count
-            && trashItems.allSatisfy { idea in
-                AppViewTreeE2E.view(
-                    identifier: "ideas.trash.item.\(idea.id)"
-                )
-                .flatMap(AppViewTreeE2E.verificationText) == "deleted"
-            }
-        guard remainingAttempts > 0 else {
-            AppViewTreeE2E.writeDump(beside: resultURL)
-            finishWithFailure(
-                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回收站展开投影失败：store=\(context.store.isIdeaTrashExpanded) "
-                        + "anchor=\(expandedStateMatches) "
-                        + "visible=\(visibleItemIdentifiers.count) "
-                        + "expected=\(trashItems.count)"
-                ),
-                on: context.store
-            )
-            return
-        }
-        guard context.store.page == .ideas,
-              trashItems.isEmpty == false,
-              expandedStateMatches,
-              trashItemsMatchProjection
-        else {
-            scrollIdeasContentToBottom()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                verifyIdeasTrashExpanded(
-                    context: context,
-                    remainingAttempts: remainingAttempts - 1
-                )
-            }
-            return
-        }
-        guard scrollIdeasAnchorIntoView("ideas.trash.toggle") else {
-            AppViewTreeE2E.writeDump(beside: resultURL)
-            finishWithFailure(
-                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回收站收起动作无法点击"
-                ),
-                on: context.store
-            )
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard let anchor = AppViewTreeE2E.view(
-                identifier: "ideas.trash.toggle"
-            ),
-                let button = AppViewTreeE2E.button(overlapping: anchor)
-            else {
-                AppViewTreeE2E.writeDump(beside: resultURL)
-                finishWithFailure(
-                    InteractiveDemoFixtureError
-                        .taskCollectionPresentationFailed(
-                            "Ideas 回收站收起动作无法点击"
-                        ),
-                    on: context.store
-                )
-                return
-            }
-            button.performClick(nil)
-            verifyIdeasTrashCollapsed(
-                context: context,
-                remainingAttempts: 100
-            )
-        }
-    }
-
-    @MainActor
-    private func verifyIdeasTrashCollapsed(
-        context: DemoCollectionCheckContext,
-        remainingAttempts: Int
-    ) {
-        guard remainingAttempts > 0 else {
-            AppViewTreeE2E.writeDump(beside: resultURL)
-            finishWithFailure(
-                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 回收站未恢复收起状态"
-                ),
-                on: context.store
-            )
-            return
-        }
-        let collapsedStateMatches = AppViewTreeE2E.view(
-            identifier: "ideas.trash.toggle"
-        )
-        .flatMap(AppViewTreeE2E.verificationText) == "collapsed"
-        let trashItemsHidden = (AppViewTreeE2E.identifiers(
-            withPrefix: "ideas.trash.item."
-        ) ?? []).isEmpty
-        guard context.store.page == .ideas,
-              collapsedStateMatches,
-              trashItemsHidden
-        else {
-            _ = scrollIdeasAnchorIntoView("ideas.trash.toggle")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                verifyIdeasTrashCollapsed(
-                    context: context,
-                    remainingAttempts: remainingAttempts - 1
-                )
-            }
-            return
-        }
-        let calendarContext = DemoCollectionCheckContext(
+        let stickyNotesContext = DemoCollectionCheckContext(
             fixture: context.fixture,
             engine: context.engine,
             sessions: context.sessions,
@@ -1099,21 +888,165 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         )
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard AppViewTreeE2E.click(
-                identifier: "sidebar.nav.calendar"
+                identifier: "sidebar.nav.stickyNotes"
             )
             else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
                 finishWithFailure(
                     InteractiveDemoFixtureError
                         .taskCollectionPresentationFailed(
-                            "Ideas 验收后无法切换到日历"
+                            "飞光验收后无法切换到 Sticky Note"
                         ),
                     on: context.store
                 )
                 return
             }
+            verifyStickyNotesStreamPresentation(
+                context: stickyNotesContext,
+                remainingAttempts: 100
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyStickyNotesStreamPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 清单流未与飞光投影对齐"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let stickyNotes = context.engine.pinnedIdeas()
+        guard context.store.page == .stickyNotes,
+              AppViewTreeE2E.view(identifier: "sticky-notes.page")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(stickyNotes.count)"
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        if AppViewTreeE2E.view(identifier: "sticky-notes.presentation")
+            .flatMap(AppViewTreeE2E.verificationText) != "stream"
+        {
+            guard AppViewTreeE2E.click(identifier: "sticky-notes.mode.stream") else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    verifyStickyNotesStreamPresentation(
+                        context: context,
+                        remainingAttempts: remainingAttempts - 1
+                    )
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard stickyNotes.count >= 3,
+              stickyNotes.allSatisfy({ idea in
+                  AppViewTreeE2E.view(
+                      identifier: "sticky-notes.item.\(idea.id)"
+                  ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+              }),
+              AppViewTreeE2E.view(identifier: "sticky-notes.empty") == nil
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(named: "stickyNotes-stream")
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        guard AppViewTreeE2E.click(identifier: "sticky-notes.mode.wall") else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 清单流验收后无法切换到便签墙"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyStickyNotesWallPresentation(
+            context: context,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyStickyNotesWallPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 便签墙未与飞光投影对齐"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let stickyNotes = context.engine.pinnedIdeas()
+        guard context.store.page == .stickyNotes,
+              AppViewTreeE2E.view(identifier: "sticky-notes.presentation")
+              .flatMap(AppViewTreeE2E.verificationText) == "wall",
+              stickyNotes.allSatisfy({ idea in
+                  AppViewTreeE2E.view(
+                      identifier: "sticky-notes.item.\(idea.id)"
+                  ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+              })
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesWallPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(named: "stickyNotes-wall")
+            try captureTaskCollectionScreenshot(page: .stickyNotes)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard AppViewTreeE2E.click(identifier: "sidebar.nav.calendar") else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                        "Sticky Note 验收后无法切换到日历"
+                    ),
+                    on: context.store
+                )
+                return
+            }
             retryCalendarRecurringBoundary(
-                context: calendarContext,
+                context: context,
                 remainingAttempts: 100
             )
         }
@@ -1128,7 +1061,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
-                    "Ideas 验收后日历页面没有呈现"
+                    "Sticky Note 验收后日历页面没有呈现"
                 ),
                 on: context.store
             )
@@ -2133,6 +2066,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func captureTaskCollectionScreenshot(page: NoonmarkStore.Page) throws {
+        try captureTaskCollectionScreenshot(named: page.rawValue)
+    }
+
+    @MainActor
+    private func captureTaskCollectionScreenshot(named name: String) throws {
         guard let window = NSApp.windows.first(where: {
             $0 is NoonmarkWindow
                 && $0.isVisible
@@ -2147,7 +2085,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 of: window,
                 to: resultURL.deletingLastPathComponent()
                     .appendingPathComponent(
-                        "task-collection-\(page.rawValue).png"
+                        "task-collection-\(name).png"
                     )
             )
         } catch {

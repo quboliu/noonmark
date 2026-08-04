@@ -307,7 +307,7 @@ final class IdeaEntryTests: XCTestCase {
         XCTAssertEqual(first.groups.flatMap(\.ideas), first.ideas)
     }
 
-    func testIdeaCollectionKeepsPinnedSeparateAndAppliesOneCompositeFilter() throws {
+    func testFlylightCollectionKeepsStickyNotesInSourceTimeline() throws {
         let engine = NoonmarkEngine()
         let catalog = try seedClassificationCatalog(in: engine)
         let labelID = try XCTUnwrap(catalog.labelIDs.first)
@@ -339,7 +339,10 @@ final class IdeaEntryTests: XCTestCase {
 
         XCTAssertEqual(collection.ideas.map(\.id), [pinned.id, regular.id])
         XCTAssertEqual(collection.pinnedIdeas.map(\.id), [pinned.id])
-        XCTAssertEqual(collection.groups.flatMap(\.ideas).map(\.id), [regular.id])
+        XCTAssertEqual(
+            collection.groups.flatMap(\.ideas).map(\.id),
+            [pinned.id, regular.id]
+        )
     }
 
     func testNextMutationDateAdvancesPastPersistedIdeaClock() throws {

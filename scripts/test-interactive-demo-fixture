@@ -168,8 +168,8 @@ tombstoned_idea_count="$(
 idea_tombstone_leak_count="$(
   plutil -extract core.ideaTimelineTombstoneLeakCount raw -o - "$result_path"
 )"
-pinned_idea_count="$(
-  plutil -extract core.pinnedIdeaCount raw -o - "$result_path"
+sticky_note_count="$(
+  plutil -extract core.stickyNoteCount raw -o - "$result_path"
 )"
 restored_idea_count="$(
   plutil -extract core.restoredIdeaCount raw -o - "$result_path"
@@ -186,15 +186,15 @@ if [[ "$single_day_completed_count" -lt 365 \
       || "$cycle_stopped_count" != "3" \
       || "$collapsible_trail_count" -lt 12 \
       || "$continuable_unfinished_count" -lt 1 \
-      || "$idea_count" != "7" \
-      || "$idea_day_count" != "6" \
+      || "$idea_count" != "8" \
+      || "$idea_day_count" != "7" \
       || "$idea_review_candidate_count" -lt 1 \
       || "$labeled_idea_count" -lt 1 \
       || "$categorized_idea_count" -lt 1 \
       || "$edited_idea_count" -lt 1 \
       || "$tombstoned_idea_count" != "1" \
       || "$idea_tombstone_leak_count" != "0" \
-      || "$pinned_idea_count" -lt 1 \
+      || "$sticky_note_count" -lt 3 \
       || "$restored_idea_count" -lt 1 ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2

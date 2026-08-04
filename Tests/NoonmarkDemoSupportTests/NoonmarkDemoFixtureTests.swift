@@ -273,25 +273,28 @@ struct NoonmarkDemoFixtureTests {
         }
     }
 
-    @Test("基线包含跨天、归类、编辑、置顶与回收站恢复的真实想法时间线")
+    @Test("基线包含跨天、归类、编辑、Sticky Note 与隐藏墓碑的真实飞光时间线")
     func coversIdeaCaptureTimeline() throws {
         let fixture = try NoonmarkDemoFixture.make(
             anchorDate: anchorDate
         )
         let engine = fixture.engine
-        let timeline = engine.ideaTimeline()
+        let timeline = engine.ideaCollection(
+            .recent,
+            today: anchorDate
+        ).ideas
 
-        #expect(timeline.count == 7)
+        #expect(timeline.count == 8)
         #expect(engine.snapshot().ideas.count == 9)
-        #expect(engine.ideaTimelineByDay().count >= 3)
+        #expect(engine.ideaCollection(.recent, today: anchorDate).groups.count >= 3)
         #expect(timeline.contains { $0.labelIDs.isEmpty == false })
         #expect(timeline.contains { $0.categoryID != nil })
         #expect(timeline.contains { $0.updatedAt > $0.createdAt })
-        let pinned = engine.pinnedIdeas()
-        #expect(pinned.count == 1)
-        #expect(pinned.allSatisfy { $0.pinnedAt != nil })
-        let pinnedIDs = Set(pinned.map(\.id))
-        #expect(timeline.allSatisfy { pinnedIDs.contains($0.id) == false })
+        let stickyNotes = engine.pinnedIdeas()
+        #expect(stickyNotes.count == 3)
+        #expect(stickyNotes.allSatisfy { $0.pinnedAt != nil })
+        let stickyNoteIDs = Set(stickyNotes.map(\.id))
+        #expect(timeline.filter { stickyNoteIDs.contains($0.id) }.count == 3)
         let tombstoned = engine.snapshot().ideas.filter { $0.isDeleted }
         #expect(tombstoned.count == 1)
         #expect(engine.ideaTrash().count == 1)
@@ -302,15 +305,15 @@ struct NoonmarkDemoFixtureTests {
                 && $0.updatedAt > $0.createdAt
                 && $0.deletedAt == nil
         })
-        #expect(fixture.report.ideaCount == 7)
-        #expect(fixture.report.ideaDayCount == 6)
+        #expect(fixture.report.ideaCount == 8)
+        #expect(fixture.report.ideaDayCount == 7)
         #expect(fixture.report.ideaReviewCandidateCount == 2)
         #expect(fixture.report.labeledIdeaCount == 4)
         #expect(fixture.report.categorizedIdeaCount == 2)
-        #expect(fixture.report.editedIdeaCount == 3)
+        #expect(fixture.report.editedIdeaCount == 5)
         #expect(fixture.report.tombstonedIdeaCount == 1)
         #expect(fixture.report.ideaTimelineTombstoneLeakCount == 0)
-        #expect(fixture.report.pinnedIdeaCount == 1)
+        #expect(fixture.report.stickyNoteCount == 3)
         #expect(fixture.report.restoredIdeaCount == 1)
         #expect(fixture.report.isComplete)
     }

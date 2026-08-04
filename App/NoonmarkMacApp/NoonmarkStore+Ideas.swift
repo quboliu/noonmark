@@ -82,8 +82,7 @@ extension NoonmarkStore {
               let idea = engine.ideas[selectedIdeaID],
               idea.isDeleted == false
         else {
-            return collection.pinnedIdeas.first
-                ?? collection.groups.first?.ideas.first
+            return collection.groups.first?.ideas.first
         }
         return idea
     }
@@ -129,12 +128,10 @@ extension NoonmarkStore {
         recentIdeaCollection.groups
     }
 
-    var pinnedIdeas: [IdeaEntry] {
-        recentIdeaCollection.pinnedIdeas
-    }
-
-    var ideaTrashItems: [IdeaEntry] {
-        engine.ideaCollection(.trash, today: today).ideas
+    /// Selected projection rendered by Sticky Note. `pinnedAt` remains the
+    /// storage compatibility fact; product code speaks in Sticky Note intent.
+    var stickyNoteIdeas: [IdeaEntry] {
+        engine.pinnedIdeas()
     }
 
     /// Total active ideas regardless of filter: distinguishes "no ideas at
@@ -144,7 +141,7 @@ extension NoonmarkStore {
     }
 
     var hasVisibleIdeas: Bool {
-        pinnedIdeas.isEmpty == false || ideaTimelineGroups.isEmpty == false
+        ideaTimelineGroups.isEmpty == false
     }
 
     var activeIdeaClassificationFilterName: String? {
@@ -338,7 +335,7 @@ extension NoonmarkStore {
     }
 
     @discardableResult
-    func pinIdea(_ id: IdeaID) -> Bool {
+    func addIdeaToStickyNotes(_ id: IdeaID) -> Bool {
         guard engine.ideas[id]?.isDeleted == false else { return false }
         do {
             try commitEngineMutation(
@@ -347,7 +344,7 @@ extension NoonmarkStore {
                 try candidate.pinIdea(id: id, now: moment.instant)
             }
             resolveOperationFailure(.ideaMutation)
-            showToast(copy.ideaPinnedToast)
+            showToast(copy.addedToStickyNotesToast)
             return true
         } catch {
             showOperationFailure(.ideaMutation, error: error)
@@ -356,7 +353,7 @@ extension NoonmarkStore {
     }
 
     @discardableResult
-    func unpinIdea(_ id: IdeaID) -> Bool {
+    func removeIdeaFromStickyNotes(_ id: IdeaID) -> Bool {
         guard engine.ideas[id]?.isDeleted == false else { return false }
         do {
             try commitEngineMutation(
@@ -365,7 +362,7 @@ extension NoonmarkStore {
                 try candidate.unpinIdea(id: id, now: moment.instant)
             }
             resolveOperationFailure(.ideaMutation)
-            showToast(copy.ideaUnpinnedToast)
+            showToast(copy.removedFromStickyNotesToast)
             return true
         } catch {
             showOperationFailure(.ideaMutation, error: error)
@@ -373,47 +370,13 @@ extension NoonmarkStore {
         }
     }
 
-    /// Tombstones normalize body, category and labels away, so a restore
-    /// always asks the user to retype the content before it is committed.
-    func beginIdeaRestore(_ idea: IdeaEntry) {
-        restoringIdeaID = idea.id
-        ideaRestoreText = ""
-    }
-
-    func cancelIdeaRestore() {
-        restoringIdeaID = nil
-        ideaRestoreText = ""
-    }
-
-    @discardableResult
-    func commitIdeaRestore() -> Bool {
-        guard let id = restoringIdeaID else { return false }
-        let body = ideaRestoreText.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard body.isEmpty == false else { return false }
-        guard engine.ideas[id]?.isDeleted == true else {
-            cancelIdeaRestore()
-            return false
-        }
-        do {
-            try commitEngineMutation(
-                undoPolicy: .snapshot(.restoreIdea)
-            ) { candidate, moment in
-                try candidate.restoreIdea(
-                    id: id,
-                    body: body,
-                    now: moment.instant
-                )
-            }
-            cancelIdeaRestore()
-            resolveOperationFailure(.ideaMutation)
-            showToast(copy.ideaRestoredToast)
-            return true
-        } catch {
-            showOperationFailure(.ideaMutation, error: error)
-            return false
-        }
+    func openIdeaInFlylight(_ id: IdeaID) {
+        guard engine.ideas[id]?.isDeleted == false else { return }
+        ideaFilterText = ""
+        clearIdeaClassificationFilter()
+        ideaBrowseMode = .recent
+        page = .ideas
+        selectedIdeaID = id
     }
 
     private func resolveIdeaDraftClassification(

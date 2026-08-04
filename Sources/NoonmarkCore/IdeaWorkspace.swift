@@ -30,7 +30,7 @@ public struct IdeaCollectionProjection: Equatable, Sendable {
 }
 
 public extension NoonmarkEngine {
-    /// Presents one explicit Ideas collection at a time. Query rules stay in
+    /// Presents one explicit Flylight collection at a time. Query rules stay in
     /// the domain boundary so the page, inspector, and future compact layouts
     /// cannot silently disagree about visibility or ordering.
     func ideaCollection(
@@ -74,12 +74,23 @@ public extension NoonmarkEngine {
             pinned = []
         }
 
+        // Sticky Note is a projection over Flylight, not a collection that
+        // removes its source entries. Keep the compatibility `pinnedIdeas`
+        // projection while presenting every active entry in the source stream.
+        let sourceTimeline: [IdeaEntry] = switch query {
+        case .trash:
+            timeline
+        default:
+            (pinned + timeline)
+                .sorted(by: Self.ideaRecencyOrder)
+        }
+
         return IdeaCollectionProjection(
             query: query,
-            ideas: pinned + timeline,
+            ideas: sourceTimeline,
             pinnedIdeas: pinned,
             groups: ideaGroups(
-                for: timeline,
+                for: sourceTimeline,
                 query: query,
                 calendar: calendar
             )

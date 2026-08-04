@@ -7,10 +7,7 @@ struct IdeasPage: View {
     @State private var searchIsPresented = false
 
     private var visibleIdeaIDs: [IdeaID] {
-        let pinned = store.ideaBrowseMode == .recent
-            ? store.pinnedIdeas.map(\.id)
-            : []
-        return pinned + store.displayedIdeaGroups.flatMap {
+        store.displayedIdeaGroups.flatMap {
             $0.ideas.map(\.id)
         }
     }
@@ -66,12 +63,6 @@ struct IdeasPage: View {
                   ids.contains(editingID) == false
             else { return }
             store.cancelIdeaEdit()
-        }
-        .onChange(of: store.ideaTrashItems.map(\.id)) { _, ids in
-            guard let restoringID = store.restoringIdeaID,
-                  ids.contains(restoringID) == false
-            else { return }
-            store.cancelIdeaRestore()
         }
     }
 }
@@ -141,12 +132,8 @@ private struct IdeaTimelinePane: View {
         store.displayedIdeaGroups
     }
 
-    private var pinnedIdeas: [IdeaEntry] {
-        store.ideaBrowseMode == .recent ? store.pinnedIdeas : []
-    }
-
     private var visibleIdeaIDs: [IdeaID] {
-        pinnedIdeas.map(\.id) + groups.flatMap { $0.ideas.map(\.id) }
+        groups.flatMap { $0.ideas.map(\.id) }
     }
 
     var body: some View {
@@ -166,50 +153,66 @@ private struct IdeaTimelinePane: View {
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity)
 
-            TaskSelectionClearingScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if let filterName = store.activeIdeaClassificationFilterName {
-                        IdeaClassificationFilterIndicator(name: filterName)
-                            .padding(
-                                .bottom,
-                                NoonmarkVisualMetrics.ideasComposerFilterSpacing
-                            )
+            ScrollViewReader { proxy in
+                TaskSelectionClearingScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if let filterName = store.activeIdeaClassificationFilterName {
+                            IdeaClassificationFilterIndicator(name: filterName)
+                                .padding(
+                                    .bottom,
+                                    NoonmarkVisualMetrics.ideasComposerFilterSpacing
+                                )
+                        }
+                        ForEach(Array(groups.enumerated()), id: \.element.date) { index, group in
+                            IdeaDaySectionHeader(group: group)
+                                .padding(
+                                    .top,
+                                    index == 0
+                                        ? 0
+                                        : NoonmarkVisualMetrics.ideasTimelineSectionSpacing
+                                )
+                            IdeaCardList(ideas: group.ideas)
+                        }
+                        if visibleIdeaIDs.isEmpty {
+                            IdeaEmptyState()
+                        }
                     }
-                    if pinnedIdeas.isEmpty == false {
-                        IdeaPinnedSectionHeader(count: pinnedIdeas.count)
-                        IdeaCardList(ideas: pinnedIdeas)
-                    }
-                    ForEach(Array(groups.enumerated()), id: \.element.date) { index, group in
-                        IdeaDaySectionHeader(group: group)
-                            .padding(
-                                .top,
-                                index == 0 && pinnedIdeas.isEmpty
-                                    ? 0
-                                    : NoonmarkVisualMetrics.ideasTimelineSectionSpacing
-                            )
-                        IdeaCardList(ideas: group.ideas)
-                    }
-                    if visibleIdeaIDs.isEmpty {
-                        IdeaEmptyState()
-                    }
-                    if store.ideaBrowseMode == .recent {
-                        IdeaTrashSection()
-                    }
-                }
-                .frame(
-                    maxWidth: NoonmarkVisualMetrics
-                        .ideasReadableTimelineMaximumWidth
-                )
-                .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
-                .padding(.top, 4)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity)
-                .background {
-                    AppE2EViewAnchor(
-                        identifier: "ideas.timeline",
-                        verificationText: "\(visibleIdeaIDs.count)"
+                    .frame(
+                        maxWidth: NoonmarkVisualMetrics
+                            .ideasReadableTimelineMaximumWidth
                     )
+                    .padding(.horizontal, NoonmarkVisualMetrics.pageHorizontalPadding)
+                    .padding(.top, 4)
+                    .padding(.bottom, 20)
+                    .frame(maxWidth: .infinity)
+                    .background {
+                        AppE2EViewAnchor(
+                            identifier: "ideas.timeline",
+                            verificationText: "\(visibleIdeaIDs.count)"
+                        )
+                    }
                 }
+                .onAppear {
+                    revealSelectedIdea(using: proxy)
+                }
+                .onChange(of: store.selectedIdeaID) {
+                    revealSelectedIdea(using: proxy)
+                }
+            }
+        }
+    }
+
+    private func revealSelectedIdea(using proxy: ScrollViewProxy) {
+        guard let targetID = store.selectedIdeaID,
+              visibleIdeaIDs.contains(targetID)
+        else {
+            return
+        }
+        DispatchQueue.main.async {
+            withAnimation(
+                Theme.shouldReduceMotion ? nil : .easeInOut(duration: 0.22)
+            ) {
+                proxy.scrollTo(targetID, anchor: .center)
             }
         }
     }
@@ -297,7 +300,7 @@ private struct IdeaComposer: View {
     }
 
     private var activeToken: NewTaskClassificationToken? {
-        store.newTaskClassificationToken(for: session.text)
+        store.ideaClassificationToken(for: session.text)
     }
 
     var body: some View {
@@ -321,21 +324,24 @@ private struct IdeaComposer: View {
                     cornerRadius: NoonmarkVisualMetrics.ideasComposerCornerRadius
                 ).stroke(Theme.lineSubtle)
             )
+            .background {
+                AppE2EViewAnchor(identifier: "ideas.composer.surface")
+            }
 
-            if store.shouldShowNewTaskClassificationSuggestions(
+            if store.shouldShowIdeaClassificationSuggestions(
                 for: session.text
             ), let activeToken {
                 NewTaskClassificationSuggestionList(
                     tokenKind: activeToken.kind,
                     suggestions: Array(
-                        store.newTaskClassificationSuggestions(
+                        store.ideaClassificationSuggestions(
                             for: session.text
                         ).prefix(6)
                     ),
                     accessibilityIdentifier: "ideas.composer.suggestions"
                 ) { suggestion in
                     session.updateText(
-                        store.completeNewTaskClassificationToken(
+                        store.completeIdeaClassificationToken(
                             in: session.text,
                             with: suggestion.name
                         )
@@ -397,7 +403,10 @@ private struct IdeaInspector: View {
                         .font(.noonmarkSystem(size: 10.5, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                         .tracking(0.6)
-                    MarkdownInlineText(idea.body)
+                    MarkdownText(
+                        idea.body,
+                        e2eIdentifier: "ideas.inspector.markdown.\(idea.id)"
+                    )
                         .font(.noonmarkSystem(size: 14.5, weight: .regular))
                         .foregroundStyle(Theme.text1)
                         .lineSpacing(5)
@@ -429,13 +438,13 @@ private struct IdeaInspector: View {
                             }
                             Button(
                                 idea.pinnedAt == nil
-                                    ? store.copy.pinIdeaAction
-                                    : store.copy.unpinIdeaAction
+                                    ? store.copy.addToStickyNotesAction
+                                    : store.copy.removeFromStickyNotesAction
                             ) {
                                 if idea.pinnedAt == nil {
-                                    _ = store.pinIdea(idea.id)
+                                    _ = store.addIdeaToStickyNotes(idea.id)
                                 } else {
-                                    _ = store.unpinIdea(idea.id)
+                                    _ = store.removeIdeaFromStickyNotes(idea.id)
                                 }
                             }
                         }
@@ -525,52 +534,30 @@ private struct IdeaClassificationFilterIndicator: View {
     }
 }
 
-/// Pinned ideas float above the day-grouped timeline; the header reuses the
-/// day-section typography so position and weight, not badges, distinguish it.
-private struct IdeaPinnedSectionHeader: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    let count: Int
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(store.copy.ideasPinnedSectionTitle)
-                .font(.noonmarkSystem(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.text2)
-            Text("\(count)")
-                .font(.noonmarkSystem(size: 10.5))
-                .foregroundStyle(Theme.text3)
-                .monospacedDigit()
-            Spacer()
-        }
-        .padding(.bottom, NoonmarkVisualMetrics.ideasSectionHeaderBottomPadding)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "ideas.pinned",
-                verificationText: "\(count)"
-            )
-        }
-    }
-}
-
 private struct IdeaCardList: View {
     @EnvironmentObject private var store: NoonmarkStore
     let ideas: [IdeaEntry]
 
     var body: some View {
         ForEach(Array(ideas.enumerated()), id: \.element.id) { index, idea in
-            // SwiftUI caches a Menu's items at first presentation; folding
-            // the pin state into the card identity recreates the card (and
-            // its overflow menu) so the reopened menu offers unpin.
-            IdeaCardView(
-                idea: idea,
-                editorSession: store.ideaInlineEditorSession
-            )
-                .id("\(idea.id.description)-pinned:\(idea.pinnedAt != nil)")
-            if index < ideas.count - 1 {
-                Divider()
-                    .overlay(Theme.lineSubtle)
-                    .padding(.leading, NoonmarkVisualMetrics.ideasCardHorizontalPadding)
+            VStack(alignment: .leading, spacing: 0) {
+                // SwiftUI caches a Menu's items at first presentation; folding
+                // Sticky Note membership into identity refreshes that intent.
+                IdeaCardView(
+                    idea: idea,
+                    editorSession: store.ideaInlineEditorSession
+                )
+                .id("\(idea.id.description)-sticky:\(idea.pinnedAt != nil)")
+                if index < ideas.count - 1 {
+                    Divider()
+                        .overlay(Theme.lineSubtle)
+                        .padding(
+                            .leading,
+                            NoonmarkVisualMetrics.ideasCardHorizontalPadding
+                        )
+                }
             }
+            .id(idea.id)
         }
     }
 }
@@ -646,7 +633,10 @@ private struct IdeaCardView: View {
 
     private var displayBody: some View {
         Group {
-            MarkdownInlineText(idea.body)
+            MarkdownText(
+                idea.body,
+                e2eIdentifier: "ideas.card.markdown.\(idea.id)"
+            )
                 .font(.noonmarkSystem(size: 13.5, weight: .regular))
                 .foregroundStyle(Theme.text1)
                 .lineSpacing(3)
@@ -794,19 +784,19 @@ private struct IdeaCardOverflowMenu: View {
         Menu {
             Button(
                 idea.pinnedAt == nil
-                    ? store.copy.pinIdeaAction
-                    : store.copy.unpinIdeaAction
+                    ? store.copy.addToStickyNotesAction
+                    : store.copy.removeFromStickyNotesAction
             ) {
                 if idea.pinnedAt == nil {
-                    _ = store.pinIdea(idea.id)
+                    _ = store.addIdeaToStickyNotes(idea.id)
                 } else {
-                    _ = store.unpinIdea(idea.id)
+                    _ = store.removeIdeaFromStickyNotes(idea.id)
                 }
             }
             .accessibilityIdentifier(
                 idea.pinnedAt == nil
-                    ? "ideas.card.pin.\(idea.id)"
-                    : "ideas.card.unpin.\(idea.id)"
+                    ? "ideas.card.sticky.add.\(idea.id)"
+                    : "ideas.card.sticky.remove.\(idea.id)"
             )
             Button(store.copy.editIdeaAction) {
                 store.beginIdeaEdit(idea)
@@ -832,197 +822,5 @@ private struct IdeaCardOverflowMenu: View {
         .background {
             AppE2EViewAnchor(identifier: "ideas.card.menu.\(idea.id)")
         }
-    }
-}
-
-/// Collapsed-by-default trash section at the bottom of the page. Tombstones
-/// retain no body, so rows show the deletion timestamp and restore asks the
-/// user to retype the content before committing.
-private struct IdeaTrashSection: View {
-    @EnvironmentObject private var store: NoonmarkStore
-
-    private var items: [IdeaEntry] {
-        store.ideaTrashItems
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(store.copy.ideasTrashSectionTitle)
-                    .font(.noonmarkSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
-                    .tracking(0.6)
-                Text("\(items.count)")
-                    .font(.noonmarkSystem(size: 10.5))
-                    .foregroundStyle(Theme.text3)
-                    .monospacedDigit()
-                Spacer()
-                Button {
-                    store.isIdeaTrashExpanded.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(
-                            store.isIdeaTrashExpanded
-                                ? store.copy.collapseIdeasTrash
-                                : store.copy.expandIdeasTrash
-                        )
-                        Image(
-                            systemName: store.isIdeaTrashExpanded
-                                ? "chevron.up"
-                                : "chevron.down"
-                        )
-                        .font(.noonmarkSystem(size: 8, weight: .semibold))
-                    }
-                    .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                    .foregroundStyle(Theme.text3)
-                    .contentShape(Rectangle())
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "ideas.trash.toggle",
-                            verificationText: store.isIdeaTrashExpanded
-                                ? "expanded"
-                                : "collapsed"
-                        )
-                    }
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(
-                    store.isIdeaTrashExpanded
-                        ? store.copy.collapseIdeasTrash
-                        : store.copy.expandIdeasTrash
-                )
-                .accessibilityIdentifier("ideas.trash.toggle.ax")
-            }
-            .padding(.bottom, NoonmarkVisualMetrics.ideasSectionHeaderBottomPadding)
-
-            if store.isIdeaTrashExpanded {
-                if items.isEmpty {
-                    Text(store.copy.ideasTrashEmptyState)
-                        .font(.noonmarkSystem(size: 12.5))
-                        .foregroundStyle(Theme.text3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                } else {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, idea in
-                        IdeaTrashRow(idea: idea)
-                        if index < items.count - 1 {
-                            Divider()
-                                .overlay(Theme.lineSubtle)
-                                .padding(.leading, NoonmarkVisualMetrics.ideasCardHorizontalPadding)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.top, NoonmarkVisualMetrics.ideasTimelineSectionSpacing)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "ideas.trash",
-                verificationText: "\(items.count)"
-            )
-        }
-    }
-}
-
-private struct IdeaTrashRow: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    let idea: IdeaEntry
-
-    private var isRestoring: Bool {
-        store.restoringIdeaID == idea.id
-    }
-
-    private var restoreBodyIsEmpty: Bool {
-        store.ideaRestoreText.trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-    }
-
-    var body: some View {
-        Group {
-            if isRestoring {
-                VStack(
-                    alignment: .leading,
-                    spacing: NoonmarkVisualMetrics.ideasCardMetadataSpacing
-                ) {
-                    IdeaRestoreComposer(
-                        draft: store.ideaRestoreTextDraft,
-                        idea: idea
-                    )
-                    HStack(spacing: 12) {
-                        TaskNoteTextActionControl(
-                            title: store.copy.restoreIdeaAction,
-                            identifier: "ideas.trash.restore.save.\(idea.id)",
-                            emphasis: .accent,
-                            isEnabled: restoreBodyIsEmpty == false
-                        ) {
-                            _ = store.commitIdeaRestore()
-                        }
-                        TaskNoteTextActionControl(
-                            title: store.copy.ideaCancelEditAction,
-                            identifier: "ideas.trash.restore.cancel.\(idea.id)",
-                            emphasis: .secondary
-                        ) {
-                            store.cancelIdeaRestore()
-                        }
-                        Spacer()
-                    }
-                }
-            } else {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(
-                        store.copy.ideaTrashDeletionLabel(
-                            store.displayDateTime(idea.deletedAt ?? idea.updatedAt)
-                        )
-                    )
-                    .font(.noonmarkSystem(size: 11))
-                    .foregroundStyle(Theme.text3)
-                    .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Button(store.copy.restoreIdeaAction) {
-                        store.beginIdeaRestore(idea)
-                    }
-                    .buttonStyle(.plain)
-                    .font(.noonmarkSystem(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.accent)
-                    .accessibilityIdentifier("ideas.trash.restore.\(idea.id)")
-                    .background {
-                        AppE2EViewAnchor(
-                            identifier: "ideas.trash.restore.\(idea.id)"
-                        )
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, NoonmarkVisualMetrics.ideasCardHorizontalPadding)
-        .padding(.vertical, NoonmarkVisualMetrics.ideasCardVerticalPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            AppE2EViewAnchor(
-                identifier: "ideas.trash.item.\(idea.id)",
-                verificationText: isRestoring ? "restoring" : "deleted"
-            )
-        }
-    }
-}
-
-private struct IdeaRestoreComposer: View {
-    @EnvironmentObject private var store: NoonmarkStore
-    @ObservedObject var draft: NoonmarkTextInputDraft
-    let idea: IdeaEntry
-
-    var body: some View {
-        MarkdownEditor(
-            text: $draft.text,
-            placeholder: store.copy.ideaRestorePlaceholder,
-            style: .body,
-            onCommit: {
-                _ = store.commitIdeaRestore()
-            },
-            onEscape: {
-                store.cancelIdeaRestore()
-            },
-            nativeAccessibilityIdentifier: "ideas.trash.restore.field.\(idea.id)",
-            focusesOnAppear: true
-        )
     }
 }

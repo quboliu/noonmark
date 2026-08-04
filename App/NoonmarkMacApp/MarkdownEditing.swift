@@ -110,11 +110,11 @@ struct MarkdownEditor: View {
     var nativeAccessibilityIdentifier: String?
     var focusesOnAppear = false
     var focusRequest = 0
-    @State private var nativeTextIsEmpty: Bool?
 
     var body: some View {
         let editor = MarkdownTextViewRepresentable(
             text: $text,
+            placeholder: placeholder,
             style: style,
             commitsOnReturn: commitsOnReturn,
             defersMarkedTextBindingUpdates:
@@ -122,13 +122,7 @@ struct MarkdownEditor: View {
             onCommit: onCommit,
             onEscape: onEscape,
             onEndEditing: onEndEditing,
-            onNativeSnapshot: { snapshot in
-                let isEmpty = snapshot.text.isEmpty
-                if nativeTextIsEmpty != isEmpty {
-                    nativeTextIsEmpty = isEmpty
-                }
-                onNativeSnapshot?(snapshot)
-            },
+            onNativeSnapshot: onNativeSnapshot,
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
             explicitHeight: height,
@@ -145,40 +139,15 @@ struct MarkdownEditor: View {
                 )
             }
         }
+            .fixedSize(horizontal: false, vertical: true)
             .background(showsSurface ? (warm ? Theme.noteBackground : Theme.panel2) : Color.clear)
-            .overlay(alignment: .topLeading) {
-                if nativeTextIsEmpty ?? text.isEmpty {
-                    Text(placeholder)
-                        .font(style.swiftUIFont)
-                        .foregroundStyle(Theme.placeholderText)
-                        .background {
-                            if let nativeAccessibilityIdentifier {
-                                AppE2EViewAnchor(
-                                    identifier: "\(nativeAccessibilityIdentifier).placeholder",
-                                    verificationText: placeholder
-                                )
-                            }
-                        }
-                        .padding(
-                            .horizontal,
-                            style.textContainerInset.width + style.lineFragmentPadding
-                        )
-                        .padding(.vertical, style.textContainerInset.height)
-                        .allowsHitTesting(false)
-                }
-            }
             .accessibilityLabel(placeholder)
-            .onChange(of: text) { _, newValue in
-                let isEmpty = newValue.isEmpty
-                if nativeTextIsEmpty != isEmpty {
-                    nativeTextIsEmpty = isEmpty
-                }
-            }
     }
 }
 
 private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     @Binding var text: String
+    let placeholder: String
     let style: MarkdownEditorStyle
     let commitsOnReturn: Bool
     let defersMarkedTextBindingUpdates: Bool
@@ -231,6 +200,13 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.allowsUndo = true
         textView.textContainerInset = style.textContainerInset
         textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
+        textView.configurePlaceholder(
+            placeholder,
+            font: style.font,
+            accessibilityIdentifier: nativeAccessibilityIdentifier.map {
+                "\($0).placeholder"
+            }
+        )
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -272,6 +248,13 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.font = style.font
         textView.textContainerInset = style.textContainerInset
         textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
+        textView.configurePlaceholder(
+            placeholder,
+            font: style.font,
+            accessibilityIdentifier: nativeAccessibilityIdentifier.map {
+                "\($0).placeholder"
+            }
+        )
         textView.commitsOnReturn = commitsOnReturn
         textView.commitAction = onCommit
         textView.escapeAction = onEscape
@@ -525,6 +508,44 @@ private final class MarkdownNSTextView: NSTextView {
     private var compositionCallbackMilliseconds = 0.0
     private var nativeSnapshotCallbackMilliseconds =
         0.0
+    private lazy var placeholderField: MarkdownPlaceholderTextField = {
+        let field = MarkdownPlaceholderTextField(labelWithString: "")
+        field.textColor = .placeholderTextColor
+        field.lineBreakMode = .byTruncatingTail
+        field.maximumNumberOfLines = 1
+        addSubview(field)
+        return field
+    }()
+
+    func configurePlaceholder(
+        _ text: String,
+        font: NSFont,
+        accessibilityIdentifier: String?
+    ) {
+        placeholderField.stringValue = text
+        placeholderField.font = font
+        placeholderField.identifier = accessibilityIdentifier.map {
+            NSUserInterfaceItemIdentifier($0)
+        }
+        updatePlaceholderVisibility()
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard placeholderField.superview != nil else { return }
+        let linePadding = textContainer?.lineFragmentPadding ?? 0
+        let x = textContainerInset.width + linePadding
+        let height = ceil(
+            placeholderField.font?.boundingRectForFont.height ?? 0
+        )
+        placeholderField.frame = NSRect(
+            x: x,
+            y: textContainerInset.height,
+            width: max(0, bounds.width - x * 2),
+            height: height
+        )
+    }
 
     override func setMarkedText(
         _ string: Any,
@@ -595,6 +616,7 @@ private final class MarkdownNSTextView: NSTextView {
         let startedAt =
             ProcessInfo.processInfo.systemUptime
         super.didChangeText()
+        updatePlaceholderVisibility()
         if recordsKeyDownTiming {
             didChangeTextMilliseconds +=
                 (
@@ -602,6 +624,10 @@ private final class MarkdownNSTextView: NSTextView {
                         - startedAt
                 ) * 1000
         }
+    }
+
+    private func updatePlaceholderVisibility() {
+        placeholderField.isHidden = string.isEmpty == false
     }
 
     override func keyDown(with event: NSEvent) {
@@ -805,6 +831,12 @@ private final class MarkdownNSTextView: NSTextView {
     }
 }
 
+private final class MarkdownPlaceholderTextField: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 enum MarkdownEditorKeyboardProbe {
     @MainActor
     static func submitWithReturn(_ action: @escaping () -> Void) -> Bool {
@@ -972,10 +1004,16 @@ struct MarkdownInlineText: View {
 struct MarkdownText: View {
     let source: String
     var fallback: String
+    var e2eIdentifier: String?
 
-    init(_ source: String, fallback: String = "") {
+    init(
+        _ source: String,
+        fallback: String = "",
+        e2eIdentifier: String? = nil
+    ) {
         self.source = source
         self.fallback = fallback
+        self.e2eIdentifier = e2eIdentifier
     }
 
     private var blocks: [MarkdownBlock] {
@@ -987,8 +1025,16 @@ struct MarkdownText: View {
             Text(fallback)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(blocks) { block in
+                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                     blockView(block)
+                        .background {
+                            if let e2eIdentifier {
+                                AppE2EViewAnchor(
+                                    identifier: "\(e2eIdentifier).\(index)",
+                                    verificationText: block.kind.verificationValue
+                                )
+                            }
+                        }
                 }
             }
         }
@@ -1041,6 +1087,21 @@ private struct MarkdownBlock: Identifiable {
         case list(marker: String, checked: Bool?)
         case quote
         case code
+
+        var verificationValue: String {
+            switch self {
+            case let .heading(level):
+                "heading-\(level)"
+            case .paragraph:
+                "paragraph"
+            case .list:
+                "list"
+            case .quote:
+                "quote"
+            case .code:
+                "code"
+            }
+        }
     }
 
     let id = UUID()

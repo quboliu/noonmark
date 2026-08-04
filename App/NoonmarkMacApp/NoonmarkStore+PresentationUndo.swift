@@ -261,13 +261,14 @@ extension NoonmarkStore {
     var visibleNavigationPages: [Page] {
         var pages: [Page] = [
             .day,
-            .ideas,
             .pool,
             .future,
             .recurring,
             .unfinished,
             .completed,
-            .calendar
+            .calendar,
+            .stickyNotes,
+            .ideas
         ]
         if isZhulongEnabled {
             pages.append(.zhulong)
@@ -294,6 +295,8 @@ extension NoonmarkStore {
         switch page {
         case .day:
             return copy.navDay
+        case .stickyNotes:
+            return copy.navStickyNotes
         case .ideas:
             return copy.navIdeas
         case .pool:
@@ -329,7 +332,7 @@ extension NoonmarkStore {
             return engine.unfinishedPoolCount()
         case .completed:
             return engine.completedTaskHierarchyCount()
-        case .calendar, .zhulong, .settings, .ideas:
+        case .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             return 0
         }
     }
@@ -478,7 +481,7 @@ extension NoonmarkStore {
                 from: selectedCalendarDate,
                 by: offset
             )
-        case .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
+        case .stickyNotes, .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
              .settings:
             return
         }
@@ -516,7 +519,7 @@ extension NoonmarkStore {
             selectedDate = Self.offset(selectedDate, by: days)
         case .calendar:
             selectedCalendarDate = Self.offset(selectedCalendarDate, by: days)
-        case .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
+        case .stickyNotes, .ideas, .pool, .future, .recurring, .unfinished, .completed, .zhulong,
              .settings:
             return
         }

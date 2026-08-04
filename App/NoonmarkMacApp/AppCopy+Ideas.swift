@@ -1,7 +1,37 @@
 extension AppCopy {
-    // MARK: - Ideas（想法记录）
+    // MARK: - Flylight
 
-    var navIdeas: String { language == .chinese ? "想法" : "Ideas" }
+    var navIdeas: String { language == .chinese ? "飞光" : "Flylight" }
+
+    var navStickyNotes: String { "Sticky Note" }
+
+    var stickyNotesSubtitle: String {
+        language == .chinese
+            ? "把值得反复看见的飞光留在这里。"
+            : "Keep the Flylights worth seeing again close at hand."
+    }
+
+    var stickyNotesEmptyState: String {
+        language == .chinese
+            ? "还没有 Sticky Note。请从飞光中挑选值得常看的条目。"
+            : "No Sticky Notes yet. Choose something worth revisiting from Flylight."
+    }
+
+    var stickyNoteStreamMode: String {
+        language == .chinese ? "清单流" : "Stream"
+    }
+
+    var stickyNoteWallMode: String {
+        language == .chinese ? "便签墙" : "Note wall"
+    }
+
+    var stickyNotePresentationMode: String {
+        language == .chinese ? "展示视图" : "Presentation"
+    }
+
+    var openInFlylightAction: String {
+        language == .chinese ? "在飞光中打开" : "Open in Flylight"
+    }
 
     var ideasSubtitle: String {
         language == .chinese
@@ -11,8 +41,8 @@ extension AppCopy {
 
     var ideaComposerPlaceholder: String {
         language == .chinese
-            ? "记录一个想法，可用 #标签、@分组，⌘回车保存；草稿自动保留"
-            : "Capture an idea; use #labels or @group, ⌘Return to save; drafts persist"
+            ? "记录一条飞光，支持 Markdown、#标签与 @分组；⌘回车保存，草稿自动保留"
+            : "Capture a Flylight with Markdown, #labels, or @group; ⌘Return saves and drafts persist"
     }
 
     var ideaFilterPlaceholder: String {
@@ -42,7 +72,7 @@ extension AppCopy {
     }
 
     var ideaInspectorTitle: String {
-        language == .chinese ? "想法详情" : "Idea details"
+        language == .chinese ? "飞光详情" : "Flylight details"
     }
 
     var ideaInspectorRecordedAt: String {
@@ -58,31 +88,31 @@ extension AppCopy {
     }
 
     var ideaInspectorEmptyState: String {
-        language == .chinese ? "选择一条想法查看详情。" : "Select an idea to inspect it."
+        language == .chinese ? "选择一条飞光查看详情。" : "Select a Flylight to inspect it."
     }
 
     var ideaEmptyState: String {
         language == .chinese
-            ? "还没有想法。把第一个灵感记在上面的速记框里。"
-            : "No ideas yet. Capture the first one in the composer above."
+            ? "还没有飞光。把第一条记录写在上面的速记框里。"
+            : "No Flylights yet. Capture the first one above."
     }
 
     var ideaFilterEmptyState: String {
         language == .chinese
-            ? "没有匹配这个想法过滤词的内容。"
-            : "No ideas match this filter."
+            ? "没有匹配这个飞光过滤词的内容。"
+            : "No Flylights match this filter."
     }
 
     var ideaReviewEmptyState: String {
         language == .chinese
-            ? "暂时没有一周以前的想法可回看。"
-            : "No ideas older than one week are ready to review."
+            ? "暂时没有一周以前的飞光可回看。"
+            : "No Flylights older than one week are ready to review."
     }
 
     var ideaMultipleCategories: String {
         language == .chinese
-            ? "每条想法只能有一个分组，请只保留一个 @分组。"
-            : "An idea can have only one group. Keep a single @group."
+            ? "每条飞光只能有一个分组，请只保留一个 @分组。"
+            : "A Flylight can have only one group. Keep a single @group."
     }
 
     func ideaUnresolvedClassification(_ names: [String]) -> String {
@@ -93,25 +123,25 @@ extension AppCopy {
     }
 
     var addIdeaAction: String {
-        language == .chinese ? "记录想法" : "Capture idea"
+        language == .chinese ? "记录飞光" : "Capture Flylight"
     }
 
     var editIdeaAction: String {
-        language == .chinese ? "编辑想法" : "Edit idea"
+        language == .chinese ? "编辑飞光" : "Edit Flylight"
     }
 
     var deleteIdeaAction: String {
-        language == .chinese ? "删除想法" : "Delete idea"
+        language == .chinese ? "删除飞光" : "Delete Flylight"
     }
 
     var ideaActionsAccessibilityLabel: String {
-        language == .chinese ? "想法操作" : "Idea actions"
+        language == .chinese ? "飞光操作" : "Flylight actions"
     }
 
     var ideaEditPlaceholder: String {
         language == .chinese
-            ? "编辑想法，⌘回车保存，Esc 取消"
-            : "Edit the idea; ⌘Return to save, Esc to cancel"
+            ? "用 Markdown 编辑飞光；⌘回车保存，Esc 取消"
+            : "Edit the Flylight in Markdown; ⌘Return saves, Esc cancels"
     }
 
     var ideaSaveEditAction: String {
@@ -123,11 +153,11 @@ extension AppCopy {
     }
 
     var ideaDeletedToast: String {
-        language == .chinese ? "已删除想法" : "Idea deleted"
+        language == .chinese ? "已删除飞光" : "Flylight deleted"
     }
 
     var ideaSavedToast: String {
-        language == .chinese ? "已记录想法" : "Idea captured"
+        language == .chinese ? "已记录飞光" : "Flylight captured"
     }
 
     var ideaEditSaveFailed: String {
@@ -136,67 +166,25 @@ extension AppCopy {
             : "Save failed. Your edit is still here; try again."
     }
 
-    // MARK: - 想法置顶（Pinned Ideas）
+    // MARK: - Sticky Note projection
 
-    var ideasPinnedSectionTitle: String {
-        language == .chinese ? "已置顶" : "Pinned"
+    var addToStickyNotesAction: String {
+        language == .chinese ? "加入 Sticky Note" : "Add to Sticky Note"
     }
 
-    var pinIdeaAction: String {
-        language == .chinese ? "置顶想法" : "Pin idea"
+    var removeFromStickyNotesAction: String {
+        language == .chinese ? "从 Sticky Note 移除" : "Remove from Sticky Note"
     }
 
-    var unpinIdeaAction: String {
-        language == .chinese ? "取消置顶" : "Unpin idea"
+    var addedToStickyNotesToast: String {
+        language == .chinese ? "已加入 Sticky Note" : "Added to Sticky Note"
     }
 
-    var ideaPinnedToast: String {
-        language == .chinese ? "已置顶想法" : "Idea pinned"
+    var removedFromStickyNotesToast: String {
+        language == .chinese ? "已从 Sticky Note 移除" : "Removed from Sticky Note"
     }
 
-    var ideaUnpinnedToast: String {
-        language == .chinese ? "已取消置顶" : "Idea unpinned"
-    }
-
-    // MARK: - 想法回收站（Idea Trash）
-
-    var ideasTrashSectionTitle: String {
-        language == .chinese ? "回收站" : "Trash"
-    }
-
-    var expandIdeasTrash: String {
-        language == .chinese ? "展开回收站" : "Expand trash"
-    }
-
-    var collapseIdeasTrash: String {
-        language == .chinese ? "收起回收站" : "Collapse trash"
-    }
-
-    var ideasTrashEmptyState: String {
-        language == .chinese ? "回收站为空。" : "Trash is empty."
-    }
-
-    var restoreIdeaAction: String {
-        language == .chinese ? "恢复想法" : "Restore idea"
-    }
-
-    var ideaRestorePlaceholder: String {
-        language == .chinese
-            ? "输入恢复后的想法内容，⌘回车恢复，Esc 取消"
-            : "Retype the idea to restore; ⌘Return to restore, Esc to cancel"
-    }
-
-    var ideaRestoredToast: String {
-        language == .chinese ? "已恢复想法" : "Idea restored"
-    }
-
-    func ideaTrashDeletionLabel(_ timestamp: String) -> String {
-        language == .chinese
-            ? "删除于 \(timestamp)"
-            : "Deleted \(timestamp)"
-    }
-
-    // MARK: - 想法分类过滤（Idea Classification Filter）
+    // MARK: - Flylight Classification Filter
 
     func ideaClassificationFilterIndicator(_ name: String) -> String {
         language == .chinese
@@ -208,32 +196,32 @@ extension AppCopy {
         language == .chinese ? "清除分类过滤" : "Clear classification filter"
     }
 
-    // MARK: - 全局想法速记（Global Idea Capture）
+    // MARK: - Global Flylight Capture
 
     var ideaCaptureCommand: String {
-        language == .chinese ? "记录想法…" : "Capture Idea…"
+        language == .chinese ? "记录飞光…" : "Capture Flylight…"
     }
 
     var ideaCapturePanelTitle: String {
-        language == .chinese ? "想法速记" : "Idea Capture"
+        language == .chinese ? "飞光速记" : "Flylight Capture"
     }
 
     var ideaCapturePanelHint: String {
         language == .chinese
-            ? "想法会进入「想法」时间线；回车换行，⌘回车保存，Esc 关闭。"
-            : "Saved to Ideas. Return adds a line, ⌘Return saves, Esc closes."
+            ? "内容会进入「飞光」时间线；支持 Markdown，回车换行，⌘回车保存，Esc 关闭。"
+            : "Saved to Flylight with Markdown; Return adds a line, ⌘Return saves, Esc closes."
     }
 
     var ideaCapturePanelPlaceholder: String {
         language == .chinese
-            ? "记录一个想法，可用 #标签、@分组"
-            : "Capture an idea; use #labels and @group"
+            ? "记录一条飞光，支持 Markdown、#标签与 @分组"
+            : "Capture a Flylight with Markdown, #labels, and @group"
     }
 
     var globalIdeaCaptureShortcutTitle: String {
         language == .chinese
-            ? "全局想法速记"
-            : "Global Idea Capture"
+            ? "全局飞光速记"
+            : "Global Flylight Capture"
     }
 
     var globalIdeaCaptureShortcutRestoreDefault: String {

@@ -199,7 +199,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let editedIdeaCount: Int
     public let tombstonedIdeaCount: Int
     public let ideaTimelineTombstoneLeakCount: Int
-    public let pinnedIdeaCount: Int
+    public let stickyNoteCount: Int
     public let restoredIdeaCount: Int
 
     public var missingRequirements: [String] {
@@ -381,30 +381,30 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "父任务完成后的简洁子任务层级",
             into: &missing
         )
-        require(ideaCount >= 6, "想法时间线至少六条", into: &missing)
-        require(ideaDayCount >= 3, "想法跨多个自然日", into: &missing)
+        require(ideaCount >= 6, "飞光时间线至少六条", into: &missing)
+        require(ideaDayCount >= 3, "飞光跨多个自然日", into: &missing)
         require(
             ideaReviewCandidateCount > 0,
-            "至少一条可进入回看的旧想法",
+            "至少一条可进入回看的旧飞光",
             into: &missing
         )
-        require(labeledIdeaCount > 0, "带标签的想法", into: &missing)
-        require(categorizedIdeaCount > 0, "带分组的想法", into: &missing)
-        require(editedIdeaCount > 0, "编辑过的想法", into: &missing)
+        require(labeledIdeaCount > 0, "带标签的飞光", into: &missing)
+        require(categorizedIdeaCount > 0, "带分组的飞光", into: &missing)
+        require(editedIdeaCount > 0, "编辑过的飞光", into: &missing)
         require(
             tombstonedIdeaCount > 0,
-            "墓碑删除的想法仍在状态中",
+            "删除后的飞光墓碑仍在状态中",
             into: &missing
         )
         require(
             ideaTimelineTombstoneLeakCount == 0,
-            "想法时间线不包含墓碑",
+            "飞光时间线不包含墓碑",
             into: &missing
         )
-        require(pinnedIdeaCount > 0, "至少一条置顶想法", into: &missing)
+        require(stickyNoteCount >= 3, "至少三条 Sticky Note", into: &missing)
         require(
             restoredIdeaCount > 0,
-            "至少一条从回收站恢复的想法",
+            "至少一条经底层兼容命令重建的飞光",
             into: &missing
         )
         return missing
@@ -628,7 +628,10 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 $0.parentCompletion != nil
                     && $0.completedChildren.isEmpty == false
             }
-        let ideaTimeline = engine.ideaTimeline()
+        let ideaTimeline = engine.ideaCollection(
+            .recent,
+            today: anchorDate
+        ).ideas
         ideaCount = ideaTimeline.count
         ideaDayCount = Set(ideaTimeline.compactMap {
             DemoCalendar.localDate(of: $0.createdAt)
@@ -648,7 +651,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         }
         tombstonedIdeaCount = snapshot.ideas.count { $0.isDeleted }
         ideaTimelineTombstoneLeakCount = ideaTimeline.count { $0.isDeleted }
-        pinnedIdeaCount = engine.pinnedIdeas().count
+        stickyNoteCount = engine.pinnedIdeas().count
         self.restoredIdeaCount = restoredIdeaCount
     }
 
@@ -2470,7 +2473,7 @@ private struct DemoStory {
             categoryName: "研究",
             labelNames: ["访谈", "洞察"]
         )
-        _ = try engine.appendIdea(
+        let releaseIdea = try engine.appendIdea(
             body: "访谈里好几个人提到 onboarding 第一屏不知道先点哪里，先记下来，走查时验证。",
             categoryID: researchClassification.categoryID,
             labelIDs: researchClassification.labelIDs,
@@ -2535,14 +2538,23 @@ private struct DemoStory {
             labelIDs: releaseClassification.labelIDs,
             now: time(on: dates[9], hour: 9, minute: 20)
         )
-        _ = try engine.appendIdea(
-            body: "连续用了十天，双置顶队列比长清单更能压住注意力，写进复盘。",
+        let attentionIdea = try engine.appendIdea(
+            body: "连续用了十天，Sticky Note 比长清单更能压住注意力，写进复盘。",
             now: time(on: dates[9], hour: 15, minute: 10)
         )
         try engine.pinIdea(
             id: expenseIdea.id,
             now: time(on: dates[9], hour: 15, minute: 20)
         )
+        try engine.pinIdea(
+            id: handoffIdea.id,
+            now: time(on: dates[9], hour: 15, minute: 21)
+        )
+        try engine.pinIdea(
+            id: attentionIdea.id,
+            now: time(on: dates[9], hour: 15, minute: 22)
+        )
+        _ = releaseIdea
         try engine.restoreIdea(
             id: dataCaliberIdea.id,
             body: "数据口径注释确认由周报模板统一维护，恢复这条留作月底跟进提醒。",
@@ -2562,7 +2574,7 @@ private struct DemoStory {
                 $0.value.name == categoryName
             }) else {
                 throw NoonmarkDemoFixtureError.incompleteCoverage([
-                    "想法分组 \(categoryName)"
+                    "飞光分组 \(categoryName)"
                 ])
             }
             categoryID = match.key
@@ -2572,7 +2584,7 @@ private struct DemoStory {
                 $0.value.name == name
             }) else {
                 throw NoonmarkDemoFixtureError.incompleteCoverage([
-                    "想法标签 \(name)"
+                    "飞光标签 \(name)"
                 ])
             }
             return match.key

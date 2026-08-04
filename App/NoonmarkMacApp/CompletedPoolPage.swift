@@ -285,6 +285,12 @@ struct CompletedTaskHierarchyParentRow: View {
                     )
                     .padding(.top, 3)
                 }
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "completed.hierarchy.parent-select.\(hierarchy.chain.id.description)",
+                        verificationText: hierarchy.parentCompletion == nil ? "open" : "completed"
+                    )
+                }
                 if hierarchy.completedChildren.isEmpty == false {
                     Button {
                         store.toggleCompletedHierarchyChildren(

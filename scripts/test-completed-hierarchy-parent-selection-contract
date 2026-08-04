@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+rg -F 'completed.hierarchy.parent-select.' App/NoonmarkMacApp/CompletedPoolPage.swift >/dev/null
+rg -F 'completed.hierarchy.parent-select.' App/NoonmarkMacApp/TaskCycleMutationE2EAutomation.swift >/dev/null
+if rg -F 'completed.hierarchy.parent.\(chainID.description)' App/NoonmarkMacApp/TaskCycleMutationE2EAutomation.swift >/dev/null; then
+  echo "task-cycle E2E still clicks the row-wide parent anchor" >&2
+  exit 1
+fi
+echo "Completed hierarchy parent selection contract passed"

@@ -89,6 +89,9 @@ run_check_suite() {
   echo "==> Sync merge failure reason contract"
   scripts/test-sync-merge-failure-reason-contract
 
+  echo "==> Completed hierarchy selection contract"
+  bash scripts/test-completed-hierarchy-parent-selection-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

@@ -101,3 +101,5 @@ FAIL-2026-08-04-20	fast	scripts/test-runtime-profile-isolation	scripts/check	Dem
 FAIL-2026-08-04-20	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo fixture 对账后必须终止 installer，再由 LaunchServices 无自动化参数重开并稳定存活
 FAIL-2026-08-04-21	fast	scripts/test-notes-ui-contract	scripts/check	Demo 保存后必须等待飞光正文锚点重新挂载、可见并与持久化正文一致
 FAIL-2026-08-04-21	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo 必须完成飞光保存、正文恢复和后续 WindowServer 交互并产出 ready manifest
+FAIL-2026-08-04-24	fast	scripts/test-completed-hierarchy-parent-selection-contract	scripts/check	拒绝 task-cycle E2E 点击会与 disclosure 重叠的整行父任务锚点
+FAIL-2026-08-04-24	symptom	scripts/test-e2e	scripts/test-all	真实完成页点击进行中父任务必须打开该父任务的分类编辑器，并完成 task-cycle 持久化与重启对账

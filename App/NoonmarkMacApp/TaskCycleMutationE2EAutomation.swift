@@ -1404,7 +1404,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             waitFor("进行中父任务详情入口") {
                 AppViewTreeE2E.click(
                     identifier:
-                    "completed.hierarchy.parent.\(chainID.description)"
+                    "completed.hierarchy.parent-select.\(chainID.description)"
                 )
             } onSuccess: { [self] in
                 waitFor("进行中父任务分类编辑器") {
@@ -1435,7 +1435,7 @@ struct TaskCycleMutationE2EAutomation: LaunchAutomationRunnable {
             waitFor("已完成父任务详情入口") {
                 AppViewTreeE2E.click(
                     identifier:
-                    "completed.hierarchy.parent.\(chainID.description)"
+                    "completed.hierarchy.parent-select.\(chainID.description)"
                 )
             } onSuccess: { [self] in
                 waitFor("已完成父任务分类编辑器") {

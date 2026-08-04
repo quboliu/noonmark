@@ -49,3 +49,5 @@ FAIL-2026-08-02-09	fast	scripts/test-dmg-evidence-contract	scripts/check	拒绝 
 FAIL-2026-08-02-09	fast	scripts/test-dmg-window-identity-contract	scripts/check	区分空 manifest bootstrap 与非空且缺少换行的损坏 manifest
 FAIL-2026-08-02-09	symptom	scripts/test-dmg-install	scripts/release-private-dmg	受控 dmg-validation 路径真实生成并绑定安装 artifact inventory
 FAIL-2026-08-02-09	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 动态验收在安全 inventory 生成或绑定失败时阻断发行
+FAIL-2026-08-04-01	fast	scripts/test-sync-merge-failure-reason-contract	scripts/check	合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码，拒绝退回到裸 202
+FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实同步失败、锁等待、修改拒绝、重启与 Help 菜单导出的诊断采集闭环

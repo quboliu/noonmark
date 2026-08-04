@@ -11,7 +11,60 @@ enum CurrentSyncRecordMergeError: Error, Equatable {
 }
 
 enum CurrentSyncRecordBatchError: Error, Equatable {
-    case invalidCurrentRecord(recordID: SyncRecordID)
+    case invalidCurrentRecord(
+        recordID: SyncRecordID,
+        reason: SyncRecordMergeFailureReason
+    )
+}
+
+extension SyncRecordMergeFailureReason {
+    /// Classifies an error thrown inside current-record validation or merging
+    /// into a privacy-safe reason. Untyped errors collapse to `.unknown` so
+    /// diagnostics never carry free text, identity, or payload content.
+    init(underlying error: Error) {
+        switch error {
+        case let mergeError as CurrentSyncRecordMergeError:
+            self = switch mergeError {
+            case .taskCycleSeriesIdentityCollision:
+                .taskCycleSeriesIdentityCollision
+            case .taskChainIdentityCollision:
+                .taskChainIdentityCollision
+            case .taskDefinitionIdentityCollision:
+                .taskDefinitionIdentityCollision
+            case .dayTraceIdentityCollision:
+                .dayTraceIdentityCollision
+            case .invalidContentClock:
+                .invalidContentClock
+            case .invalidReactivationWitnesses:
+                .invalidReactivationWitnesses
+            }
+        case let noteError as TaskNoteEntryMergeError:
+            self = switch noteError {
+            case .invalidEntries:
+                .invalidNoteEntries
+            case .createdAtCollision:
+                .noteEntryCreatedAtCollision
+            }
+        case is ChainReactivationEnvelopeError:
+            self = .invalidReactivationWitnesses
+        case let domainError as NoonmarkError:
+            self = switch domainError {
+            case .invalidInput:
+                .invalidRecordPayload
+            default:
+                .unknown
+            }
+        case let batchError as CurrentSyncRecordBatchError:
+            switch batchError {
+            case let .invalidCurrentRecord(_, reason):
+                self = reason
+            }
+        case is SyncRecordMapperError, is SyncRecordMaterializerError:
+            self = .invalidRecordPayload
+        default:
+            self = .unknown
+        }
+    }
 }
 
 struct CurrentSyncRecordMergeContext {
@@ -262,9 +315,10 @@ struct CurrentSyncRecordMerger {
             )
         } catch let error as CurrentSyncRecordBatchError {
             switch error {
-            case let .invalidCurrentRecord(recordID):
+            case let .invalidCurrentRecord(recordID, reason):
                 throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: recordID
+                    recordID: recordID,
+                    reason: reason
                 )
             }
         }
@@ -291,7 +345,8 @@ struct CurrentSyncRecordMerger {
             }
             guard headersAreConsistent else {
                 throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                    recordID: group.recordID
+                    recordID: group.recordID,
+                    reason: .inconsistentRecordHeaders
                 )
             }
 
@@ -348,7 +403,8 @@ struct CurrentSyncRecordMerger {
                     supersededEvidenceIDs = provenance.superseded
                 } catch {
                     throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                        recordID: group.recordID
+                        recordID: group.recordID,
+                        reason: SyncRecordMergeFailureReason(underlying: error)
                     )
                 }
             }
@@ -460,7 +516,8 @@ struct CurrentSyncRecordMerger {
                 )
             } catch {
                 throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                    recordID: record.id
+                    recordID: record.id,
+                    reason: SyncRecordMergeFailureReason(underlying: error)
                 )
             }
         }
@@ -599,7 +656,8 @@ struct CurrentSyncRecordMerger {
             try validate(record)
         } catch {
             throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                recordID: record.id
+                recordID: record.id,
+                reason: SyncRecordMergeFailureReason(underlying: error)
             )
         }
     }
@@ -622,7 +680,8 @@ struct CurrentSyncRecordMerger {
             )
         } catch {
             throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                recordID: record.id
+                recordID: record.id,
+                reason: SyncRecordMergeFailureReason(underlying: error)
             )
         }
     }
@@ -651,7 +710,8 @@ struct CurrentSyncRecordMerger {
                 }
             } catch {
                 throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                    recordID: record.id
+                    recordID: record.id,
+                    reason: SyncRecordMergeFailureReason(underlying: error)
                 )
             }
         }
@@ -1432,12 +1492,17 @@ struct CurrentSyncRecordMerger {
     ) throws -> [ChainReactivationEnvelope] {
         guard record.entityType == .taskChain else { return [] }
         return try record.reactivationWitnesses.map { data in
-            let witness = try ChainReactivationEnvelope.decode(data)
+            let witness: ChainReactivationEnvelope
+            do {
+                witness = try ChainReactivationEnvelope.decode(data)
+            } catch {
+                throw CurrentSyncRecordMergeError.invalidReactivationWitnesses
+            }
             guard witness.restoredChain.id == chain.id,
                   witness.restoredChain.createdAt == chain.createdAt,
                   chain.updatedAt >= witness.restoredChain.updatedAt
             else {
-                throw SyncRecordMapperError.invalidPayload(record.entityType)
+                throw CurrentSyncRecordMergeError.invalidReactivationWitnesses
             }
             return witness
         }

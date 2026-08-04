@@ -369,7 +369,8 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                 )
             } catch {
                 throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: record.id
+                    recordID: record.id,
+                    reason: SyncRecordMergeFailureReason(underlying: error)
                 )
             }
         }
@@ -411,7 +412,8 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                 )
             } catch {
                 throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: record.id
+                    recordID: record.id,
+                    reason: SyncRecordMergeFailureReason(underlying: error)
                 )
             }
             guard merged.exactlyMatches(existing) == false else {

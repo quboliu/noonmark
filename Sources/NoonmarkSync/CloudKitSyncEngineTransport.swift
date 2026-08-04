@@ -55,7 +55,7 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     private var cloudContainer: CKContainer?
     private var runtimeEnvironment: CloudKitSyncEnvironment?
     private var syncEngine: CKSyncEngine?
-    private var operationFailure: CloudKitSyncEngineTransportError?
+    private var operationFailure: (any Error)?
 
     public init(
         containerIdentifier: String,
@@ -264,8 +264,15 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     private func recordOperationFailure(_ error: Error) {
         if let error = error as? CloudKitSyncEngineTransportError {
             operationFailure = error
+        } else if error is SyncRecordTransportError {
+            // Typed sync errors carry a privacy-safe diagnostic mapping of
+            // their own; keep them intact instead of reclassifying them as a
+            // generic CloudKit failure.
+            operationFailure = error
         } else {
-            operationFailure = .cloudKitFailure(String(describing: error))
+            operationFailure = CloudKitSyncEngineTransportError.cloudKitFailure(
+                String(describing: error)
+            )
         }
     }
 

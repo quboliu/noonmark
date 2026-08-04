@@ -232,7 +232,10 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
-                .invalidCurrentRecordMerge(recordID: first.id)
+                .invalidCurrentRecordMerge(
+                    recordID: first.id,
+                    reason: .invalidContentClock
+                )
             )
         }
     }
@@ -282,7 +285,10 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     error as? SyncRecordTransportError,
-                    .invalidCurrentRecordMerge(recordID: first.id)
+                    .invalidCurrentRecordMerge(
+                        recordID: first.id,
+                        reason: .invalidContentClock
+                    )
                 )
             }
         }
@@ -386,7 +392,10 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
-                .invalidCurrentRecordMerge(recordID: first.id)
+                .invalidCurrentRecordMerge(
+                    recordID: first.id,
+                    reason: .taskChainIdentityCollision
+                )
             )
         }
     }
@@ -665,7 +674,10 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
-                .invalidCurrentRecordMerge(recordID: immutable.id)
+                .invalidCurrentRecordMerge(
+                    recordID: immutable.id,
+                    reason: .invalidReactivationWitnesses
+                )
             )
         }
     }
@@ -747,6 +759,228 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
                     .invalidContentClock
                 )
             }
+        }
+    }
+
+    func testTransportBatchRejectsInconsistentHeadersForSameRecordID() throws {
+        let mapper = SyncRecordMapper()
+        let dayRecord = try mapper.record(
+            for: Day(date: today, now: now),
+            modifiedBy: SyncDeviceID("mac-headers")
+        )
+        let deleteEcho = SyncRecord(
+            id: dayRecord.id,
+            entityType: dayRecord.entityType,
+            entityID: dayRecord.entityID,
+            operation: .delete,
+            modifiedAt: dayRecord.modifiedAt,
+            modifiedByDeviceID: dayRecord.modifiedByDeviceID,
+            payload: dayRecord.payload
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [dayRecord, deleteEcho]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: dayRecord.id,
+                    reason: .inconsistentRecordHeaders
+                )
+            )
+        }
+    }
+
+    func testTransportBatchRejectsTaskCycleSeriesIdentityCollision() throws {
+        let mapper = SyncRecordMapper()
+        let seriesID = TaskCycleSeriesID()
+        let first = TaskCycleSeries(
+            id: seriesID,
+            title: "周期任务",
+            startDate: today,
+            endDate: today,
+            schedule: .daily,
+            createdAt: now
+        )
+        let divergent = TaskCycleSeries(
+            id: seriesID,
+            title: "周期任务",
+            startDate: LocalDate("2026-07-17"),
+            endDate: today,
+            schedule: .daily,
+            createdAt: now
+        )
+        let firstRecord = try mapper.record(
+            for: first,
+            modifiedBy: SyncDeviceID("series-a")
+        )
+        let divergentRecord = try mapper.record(
+            for: divergent,
+            modifiedBy: SyncDeviceID("series-b")
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [firstRecord, divergentRecord]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: firstRecord.id,
+                    reason: .taskCycleSeriesIdentityCollision
+                )
+            )
+        }
+    }
+
+    func testTransportBatchRejectsTaskDefinitionIdentityCollision() throws {
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "定义身份", now: now)
+        let definition = try XCTUnwrap(engine.snapshot().definitions.first)
+        var divergent = definition
+        divergent.chainID = TaskChainID()
+        let firstRecord = try mapper.record(
+            for: definition,
+            modifiedBy: SyncDeviceID("definition-a")
+        )
+        let divergentRecord = try mapper.record(
+            for: divergent,
+            modifiedBy: SyncDeviceID("definition-b")
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [firstRecord, divergentRecord]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: firstRecord.id,
+                    reason: .taskDefinitionIdentityCollision
+                )
+            )
+        }
+    }
+
+    func testTransportBatchRejectsDayTraceIdentityCollision() throws {
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "轨迹身份", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let trace = try XCTUnwrap(engine.traces[traceID])
+        var divergent = trace
+        divergent.createdAt = trace.createdAt.addingTimeInterval(-1)
+        let firstRecord = try mapper.record(
+            for: trace,
+            modifiedBy: SyncDeviceID("trace-a")
+        )
+        let divergentRecord = try mapper.record(
+            for: divergent,
+            modifiedBy: SyncDeviceID("trace-b")
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [firstRecord, divergentRecord]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: firstRecord.id,
+                    reason: .dayTraceIdentityCollision
+                )
+            )
+        }
+    }
+
+    func testTransportBatchRejectsUndecodableReactivationWitness() throws {
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "见证解码", now: now)
+        let chain = try XCTUnwrap(engine.snapshot().chains.first)
+        let base = try mapper.record(
+            for: chain,
+            modifiedBy: SyncDeviceID("mac-witness")
+        )
+        let record = SyncRecord(
+            id: base.id,
+            entityType: base.entityType,
+            entityID: base.entityID,
+            operation: base.operation,
+            modifiedAt: base.modifiedAt,
+            modifiedByDeviceID: base.modifiedByDeviceID,
+            payload: base.payload,
+            reactivationWitnesses: [Data([0xCA, 0xFE])]
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [record]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: record.id,
+                    reason: .invalidReactivationWitnesses
+                )
+            )
+        }
+    }
+
+    func testTransportBatchRejectsSubtaskIntegrityViolation() throws {
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "子任务完整", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "子任务",
+            now: now.addingTimeInterval(2)
+        )
+        var malformed = try XCTUnwrap(
+            engine.snapshot().subtasks.first { $0.id == subtaskID }
+        )
+        malformed.title = " 前导空白"
+        let record = try mapper.record(
+            for: malformed,
+            modifiedBy: SyncDeviceID("mac-subtask")
+        )
+
+        XCTAssertThrowsError(
+            try CurrentSyncRecordMerger().prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: [record]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: record.id,
+                    reason: .invalidRecordPayload
+                )
+            )
         }
     }
 

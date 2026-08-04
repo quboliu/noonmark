@@ -28,7 +28,8 @@ public actor InMemorySyncTransport: SyncRecordTransport {
         for record in batch.records {
             guard staged.updateValue(record, forKey: record.id) == nil else {
                 throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: record.id
+                    recordID: record.id,
+                    reason: .unknown
                 )
             }
         }
@@ -79,7 +80,8 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                     )
                 } catch {
                     throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                        recordID: record.id
+                        recordID: record.id,
+                        reason: SyncRecordMergeFailureReason(underlying: error)
                     )
                 }
                 continue

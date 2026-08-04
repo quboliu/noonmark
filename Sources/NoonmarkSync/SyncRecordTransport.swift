@@ -1,8 +1,45 @@
 import Foundation
 
+/// Privacy-safe classification of why a current-record merge was rejected.
+/// Raw values are stable diagnostic tokens; they never carry record identity,
+/// entity content, timestamps, or free text.
+public enum SyncRecordMergeFailureReason: String, CaseIterable, Equatable, Sendable {
+    /// Two records share one record ID but disagree on entity type, entity ID,
+    /// or operation, so no canonical header exists.
+    case inconsistentRecordHeaders
+    /// The record or one merge side violates its content or mutation clock
+    /// invariant (non-finite clock, content clock before creation, terminal
+    /// clock outside the content window, or mutation clock bit mismatch).
+    case invalidContentClock
+    /// A task cycle series disagrees on stable identity (id, start date,
+    /// creation clock) or reuses a revision/fact identity with new content.
+    case taskCycleSeriesIdentityCollision
+    /// A task chain disagrees on its creation clock or cycle membership.
+    case taskChainIdentityCollision
+    /// A task definition disagrees on chain, sequence, or creation clock.
+    case taskDefinitionIdentityCollision
+    /// A day trace disagrees on chain, creation clock, continuation, or
+    /// carry-over identity.
+    case dayTraceIdentityCollision
+    /// Reactivation witnesses are attached to a non-chain record or fail
+    /// witness validation.
+    case invalidReactivationWitnesses
+    /// Note entries violate entry-level invariants.
+    case invalidNoteEntries
+    /// The same note entry identity appears with two different creation clocks.
+    case noteEntryCreatedAtCollision
+    /// A record payload cannot be decoded or fails payload-level validation.
+    case invalidRecordPayload
+    /// The rejection cause did not carry a more specific typed reason.
+    case unknown
+}
+
 public enum SyncRecordTransportError: Error, Equatable, Sendable {
     case immutableRecordCollision(recordID: SyncRecordID)
-    case invalidCurrentRecordMerge(recordID: SyncRecordID)
+    case invalidCurrentRecordMerge(
+        recordID: SyncRecordID,
+        reason: SyncRecordMergeFailureReason
+    )
 }
 
 extension SyncRecordTransportError: LocalizedError {
@@ -10,8 +47,9 @@ extension SyncRecordTransportError: LocalizedError {
         switch self {
         case let .immutableRecordCollision(recordID):
             "Immutable sync record collision for id \(recordID.rawValue)"
-        case let .invalidCurrentRecordMerge(recordID):
+        case let .invalidCurrentRecordMerge(recordID, reason):
             "Current sync records cannot be merged for id \(recordID.rawValue)"
+                + " (reason: \(reason.rawValue))"
         }
     }
 }

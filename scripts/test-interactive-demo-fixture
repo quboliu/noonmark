@@ -264,4 +264,38 @@ runtime_evidence_assert_clean_logs \
   "$app_log" \
   "$runtime_console_log"
 
+kill -TERM "$app_pid" >/dev/null 2>&1 || true
+wait "$app_pid" 2>/dev/null || true
+app_pid=""
+
+open -n "$app_path" --args \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale zh_Hans_SG \
+  --e2e-zhulong-sidecar-key \
+  --page ideas
+
+for _ in {1..100}; do
+  candidate_pid="$(pgrep -x "$app_executable_name" | tail -n 1 || true)"
+  if [[ -n "$candidate_pid" ]]; then
+    app_pid="$candidate_pid"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ -z "$app_pid" ]]; then
+  echo "verified Demo fixture could not reopen as a presentation App" >&2
+  exit 1
+fi
+
+for _ in {1..20}; do
+  if ! kill -0 "$app_pid" >/dev/null 2>&1; then
+    echo "Demo presentation App exited after LaunchServices reopen" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
 echo "interactive demo fixture: ok"

@@ -1072,8 +1072,12 @@ scripts/test-system|scripts/reset-dev-data audit
 scripts/test-deterministic-sim|scripts/reset-dev-data audit
 scripts/run-demo-app|scripts/reset-dev-data demo
 scripts/run-demo-app|export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+scripts/run-demo-app|fixture_pid=$!
+scripts/run-demo-app|kill -TERM "$fixture_pid"
+scripts/run-demo-app|open -n "$app_path" --args
 scripts/test-interactive-demo-fixture|scripts/reset-dev-data demo
 scripts/test-interactive-demo-fixture|export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+scripts/test-interactive-demo-fixture|open -n "$app_path" --args
 App/NoonmarkMacApp/InteractiveDemoFixtureAutomation.swift|requestEventAccessIfNeeded: true
 scripts/test-e2e|scripts/reset-dev-data e2e
 scripts/test-e2e|app_bundle_name="NoonmarkE2E"
@@ -1100,6 +1104,15 @@ if /usr/bin/grep -Fq \
   'AXIsProcessTrustedWithOptions' \
   "$repo_root/App/NoonmarkMacApp/WindowServerInputDriver.swift"; then
   echo "Demo input driver must not request unrelated Accessibility client trust" >&2
+  exit 1
+fi
+
+run_demo_fixture_flag_count="$(
+  /usr/bin/grep -Fc -- '--interactive-demo-fixture' \
+    "$repo_root/scripts/run-demo-app"
+)"
+if [[ "$run_demo_fixture_flag_count" != "1" ]]; then
+  echo "run-demo-app must reserve fixture automation for its installer process" >&2
   exit 1
 fi
 

@@ -13,11 +13,11 @@ make run-demo-app
 1. 构建专用 `dist/NoonmarkDemo.app`。它固定使用 `demo` profile：bundle identifier 为 `app.noonmark.mac.demo`，Application Support 目录为 `noonmark-demo`，iCloud repository 为 `Noonmark-Demo/SyncRepository`；因此可以接收固定自然日与隔离数据库参数。production `app.noonmark.mac` 仍然拒绝这些参数。
 2. 只 reset `demo` profile，再重建仓库内固定数据根 `artifacts/interactive-demo/`。显式 fixture 写入该仓库目录，其余运行资源仍由 `demo` profile 固定拥有；命令不得启动 production 身份，也不得读取、定位、修改或 reset `noonmark` 与 `Noonmark/SyncRepository`。
 3. 写入当前本机已经配置的 Provider 凭证，并执行 readiness；凭证只进入 `app.noonmark.zhulong.provider.demo` Keychain service，不写入 fixture 或 manifest，也不读取 production Keychain service。
-4. 以 `2026-07-24`、`America/New_York` 和 `zh_Hans_SG` 启动真实 App。
+4. 以 `2026-07-24`、`America/New_York` 和 `zh_Hans_SG` 直接启动隔离的 fixture installer 进程；WindowServer 自动化只属于该验收进程。
 5. 由 `NoonmarkDemoSupport` 通过真实领域接口重放 365 天用户故事，再把完整 snapshot 写入 SQLite。
 6. 写入二十场真实加密烛龙会话，并回读 SQLite 与 sidecar 对账。
 7. 从同一真实 App 自动截取 Day Todo、飞光、Sticky Note 清单流、Sticky Note 便签墙、任务池、未来计划、重复计划、未完成、已完成、日历、烛龙、快速记录，以及不含宿主机路径或 Provider 身份的通用、分组、数据和隐私设置面板；窗口或面板状态不符时 fail-closed。
-8. 关闭快速记录与设置辅助窗口，并恢复到 Day Todo。只有 `fixture-manifest.json` 报告 `ready` 且 App 仍存活时，命令才成功返回。
+8. 关闭快速记录与设置辅助窗口。只有 `fixture-manifest.json` 报告 `ready`、SQLite 与 sidecar 对账通过后，才终止 installer，并由 LaunchServices 重新打开不带任何 fixture 自动化参数的纯展示 App，直接进入飞光；展示进程稳定存活后命令才成功返回。
 
 Demo App 运行后会按本机默认偏好注册全局 `⌃⇧N`。可以关闭主窗口、切到其他 App 后直接体验快速记录；设置页也可录制新组合。快捷键偏好是本机壳层状态，不属于年度任务 fixture，也不进入 manifest、SQLite 或烛龙 sidecar。
 

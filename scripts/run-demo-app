@@ -14,6 +14,23 @@ database_path="$demo_root/Noonmark.sqlite"
 result_path="$demo_root/fixture-manifest.json"
 bootstrap_log="$demo_root/provider-bootstrap.log"
 readiness_result="$demo_root/provider-readiness.txt"
+fixture_log="$demo_root/fixture-install.log"
+fixture_pid=""
+presentation_pid=""
+
+cleanup_failed_demo_launch() {
+  local command_exit=$?
+  if [[ "$command_exit" -ne 0 ]]; then
+    for owned_pid in "$fixture_pid" "$presentation_pid"; do
+      if [[ -n "$owned_pid" ]] \
+          && kill -0 "$owned_pid" >/dev/null 2>&1; then
+        kill -TERM "$owned_pid" >/dev/null 2>&1 || true
+        wait "$owned_pid" 2>/dev/null || true
+      fi
+    done
+  fi
+}
+trap cleanup_failed_demo_launch EXIT
 
 case "$demo_root" in
   "$PWD"/artifacts/interactive-demo) ;;
@@ -56,7 +73,7 @@ if [[ ! -f "$readiness_result" \
   exit 1
 fi
 
-open -n "$app_path" --args \
+"$app_executable" \
   --data-url "$database_path" \
   --e2e-fixed-instant 2026-07-24T22:00:00Z \
   --e2e-fixed-time-zone America/New_York \
@@ -64,29 +81,18 @@ open -n "$app_path" --args \
   --e2e-zhulong-sidecar-key \
   --interactive-demo-fixture \
   --interactive-demo-result-url "$result_path" \
-  --page day
-
-target_pid=""
-for _ in {1..100}; do
-  candidate_pid="$(pgrep -x "$executable_name" || true)"
-  if [[ -n "$candidate_pid" ]]; then
-    target_pid="$candidate_pid"
-    break
-  fi
-  sleep 0.1
-done
-
-if [[ -z "$target_pid" ]]; then
-  echo "failed to launch interactive demo app: $app_path" >&2
-  exit 1
-fi
+  --page day \
+  >"$fixture_log" 2>&1 &
+fixture_pid=$!
 
 for ((attempt = 0; attempt < NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT; attempt += 1)); do
   if [[ -f "$result_path" ]]; then
     break
   fi
-  if ! kill -0 "$target_pid" >/dev/null 2>&1; then
-    echo "interactive demo app exited before fixture became ready" >&2
+  if ! kill -0 "$fixture_pid" >/dev/null 2>&1; then
+    wait "$fixture_pid" || true
+    echo "interactive demo installer exited before fixture became ready" >&2
+    sed -n '1,160p' "$fixture_log" >&2
     exit 1
   fi
   sleep 0.1
@@ -136,9 +142,35 @@ for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCRE
   fi
 done
 
+kill -TERM "$fixture_pid" >/dev/null 2>&1 || true
+wait "$fixture_pid" 2>/dev/null || true
+fixture_pid=""
+
+open -n "$app_path" --args \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale zh_Hans_SG \
+  --e2e-zhulong-sidecar-key \
+  --page ideas
+
+for _ in {1..100}; do
+  candidate_pid="$(pgrep -x "$executable_name" | tail -n 1 || true)"
+  if [[ -n "$candidate_pid" ]]; then
+    presentation_pid="$candidate_pid"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ -z "$presentation_pid" ]]; then
+  echo "failed to launch interactive demo presentation: $app_path" >&2
+  exit 1
+fi
+
 for _ in {1..20}; do
-  if ! kill -0 "$target_pid" >/dev/null 2>&1; then
-    echo "interactive demo app exited after fixture installation" >&2
+  if ! kill -0 "$presentation_pid" >/dev/null 2>&1; then
+    echo "interactive demo presentation exited after verified installation" >&2
     exit 1
   fi
   sleep 0.1

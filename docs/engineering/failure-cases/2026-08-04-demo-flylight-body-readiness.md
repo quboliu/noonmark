@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-21：Demo 在飞光正文重新挂载前继续物理编辑
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 12:30 -04:00
 - 影响版本／构建：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec` 至修复前工作树
 - 引入提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec` `fix(flylight): 补齐编辑恢复与真实交互门禁`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：当前 Codex agent；由 Git blame、运行视图树与本次工作会话确认
-- 修复提交：待回填
+- 修复提交：`798ae5a46d95cc8bbbc6c6a87e3374c29f53b7f8`
 
 ## 用户症状与影响
 

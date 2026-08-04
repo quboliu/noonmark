@@ -15,9 +15,32 @@ extension SyncRecordTransportError: DiagnosticFailureProviding {
     public var diagnosticFailure: DiagnosticFailure {
         let code = switch self {
         case .immutableRecordCollision: 201
-        case .invalidCurrentRecordMerge: 202
+        case let .invalidCurrentRecordMerge(_, reason):
+            reason.diagnosticCode
         }
         return DiagnosticFailure(domain: .syncProtocol, code: code)
+    }
+}
+
+extension SyncRecordMergeFailureReason {
+    /// Merge-rejection subcodes occupy the 250-259 block of the syncProtocol
+    /// domain; 202 remains the fallback when no typed reason was preserved.
+    /// Codes identify only the violated merge rule — never record identity,
+    /// entity content, timestamps, or free text.
+    var diagnosticCode: Int {
+        switch self {
+        case .unknown: 202
+        case .inconsistentRecordHeaders: 250
+        case .invalidContentClock: 251
+        case .taskCycleSeriesIdentityCollision: 252
+        case .taskChainIdentityCollision: 253
+        case .taskDefinitionIdentityCollision: 254
+        case .dayTraceIdentityCollision: 255
+        case .invalidReactivationWitnesses: 256
+        case .invalidNoteEntries: 257
+        case .noteEntryCreatedAtCollision: 258
+        case .invalidRecordPayload: 259
+        }
     }
 }
 

@@ -83,6 +83,9 @@ run_check_suite() {
   echo "==> E2E and writer-lease evidence contract"
   scripts/test-e2e-evidence-contract
 
+  echo "==> Sync merge failure reason contract"
+  scripts/test-sync-merge-failure-reason-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

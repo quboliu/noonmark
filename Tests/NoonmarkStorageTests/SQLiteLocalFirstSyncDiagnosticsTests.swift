@@ -134,6 +134,69 @@ final class SQLiteLocalFirstSyncDiagnosticsTests: XCTestCase {
         )
     }
 
+    func testMergeRejectionSurfacesTypedReasonSubcode() async throws {
+        let databaseURL = makeDatabaseURL("merge-rejection")
+        let baselineNow = Date(timeIntervalSince1970: 1_799_999_900)
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(
+            title: "merge rejection fixture",
+            now: baselineNow
+        )
+        try SQLiteEngineRepository(databaseURL: databaseURL)
+            .save(engine.snapshot())
+        try SQLiteSyncRepository(databaseURL: databaseURL)
+            .saveDeviceIdentity(
+                SyncDeviceIdentity(
+                    deviceID: SyncDeviceID("merge-rejection-device"),
+                    createdAt: baselineNow
+                )
+            )
+        let remote = InMemorySyncTransport()
+        _ = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: remote
+        ).sync(now: Date(timeIntervalSince1970: 1_799_999_999))
+
+        _ = try engine.createPoolTask(
+            title: "pending poison upload",
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        try SQLiteEngineRepository(databaseURL: databaseURL)
+            .save(engine.snapshot())
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive
+        )
+
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: databaseURL,
+                transport: FailingPushTransport(remote: remote),
+                diagnosticOperation: operation
+            ).sync(now: Date(timeIntervalSince1970: 1_800_000_100))
+            XCTFail("merge rejection must fail the sync operation")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .invalidCurrentRecordMerge(
+                    recordID: FailingPushTransport.rejectedRecordID,
+                    reason: .invalidContentClock
+                )
+            )
+        }
+
+        let terminal = try XCTUnwrap(
+            recorder.snapshot().map(\.event).last
+        )
+        XCTAssertEqual(terminal.code, .operationFailed)
+        XCTAssertEqual(terminal.failure?.domain, .syncProtocol)
+        XCTAssertEqual(terminal.failure?.code, 7)
+        XCTAssertEqual(terminal.failureDetail?.domain, .syncProtocol)
+        XCTAssertEqual(terminal.failureDetail?.code, 251)
+        XCTAssertNotNil(terminal.incidentID)
+    }
+
     private func makeDatabaseURL(_ name: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -153,5 +216,26 @@ private actor FailingFetchTransport: SyncRecordTransport {
 
     func fetchAll() async throws -> [SyncRecord] {
         throw Failure.offline
+    }
+}
+
+private actor FailingPushTransport: SyncRecordTransport {
+    static let rejectedRecordID = SyncRecordID("day:2026-08-04")
+
+    private let remote: InMemorySyncTransport
+
+    init(remote: InMemorySyncTransport) {
+        self.remote = remote
+    }
+
+    func push(_ records: [SyncRecord]) async throws {
+        throw SyncRecordTransportError.invalidCurrentRecordMerge(
+            recordID: Self.rejectedRecordID,
+            reason: .invalidContentClock
+        )
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        try await remote.fetchAll()
     }
 }

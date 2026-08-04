@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+# FAIL-2026-08-04-01: production 同步失败的 failureDetail 曾是裸 202，
+# merger 各 catch 点吞掉内部 typed 错误，导致无法定位被违反的合并规则。
+# 本契约强制：合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码；
+# 任何吞错点退回到无 reason 的 invalidCurrentRecordMerge 都会判红。
+swift test \
+  --filter DiagnosticFailureMappingTests \
+  --filter testTransportBatchRejectsDivergentPreferenceWithSameVersion \
+  --filter testTransportBatchRejectsDivergentPreferenceVersionAcrossEveryPermutation \
+  --filter testTransportBatchRejectsDivergentCycleMembershipForSameChain \
+  --filter testTransportBatchRejectsReactivationWitnessOnImmutableRecord \
+  --filter testTransportBatchRejectsInconsistentHeadersForSameRecordID \
+  --filter testTransportBatchRejectsTaskCycleSeriesIdentityCollision \
+  --filter testTransportBatchRejectsTaskDefinitionIdentityCollision \
+  --filter testTransportBatchRejectsDayTraceIdentityCollision \
+  --filter testTransportBatchRejectsUndecodableReactivationWitness \
+  --filter testTransportBatchRejectsSubtaskIntegrityViolation \
+  --filter testCurrentNoteIdentityCollisionFailsClosedAcrossTransports \
+  --filter testTransportsRejectPreferenceHeaderPayloadClockMismatch \
+  --filter testFirstHistoricalTraceRecordWithDuplicateNoteIdentityFailsClosed \
+  --filter testMalformedOrdinarySeedFailsClosed \
+  --filter testMergeRejectionSurfacesTypedReasonSubcode

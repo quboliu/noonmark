@@ -84,7 +84,10 @@ final class InMemorySyncTransportTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
-                .invalidCurrentRecordMerge(recordID: malformed.id)
+                .invalidCurrentRecordMerge(
+                    recordID: malformed.id,
+                    reason: .invalidRecordPayload
+                )
             )
         }
     }

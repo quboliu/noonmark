@@ -257,7 +257,8 @@ public struct CloudKitSyncMirror {
             )
         } catch {
             throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                recordID: incoming.id
+                recordID: incoming.id,
+                reason: SyncRecordMergeFailureReason(underlying: error)
             )
         }
     }

@@ -282,8 +282,14 @@ public struct SyncRecordMerger: Sendable {
                     provenanceGroups: batch.provenanceGroups
                 )
             } catch let error as SyncRecordTransportError {
+                // By design this path degrades the offending record into a
+                // per-record conflict and keeps canonicalizing the rest of
+                // the batch, instead of failing the whole operation. The
+                // typed merge failure reason is therefore intentionally not
+                // propagated into an operation-level diagnostic here; the
+                // conflict queue is the user-visible surface for this case.
                 let recordID: SyncRecordID = switch error {
-                case let .invalidCurrentRecordMerge(invalidID),
+                case let .invalidCurrentRecordMerge(invalidID, _),
                      let .immutableRecordCollision(invalidID):
                     invalidID
                 }

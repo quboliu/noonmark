@@ -302,7 +302,8 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         for transport in transports {
             await assertInvalidCurrentRecord(
                 malformed,
-                through: transport
+                through: transport,
+                reason: .invalidRecordPayload
             )
         }
     }
@@ -1878,8 +1879,8 @@ final class LocalFolderSyncTransportTests: XCTestCase {
 
         let local = LocalFolderSyncTransport(rootURL: makeFolderURL())
         let memory = InMemorySyncTransport()
-        await assertInvalidCurrentRecord(record, through: local)
-        await assertInvalidCurrentRecord(record, through: memory)
+        await assertInvalidCurrentRecord(record, through: local, reason: .invalidNoteEntries)
+        await assertInvalidCurrentRecord(record, through: memory, reason: .invalidNoteEntries)
         let localRecords = try await local.fetchAll()
         let memoryRecords = try await memory.fetchAll()
         XCTAssertTrue(localRecords.isEmpty)
@@ -2001,7 +2002,10 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             } catch {
                 XCTAssertEqual(
                     error as? SyncRecordTransportError,
-                    .invalidCurrentRecordMerge(recordID: first.id)
+                    .invalidCurrentRecordMerge(
+                        recordID: first.id,
+                        reason: .noteEntryCreatedAtCollision
+                    )
                 )
             }
         }
@@ -2317,6 +2321,7 @@ final class LocalFolderSyncTransportTests: XCTestCase {
     private func assertInvalidCurrentRecord(
         _ record: SyncRecord,
         through transport: any SyncRecordTransport,
+        reason: SyncRecordMergeFailureReason,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
@@ -2326,7 +2331,7 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         } catch {
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
-                .invalidCurrentRecordMerge(recordID: record.id),
+                .invalidCurrentRecordMerge(recordID: record.id, reason: reason),
                 file: file,
                 line: line
             )

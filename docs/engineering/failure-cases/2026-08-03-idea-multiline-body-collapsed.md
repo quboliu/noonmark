@@ -1,13 +1,13 @@
 # FAIL-2026-08-03-03：多行想法保存后被压成单行
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-03（想法重做双轴代码审查）
 - 影响版本／构建：`feature/idea-capture` 的 `ff86af0`，0.2.0 之后未发布开发构建
 - 引入提交：`ff86af0a1fa47518667348e3df0d61d1c9caf09e` `feat(ideas): 原生想法记录与置顶、回收站、标签过滤`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 和现有 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`7a639ee4deac5969a103796076e9147c7fb54a3b` `feat(ideas): 重做想法捕捉与浏览骨架`
 
 ## 用户症状与影响
 
@@ -53,7 +53,7 @@ failed: Cmd+Enter did not save the idea draft
 
 ## 根因修复
 
-实现与验证已完成，修复提交待回填：
+实现与验证已完成，修复提交为 `7a639ee4deac5969a103796076e9147c7fb54a3b`：
 
 - 新增独立 `IdeaDraftParser`，复用分类 token 识别规则，但只移除 token 与其邻接 horizontal whitespace，不合并正文行。
 - 页面与全局浮窗的想法提交统一改走 `IdeaDraft`；任务创建继续使用原有单行 `NewTaskDraftParser`。
@@ -66,7 +66,7 @@ failed: Cmd+Enter did not save the idea draft
 - 症状红：`ff86af0` 隔离 worktree 的真实 `.app` 两行草稿以 `Cmd+Enter did not save the idea draft` 判红。
 - Fast：`NewTaskDraftParserTests.testIdeaDraftPreservesLineBreaksWhileRemovingClassificationTokens` 与相关 Idea collection/search 测试通过。
 - 症状绿：`NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e` 通过；同一两行正文经物理输入、`⌘Enter`、卡片、App 重启和 SQLite 回读后仍保持两行，外层 SQLite probe 为 `5 4 1 1 1 1 0 1 1 1 1`。
-- 修复提交：待回填。
+- 修复提交：`7a639ee4deac5969a103796076e9147c7fb54a3b`。
 
 ## 永久门禁
 

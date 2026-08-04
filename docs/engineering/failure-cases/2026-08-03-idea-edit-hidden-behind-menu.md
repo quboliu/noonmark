@@ -1,13 +1,13 @@
 # FAIL-2026-08-03-02：想法正文双击不能编辑且编辑入口隐藏在溢出菜单
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-03（本任务用户体验审查）
 - 影响版本／构建：`feature/idea-capture` 的 `ff86af0`，0.2.0 之后未发布开发构建
 - 引入提交：`ff86af0a1fa47518667348e3df0d61d1c9caf09e` `feat(ideas): 原生想法记录与置顶、回收站、标签过滤`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 和现有 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`7a639ee4deac5969a103796076e9147c7fb54a3b` `feat(ideas): 重做想法捕捉与浏览骨架`
 
 ## 用户症状与影响
 
@@ -56,7 +56,7 @@ idea capture exercise failed: failed: idea inline edit field did not take focus
 
 ## 根因修复
 
-实现与验证已完成，修复提交待回填：
+实现与验证已完成，修复提交为 `7a639ee4deac5969a103796076e9147c7fb54a3b`：
 
 - 正文稳定提供唯一可识别的双击区域；物理双击直接建立同一条目的 inline editor session。
 - editor 在原位置、原宽度和近似原高度出现，保持滚动位置。
@@ -70,7 +70,7 @@ idea capture exercise failed: failed: idea inline edit field did not take focus
 - Fast：`scripts/reset-dev-data audit && swift test --filter IdeaCaptureSessionTests` 通过 6 项 session 测试，覆盖共享草稿、成功后清空、失败保留、正文归一化、保存／取消和编辑错误留存；`scripts/test-unit` 已强制调用该 suite。
 - 症状绿：`NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e` 通过；同一真实 `.app` 场景对正文锚点发送 WindowServer 物理双击，原位 editor 出现并取得焦点，保存后正文、重启和 SQLite 探针一致。三点菜单没有参与进入编辑。
 - 年度回归：`make test-demo-fixture` 通过；同一真实 Demo App 额外覆盖宽屏双栏、按需搜索、旧想法回看、右侧检视与回收站。
-- 修复提交：待回填。
+- 修复提交：`7a639ee4deac5969a103796076e9147c7fb54a3b`。
 
 ## 永久门禁
 

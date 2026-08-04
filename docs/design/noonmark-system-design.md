@@ -1770,8 +1770,8 @@ build 与 package 只产生档案，不 reset 或启动任何 profile；需要�
 
 当前版本字段：
 
-- `CFBundleShortVersionString = 0.2.0`
-- `CFBundleVersion = 5`
+- `CFBundleShortVersionString = 0.2.1`
+- `CFBundleVersion = 6`
 - `LSMinimumSystemVersion = 14.0`
 
 ### 17.2 CloudKit 签名

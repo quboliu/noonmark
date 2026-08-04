@@ -144,6 +144,27 @@ public enum IdeaDraftParser {
         )
     }
 
+    /// Reconstructs the single editable Flylight draft without losing the
+    /// stable classification identities supplied by the caller. Classification
+    /// names use the same reversible quoting rules as token completion.
+    public static func editableText(
+        body: String,
+        categoryName: String?,
+        labelNames: [String]
+    ) -> String {
+        var tokens: [String] = []
+        if let categoryName {
+            tokens.append(
+                "@\(NewTaskDraftParser.encodedClassificationName(categoryName))"
+            )
+        }
+        tokens.append(contentsOf: labelNames.map {
+            "#\(NewTaskDraftParser.encodedClassificationName($0))"
+        })
+        guard tokens.isEmpty == false else { return body }
+        return "\(body)\n\(tokens.joined(separator: " "))"
+    }
+
     private static func body(
         removing occurrences: [TokenOccurrence],
         from raw: String
@@ -425,7 +446,7 @@ public enum NewTaskDraftParser {
         }
         let prefix = rawText[..<markerIndex]
         let marker = rawText[markerIndex]
-        return "\(prefix)\(marker)\(encoded(name)) "
+        return "\(prefix)\(marker)\(encodedClassificationName(name)) "
     }
 
     fileprivate static func classificationTokenOccurrences(
@@ -571,7 +592,7 @@ public enum NewTaskDraftParser {
         }
     }
 
-    private static func encoded(_ name: String) -> String {
+    fileprivate static func encodedClassificationName(_ name: String) -> String {
         guard name.contains(where: { $0.isWhitespace || $0 == "\"" || $0 == "\\" })
         else {
             return name

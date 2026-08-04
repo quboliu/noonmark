@@ -3906,7 +3906,7 @@ run_idea_capture_probe() {
       count(*),
       (SELECT count(*) FROM idea_entries WHERE deleted_at IS NULL),
       (SELECT count(*) FROM idea_entries
-       WHERE body = '## e2e Flylight alpha' || char(10)
+       WHERE body = '## e2e Flylight alpha edited' || char(10)
          || '- second line https://example.com/@user'
          AND deleted_at IS NULL
          AND category_id IS NOT NULL
@@ -3930,7 +3930,7 @@ run_idea_capture_probe() {
          AND pinned_at IS NOT NULL
          AND typeof(pinned_at_bits) = 'integer'),
       (SELECT count(*) FROM idea_entries
-       WHERE body = '## e2e Flylight alpha' || char(10)
+       WHERE body = '## e2e Flylight alpha edited' || char(10)
          || '- second line https://example.com/@user'
          AND pinned_at IS NULL),
       (SELECT count(*) FROM idea_entries
@@ -3971,10 +3971,12 @@ run_idea_capture_probe() {
     ideas-detail-collapsed.png \
     ideas-detail-expanded.png \
     ideas-composer-failed.png \
+    ideas-composer-saving.png \
     ideas-composer-saved.png \
     ideas-filtered.png \
     ideas-classification-filtered.png \
     ideas-edited.png \
+    ideas-inline-saving.png \
     ideas-empty-focused.png \
     sticky-notes-wall.png \
     sticky-notes-selected.png \

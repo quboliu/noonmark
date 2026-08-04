@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
 source scripts/interactive-demo-screenshot-contract
 source scripts/runtime-evidence
 
@@ -87,6 +89,8 @@ for expected in \
   '"dayTodoGroupingPresentationVerified" : true' \
   '"taskCollectionCategoryVisibilityVerified" : true' \
   '"ideasPresentationVerified" : true' \
+  '"flylightEditingInteractionVerified" : true' \
+  '"flylightGlobalSuggestionVerified" : true' \
   '"completedPoolRowHierarchyVerified" : true' \
   '"visibleScopeReauthorizationCardCount" : 0' \
   '"scopeAuthorizationUIVerified" : true' \

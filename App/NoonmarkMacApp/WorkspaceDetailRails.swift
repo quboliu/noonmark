@@ -1031,6 +1031,14 @@ struct DetailRail: View {
                                 .menuStyle(.borderlessButton)
                                 .menuIndicator(.hidden)
                                 .fixedSize()
+                                .accessibilityIdentifier(
+                                    "ideas.inspector.menu.\(idea.id)"
+                                )
+                                .background {
+                                    AppE2EViewAnchor(
+                                        identifier: "ideas.inspector.menu.\(idea.id)"
+                                    )
+                                }
                                 .accessibilityLabel(
                                     store.copy.ideaActionsAccessibilityLabel
                                 )

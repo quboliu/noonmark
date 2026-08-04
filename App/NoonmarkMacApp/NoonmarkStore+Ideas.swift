@@ -18,6 +18,17 @@ enum IdeaBrowseMode: Equatable {
     case review
 }
 
+/// A stable Flylight browsing position. Source navigation and temporary
+/// classification collections may replace the visible collection, but they
+/// never destroy the user's prior filter, review seed, or selection.
+struct IdeaBrowseLocation: Equatable {
+    let filterText: String
+    let classificationFilter: IdeaClassificationFilterSelection?
+    let browseMode: IdeaBrowseMode
+    let reviewSeed: UInt64
+    let selectedIdeaID: IdeaID?
+}
+
 /// One clickable classification component on an idea card.
 struct IdeaClassificationComponent: Equatable {
     let selection: IdeaClassificationFilterSelection
@@ -90,6 +101,9 @@ extension NoonmarkStore {
     @discardableResult
     func showRecentIdeas() -> Bool {
         guard prepareForIdeaContextChange() else { return false }
+        if ideaBrowseMode != .recent {
+            invalidateIdeaBrowseReturnLocations()
+        }
         ideaBrowseMode = .recent
         return true
     }
@@ -97,6 +111,9 @@ extension NoonmarkStore {
     @discardableResult
     func dismissIdeaSearch() -> Bool {
         guard prepareForIdeaContextChange() else { return false }
+        if ideaFilterText.isEmpty == false {
+            invalidateIdeaBrowseReturnLocations()
+        }
         ideaFilterText = ""
         return true
     }
@@ -104,6 +121,7 @@ extension NoonmarkStore {
     @discardableResult
     func showIdeaReview() -> Bool {
         guard prepareForIdeaContextChange() else { return false }
+        invalidateIdeaBrowseReturnLocations()
         ideaFilterText = ""
         ideaClassificationFilter = nil
         ideaBrowseMode = .review
@@ -113,6 +131,7 @@ extension NoonmarkStore {
     @discardableResult
     func refreshIdeaReview() -> Bool {
         guard prepareForIdeaContextChange() else { return false }
+        invalidateIdeaBrowseReturnLocations()
         ideaReviewSeed &+= 1
         return true
     }
@@ -120,6 +139,7 @@ extension NoonmarkStore {
     func updateIdeaFilterText(_ text: String) {
         guard ideaFilterText != text else { return }
         guard prepareForIdeaContextChange() else { return }
+        invalidateIdeaBrowseReturnLocations()
         ideaFilterText = text
         if text.isEmpty == false {
             ideaBrowseMode = .recent
@@ -188,6 +208,10 @@ extension NoonmarkStore {
         _ component: IdeaClassificationComponent
     ) -> Bool {
         guard prepareForIdeaContextChange() else { return false }
+        ideaSourceBrowseReturnLocation = nil
+        if ideaClassificationBrowseReturnLocation == nil {
+            ideaClassificationBrowseReturnLocation = currentIdeaBrowseLocation
+        }
         ideaBrowseMode = .recent
         ideaClassificationFilter = component.selection
         return true
@@ -196,8 +220,36 @@ extension NoonmarkStore {
     @discardableResult
     func clearIdeaClassificationFilter() -> Bool {
         guard prepareForIdeaContextChange() else { return false }
-        ideaClassificationFilter = nil
+        if let location = ideaClassificationBrowseReturnLocation {
+            ideaClassificationBrowseReturnLocation = nil
+            applyIdeaBrowseLocation(location)
+        } else {
+            ideaSourceBrowseReturnLocation = nil
+            ideaClassificationFilter = nil
+        }
         return true
+    }
+
+    var canRestoreIdeaBrowseLocation: Bool {
+        ideaSourceBrowseReturnLocation != nil
+    }
+
+    @discardableResult
+    func restoreIdeaBrowseLocation() -> Bool {
+        guard prepareForIdeaContextChange(),
+              let location = ideaSourceBrowseReturnLocation
+        else { return false }
+        ideaSourceBrowseReturnLocation = nil
+        applyIdeaBrowseLocation(location)
+        return true
+    }
+
+    /// Navigation has already run the editor preflight. Restore without a
+    /// second blur/save attempt so leaving a source reveal is deterministic.
+    func restoreIdeaBrowseLocationForNavigation() {
+        guard let location = ideaSourceBrowseReturnLocation else { return }
+        ideaSourceBrowseReturnLocation = nil
+        applyIdeaBrowseLocation(location)
     }
 
     func isIdeaClassificationFilterActive(
@@ -304,7 +356,10 @@ extension NoonmarkStore {
             }
             return false
         } catch {
-            showOperationFailure(.ideaMutation, error: error)
+            if let message = ideaEditorFailureMessage(for: error) {
+                ideaComposerSession.setFailureMessage(message)
+            }
+            recordIdeaEditorFailure(error)
             return false
         }
     }
@@ -388,30 +443,69 @@ extension NoonmarkStore {
             }
             return false
         } catch {
-            showOperationFailure(.ideaMutation, error: error)
+            if let message = ideaEditorFailureMessage(for: error) {
+                ideaInlineEditorSession.setFailureMessage(message)
+            }
+            recordIdeaEditorFailure(error)
             return false
         }
     }
 
+    /// Composer and inline edit already own an in-place recovery surface.
+    /// Preserve diagnostic evidence without stacking a second global failure
+    /// notice over the actionable editor state.
+    private func recordIdeaEditorFailure(_ error: Error) {
+        _ = recordOperationFailureEvidence(
+            .ideaMutation,
+            error: error
+        )
+    }
+
+    /// Editor-owned recovery UI keeps typed, actionable gate guidance while
+    /// arbitrary persistence errors stay behind the privacy-filtered generic
+    /// failure copy and diagnostic incident.
+    private func ideaEditorFailureMessage(for error: Error) -> String? {
+        guard let gateError = error as? StoreMutationGateError else {
+            return nil
+        }
+        switch gateError {
+        case .pendingZhulongApplication:
+            return AppPresentation(
+                language: engine.preferences.language
+            ).zhulong.pendingApplicationMutationBlocked
+        case .exclusiveOperationInProgress:
+            return gateError.errorDescription
+        }
+    }
+
     private func editableIdeaDraft(for idea: IdeaEntry) -> String {
-        let classification = ideaClassificationComponents(for: idea)
-            .map(\.displayName)
-            .joined(separator: " ")
-        guard classification.isEmpty == false else { return idea.body }
-        return "\(idea.body)\n\(classification)"
+        let catalog = classificationCatalog()
+        let categoryName = idea.categoryID.flatMap { categoryID in
+            catalog?.categories.first(where: {
+                $0.id == categoryID.description
+            })?.name
+        }
+        let labelNames = idea.labelIDs.compactMap { labelID in
+            catalog?.labels.first(where: {
+                $0.id == labelID.description
+            })?.name
+        }
+        return IdeaDraftParser.editableText(
+            body: idea.body,
+            categoryName: categoryName,
+            labelNames: labelNames
+        )
     }
 
     @discardableResult
     func deleteIdea(_ id: IdeaID) -> Bool {
         guard engine.ideas[id]?.isDeleted == false else { return false }
+        guard prepareForIdeaContextChange() else { return false }
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshot(.deleteIdea)
             ) { candidate, moment in
                 try candidate.deleteIdea(id: id, now: moment.instant)
-            }
-            if editingIdeaID == id {
-                cancelIdeaEdit()
             }
             resolveOperationFailure(.ideaMutation)
             showToast(copy.ideaDeletedToast)
@@ -460,11 +554,40 @@ extension NoonmarkStore {
 
     func openIdeaInFlylight(_ id: IdeaID) {
         guard engine.ideas[id]?.isDeleted == false else { return }
+        if ideaSourceBrowseReturnLocation == nil {
+            ideaSourceBrowseReturnLocation = currentIdeaBrowseLocation
+        }
         ideaFilterText = ""
-        clearIdeaClassificationFilter()
+        ideaClassificationFilter = nil
         ideaBrowseMode = .recent
         page = .ideas
         selectedIdeaID = id
+    }
+
+    private var currentIdeaBrowseLocation: IdeaBrowseLocation {
+        IdeaBrowseLocation(
+            filterText: ideaFilterText,
+            classificationFilter: ideaClassificationFilter,
+            browseMode: ideaBrowseMode,
+            reviewSeed: ideaReviewSeed,
+            selectedIdeaID: selectedIdeaID
+        )
+    }
+
+    private func applyIdeaBrowseLocation(_ location: IdeaBrowseLocation) {
+        ideaFilterText = location.filterText
+        ideaClassificationFilter = location.classificationFilter
+        ideaBrowseMode = location.browseMode
+        ideaReviewSeed = location.reviewSeed
+        selectedIdeaID = location.selectedIdeaID
+    }
+
+    /// Search, review and other explicit collection choices become the new
+    /// browsing baseline. A later clear, restore or page transition must not
+    /// resurrect a return location captured before that user choice.
+    private func invalidateIdeaBrowseReturnLocations() {
+        ideaClassificationBrowseReturnLocation = nil
+        ideaSourceBrowseReturnLocation = nil
     }
 
     private func resolveIdeaDraftClassification(

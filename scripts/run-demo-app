@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
 source scripts/interactive-demo-screenshot-contract
 
 configuration="${1:-debug}"

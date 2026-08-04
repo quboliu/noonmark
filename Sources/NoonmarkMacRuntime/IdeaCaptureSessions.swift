@@ -68,21 +68,29 @@ public enum IdeaComposerSubmissionState: Equatable, Sendable {
 /// sync payloads, or diagnostics.
 @MainActor
 public final class IdeaComposerSession: ObservableObject {
+    public static let defaultSuccessTransitionNanoseconds: UInt64 = 240_000_000
+
     @Published public private(set) var text: String
     @Published public private(set) var submissionState:
         IdeaComposerSubmissionState = .idle
     @Published public private(set) var failureMessage: String?
 
     private let repository: any IdeaComposerDraftStoring
+    private let successTransitionNanoseconds: UInt64
     private var successGeneration: UInt64 = 0
 
-    public init(repository: any IdeaComposerDraftStoring) {
+    public init(
+        repository: any IdeaComposerDraftStoring,
+        successTransitionNanoseconds: UInt64 = defaultSuccessTransitionNanoseconds
+    ) {
         self.repository = repository
+        self.successTransitionNanoseconds = successTransitionNanoseconds
         text = repository.load()
     }
 
     public func updateText(_ text: String) {
         guard self.text != text else { return }
+        successGeneration &+= 1
         self.text = text
         submissionState = .idle
         failureMessage = nil
@@ -108,10 +116,23 @@ public final class IdeaComposerSession: ObservableObject {
             return false
         }
 
-        text = ""
-        failureMessage = nil
+        // The durable mutation has already completed. Clear the device-local
+        // draft immediately, then retain the in-memory text for one short,
+        // observable saving transition so SwiftUI can paint truthful feedback.
         repository.save("")
-        presentSuccess()
+        let generation = beginSuccessTransition()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(
+                nanoseconds: successTransitionNanoseconds
+            )
+            guard successGeneration == generation,
+                  submissionState == .saving
+            else { return }
+            text = ""
+            failureMessage = nil
+            presentSuccess()
+        }
         return true
     }
 
@@ -144,6 +165,11 @@ public final class IdeaComposerSession: ObservableObject {
             submissionState = .idle
         }
     }
+
+    private func beginSuccessTransition() -> UInt64 {
+        successGeneration &+= 1
+        return successGeneration
+    }
 }
 
 public enum IdeaInlineEditorSaveState: Equatable, Sendable {
@@ -166,6 +192,8 @@ public enum IdeaInlineEditorEndReason: Equatable, Sendable {
 /// semantics.
 @MainActor
 public final class IdeaInlineEditorSession: ObservableObject {
+    public static let defaultSuccessTransitionNanoseconds: UInt64 = 240_000_000
+
     @Published public private(set) var ideaID: IdeaID?
     @Published public private(set) var originalText = ""
     @Published public private(set) var draftText = ""
@@ -175,8 +203,13 @@ public final class IdeaInlineEditorSession: ObservableObject {
     @Published public private(set) var failureMessage: String?
     public private(set) var saveGeneration: UInt64 = 0
     private var successGeneration: UInt64 = 0
+    private let successTransitionNanoseconds: UInt64
 
-    public init() {}
+    public init(
+        successTransitionNanoseconds: UInt64 = defaultSuccessTransitionNanoseconds
+    ) {
+        self.successTransitionNanoseconds = successTransitionNanoseconds
+    }
 
     public var isDirty: Bool {
         draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -212,6 +245,16 @@ public final class IdeaInlineEditorSession: ObservableObject {
     public func save(
         using persist: (IdeaID, String) -> Bool
     ) -> Bool {
+        save(using: persist, showsSuccessTransition: true)
+    }
+
+    private func save(
+        using persist: (IdeaID, String) -> Bool,
+        showsSuccessTransition: Bool
+    ) -> Bool {
+        if saveState == .saving {
+            return true
+        }
         guard let ideaID else { return false }
         let normalized = draftText.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -233,8 +276,25 @@ public final class IdeaInlineEditorSession: ObservableObject {
             return false
         }
 
-        finish()
-        presentSuccess(for: ideaID)
+        guard showsSuccessTransition else {
+            finish()
+            presentSuccess(for: ideaID)
+            return true
+        }
+
+        let generation = beginSuccessTransition()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(
+                nanoseconds: successTransitionNanoseconds
+            )
+            guard successGeneration == generation,
+                  saveState == .saving,
+                  self.ideaID == ideaID
+            else { return }
+            finish()
+            presentSuccess(for: ideaID)
+        }
         return true
     }
 
@@ -259,8 +319,10 @@ public final class IdeaInlineEditorSession: ObservableObject {
             guard ideaID != nil else { return false }
             finish()
             return true
-        case .submit, .blur, .navigation:
-            return save(using: persist)
+        case .submit:
+            return save(using: persist, showsSuccessTransition: true)
+        case .blur, .navigation:
+            return save(using: persist, showsSuccessTransition: false)
         }
     }
 
@@ -289,5 +351,10 @@ public final class IdeaInlineEditorSession: ObservableObject {
             lastSavedIdeaID = nil
             saveState = .idle
         }
+    }
+
+    private func beginSuccessTransition() -> UInt64 {
+        successGeneration &+= 1
+        return successGeneration
     }
 }

@@ -45,6 +45,14 @@ extension AppCopy {
             : "Capture a Flylight with Markdown, #labels, or @group; ⌘Return saves and drafts persist"
     }
 
+    var ideaBodyAccessibilityLabel: String {
+        language == .chinese ? "飞光正文" : "Flylight body"
+    }
+
+    var restoreIdeaBrowseLocationAction: String {
+        language == .chinese ? "返回之前的浏览" : "Return to previous view"
+    }
+
     var ideaFilterPlaceholder: String {
         language == .chinese ? "搜索正文或标签…" : "Search text or labels…"
     }

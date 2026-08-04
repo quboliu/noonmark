@@ -5,12 +5,15 @@ import XCTest
 
 @MainActor
 final class IdeaCaptureSessionTests: XCTestCase {
-    func testComposerRestoresDraftAndClearsItOnlyAfterSuccessfulCapture() {
+    func testComposerRestoresDraftAndClearsItOnlyAfterSuccessfulCapture() async {
         let (suiteName, defaults) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let repository = IdeaComposerDraftRepository(defaults: defaults)
         repository.save("第一行\n第二行 #记录")
-        let session = IdeaComposerSession(repository: repository)
+        let session = IdeaComposerSession(
+            repository: repository,
+            successTransitionNanoseconds: 1_000_000
+        )
         var capturedBody: String?
 
         XCTAssertEqual(session.text, "第一行\n第二行 #记录")
@@ -22,8 +25,13 @@ final class IdeaCaptureSessionTests: XCTestCase {
 
         XCTAssertTrue(saved)
         XCTAssertEqual(capturedBody, "第一行\n第二行 #记录")
-        XCTAssertEqual(session.text, "")
+        XCTAssertEqual(session.text, "第一行\n第二行 #记录")
         XCTAssertEqual(repository.load(), "")
+        XCTAssertEqual(session.submissionState, .saving)
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+
+        XCTAssertEqual(session.text, "")
         XCTAssertEqual(session.submissionState, .succeeded)
     }
 
@@ -62,9 +70,11 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertEqual(session.submissionState, .empty)
     }
 
-    func testInlineEditorCommitsNormalizedTextAndEndsSession() {
+    func testInlineEditorCommitsNormalizedTextAndEndsSession() async {
         let id = IdeaID()
-        let session = IdeaInlineEditorSession()
+        let session = IdeaInlineEditorSession(
+            successTransitionNanoseconds: 1_000_000
+        )
         var observed: (IdeaID, String)?
         session.begin(id: id, body: "原来的想法")
         session.updateText("  修改后的想法\n")
@@ -77,6 +87,12 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertTrue(saved)
         XCTAssertEqual(observed?.0, id)
         XCTAssertEqual(observed?.1, "修改后的想法")
+        XCTAssertEqual(session.ideaID, id)
+        XCTAssertEqual(session.draftText, "  修改后的想法\n")
+        XCTAssertEqual(session.saveState, .saving)
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
+
         XCTAssertNil(session.ideaID)
         XCTAssertEqual(session.draftText, "")
         XCTAssertEqual(session.saveState, .succeeded)

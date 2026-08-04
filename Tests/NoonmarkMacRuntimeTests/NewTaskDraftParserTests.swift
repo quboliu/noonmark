@@ -69,6 +69,24 @@ final class NewTaskDraftParserTests: XCTestCase {
         )
     }
 
+    func testIdeaEditableTextRoundTripsClassificationNamesContainingSpaces() {
+        let editable = IdeaDraftParser.editableText(
+            body: "Keep the authored body",
+            categoryName: "Client Work",
+            labelNames: ["Deep Focus", "reference"]
+        )
+        let roundTrip = IdeaDraftParser.parse(editable)
+
+        XCTAssertEqual(
+            editable,
+            "Keep the authored body\n@\"Client Work\" #\"Deep Focus\" #reference"
+        )
+        XCTAssertEqual(roundTrip.body, "Keep the authored body")
+        XCTAssertEqual(roundTrip.categoryName, "Client Work")
+        XCTAssertEqual(roundTrip.labelNames, ["Deep Focus", "reference"])
+        XCTAssertNil(roundTrip.issue)
+    }
+
     func testParsesLabelsAndOneCategoryWithoutLeakingTokensIntoTitle() {
         let draft = NewTaskDraftParser.parse(
             "准备发布 @工作 #紧急 #本周"

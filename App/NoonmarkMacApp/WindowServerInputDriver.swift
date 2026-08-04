@@ -161,8 +161,10 @@ final class WindowServerInputDriver {
     private let source: CGEventSource
     private let userData: Int64
 
-    init() throws {
-        guard CGPreflightPostEventAccess() else {
+    init(requestEventAccessIfNeeded: Bool = false) throws {
+        let hasEventAccess = CGPreflightPostEventAccess()
+            || (requestEventAccessIfNeeded && CGRequestPostEventAccess())
+        guard hasEventAccess else {
             throw Failure.eventAccessUnavailable
         }
         guard let source = CGEventSource(stateID: .combinedSessionState) else {

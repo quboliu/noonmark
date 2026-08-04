@@ -738,6 +738,9 @@ final class NoonmarkStore: ObservableObject {
     @Published var ideaBrowseMode: IdeaBrowseMode = .recent
     @Published var ideaReviewSeed: UInt64 = 0
     @Published var selectedIdeaID: IdeaID?
+    @Published var ideaClassificationBrowseReturnLocation:
+        IdeaBrowseLocation?
+    @Published var ideaSourceBrowseReturnLocation: IdeaBrowseLocation?
     var editingIdeaID: IdeaID? { ideaInlineEditorSession.ideaID }
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false

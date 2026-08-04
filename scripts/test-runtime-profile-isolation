@@ -1071,7 +1071,10 @@ scripts/test-integration|scripts/reset-dev-data audit
 scripts/test-system|scripts/reset-dev-data audit
 scripts/test-deterministic-sim|scripts/reset-dev-data audit
 scripts/run-demo-app|scripts/reset-dev-data demo
+scripts/run-demo-app|export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 scripts/test-interactive-demo-fixture|scripts/reset-dev-data demo
+scripts/test-interactive-demo-fixture|export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+App/NoonmarkMacApp/InteractiveDemoFixtureAutomation.swift|requestEventAccessIfNeeded: true
 scripts/test-e2e|scripts/reset-dev-data e2e
 scripts/test-e2e|app_bundle_name="NoonmarkE2E"
 scripts/test-e2e|app-snapshot/NoonmarkE2E.app
@@ -1092,5 +1095,12 @@ scripts/test-data-root-process-lease-e2e|dist/NoonmarkE2E.app
 scripts/test-data-root-process-lease-e2e|app-snapshot/NoonmarkE2E.app
 scripts/test-interactive-app-launch|dist/NoonmarkDevelopment.app
 CALLERS
+
+if /usr/bin/grep -Fq \
+  'AXIsProcessTrustedWithOptions' \
+  "$repo_root/App/NoonmarkMacApp/WindowServerInputDriver.swift"; then
+  echo "Demo input driver must not request unrelated Accessibility client trust" >&2
+  exit 1
+fi
 
 echo "Runtime profile, reset, pure build, and caller contract passed"

@@ -34,6 +34,16 @@ struct IdeasPage: View {
             else { return }
             _ = store.endIdeaEdit(reason: .navigation)
         }
+        .onAppear {
+            if store.ideaFilterText.isEmpty == false {
+                searchIsPresented = true
+            }
+        }
+        .onChange(of: store.ideaFilterText) { _, filterText in
+            if filterText.isEmpty == false {
+                searchIsPresented = true
+            }
+        }
     }
 }
 
@@ -214,6 +224,21 @@ private struct IdeaCollectionContext: View {
                 .font(.noonmarkSystem(size: 11, weight: .medium))
                 .foregroundStyle(Theme.accent)
                 .accessibilityIdentifier("ideas.review.refresh")
+                .background {
+                    AppE2EViewAnchor(identifier: "ideas.review.refresh")
+                }
+            }
+            if store.canRestoreIdeaBrowseLocation {
+                Button(store.copy.restoreIdeaBrowseLocationAction) {
+                    store.restoreIdeaBrowseLocation()
+                }
+                .buttonStyle(.plain)
+                .font(.noonmarkSystem(size: 11, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .accessibilityIdentifier("ideas.browse.restore")
+                .background {
+                    AppE2EViewAnchor(identifier: "ideas.browse.restore")
+                }
             }
         }
         .frame(minHeight: 24)
@@ -273,10 +298,6 @@ private struct IdeaComposer: View {
         )
     }
 
-    private var activeToken: NewTaskClassificationToken? {
-        store.ideaClassificationToken(for: session.text)
-    }
-
     private var issueMessage: String? {
         store.ideaDraftIssueMessage(for: session.text)
             ?? session.failureMessage
@@ -293,41 +314,18 @@ private struct IdeaComposer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            FlylightComposerSurface(
-                text: text,
-                mode: .pageCreate,
-                state: composerState,
-                issueMessage: issueMessage,
-                identifier: "ideas.composer",
-                placeholder: store.copy.ideaComposerPlaceholder,
-                onSubmit: {
-                    _ = store.appendIdeaFromComposer()
-                },
-                onSecondary: session.dismiss
-            )
-
-            if store.shouldShowIdeaClassificationSuggestions(
-                for: session.text
-            ), let activeToken {
-                NewTaskClassificationSuggestionList(
-                    tokenKind: activeToken.kind,
-                    suggestions: Array(
-                        store.ideaClassificationSuggestions(
-                            for: session.text
-                        ).prefix(6)
-                    ),
-                    accessibilityIdentifier: "ideas.composer.suggestions"
-                ) { suggestion in
-                    session.updateText(
-                        store.completeIdeaClassificationToken(
-                            in: session.text,
-                            with: suggestion.name
-                        )
-                    )
-                }
-            }
-        }
+        FlylightComposerSurface(
+            text: text,
+            mode: .pageCreate,
+            state: composerState,
+            issueMessage: issueMessage,
+            identifier: "ideas.composer",
+            placeholder: store.copy.ideaComposerPlaceholder,
+            onSubmit: {
+                _ = store.appendIdeaFromComposer()
+            },
+            onSecondary: session.dismiss
+        )
     }
 }
 
@@ -639,10 +637,6 @@ private struct IdeaEditComposer: View {
         )
     }
 
-    private var activeToken: NewTaskClassificationToken? {
-        store.ideaClassificationToken(for: session.draftText)
-    }
-
     private var issueMessage: String? {
         store.ideaDraftIssueMessage(for: session.draftText)
             ?? session.failureMessage
@@ -657,51 +651,27 @@ private struct IdeaEditComposer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            FlylightComposerSurface(
-                text: text,
-                mode: .inlineEdit,
-                state: composerState,
-                issueMessage: issueMessage,
-                identifier: "ideas.card.edit-field.\(idea.id)",
-                placeholder: store.copy.ideaEditPlaceholder,
-                primaryIdentifier: "ideas.card.edit.save.\(idea.id)",
-                secondaryIdentifier: "ideas.card.edit.cancel.\(idea.id)",
-                focusesOnAppear: true,
-                onSubmit: {
-                    _ = store.endIdeaEdit(reason: .submit)
-                },
-                onSecondary: {
-                    _ = store.endIdeaEdit(reason: .explicitCancel)
-                },
-                onBlur: {
-                    guard session.ideaID == idea.id else { return true }
-                    return store.endIdeaEdit(reason: .blur)
-                }
-            )
-
-            if store.shouldShowIdeaClassificationSuggestions(
-                for: session.draftText
-            ), let activeToken {
-                NewTaskClassificationSuggestionList(
-                    tokenKind: activeToken.kind,
-                    suggestions: Array(
-                        store.ideaClassificationSuggestions(
-                            for: session.draftText
-                        ).prefix(6)
-                    ),
-                    accessibilityIdentifier:
-                    "ideas.card.edit.suggestions.\(idea.id)"
-                ) { suggestion in
-                    session.updateText(
-                        store.completeIdeaClassificationToken(
-                            in: session.draftText,
-                            with: suggestion.name
-                        )
-                    )
-                }
+        FlylightComposerSurface(
+            text: text,
+            mode: .inlineEdit,
+            state: composerState,
+            issueMessage: issueMessage,
+            identifier: "ideas.card.edit-field.\(idea.id)",
+            placeholder: store.copy.ideaEditPlaceholder,
+            primaryIdentifier: "ideas.card.edit.save.\(idea.id)",
+            secondaryIdentifier: "ideas.card.edit.cancel.\(idea.id)",
+            focusesOnAppear: true,
+            onSubmit: {
+                _ = store.endIdeaEdit(reason: .submit)
+            },
+            onSecondary: {
+                _ = store.endIdeaEdit(reason: .explicitCancel)
+            },
+            onBlur: {
+                guard session.ideaID == idea.id else { return true }
+                return store.endIdeaEdit(reason: .blur)
             }
-        }
+        )
     }
 }
 

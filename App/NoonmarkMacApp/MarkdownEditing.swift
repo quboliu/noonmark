@@ -162,6 +162,7 @@ struct MarkdownEditor: View {
     var onNativeSnapshot:
         ((NativeMarkdownEditorSnapshot) -> Void)?
     var commandRequest: MarkdownEditorCommandRequest?
+    var accessibilityLabel: String?
     var nativeAccessibilityIdentifier: String?
     var focusesOnAppear = false
     var focusRequest = 0
@@ -180,7 +181,7 @@ struct MarkdownEditor: View {
             onFocusChange: onFocusChange,
             onNativeSnapshot: onNativeSnapshot,
             commandRequest: commandRequest,
-            accessibilityLabel: placeholder,
+            accessibilityLabel: accessibilityLabel ?? placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
             explicitHeight: height,
             focusesOnAppear: focusesOnAppear,
@@ -198,7 +199,7 @@ struct MarkdownEditor: View {
         }
             .fixedSize(horizontal: false, vertical: true)
             .background(showsSurface ? (warm ? Theme.noteBackground : Theme.panel2) : Color.clear)
-            .accessibilityLabel(placeholder)
+            .accessibilityLabel(accessibilityLabel ?? placeholder)
     }
 }
 

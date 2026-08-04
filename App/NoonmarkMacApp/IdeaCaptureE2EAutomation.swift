@@ -1,7 +1,10 @@
 import AppKit
 import Foundation
 import NoonmarkCore
+import NoonmarkDiagnostics
 import NoonmarkMacRuntime
+import NoonmarkStorage
+import SQLite3
 
 /// Drives Flylight, Sticky Note, and global capture through the signed
 /// App and physical WindowServer input. Store access is limited to assertions;
@@ -14,11 +17,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         case verify
     }
 
-    private static let alphaDraft = "## e2e Flylight alpha\n- second line https://example.com/@user #SwiftUI @工程"
+    private static let alphaDraft = "## e2e Flylight alpha\n- second line https://example.com/@user #SwiftUI @\"Client Work\""
     private static let alphaBody = "## e2e Flylight alpha\n- second line https://example.com/@user"
-    private static let alphaCategoryName = "工程"
+    private static let alphaEditedBody = "## e2e Flylight alpha edited\n- second line https://example.com/@user"
+    private static let alphaCategoryName = "Client Work"
     private static let alphaLabelName = "SwiftUI"
-    private static let failedDraft = "e2e failure proof #NoonmarkMissingE2EClassification"
     private static let betaBody = "e2e idea beta marker"
     private static let betaEditedBody = "e2e idea beta edited"
     private static let betaSwitchedBody = "e2e idea beta saved before switching cards"
@@ -28,10 +31,14 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     private static let epsilonBody = "e2e idea epsilon marker"
     private static let discardedDraft = "e2e draft discarded"
     private static let gammaBody = "e2e panel idea gamma"
+    private static let gammaSuggestionDraft = "e2e panel idea gamma @工"
+    private static let gammaCompletedDraft = "e2e panel idea gamma @工程 "
     private static let deltaBody = "e2e hotkey idea delta"
     private static let cancellationProofBody = "e2e cancellation persistence proof"
     private static let cancellationAttemptBody = "e2e cancellation must not persist"
     private static let restartDraft = "e2e draft survives process restart"
+    private static let collapsedDraft = "#Sw"
+    private static let sourceBrowseFilter = "alpha edited"
 
     // Card overflow menu order is Sticky Note intent, edit, delete; the first down
     // arrow highlights the first item once tracking begins.
@@ -86,6 +93,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         let input = try WindowServerInputDriver()
         let mainWindow = try await visibleMainWindow()
         try await activate(mainWindow)
+        try prepareClassificationFixture(store: store)
 
         try await openIdeasPageFromSidebar(
             store: store,
@@ -99,17 +107,16 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
+        try await exerciseDirtyComposerCollapse(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
         try await exerciseComposerTools(
             store: store,
             mainWindow: mainWindow,
             input: input
         )
-        try await exerciseComposerFailure(
-            store: store,
-            mainWindow: mainWindow,
-            input: input
-        )
-
         let alpha = try await saveComposerIdea(
             ComposerDraft(
                 text: Self.alphaDraft,
@@ -118,7 +125,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ),
             store: store,
             mainWindow: mainWindow,
-            input: input
+            input: input,
+            provesPersistenceRetry: true
         )
         try assertAlphaClassification(alpha, store: store)
         guard AppViewTreeE2E.view(
@@ -132,6 +140,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         else {
             throw Failure.failed("Flylight card did not render Markdown blocks")
         }
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try assertComposerDoesNotOverlapCollection(in: mainWindow)
         try await captureScreenshot("ideas-composer-saved.png", of: mainWindow)
 
         let beta = try await saveComposerIdea(
@@ -297,7 +307,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
 
         for body in [
-            Self.alphaBody,
+            Self.alphaEditedBody,
             Self.deltaBody,
             Self.cancellationProofBody,
         ] {
@@ -388,11 +398,15 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
 
         guard let alpha = store.engine.ideaTimeline().first(where: {
-            $0.body == Self.alphaBody
+            $0.body == Self.alphaEditedBody
         }) else {
             throw Failure.failed("classified idea was missing after restart")
         }
-        try assertAlphaClassification(alpha, store: store)
+        try assertAlphaClassification(
+            alpha,
+            expectedBody: Self.alphaEditedBody,
+            store: store
+        )
         try await captureScreenshot("ideas-restart.png", of: mainWindow)
     }
 
@@ -473,6 +487,9 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
               (20 ... 26).contains(editorFrame.height),
               editorFrame.contains(placeholderFrame),
               (62 ... 72).contains(surfaceFrame.height),
+              editor.accessibilityLabel()
+              == store.copy.ideaBodyAccessibilityLabel,
+              editor.accessibilityValue() == "",
               AppViewTreeE2E.verificationText(for: secondary)
               == store.copy.ideaExpandComposerAction
         else {
@@ -482,6 +499,81 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed(
                 "idle Flylight composer was not a compact, actionable surface: editor=\(editorFrame), placeholder=\(placeholderFrame), surface=\(surfaceFrame), secondary=\(secondaryText)"
             )
+        }
+    }
+
+    private func exerciseDirtyComposerCollapse(
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let editor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView else {
+            throw Failure.failed("Flylight collapse proof lost its editor")
+        }
+        try await click("ideas.composer.input", in: mainWindow, input: input)
+        try input.typeUnicode(Self.collapsedDraft)
+        try await waitUntil("Flylight collapse fixture did not become dirty") {
+            editor.string == Self.collapsedDraft
+                && store.ideaText == Self.collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) != nil
+        }
+        try await click(
+            "ideas.composer.secondary",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("dirty Flylight draft did not visibly collapse") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            guard let surface = AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            ), let secondary = AppViewTreeE2E.view(
+                identifier: "ideas.composer.secondary",
+                in: mainWindow
+            ) else { return false }
+            return mainWindow.firstResponder !== editor
+                && (62 ... 72).contains(
+                    AppViewTreeE2E.frameInWindow(for: surface).height
+                )
+                && editor.string == Self.collapsedDraft
+                && store.ideaText == Self.collapsedDraft
+                && editor.accessibilityLabel()
+                == store.copy.ideaBodyAccessibilityLabel
+                && editor.accessibilityValue() == Self.collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) == nil
+                && AppViewTreeE2E.verificationText(for: secondary)
+                == store.copy.ideaExpandComposerAction
+        }
+        try await captureScreenshot(
+            "ideas-composer-dirty-collapsed.png",
+            of: mainWindow
+        )
+        try await click(
+            "ideas.composer.secondary",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("collapsed Flylight draft did not reopen") {
+            mainWindow.firstResponder === editor
+                && editor.string == Self.collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) != nil
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitUntil("Flylight collapse fixture did not clear") {
+            editor.string.isEmpty && store.ideaText.isEmpty
         }
     }
 
@@ -766,6 +858,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         var suggestionsCheckpoint: String?
     }
 
+    private func prepareClassificationFixture(store: NoonmarkStore) throws {
+        guard store.classificationCatalog()?.categories.contains(where: {
+            $0.name == Self.alphaCategoryName
+        }) == false else { return }
+        _ = try store.applyClassificationIntent(
+            .createCategory(
+                name: Self.alphaCategoryName,
+                colorHex: "#2A6FDB"
+            ),
+            interactionID: UUID(
+                uuidString: "91000000-0000-0000-0000-000000000001"
+            )!
+        )
+    }
+
     private func exerciseComposerTools(
         store: NoonmarkStore,
         mainWindow: NSWindow,
@@ -834,7 +941,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         _ draft: ComposerDraft,
         store: NoonmarkStore,
         mainWindow: NSWindow,
-        input: WindowServerInputDriver
+        input: WindowServerInputDriver,
+        provesPersistenceRetry: Bool = false
     ) async throws -> IdeaEntry {
         var editor: NSTextView?
         try await waitUntil("ideas composer editor did not render") {
@@ -880,7 +988,30 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 ).flatMap(AppViewTreeE2E.verificationText) == "dirty"
         }
 
-        try input.postKey(keyCode: 36, modifiers: [.command])
+        if provesPersistenceRetry {
+            try await exerciseRecoverablePersistenceFailure(
+                draft: draft,
+                editor: editor,
+                store: store,
+                mainWindow: mainWindow,
+                input: input
+            )
+        } else {
+            try input.postKey(keyCode: 36, modifiers: [.command])
+        }
+        try await waitUntil("Flylight composer saving state was not observable") {
+            store.ideaComposerSession.submissionState == .saving
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.surface",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "saving"
+        }
+        if provesPersistenceRetry {
+            try await captureScreenshot(
+                "ideas-composer-saving.png",
+                of: mainWindow
+            )
+        }
         var created: IdeaEntry?
         try await waitUntil("Cmd+Enter did not save the idea draft") {
             created = store.engine.ideaTimeline().first {
@@ -918,78 +1049,93 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         return created
     }
 
-    private func exerciseComposerFailure(
+    private func exerciseRecoverablePersistenceFailure(
+        draft: ComposerDraft,
+        editor: NSTextView,
         store: NoonmarkStore,
         mainWindow: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
-        guard let editor = AppViewTreeE2E.view(
-            identifier: "ideas.composer.input",
-            in: mainWindow
-        ) as? NSTextView else {
-            throw Failure.failed("failure-state composer editor was missing")
+        guard let databaseURL = store.databaseURL else {
+            throw Failure.failed(
+                "persistence retry requires the real E2E SQLite database"
+            )
         }
-        try await click("ideas.composer.input", in: mainWindow, input: input)
-        try input.typeUnicode(Self.failedDraft)
-        try await waitUntil("failure-state draft did not become dirty") {
-            editor.string == Self.failedDraft
-                && store.ideaText == Self.failedDraft
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.composer.surface",
-                    in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == "dirty"
-        }
+        let selectedRange = editor.selectedRange()
+        let lock = try SQLiteWriteLock(databaseURL: databaseURL)
         try input.postKey(keyCode: 36, modifiers: [.command])
-        try await waitUntil("failed publish did not enter the failed state") {
-            store.ideaComposerSession.submissionState == .failed
-        }
-        guard store.ideaText == Self.failedDraft else {
-            throw Failure.failed("failed publish changed the composer draft")
-        }
-        guard store.engine.ideaTimeline().isEmpty else {
-            throw Failure.failed("failed publish inserted an idea")
-        }
-        try await waitUntil("failed publish did not render its failure state") {
-            AppViewTreeE2E.view(
-                identifier: "ideas.composer.surface",
-                in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "failed"
-        }
-        try assertCompleteSidebar(
-            in: mainWindow,
-            checkpoint: "ideas-composer-failed"
-        )
-        try await waitUntil("failed publish did not expose actionable retry") {
-            guard let retry = AppViewTreeE2E.view(
-                identifier: "ideas.composer.primary",
-                in: mainWindow
-            ) else { return false }
+        try await waitUntil(
+            "real SQLite contention did not expose a recoverable publish failure"
+        ) {
+            guard store.ideaComposerSession.submissionState == .failed,
+                  store.ideaText == draft.text,
+                  editor.string == draft.text,
+                  editor.window?.firstResponder === editor,
+                  editor.selectedRange() == selectedRange,
+                  store.operationFailureNotice == nil,
+                  store.engine.ideaTimeline().contains(where: {
+                      $0.body == draft.body
+                  }) == false,
+                  let retry = AppViewTreeE2E.view(
+                      identifier: "ideas.composer.primary",
+                      in: mainWindow
+                  )
+            else { return false }
             return AppViewTreeE2E.verificationText(for: retry)
                 == store.copy.ideaRetryAction
                 && AppViewTreeE2E.buttonInteractionTarget(
                     overlapping: retry
                 ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.message",
+                    in: mainWindow
+                ) != nil
         }
-        try await waitUntil("failed publish did not explain the failure in place") {
-            AppViewTreeE2E.view(
-                identifier: "ideas.composer.message",
-                in: mainWindow
-            ) != nil
+        guard try SQLiteEngineRepository(databaseURL: databaseURL)
+            .load()
+            .ideas
+            .values
+            .contains(where: { $0.body == draft.body }) == false
+        else {
+            throw Failure.failed(
+                "failed Flylight publish leaked into the SQLite snapshot"
+            )
         }
-        try await click("ideas.composer.primary", in: mainWindow, input: input)
-        try await waitUntil("retry did not preserve the failed draft in place") {
-            store.ideaComposerSession.submissionState == .failed
-                && store.ideaText == Self.failedDraft
-                && store.engine.ideaTimeline().isEmpty
-        }
+        try await assertIdeaPersistenceFailureWasRecorded(store: store)
+        try assertCompleteSidebar(
+            in: mainWindow,
+            checkpoint: "ideas-composer-persistence-failed"
+        )
         try await captureScreenshot("ideas-composer-failed.png", of: mainWindow)
-        try input.postKey(keyCode: 0, modifiers: [.command])
-        try input.postKey(keyCode: 51)
-        try await waitUntil("failure-state draft did not clear") {
-            editor.string.isEmpty
-                && store.ideaText.isEmpty
-                && store.ideaComposerSession.submissionState == .idle
+
+        try lock.release()
+        try await click("ideas.composer.primary", in: mainWindow, input: input)
+    }
+
+    private func assertIdeaPersistenceFailureWasRecorded(
+        store: NoonmarkStore
+    ) async throws {
+        guard let recorder = store.localDiagnosticRecorder else {
+            throw Failure.failed(
+                "Flylight persistence retry lost its diagnostic recorder"
+            )
         }
+        for _ in 0 ..< 120 {
+            let package = try await recorder.snapshotPackage()
+            if package.records.contains(where: { record in
+                record.event.code == .mutationRejected
+                    && record.event.mutationContext == .idea
+                    && record.event.mutationRejectionReason
+                    == .persistenceFailure
+                    && record.event.failure != nil
+            }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw Failure.failed(
+            "Flylight persistence failure was not durably recorded"
+        )
     }
 
     private func exerciseFilter(
@@ -1082,6 +1228,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             "idea label click did not activate the classification filter"
         ) {
             store.ideaClassificationFilter == .label(labelID)
+                && store.ideaClassificationBrowseReturnLocation != nil
                 && AppViewTreeE2E.view(
                     identifier: "ideas.filter.classification",
                     in: mainWindow
@@ -1122,6 +1269,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             "classification and text filters did not AND-combine"
         ) {
             store.ideaFilterText == "beta"
+                && store.ideaClassificationBrowseReturnLocation == nil
+                && store.ideaSourceBrowseReturnLocation == nil
                 && timelineCount(in: mainWindow) == 0
                 && AppViewTreeE2E.view(
                     identifier: "ideas.empty",
@@ -1169,26 +1318,60 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         )
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(Self.betaSwitchedBody)
-        let alphaBeforeSwitch = store.engine.ideas[alphaID]
-        _ = try await beginInlineEditor(
+        let alphaEditor = try await beginInlineEditor(
             ideaID: alphaID,
             store: store,
             mainWindow: mainWindow,
             input: input
         )
+        guard alphaEditor.string
+            == "\(Self.alphaBody)\n@\"Client Work\" #SwiftUI"
+        else {
+            throw Failure.failed(
+                "inline Flylight did not reversibly quote classification names"
+            )
+        }
         try await waitUntil("switching inline cards did not save the first draft") {
             store.editingIdeaID == alphaID
                 && store.engine.ideas[betaID]?.body == Self.betaSwitchedBody
         }
-        try await click(
-            "ideas.card.edit.cancel.\(alphaID)",
-            in: mainWindow,
-            input: input
+        guard let alphaBeforeEdit = store.engine.ideas[alphaID],
+              let databaseURL = store.databaseURL
+        else {
+            throw Failure.failed("classified Flylight edit lost its source identity")
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(
+            "\(Self.alphaEditedBody)\n@\"Client Work\" #SwiftUI"
         )
-        try await waitUntil("clicking Cancel mutated the second idea") {
-            store.editingIdeaID == nil
-                && store.engine.ideas[alphaID]?.body == alphaBeforeSwitch?.body
-                && store.engine.ideas[alphaID]?.updatedAt == alphaBeforeSwitch?.updatedAt
+        try input.postKey(keyCode: 36, modifiers: [.command])
+        try await waitUntil("inline Flylight saving state was not observable") {
+            store.ideaInlineEditorSession.saveState == .saving
+                && store.editingIdeaID == alphaID
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.edit-field.\(alphaID).surface",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "saving"
+        }
+        try await captureScreenshot("ideas-inline-saving.png", of: mainWindow)
+        try await waitUntil("classified inline Flylight did not save") {
+            guard store.editingIdeaID == nil,
+                  let edited = store.engine.ideas[alphaID]
+            else { return false }
+            return edited.body == Self.alphaEditedBody
+                && edited.categoryID == alphaBeforeEdit.categoryID
+                && edited.labelIDs == alphaBeforeEdit.labelIDs
+        }
+        guard let persistedAlpha = try SQLiteEngineRepository(
+            databaseURL: databaseURL
+        ).load().ideas[alphaID],
+            persistedAlpha.body == Self.alphaEditedBody,
+            persistedAlpha.categoryID == alphaBeforeEdit.categoryID,
+            persistedAlpha.labelIDs == alphaBeforeEdit.labelIDs
+        else {
+            throw Failure.failed(
+                "classified inline Flylight did not preserve identity in SQLite"
+            )
         }
 
         let betaBeforeTools = store.engine.ideas[betaID]
@@ -1297,6 +1480,58 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                     identifier: "ideas.filter",
                     in: mainWindow
                 ) == nil
+                && store.editingIdeaID == betaID
+                && mainWindow.firstResponder === editor
+        }
+
+        if store.isDetailRailExpanded == false {
+            try await click(
+                "shell.detail-rail.toggle",
+                in: mainWindow,
+                input: input
+            )
+        }
+        try await waitUntil("invalid edit did not remain visible in the detail rail") {
+            store.isDetailRailExpanded
+                && store.editingIdeaID == betaID
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.inspector.menu.\(betaID)",
+                    in: mainWindow
+                ) != nil
+        }
+        let deleteProbe = MenuTrackingProbe()
+        defer { deleteProbe.stop() }
+        try await click(
+            "ideas.inspector.menu.\(betaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight inspector menu did not begin tracking") {
+            deleteProbe.didBeginTracking
+        }
+        try input.postKey(keyCode: 125)
+        try input.postKey(keyCode: 36)
+        try await waitUntil("Flylight inspector menu did not end tracking") {
+            deleteProbe.didEndTracking
+        }
+        guard store.engine.ideas[betaID]?.isDeleted == false,
+              store.editingIdeaID == betaID,
+              store.ideaEditText.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty,
+              mainWindow.firstResponder === editor
+        else {
+            throw Failure.failed(
+                "deleting from the inspector discarded an invalid inline draft"
+            )
+        }
+        try await click(
+            "shell.detail-rail.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight detail rail did not close after delete preflight") {
+            store.isDetailRailExpanded == false
                 && store.editingIdeaID == betaID
                 && mainWindow.firstResponder === editor
         }
@@ -1483,7 +1718,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && AppViewTreeE2E.view(
                     identifier: "ideas.card.\(alphaID)",
                     in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
+                ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaEditedBody
                 && store.ideaTimelineGroups.flatMap(\.ideas).contains {
                     $0.id == alphaID
                 }
@@ -1500,6 +1735,28 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ) !== prePinMenuView
         }
 
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight source-navigation search did not appear") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) != nil
+        }
+        try await click("ideas.filter", in: mainWindow, input: input)
+        try await waitUntil("Flylight source-navigation search did not take focus") {
+            mainWindow.firstResponder is NSTextView
+        }
+        try input.typeUnicode(Self.sourceBrowseFilter)
+        try await waitUntil("Flylight source-navigation filter did not settle") {
+            store.ideaFilterText == Self.sourceBrowseFilter
+                && timelineCount(in: mainWindow) == 1
+        }
+        let sourceBrowseSelection = store.selectedIdeaID
+
         try await openStickyNotesPageFromSidebar(
             store: store,
             mainWindow: mainWindow,
@@ -1509,7 +1766,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.view(
                 identifier: "sticky-notes.item.\(alphaID)",
                 in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
+            ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaEditedBody
         }
         try await chooseStickyNotePresentation(
             .wall,
@@ -1532,10 +1789,178 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         ) {
             store.page == .ideas
                 && store.selectedIdeaID == alphaID
+                && store.ideaFilterText.isEmpty
+                && store.canRestoreIdeaBrowseLocation
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.browse.restore",
+                    in: mainWindow
+                ) != nil
                 && AppViewTreeE2E.view(
                     identifier: "ideas.card.\(alphaID)",
                     in: mainWindow
-                ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
+                ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaEditedBody
+        }
+        try await click(
+            "ideas.browse.restore",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil(
+            "Sticky Note source navigation did not restore prior browsing"
+        ) {
+            store.ideaFilterText == Self.sourceBrowseFilter
+                && store.selectedIdeaID == sourceBrowseSelection
+                && store.canRestoreIdeaBrowseLocation == false
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.browse.restore",
+                    in: mainWindow
+                ) == nil
+                && timelineCount(in: mainWindow) == 1
+        }
+        try await captureScreenshot(
+            "ideas-source-browse-restored.png",
+            of: mainWindow
+        )
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("restored Flylight source filter did not dismiss") {
+            store.ideaFilterText.isEmpty
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) == nil
+                && timelineCount(in: mainWindow) == 1
+        }
+
+        guard let labelID = store.engine.ideas[alphaID]?.labelIDs.first else {
+            throw Failure.failed(
+                "Sticky Note source restoration lost its classification fixture"
+            )
+        }
+        try await click(
+            "ideas.card.filter.\(alphaID).label.\(labelID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight source proof did not enter a classification") {
+            store.ideaBrowseMode == .recent
+                && store.ideaClassificationFilter == .label(labelID)
+                && store.ideaClassificationBrowseReturnLocation != nil
+                && timelineCount(in: mainWindow) == 1
+        }
+        try await openStickyNotesPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await doubleClick(
+            "sticky-notes.item.\(alphaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("classified Sticky Note source did not reveal Flylight") {
+            store.page == .ideas
+                && store.selectedIdeaID == alphaID
+                && store.ideaClassificationFilter == nil
+                && store.canRestoreIdeaBrowseLocation
+        }
+        try await click(
+            "ideas.browse.restore",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil(
+            "Sticky Note source did not restore its classification collection"
+        ) {
+            store.ideaBrowseMode == .recent
+                && store.ideaClassificationFilter == .label(labelID)
+                && store.ideaClassificationBrowseReturnLocation != nil
+                && store.canRestoreIdeaBrowseLocation == false
+                && timelineCount(in: mainWindow) == 1
+        }
+        try await captureScreenshot(
+            "ideas-source-classification-restored.png",
+            of: mainWindow
+        )
+
+        try await click(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("explicit review retained stale Flylight return locations") {
+            store.ideaBrowseMode == .review
+                && store.ideaClassificationFilter == nil
+                && store.ideaClassificationBrowseReturnLocation == nil
+                && store.ideaSourceBrowseReturnLocation == nil
+        }
+        let priorReviewSeed = store.ideaReviewSeed
+        try await click(
+            "ideas.review.refresh",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight review refresh did not advance its seed") {
+            store.ideaBrowseMode == .review
+                && store.ideaReviewSeed == priorReviewSeed &+ 1
+        }
+        let restoredReviewSeed = store.ideaReviewSeed
+        try await openStickyNotesPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await doubleClick(
+            "sticky-notes.item.\(alphaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("review Sticky Note source did not reveal Flylight") {
+            store.page == .ideas
+                && store.selectedIdeaID == alphaID
+                && store.ideaBrowseMode == .recent
+                && store.canRestoreIdeaBrowseLocation
+        }
+        try await click(
+            "ideas.browse.restore",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil(
+            "Sticky Note source did not restore review mode and seed"
+        ) {
+            store.ideaBrowseMode == .review
+                && store.ideaReviewSeed == restoredReviewSeed
+                && store.ideaFilterText.isEmpty
+                && store.ideaClassificationFilter == nil
+                && store.canRestoreIdeaBrowseLocation == false
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.collection",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "review"
+        }
+        try await captureScreenshot(
+            "ideas-source-review-restored.png",
+            of: mainWindow
+        )
+        try await click(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight review did not return to the source timeline") {
+            store.ideaBrowseMode == .recent
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(alphaID)",
+                    in: mainWindow
+                ) != nil
         }
         try await chooseCardMenuItem(
             cardID: alphaID,
@@ -1601,19 +2026,59 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && store.ideaText == Self.discardedDraft
         }
         try input.postKey(keyCode: 0, modifiers: [.command])
-        try input.typeUnicode(Self.gammaBody)
-        try await waitUntil("restored panel draft was not replaced") {
-            editor?.string == Self.gammaBody
-                && store.ideaText == Self.gammaBody
+        try input.typeUnicode(Self.gammaSuggestionDraft)
+        try await waitUntil("global Flylight did not expose category suggestions") {
+            editor?.string == Self.gammaSuggestionDraft
+                && store.ideaText == Self.gammaSuggestionDraft
+                && AppViewTreeE2E.view(
+                    identifier: "idea-capture.field.suggestions",
+                    in: panel
+                ) != nil
+        }
+        try await click(
+            "idea-capture.field.suggestions",
+            in: panel,
+            input: input
+        )
+        try await waitUntil("global Flylight category suggestion was not selected") {
+            editor?.string == Self.gammaCompletedDraft
+                && store.ideaText == Self.gammaCompletedDraft
         }
         try await captureScreenshot("idea-capture-panel.png", of: panel)
         try input.postKey(keyCode: 36, modifiers: [.command])
         try await waitUntil("panel Cmd+Return did not persist the idea") {
             panel.isVisible == false
-                && store.engine.ideaTimeline().contains {
-                    $0.body == Self.gammaBody
+                && store.engine.ideaTimeline().contains { idea in
+                    idea.body == Self.gammaBody
+                        && store.ideaClassificationLine(for: idea) == "@工程"
                 }
                 && timelineCount(in: mainWindow) == 2
+        }
+    }
+
+    private func assertComposerDoesNotOverlapCollection(
+        in mainWindow: NSWindow
+    ) throws {
+        mainWindow.contentView?.layoutSubtreeIfNeeded()
+        guard let surface = AppViewTreeE2E.view(
+            identifier: "ideas.composer.surface",
+            in: mainWindow
+        ), let collection = AppViewTreeE2E.view(
+            identifier: "ideas.collection",
+            in: mainWindow
+        ) else {
+            throw Failure.failed("Flylight composer overlap proof lost its views")
+        }
+        let surfaceFrame = AppViewTreeE2E.frameInWindow(for: surface)
+        let collectionFrame = AppViewTreeE2E.frameInWindow(for: collection)
+        guard (111 ... 222).contains(surfaceFrame.height),
+              surfaceFrame.intersects(collectionFrame) == false,
+              collectionFrame.maxY <= surfaceFrame.minY
+        else {
+            throw Failure.failed(
+                "Flylight success collapse overlapped the collection context: "
+                    + "surface=\(surfaceFrame) collection=\(collectionFrame)"
+            )
         }
     }
 
@@ -1889,9 +2354,10 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
 
     private func assertAlphaClassification(
         _ idea: IdeaEntry,
+        expectedBody: String = Self.alphaBody,
         store: NoonmarkStore
     ) throws {
-        guard idea.body == Self.alphaBody,
+        guard idea.body == expectedBody,
               let categoryID = idea.categoryID,
               idea.labelIDs.count == 1
         else {
@@ -2032,8 +2498,9 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSRunningApplication.current.activate(options: [.activateAllWindows])
-        try await waitUntil("idea capture main window did not become active") {
-            NSApp.isActive && window.isMainWindow && window.isKeyWindow
+        try await waitUntil("idea capture window did not become active") {
+            let hasExpectedWindowRole = window is NSPanel || window.isMainWindow
+            return NSApp.isActive && hasExpectedWindowRole && window.isKeyWindow
         }
     }
 
@@ -2232,6 +2699,69 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 NotificationCenter.default.removeObserver(observer)
             }
             observers = []
+        }
+    }
+
+    private final class SQLiteWriteLock {
+        private var database: OpaquePointer?
+
+        init(databaseURL: URL) throws {
+            var candidate: OpaquePointer?
+            let openResult = sqlite3_open_v2(
+                databaseURL.path,
+                &candidate,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            )
+            guard openResult == SQLITE_OK, let candidate else {
+                let message = candidate.map {
+                    String(cString: sqlite3_errmsg($0))
+                } ?? "unknown SQLite open error"
+                sqlite3_close(candidate)
+                throw Failure.failed(
+                    "could not open the E2E SQLite lock holder: \(message)"
+                )
+            }
+            database = candidate
+            sqlite3_busy_timeout(candidate, 0)
+            guard sqlite3_exec(
+                candidate,
+                "BEGIN IMMEDIATE",
+                nil,
+                nil,
+                nil
+            ) == SQLITE_OK else {
+                let message = String(cString: sqlite3_errmsg(candidate))
+                sqlite3_close(candidate)
+                database = nil
+                throw Failure.failed(
+                    "could not hold the E2E SQLite writer lock: \(message)"
+                )
+            }
+        }
+
+        func release() throws {
+            guard let database else { return }
+            guard sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
+                == SQLITE_OK
+            else {
+                throw Failure.failed(
+                    "could not release the E2E SQLite writer lock: "
+                        + String(cString: sqlite3_errmsg(database))
+                )
+            }
+            guard sqlite3_close(database) == SQLITE_OK else {
+                throw Failure.failed(
+                    "could not close the E2E SQLite writer lock"
+                )
+            }
+            self.database = nil
+        }
+
+        deinit {
+            guard let database else { return }
+            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
+            sqlite3_close(database)
         }
     }
 

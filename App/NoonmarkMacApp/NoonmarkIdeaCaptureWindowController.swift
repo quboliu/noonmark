@@ -161,8 +161,13 @@ final class NoonmarkIdeaCaptureWindowModel: ObservableObject {
         focusRequest &+= 1
     }
 
-    func updatePresentation(showsIssue: Bool) {
-        let nextContentHeight: CGFloat = 226 + (showsIssue ? 28 : 0)
+    func updatePresentation(suggestionCount: Int, showsIssue: Bool) {
+        let suggestionHeight = suggestionCount > 0
+            ? CGFloat(min(suggestionCount, 6) * 28 + 8)
+            : 0
+        let nextContentHeight: CGFloat = 226
+            + suggestionHeight
+            + (showsIssue ? 28 : 0)
         guard contentHeight != nextContentHeight else { return }
         contentHeight = nextContentHeight
     }
@@ -174,7 +179,6 @@ final class NoonmarkIdeaCaptureWindowModel: ObservableObject {
             NSSound.beep()
             return
         }
-        onClose?()
     }
 }
 
@@ -208,6 +212,10 @@ private struct NoonmarkIdeaCaptureView: View {
             ).isEmpty == false,
             isInvalid: issueMessage != nil
         )
+    }
+
+    private var suggestionCount: Int {
+        min(store.ideaClassificationSuggestions(for: session.text).count, 6)
     }
 
     var body: some View {
@@ -244,8 +252,15 @@ private struct NoonmarkIdeaCaptureView: View {
         .padding(.top, 18)
         .padding(.bottom, 16)
         .background(Theme.background)
-        .onChange(of: issueMessage, initial: true) { _, _ in
-            model.updatePresentation(showsIssue: issueMessage != nil)
+        .onChange(of: session.text, initial: true) { _, _ in
+            updatePresentation()
+        }
+        .onChange(of: issueMessage) { _, _ in
+            updatePresentation()
+        }
+        .onChange(of: session.submissionState) { _, state in
+            guard state == .succeeded else { return }
+            model.onClose?()
         }
         .background {
             AppE2EViewAnchor(
@@ -253,5 +268,12 @@ private struct NoonmarkIdeaCaptureView: View {
                 verificationText: store.copy.ideaCapturePanelTitle
             )
         }
+    }
+
+    private func updatePresentation() {
+        model.updatePresentation(
+            suggestionCount: suggestionCount,
+            showsIssue: issueMessage != nil
+        )
     }
 }

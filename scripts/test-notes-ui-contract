@@ -18,6 +18,12 @@ store="App/NoonmarkMacApp/NoonmarkStore.swift"
 store_ideas="App/NoonmarkMacApp/NoonmarkStore+Ideas.swift"
 sidebar="App/NoonmarkMacApp/WorkspaceShellViews.swift"
 workspace="Sources/NoonmarkCore/IdeaWorkspace.swift"
+draft_parser="Sources/NoonmarkMacRuntime/NewTaskDraftParser.swift"
+draft_parser_tests="Tests/NoonmarkMacRuntimeTests/NewTaskDraftParserTests.swift"
+idea_sessions="Sources/NoonmarkMacRuntime/IdeaCaptureSessions.swift"
+idea_session_tests="Tests/NoonmarkMacRuntimeTests/IdeaCaptureSessionTests.swift"
+demo_automation="App/NoonmarkMacApp/InteractiveDemoFixtureAutomation.swift"
+demo_contract="scripts/test-interactive-demo-fixture"
 
 require_literal() {
   local literal="$1"
@@ -62,6 +68,62 @@ require_literal \
   "$flylight_composer" \
   'Flylight composer lost visible success state'
 require_literal \
+  'if isCollapsedByIntent { return false }' \
+  "$flylight_composer" \
+  'Flylight dirty drafts can no longer stay explicitly collapsed'
+require_literal \
+  'if isExpanded,' \
+  "$flylight_composer" \
+  'collapsed Flylight drafts can still leak classification suggestions'
+require_literal \
+  'ideas-composer-dirty-collapsed.png' \
+  "$flylight_e2e" \
+  'real App no longer proves a dirty Flylight draft can collapse and reopen'
+require_literal \
+  'identifier: "ideas.composer.suggestions"' \
+  "$flylight_e2e" \
+  'real App no longer proves active-token suggestions disappear while collapsed'
+require_literal \
+  'accessibilityLabel: store.copy.ideaBodyAccessibilityLabel' \
+  "$flylight_composer" \
+  'Flylight editor again derives its accessibility name from placeholder copy'
+require_literal \
+  'editor.accessibilityLabel()' \
+  "$flylight_e2e" \
+  'real App no longer verifies the Flylight editor accessibility label and value'
+require_literal \
+  'ideaClassificationBrowseReturnLocation = currentIdeaBrowseLocation' \
+  "$store_ideas" \
+  'classification filtering no longer retains the prior Flylight browse location'
+require_literal \
+  'ideaSourceBrowseReturnLocation = currentIdeaBrowseLocation' \
+  "$store_ideas" \
+  'Sticky Note source navigation no longer retains the prior Flylight browse location'
+require_literal \
+  'invalidateIdeaBrowseReturnLocations()' \
+  "$store_ideas" \
+  'explicit Flylight collection changes can resurrect stale return locations'
+require_literal \
+  'try await click(' \
+  "$flylight_e2e" \
+  'real App Flylight E2E lost physical click coverage'
+require_literal \
+  '"ideas.browse.restore"' \
+  "$flylight_e2e" \
+  'real App no longer restores the Flylight collection opened before Sticky Note navigation'
+require_literal \
+  'Sticky Note source did not restore its classification collection' \
+  "$flylight_e2e" \
+  'real App no longer restores classification state after Sticky Note source navigation'
+require_literal \
+  'Sticky Note source did not restore review mode and seed' \
+  "$flylight_e2e" \
+  'real App no longer restores review mode and seed after Sticky Note source navigation'
+require_literal \
+  'AppE2EViewAnchor(identifier: "ideas.review.refresh")' \
+  "$flylight_page" \
+  'Flylight review refresh lost its stable physical-input trigger boundary'
+require_literal \
   'store.copy.ideaRetryAction' \
   "$flylight_composer" \
   'Flylight failure no longer exposes a local retry action'
@@ -73,6 +135,102 @@ require_literal \
   'try await click("ideas.composer.primary"' \
   "$flylight_e2e" \
   'Flylight E2E no longer physically retries a failed publish'
+require_literal \
+  'BEGIN IMMEDIATE' \
+  "$flylight_e2e" \
+  'Flylight retry no longer proves a real SQLite writer failure'
+require_literal \
+  'editor.selectedRange() == selectedRange' \
+  "$flylight_e2e" \
+  'Flylight persistence failure no longer preserves the native selection'
+require_literal \
+  'store.operationFailureNotice == nil' \
+  "$flylight_e2e" \
+  'Flylight in-place failure recovery again stacks a global failure notice'
+require_literal \
+  'recordIdeaEditorFailure(error)' \
+  "$store_ideas" \
+  'Flylight editor failures no longer preserve diagnostics without global UI duplication'
+require_literal \
+  'pendingApplicationMutationBlocked' \
+  "$store_ideas" \
+  'Flylight local recovery lost the typed pending Zhulong guidance'
+require_literal \
+  'record.event.mutationRejectionReason' \
+  "$flylight_e2e" \
+  'Flylight SQLite retry no longer checks the durable diagnostic incident'
+require_literal \
+  'defaultSuccessTransitionNanoseconds' \
+  "$idea_sessions" \
+  'Flylight saving state is no longer observable across a UI transition'
+require_literal \
+  'XCTAssertEqual(session.submissionState, .saving)' \
+  "$idea_session_tests" \
+  'Flylight composer saving transition lost its deterministic fast gate'
+require_literal \
+  'ideas-composer-saving.png' \
+  "$flylight_e2e" \
+  'real App Flylight composer no longer captures a saving frame'
+require_literal \
+  'guard prepareForIdeaContextChange() else { return false }' \
+  "$store_ideas" \
+  'Flylight deletion can bypass the active editor preflight'
+require_literal \
+  'deleting from the inspector discarded an invalid inline draft' \
+  "$flylight_e2e" \
+  'real App E2E no longer protects an invalid draft from inspector deletion'
+require_literal \
+  'public static func editableText(' \
+  "$draft_parser" \
+  'Flylight editable classification tokens lost their reversible encoder'
+require_literal \
+  'testIdeaEditableTextRoundTripsClassificationNamesContainingSpaces' \
+  "$draft_parser_tests" \
+  'classification names containing spaces lost their parser round-trip gate'
+require_literal \
+  'inline Flylight did not reversibly quote classification names' \
+  "$flylight_e2e" \
+  'real App no longer verifies quoted classifications in the inline editor'
+require_literal \
+  'classified inline Flylight did not preserve identity in SQLite' \
+  "$flylight_e2e" \
+  'space-bearing Flylight classifications are no longer saved and checked in SQLite'
+require_literal \
+  'NewTaskClassificationSuggestionList(' \
+  "$flylight_composer" \
+  'shared Flylight composer lost classification suggestions'
+require_literal \
+  'global Flylight did not expose category suggestions' \
+  "$flylight_e2e" \
+  'global Flylight no longer proves classification suggestion parity'
+require_literal \
+  'verifyingFlylightInteractions()' \
+  "$demo_automation" \
+  'annual Demo no longer records physical Flylight editing and suggestion coverage'
+require_literal \
+  '飞光脏草稿没有在保留正文时收起' \
+  "$demo_automation" \
+  'annual Demo no longer proves dirty Flylight draft collapse and accessibility recovery'
+require_literal \
+  'Sticky Note 来源没有恢复此前浏览位置' \
+  "$demo_automation" \
+  'annual Demo no longer proves Flylight browse continuity after Sticky Note source navigation'
+require_literal \
+  '回看来源没有恢复模式与随机种子' \
+  "$demo_automation" \
+  'annual Demo no longer proves Flylight review state survives source navigation'
+require_literal \
+  '"flylightEditingInteractionVerified" : true' \
+  "$demo_contract" \
+  'Demo manifest no longer requires the physical Flylight editing path'
+require_literal \
+  'let hasExpectedWindowRole = window is NSPanel || window.isMainWindow' \
+  "$flylight_e2e" \
+  'WindowServer E2E again requires a key NSPanel to become the main window'
+require_literal \
+  'collectionFrame.maxY <= surfaceFrame.minY' \
+  "$flylight_e2e" \
+  'Flylight success-state layout no longer proves collection ordering'
 require_literal \
   'contentFrame.contains(itemFrame)' \
   "$flylight_e2e" \
@@ -215,6 +373,11 @@ if /usr/bin/grep -Eq \
   'MemoTrashPage|IdeaTrashRow|IdeaRestoreComposer|sidebar\.nav\.memoTrash|ideas\.trash\.(restore|toggle)|ideasTrashSectionTitle|ideaRestore|beginIdeaRestore|commitIdeaRestore|ideaTrashItems|restoringIdeaID' \
   "$flylight_page" "$sidebar" "$notes_copy" "$store" "$store_ideas"; then
   echo 'Flylight trash or restore UI became user reachable' >&2
+  exit 1
+fi
+
+if /usr/bin/grep -Fq 'value: isExpanded' "$flylight_composer"; then
+  echo 'Flylight composer reintroduced unsafe whole-surface expansion animation' >&2
   exit 1
 fi
 

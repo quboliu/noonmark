@@ -7,6 +7,7 @@ extension NoonmarkStore {
         let nextPage = visiblePage(for: next)
         if page == .ideas, nextPage != .ideas {
             guard prepareForIdeaContextChange() else { return }
+            restoreIdeaBrowseLocationForNavigation()
         }
         if nextPage == .calendar, page != .calendar {
             isDetailRailExpanded = false

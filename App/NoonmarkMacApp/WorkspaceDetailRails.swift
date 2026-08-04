@@ -1006,14 +1006,41 @@ struct DetailRail: View {
                     FlylightRailSection(
                         title: store.copy.ideaInspectorActions
                     ) {
-                        HStack(spacing: 12) {
-                            Button(store.copy.editIdeaAction) {
-                                store.beginIdeaEdit(idea)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                FlylightActionButton(
+                                    title: store.copy.editIdeaAction,
+                                    identifier: "ideas.inspector.edit.\(idea.id)",
+                                    emphasis: .primary
+                                ) {
+                                    store.beginIdeaEdit(idea)
+                                }
+                                Spacer(minLength: 0)
+                                Menu {
+                                    Button(
+                                        store.copy.deleteIdeaAction,
+                                        role: .destructive
+                                    ) {
+                                        _ = store.deleteIdea(idea.id)
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .accessibilityLabel(
+                                    store.copy.ideaActionsAccessibilityLabel
+                                )
                             }
-                            Button(
-                                idea.pinnedAt == nil
+                            FlylightActionButton(
+                                title: idea.pinnedAt == nil
                                     ? store.copy.addToStickyNotesAction
-                                    : store.copy.removeFromStickyNotesAction
+                                    : store.copy.removeFromStickyNotesAction,
+                                identifier: "ideas.inspector.sticky.\(idea.id)",
+                                emphasis: .secondary
                             ) {
                                 if idea.pinnedAt == nil {
                                     _ = store.addIdeaToStickyNotes(idea.id)
@@ -1022,8 +1049,6 @@ struct DetailRail: View {
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.accent)
                     }
                 }
                 .background {

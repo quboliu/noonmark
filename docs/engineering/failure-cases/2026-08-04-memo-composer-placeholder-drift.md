@@ -19,17 +19,20 @@
 - 2026-08-04：隔离 E2E 新增空 composer 几何断言，首次稳定判红。
 - 2026-08-04：逐层排除原生 inset、点击位置与 clip view 方向后，确认 SwiftUI 外层与原生 editor 使用不同的布局边界。
 - 2026-08-04：修复后同一真实 App 症状断言转绿，完整飞光 E2E 的 exercise／restart 结果均为 `ok`。
+- 2026-08-04：共享 Flylight Composer 重构把页面空态收敛为 65pt、聚焦工作态收敛为 113pt；E2E 首次发现 focus delegate 与 0.16 秒布局动画之间存在取证竞态，补强原生 first-responder 上报与完成态等待后再次转绿。
+- 2026-08-04：真实点击 `Aa`、`#`、`@` 的增强路径触发 SwiftUI runtime 门禁，证明同步焦点发布与同步 Markdown 命令仍发生在 `NSViewRepresentable.updateNSView` 周期内；两者统一延后到下一次主队列后，运行时警告清零。
 
 ## 复现与证据
 
-运行 `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`。修复前稳定返回：editor 高 54pt，但 placeholder 与 focused caret 的垂直中点相差 39pt；原生 text view 的 `y=0` 已正确映射到自身顶部，说明不是 TextKit 把光标排到底部。修复前截图为 `artifacts/e2e-idea-capture/ideas-empty-focused.png` 的当轮产物。
+运行 `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`。原故障稳定返回：editor 高 54pt，但 placeholder 与 focused caret 的垂直中点相差 39pt；原生 text view 的 `y=0` 已正确映射到自身顶部，说明不是 TextKit 把光标排到底部。本轮 Composer 重构的首轮真实 App 结果又捕获到 65pt 收起态没有随程序化 first responder 可靠扩展，以及动画中间帧被误当完成态；最终门禁固定测量可见 scroll surface、113pt 聚焦容器、43pt action chrome 与 placeholder／caret 的共同文字顶线。症状截图为 `artifacts/e2e-idea-capture/ideas-empty-focused.png` 的当轮产物。
 
 ## 排除的假设
 
-- 不是 `textContainerInset` 过大：运行值为水平 5pt、垂直 6pt。
+- 不是 `textContainerInset` 过大：原修复运行值为水平 5pt、垂直 6pt；本轮 Flylight 专用节奏为有效水平 16pt、顶部 13pt，placeholder 与 caret 仍共享同一原生 text container。
 - 不是物理点击落点导致：直接把 editor 设为 first responder 与物理点击后的 caret 坐标相同。
 - 不是 `NSClipView.isFlipped`：clip view 与 text view 均已 flipped，显式替换 clip view 不改变 39pt 偏移。
 - 不是 fixture 偶发：每轮 clean `e2e` profile 均在同一几何位置判红。
+- 不是页面标签按钮或 Composer 失焦造成 App 退到后台：连续失败的增强证据显示前台进程是仍在运行的旧 `demo` profile App；终止该精确非生产进程后，同一未放宽的物理点击链路通过。
 
 ## 根因与破坏机制
 
@@ -39,20 +42,22 @@
 
 - placeholder 改为 `MarkdownNSTextView` 自有的被动原生子视图，与 caret 共用 text container inset 和坐标空间。
 - 共享 editor 在垂直方向使用自身测量尺寸，不再吸收父布局的无意义剩余高度。
-- 飞光 E2E 同时测量原生 editor、可见 surface 与 placeholder／caret 中点，任何一层重新漂移均判红。
+- `MarkdownNSTextView` 直接从 `becomeFirstResponder`／`resignFirstResponder` 上报焦点，delegate 通知只作为同一去重边界的补充；页面首次展开后保持工作态，只有明确“收起”或 Esc 才收起，避免其他操作在 mouseDown 期间触发布局位移。
+- 原生焦点发布与 Markdown 命令执行均在 generation／焦点去重后延后到下一次主队列，禁止在 SwiftUI view update 内同步改 `@State` 或 Binding。
+- 飞光 E2E 同时测量可见 scroll editor、完整 surface、action chrome 与 placeholder／caret 的共同文字顶线，并等待 0.16 秒展开动画到达完成态；任何一层重新漂移均判红。
 
 ## 验证结果
 
 - `scripts/test-notes-ui-contract`：通过。
 - `swift test --filter NewTaskDraftParserTests`：11／11 通过。
-- `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`：exercise／verify 均为 `ok`；空 composer surface 与 editor 同为 54pt，placeholder／caret 偏移不超过 6pt。
+- `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`：原修复与本轮 Composer 重构的 exercise／verify 均为 `ok`；本轮聚焦 surface 为 113pt、可见 editor 为 70pt、action chrome 为 43pt，placeholder／caret 顶线偏移为 0pt，并继续走完 Markdown、分类、编辑、删除、Sticky Note、全局浮窗、快捷键、重启与 SQLite 对账。
 - `make test-demo-fixture`：通过；一年演示资料中的飞光与 Sticky Note 投影经真实 `.app`、SQLite 和 sidecar 回读对账。
-- `make check`：通过，1493 项测试无失败；两项 live iCloud 测试按既有环境约束跳过，其余 lint、format、真实 App、仿真、DMG 与故障案例门禁全部通过。
+- `make check`：原修复提交通过；本轮 Composer 重构以当前运行报告为准，不固化陈旧测试计数。
 
 ## 永久门禁
 
-- fast：`scripts/test-notes-ui-contract`，由 `scripts/check` 强制调用，约束共享 editor 自测高度、原生 placeholder、可测 surface 与几何断言仍存在。
-- symptom：`scripts/test-e2e`，由 `scripts/test-all` 强制调用，在隔离真实 App 中聚焦空飞光 composer，并校验 surface 高度及 placeholder／caret 实际位置。
+- fast：`scripts/test-notes-ui-contract`，由 `scripts/check` 强制调用，约束共享 editor 自测高度、原生 placeholder、Flylight 收起／工作态、action chrome 与几何断言仍存在。
+- symptom：`scripts/test-e2e`，由 `scripts/test-all` 强制调用，在隔离真实 App 中聚焦空飞光 composer，并校验动画完成后的可见 editor、surface、action chrome 及 placeholder／caret 实际顶线。
 
 ## 发行与回滚
 

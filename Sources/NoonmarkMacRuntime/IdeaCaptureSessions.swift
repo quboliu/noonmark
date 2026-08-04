@@ -58,6 +58,7 @@ public final class InMemoryIdeaComposerDraftRepository:
 public enum IdeaComposerSubmissionState: Equatable, Sendable {
     case idle
     case saving
+    case succeeded
     case empty
     case failed
 }
@@ -70,8 +71,10 @@ public final class IdeaComposerSession: ObservableObject {
     @Published public private(set) var text: String
     @Published public private(set) var submissionState:
         IdeaComposerSubmissionState = .idle
+    @Published public private(set) var failureMessage: String?
 
     private let repository: any IdeaComposerDraftStoring
+    private var successGeneration: UInt64 = 0
 
     public init(repository: any IdeaComposerDraftStoring) {
         self.repository = repository
@@ -82,6 +85,7 @@ public final class IdeaComposerSession: ObservableObject {
         guard self.text != text else { return }
         self.text = text
         submissionState = .idle
+        failureMessage = nil
         repository.save(text)
     }
 
@@ -97,6 +101,7 @@ public final class IdeaComposerSession: ObservableObject {
             return false
         }
 
+        failureMessage = nil
         submissionState = .saving
         guard capture(normalized) else {
             submissionState = .failed
@@ -104,8 +109,9 @@ public final class IdeaComposerSession: ObservableObject {
         }
 
         text = ""
+        failureMessage = nil
         repository.save("")
-        submissionState = .idle
+        presentSuccess()
         return true
     }
 
@@ -114,17 +120,45 @@ public final class IdeaComposerSession: ObservableObject {
     }
 
     public func clear() {
+        successGeneration &+= 1
         text = ""
         submissionState = .idle
+        failureMessage = nil
         repository.save("")
+    }
+
+    public func setFailureMessage(_ message: String) {
+        failureMessage = message
+    }
+
+    private func presentSuccess() {
+        successGeneration &+= 1
+        let generation = successGeneration
+        submissionState = .succeeded
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let self,
+                  successGeneration == generation,
+                  submissionState == .succeeded
+            else { return }
+            submissionState = .idle
+        }
     }
 }
 
 public enum IdeaInlineEditorSaveState: Equatable, Sendable {
     case idle
     case saving
+    case succeeded
     case empty
     case failed
+}
+
+public enum IdeaInlineEditorEndReason: Equatable, Sendable {
+    case submit
+    case explicitCancel
+    case blur
+    case navigation
 }
 
 /// Owns the one active inline edit independently of the memo row's visual
@@ -137,21 +171,41 @@ public final class IdeaInlineEditorSession: ObservableObject {
     @Published public private(set) var draftText = ""
     @Published public private(set) var saveState:
         IdeaInlineEditorSaveState = .idle
+    @Published public private(set) var lastSavedIdeaID: IdeaID?
+    @Published public private(set) var failureMessage: String?
     public private(set) var saveGeneration: UInt64 = 0
+    private var successGeneration: UInt64 = 0
 
     public init() {}
 
-    public func begin(id: IdeaID, body: String) {
+    public var isDirty: Bool {
+        draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+            != originalText
+    }
+
+    /// Starts an edit only when no other idea owns the session. Re-entering
+    /// the same idea is deliberately idempotent so a repeated double-click
+    /// cannot replace a dirty draft with the persisted body.
+    @discardableResult
+    public func begin(id: IdeaID, body: String) -> Bool {
+        if let activeID = ideaID {
+            return activeID == id
+        }
         ideaID = id
+        successGeneration &+= 1
+        lastSavedIdeaID = nil
+        failureMessage = nil
         originalText = body
         draftText = body
         saveState = .idle
+        return true
     }
 
     public func updateText(_ text: String) {
         guard draftText != text else { return }
         draftText = text
         saveState = .idle
+        failureMessage = nil
     }
 
     @discardableResult
@@ -172,6 +226,7 @@ public final class IdeaInlineEditorSession: ObservableObject {
         }
 
         saveGeneration &+= 1
+        failureMessage = nil
         saveState = .saving
         guard persist(ideaID, normalized) else {
             saveState = .failed
@@ -179,6 +234,7 @@ public final class IdeaInlineEditorSession: ObservableObject {
         }
 
         finish()
+        presentSuccess(for: ideaID)
         return true
     }
 
@@ -186,10 +242,52 @@ public final class IdeaInlineEditorSession: ObservableObject {
         finish()
     }
 
+    public func setFailureMessage(_ message: String) {
+        failureMessage = message
+    }
+
+    /// Funnels every editor exit through one reasoned boundary. Callers defer
+    /// blur by one main-run-loop turn so an explicit cancel intent can win
+    /// before AppKit reports the corresponding focus loss.
+    @discardableResult
+    public func end(
+        reason: IdeaInlineEditorEndReason,
+        using persist: (IdeaID, String) -> Bool
+    ) -> Bool {
+        switch reason {
+        case .explicitCancel:
+            guard ideaID != nil else { return false }
+            finish()
+            return true
+        case .submit, .blur, .navigation:
+            return save(using: persist)
+        }
+    }
+
     private func finish() {
+        successGeneration &+= 1
         ideaID = nil
         originalText = ""
         draftText = ""
+        lastSavedIdeaID = nil
+        failureMessage = nil
         saveState = .idle
+    }
+
+    private func presentSuccess(for id: IdeaID) {
+        successGeneration &+= 1
+        let generation = successGeneration
+        lastSavedIdeaID = id
+        saveState = .succeeded
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let self,
+                  successGeneration == generation,
+                  saveState == .succeeded,
+                  ideaID == nil
+            else { return }
+            lastSavedIdeaID = nil
+            saveState = .idle
+        }
     }
 }

@@ -6,6 +6,8 @@ import SwiftUI
 enum MarkdownEditorStyle {
     case title
     case body
+    case flylightCollapsed
+    case flylight
     case detailBody
     case compact
     case subtask
@@ -15,6 +17,8 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
+        case .flylightCollapsed, .flylight:
+            .noonmarkSystemFont(ofSize: 14)
         case .compact, .subtask:
             .systemFont(ofSize: NoonmarkVisualMetrics.compactEditorPointSize, weight: .medium)
         case .conversation:
@@ -26,6 +30,8 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystem(size: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystem(size: 12)
+        case .flylightCollapsed, .flylight:
+            .noonmarkSystem(size: 14)
         case .compact, .subtask:
             .noonmarkRenderedSystem(
                 size: NoonmarkVisualMetrics.compactEditorPointSize,
@@ -40,6 +46,8 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: NoonmarkVisualMetrics.detailTitleMinimumHeight
         case .body: 54
+        case .flylightCollapsed: 22
+        case .flylight: 70
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMinimumHeight
         case .compact, .subtask: 32
         case .conversation: NoonmarkVisualMetrics.zhulongConversationComposerEditorHeight
@@ -51,6 +59,8 @@ enum MarkdownEditorStyle {
         case .title: NoonmarkVisualMetrics.detailTitleMaximumHeight
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMaximumHeight
         case .body: 132
+        case .flylightCollapsed: 22
+        case .flylight: 178
         case .compact: 32
         case .subtask: 120
         case .conversation: 168
@@ -66,6 +76,18 @@ enum MarkdownEditorStyle {
             )
         case .body:
             NSSize(width: 5, height: 6)
+        case .flylightCollapsed:
+            NSSize(
+                width: NoonmarkVisualMetrics
+                    .ideasComposerHorizontalTextInset - 5,
+                height: 2
+            )
+        case .flylight:
+            NSSize(
+                width: NoonmarkVisualMetrics
+                    .ideasComposerHorizontalTextInset - 5,
+                height: NoonmarkVisualMetrics.ideasComposerTopTextInset
+            )
         case .compact, .subtask:
             // Keep the first 15 pt insertion caret centred in a 32 pt line.
             // Subtask editors reuse this first-line rhythm as they grow.
@@ -82,10 +104,41 @@ enum MarkdownEditorStyle {
         switch self {
         case .title, .detailBody:
             NoonmarkVisualMetrics.detailLineFragmentPadding
-        case .body, .compact, .subtask, .conversation:
+        case .body, .flylightCollapsed, .flylight,
+             .compact, .subtask, .conversation:
             5
         }
     }
+
+    var showsVerticalScroller: Bool {
+        switch self {
+        case .flylightCollapsed, .compact:
+            false
+        case .title, .body, .flylight, .detailBody,
+             .subtask, .conversation:
+            true
+        }
+    }
+}
+
+enum MarkdownEditorCommand: Equatable {
+    case insertLabelToken
+    case insertCategoryToken
+    case bold
+    case italic
+    case inlineCode
+    case link
+    case heading(Int)
+    case unorderedList
+    case orderedList
+    case taskList
+    case quote
+    case codeBlock
+}
+
+struct MarkdownEditorCommandRequest: Equatable {
+    let generation: UInt64
+    let command: MarkdownEditorCommand
 }
 
 struct NativeMarkdownEditorSnapshot: Equatable {
@@ -105,8 +158,10 @@ struct MarkdownEditor: View {
     var onCommit: (() -> Void)?
     var onEscape: (() -> Void)?
     var onEndEditing: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
     var onNativeSnapshot:
         ((NativeMarkdownEditorSnapshot) -> Void)?
+    var commandRequest: MarkdownEditorCommandRequest?
     var nativeAccessibilityIdentifier: String?
     var focusesOnAppear = false
     var focusRequest = 0
@@ -122,7 +177,9 @@ struct MarkdownEditor: View {
             onCommit: onCommit,
             onEscape: onEscape,
             onEndEditing: onEndEditing,
+            onFocusChange: onFocusChange,
             onNativeSnapshot: onNativeSnapshot,
+            commandRequest: commandRequest,
             accessibilityLabel: placeholder,
             nativeAccessibilityIdentifier: nativeAccessibilityIdentifier,
             explicitHeight: height,
@@ -154,8 +211,10 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
     let onCommit: (() -> Void)?
     let onEscape: (() -> Void)?
     let onEndEditing: (() -> Void)?
+    let onFocusChange: ((Bool) -> Void)?
     let onNativeSnapshot:
         ((NativeMarkdownEditorSnapshot) -> Void)?
+    let commandRequest: MarkdownEditorCommandRequest?
     let accessibilityLabel: String
     let nativeAccessibilityIdentifier: String?
     let explicitHeight: CGFloat?
@@ -168,6 +227,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             defersMarkedTextBindingUpdates:
             defersMarkedTextBindingUpdates,
             onEndEditing: onEndEditing,
+            onFocusChange: onFocusChange,
             onNativeSnapshot: onNativeSnapshot,
             focusRequest: focusRequest
         )
@@ -177,7 +237,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         let scrollView = MarkdownEditorScrollView()
         scrollView.requestsInitialFocus = focusesOnAppear
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = style != .compact
+        scrollView.hasVerticalScroller = style.showsVerticalScroller
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
 
@@ -189,6 +249,10 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             [weak coordinator = context.coordinator, weak textView] in
             guard let textView else { return }
             coordinator?.captureNativeSnapshot(from: textView)
+        }
+        textView.focusStateDidChange = {
+            [weak coordinator = context.coordinator] isFocused in
+            coordinator?.reportFocusState(isFocused)
         }
         textView.font = style.font
         textView.textColor = NSColor.labelColor
@@ -225,6 +289,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             )
         }
         context.coordinator.onEndEditing = onEndEditing
+        context.coordinator.onFocusChange = onFocusChange
         context.coordinator.onNativeSnapshot =
             onNativeSnapshot
         scrollView.documentView = textView
@@ -248,6 +313,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         textView.font = style.font
         textView.textContainerInset = style.textContainerInset
         textView.textContainer?.lineFragmentPadding = style.lineFragmentPadding
+        scrollView.hasVerticalScroller = style.showsVerticalScroller
         textView.configurePlaceholder(
             placeholder,
             font: style.font,
@@ -272,12 +338,30 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         context.coordinator.defersMarkedTextBindingUpdates =
             defersMarkedTextBindingUpdates
         context.coordinator.onEndEditing = onEndEditing
+        context.coordinator.onFocusChange = onFocusChange
         context.coordinator.onNativeSnapshot =
             onNativeSnapshot
         textView.compositionStateDidChange = {
             [weak coordinator = context.coordinator, weak textView] in
             guard let textView else { return }
             coordinator?.captureNativeSnapshot(from: textView)
+        }
+        textView.focusStateDidChange = {
+            [weak coordinator = context.coordinator] isFocused in
+            coordinator?.reportFocusState(isFocused)
+        }
+        if let commandRequest,
+           context.coordinator.lastCommandGeneration
+               != commandRequest.generation
+        {
+            context.coordinator.lastCommandGeneration =
+                commandRequest.generation
+            DispatchQueue.main.async { [weak scrollView, weak textView] in
+                guard let scrollView, let textView,
+                      textView.enclosingScrollView === scrollView
+                else { return }
+                textView.performMarkdownCommand(commandRequest.command)
+            }
         }
         if let editorScrollView = scrollView as? MarkdownEditorScrollView {
             editorScrollView.requestsInitialFocus = focusesOnAppear
@@ -309,6 +393,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         coordinator.onEndEditing?()
         textView.delegate = nil
         textView.compositionStateDidChange = nil
+        textView.focusStateDidChange = nil
         textView.commitAction = nil
     }
 
@@ -358,16 +443,20 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
         var text: Binding<String>
         var defersMarkedTextBindingUpdates: Bool
         var onEndEditing: (() -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
         var onNativeSnapshot:
             ((NativeMarkdownEditorSnapshot) -> Void)?
         var focusRequest: Int
+        var lastCommandGeneration: UInt64?
         private var lastNativeSnapshot:
             NativeMarkdownEditorSnapshot
+        private var lastReportedFocus: Bool?
 
         init(
             text: Binding<String>,
             defersMarkedTextBindingUpdates: Bool,
             onEndEditing: (() -> Void)?,
+            onFocusChange: ((Bool) -> Void)?,
             onNativeSnapshot:
             ((NativeMarkdownEditorSnapshot) -> Void)?,
             focusRequest: Int
@@ -376,6 +465,7 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             self.defersMarkedTextBindingUpdates =
                 defersMarkedTextBindingUpdates
             self.onEndEditing = onEndEditing
+            self.onFocusChange = onFocusChange
             self.onNativeSnapshot = onNativeSnapshot
             self.focusRequest = focusRequest
             lastNativeSnapshot = NativeMarkdownEditorSnapshot(
@@ -389,8 +479,24 @@ private struct MarkdownTextViewRepresentable: NSViewRepresentable {
             captureNativeSnapshot(from: textView)
         }
 
+        func textDidBeginEditing(_ notification: Notification) {
+            reportFocusState(true)
+        }
+
         func textDidEndEditing(_ notification: Notification) {
+            reportFocusState(false)
             onEndEditing?()
+        }
+
+        func reportFocusState(_ isFocused: Bool) {
+            guard lastReportedFocus != isFocused else { return }
+            lastReportedFocus = isFocused
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.lastReportedFocus == isFocused
+                else { return }
+                self.onFocusChange?(isFocused)
+            }
         }
 
         func recordExternalText(_ nextText: String) {
@@ -499,6 +605,7 @@ private final class MarkdownNSTextView: NSTextView {
     var commitAction: (() -> Void)?
     var escapeAction: (() -> Void)?
     var compositionStateDidChange: (() -> Void)?
+    var focusStateDidChange: ((Bool) -> Void)?
 
     private var reportedCompositionIsActive = false
     private var recordsKeyDownTiming = false
@@ -516,6 +623,22 @@ private final class MarkdownNSTextView: NSTextView {
         addSubview(field)
         return field
     }()
+
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder {
+            focusStateDidChange?(true)
+        }
+        return becameFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resignedFirstResponder = super.resignFirstResponder()
+        if resignedFirstResponder {
+            focusStateDidChange?(false)
+        }
+        return resignedFirstResponder
+    }
 
     func configurePlaceholder(
         _ text: String,
@@ -829,6 +952,92 @@ private final class MarkdownNSTextView: NSTextView {
             NSRange(location: range.location + prefix.utf16.count, length: selected.utf16.count)
         )
     }
+
+    func performMarkdownCommand(_ command: MarkdownEditorCommand) {
+        guard hasMarkedText() == false else {
+            NSSound.beep()
+            return
+        }
+        window?.makeFirstResponder(self)
+        switch command {
+        case .insertLabelToken:
+            insertClassificationToken("#")
+        case .insertCategoryToken:
+            insertClassificationToken("@")
+        case .bold:
+            wrapSelection(prefix: "**", suffix: "**")
+        case .italic:
+            wrapSelection(prefix: "*", suffix: "*")
+        case .inlineCode:
+            wrapSelection(prefix: "`", suffix: "`")
+        case .link:
+            wrapSelection(prefix: "[", suffix: "](https://)")
+        case let .heading(level):
+            prefixSelectedLines(with: String(repeating: "#", count: min(max(level, 1), 3)) + " ")
+        case .unorderedList:
+            prefixSelectedLines(with: "- ")
+        case .orderedList:
+            prefixSelectedLines(with: "1. ")
+        case .taskList:
+            prefixSelectedLines(with: "- [ ] ")
+        case .quote:
+            prefixSelectedLines(with: "> ")
+        case .codeBlock:
+            wrapSelection(prefix: "```\n", suffix: "\n```")
+        }
+    }
+
+    private func insertClassificationToken(_ marker: String) {
+        let range = selectedRange()
+        let source = string as NSString
+        let selected = source.substring(with: range)
+        let precedingCharacter = range.location > 0
+            ? source.substring(
+                with: source.rangeOfComposedCharacterSequence(
+                    at: range.location - 1
+                )
+            )
+            : ""
+        let needsLeadingSpace = precedingCharacter.isEmpty == false
+            && precedingCharacter.rangeOfCharacter(
+                from: .whitespacesAndNewlines
+            ) == nil
+        let insertion = (needsLeadingSpace ? " " : "")
+            + marker + selected
+        insertText(insertion, replacementRange: range)
+        setSelectedRange(
+            NSRange(
+                location: range.location + insertion.utf16.count,
+                length: 0
+            )
+        )
+    }
+
+    private func prefixSelectedLines(with prefix: String) {
+        let source = string as NSString
+        let selection = selectedRange()
+        let lineRange = source.lineRange(for: selection)
+        let raw = source.substring(with: lineRange)
+        let hasTrailingNewline = raw.hasSuffix("\n")
+        var lines = raw.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        if hasTrailingNewline, lines.last == "" {
+            lines.removeLast()
+        }
+        let replacement = lines
+            .map { $0.isEmpty ? prefix : prefix + $0 }
+            .joined(separator: "\n")
+            + (hasTrailingNewline ? "\n" : "")
+        insertText(replacement, replacementRange: lineRange)
+        setSelectedRange(
+            NSRange(
+                location: lineRange.location,
+                length: replacement.utf16.count
+            )
+        )
+    }
 }
 
 private final class MarkdownPlaceholderTextField: NSTextField {
@@ -892,6 +1101,7 @@ enum MarkdownEditorKeyboardProbe {
         }
 
         failures.append(contentsOf: tabFailures(using: textView))
+        failures.append(contentsOf: flylightFormattingFailures())
 
         let rendered = MarkdownInlineText.attributed("**bold** and [link](https://example.com)")
         if String(rendered.characters) != "bold and link" {
@@ -900,6 +1110,54 @@ enum MarkdownEditorKeyboardProbe {
         let blocks = MarkdownBlock.parse("# Heading\n- [x] item\n> quote\n```\ncode\n```")
         if blocks.count != 4 {
             failures.append("block Markdown did not render")
+        }
+        return failures
+    }
+
+    @MainActor
+    private static func flylightFormattingFailures() -> [String] {
+        let cases: [(MarkdownEditorCommand, String, NSRange, String)] = [
+            (.heading(2), "标题", NSRange(location: 0, length: 2), "## 标题"),
+            (
+                .unorderedList,
+                "甲\n乙",
+                NSRange(location: 0, length: 3),
+                "- 甲\n- 乙"
+            ),
+            (
+                .orderedList,
+                "甲\n乙",
+                NSRange(location: 0, length: 3),
+                "1. 甲\n1. 乙"
+            ),
+            (
+                .taskList,
+                "跟进",
+                NSRange(location: 0, length: 2),
+                "- [ ] 跟进"
+            ),
+            (
+                .quote,
+                "提醒",
+                NSRange(location: 0, length: 2),
+                "> 提醒"
+            ),
+            (
+                .codeBlock,
+                "let value = 1",
+                NSRange(location: 0, length: 13),
+                "```\nlet value = 1\n```"
+            )
+        ]
+        var failures: [String] = []
+        for (command, source, selection, expected) in cases {
+            let textView = MarkdownNSTextView()
+            textView.string = source
+            textView.setSelectedRange(selection)
+            textView.performMarkdownCommand(command)
+            if textView.string != expected {
+                failures.append("Flylight Markdown command \(command) failed")
+            }
         }
         return failures
     }

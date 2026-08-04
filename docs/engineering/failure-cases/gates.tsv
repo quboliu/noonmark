@@ -51,9 +51,15 @@ FAIL-2026-08-03-02	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 
 FAIL-2026-08-03-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理双击想法正文，原位编辑器未出现或未聚焦即判红
 FAIL-2026-08-03-03	fast	scripts/test-unit	scripts/check	IdeaDraftParser 固定保留多行正文并只剥离分组／标签 token
 FAIL-2026-08-03-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 多行想法经物理输入、保存、SQLite 与第二个 App process 回读后必须逐行一致
-FAIL-2026-08-04-01	fast	scripts/test-notes-ui-contract	scripts/check	约束原生 placeholder、共享 editor 自测高度、飞光 surface 与几何断言不漂移
-FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 聚焦空飞光 composer，surface 超高或 placeholder 与 caret 错位即判红
+FAIL-2026-08-04-01	fast	scripts/test-notes-ui-contract	scripts/check	约束原生 placeholder、共享 editor 自测高度、飞光收起／工作态、action chrome 与几何断言不漂移
+FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 聚焦空飞光 composer，动画完成后的可见 editor、surface、action chrome 或 placeholder／caret 顶线错位即判红
 FAIL-2026-08-04-02	fast	scripts/test-notes-ui-contract	scripts/check	强制单一应用自有下拉触发器，拒绝旧双按钮与逐模式瞬态锚点
 FAIL-2026-08-04-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以 WindowServer 打开下拉清单并选择两种视图，菜单 tracking 或选择失败即判红
 FAIL-2026-08-04-03	fast	scripts/test-unit	scripts/check	固定飞光 Markdown 转义标记、裸 URL 与 active-token 共用保护范围，任何正文剥离即判红
 FAIL-2026-08-04-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理输入带 @ 的裸 URL，经保存、SQLite 与第二个 App process 回读后必须逐字一致
+FAIL-2026-08-04-04	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 固定同 ID 幂等、异 ID 拒绝覆盖、失败草稿保留与显式取消压制 blur
+FAIL-2026-08-04-04	symptom	scripts/test-e2e	scripts/test-all	真实 App 双击切换、无效／有效导航与取消后的 SQLite body／updated_at_bits 精确对账
+FAIL-2026-08-04-05	fast	scripts/test-notes-ui-contract	scripts/check	强制 failed 非空飞光草稿保持可重试，并保留本地重试文案与真实物理点击路径
+FAIL-2026-08-04-05	symptom	scripts/test-e2e	scripts/test-all	真实 App 触发发布失败、显示原位说明、物理点击重试并证明草稿保留与零误写
+FAIL-2026-08-04-06	fast	scripts/test-notes-ui-contract	scripts/check	强制三个嵌套 Hosting Controller 关闭理想尺寸反推，并保留 window content containment 断言
+FAIL-2026-08-04-06	symptom	scripts/test-e2e	scripts/test-all	真实 App 展开失败说明及窄窗口右栏时，计划／轨迹／札记十个导航项必须全部留在窗口内

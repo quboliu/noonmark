@@ -52,19 +52,26 @@ enum AppViewTreeE2E {
     }
 
     static func view(identifier: String, in window: NSWindow) -> NSView? {
+        let matches = visibleViews(identifier: identifier, in: window)
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    private static func visibleViews(
+        identifier: String,
+        in window: NSWindow
+    ) -> [NSView] {
         guard window.isVisible,
               window.isMiniaturized == false,
               window.alphaValue > 0,
               let rootView = window.contentView?.superview ?? window.contentView
         else {
-            return nil
+            return []
         }
-        let matches = allViews(from: rootView).filter {
+        return allViews(from: rootView).filter {
             $0.identifier?.rawValue == identifier
                 && isVisible($0, in: [window])
         }
-        guard matches.count == 1 else { return nil }
-        return matches[0]
     }
 
     static func hasNoVisibleView(identifier: String) -> Bool {

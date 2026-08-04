@@ -18,14 +18,19 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     private static let alphaBody = "## e2e Flylight alpha\n- second line https://example.com/@user"
     private static let alphaCategoryName = "工程"
     private static let alphaLabelName = "SwiftUI"
+    private static let failedDraft = "e2e failure proof #NoonmarkMissingE2EClassification"
     private static let betaBody = "e2e idea beta marker"
     private static let betaEditedBody = "e2e idea beta edited"
+    private static let betaSwitchedBody = "e2e idea beta saved before switching cards"
+    private static let betaNavigationBody = "e2e idea beta saved before navigation"
     private static let betaAutosavedBody = "e2e idea beta autosaved"
     private static let betaCancelledBody = "e2e idea beta must cancel"
     private static let epsilonBody = "e2e idea epsilon marker"
     private static let discardedDraft = "e2e draft discarded"
     private static let gammaBody = "e2e panel idea gamma"
     private static let deltaBody = "e2e hotkey idea delta"
+    private static let cancellationProofBody = "e2e cancellation persistence proof"
+    private static let cancellationAttemptBody = "e2e cancellation must not persist"
     private static let restartDraft = "e2e draft survives process restart"
 
     // Card overflow menu order is Sticky Note intent, edit, delete; the first down
@@ -89,6 +94,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             expectEmpty: true
         )
         try await captureScreenshot("ideas-empty.png", of: mainWindow)
+        try assertCollapsedComposerGeometry(mainWindow: mainWindow, store: store)
+        try await assertEmptyComposerGeometry(
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await exerciseComposerTools(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await exerciseComposerFailure(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
 
         let alpha = try await saveComposerIdea(
             ComposerDraft(
@@ -146,6 +166,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await exerciseInlineEdit(
+            alphaID: alpha.id,
             betaID: beta.id,
             store: store,
             mainWindow: mainWindow,
@@ -189,6 +210,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await exerciseStickyNoteGamma(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        let cancellationProof = try await saveComposerIdea(
+            ComposerDraft(
+                text: Self.cancellationProofBody,
+                body: Self.cancellationProofBody
+            ),
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await exerciseCancellationPersistenceProof(
+            idea: cancellationProof,
             store: store,
             mainWindow: mainWindow,
             input: input
@@ -248,8 +284,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     private func verify(on store: NoonmarkStore) async throws {
         let mainWindow = try await visibleMainWindow()
         try await activate(mainWindow)
-        try await waitUntil("Flylight page did not render three cards after restart") {
-            store.page == .ideas && timelineCount(in: mainWindow) == 3
+        try await waitUntil("Flylight page did not render four cards after restart") {
+            store.page == .ideas && timelineCount(in: mainWindow) == 4
         }
         try await waitUntil("idea composer draft did not survive process restart") {
             guard let editor = AppViewTreeE2E.view(
@@ -260,7 +296,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 && editor.string == Self.restartDraft
         }
 
-        for body in [Self.alphaBody, Self.deltaBody] {
+        for body in [
+            Self.alphaBody,
+            Self.deltaBody,
+            Self.cancellationProofBody,
+        ] {
             guard let idea = store.engine.ideaTimeline().first(where: {
                 $0.body == body
             }), let card = AppViewTreeE2E.view(
@@ -391,16 +431,56 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ) != nil else {
                 throw Failure.failed("Flylight composer placeholder was missing")
             }
-            try await assertEmptyComposerGeometry(
-                mainWindow: mainWindow,
-                input: input
-            )
         }
         guard store.detailRailRoute == .flylight,
               store.hasDetailRailContent
         else {
             throw Failure.failed(
                 "Flylight did not register its shared detail rail route"
+            )
+        }
+    }
+
+    private func assertCollapsedComposerGeometry(
+        mainWindow: NSWindow,
+        store: NoonmarkStore
+    ) throws {
+        guard let editor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView,
+            let scrollView = editor.enclosingScrollView,
+            let placeholder = AppViewTreeE2E.view(
+                identifier: "ideas.composer.placeholder",
+                in: mainWindow
+            ),
+            let surface = AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            ),
+            let secondary = AppViewTreeE2E.view(
+                identifier: "ideas.composer.secondary",
+                in: mainWindow
+            )
+        else {
+            throw Failure.failed("collapsed Flylight composer targets were missing")
+        }
+        mainWindow.contentView?.layoutSubtreeIfNeeded()
+        let editorFrame = AppViewTreeE2E.frameInWindow(for: scrollView)
+        let placeholderFrame = AppViewTreeE2E.frameInWindow(for: placeholder)
+        let surfaceFrame = AppViewTreeE2E.frameInWindow(for: surface)
+        guard mainWindow.firstResponder !== editor,
+              (20 ... 26).contains(editorFrame.height),
+              editorFrame.contains(placeholderFrame),
+              (62 ... 72).contains(surfaceFrame.height),
+              AppViewTreeE2E.verificationText(for: secondary)
+              == store.copy.ideaExpandComposerAction
+        else {
+            let secondaryText = AppViewTreeE2E.verificationText(
+                for: secondary
+            ) ?? "nil"
+            throw Failure.failed(
+                "idle Flylight composer was not a compact, actionable surface: editor=\(editorFrame), placeholder=\(placeholderFrame), surface=\(surfaceFrame), secondary=\(secondaryText)"
             )
         }
     }
@@ -446,20 +526,65 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         else {
             throw Failure.failed("empty composer geometry targets were missing")
         }
-        if mainWindow.firstResponder !== editor {
-            _ = mainWindow.makeFirstResponder(editor)
+        guard AppViewTreeE2E.view(
+            identifier: "ideas.composer.primary",
+            in: mainWindow
+        ) != nil,
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.secondary",
+                in: mainWindow
+            ) != nil,
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.tool.label",
+                in: mainWindow
+            ) != nil,
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.tool.category",
+                in: mainWindow
+            ) != nil,
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.tool.format",
+                in: mainWindow
+            ) != nil
+        else {
+            throw Failure.failed(
+                "Flylight composer did not expose its integrated actions and tools"
+            )
         }
+        try await click(
+            "ideas.composer.secondary",
+            in: mainWindow,
+            input: input
+        )
         try await waitUntil("empty composer did not take focus") {
             mainWindow.firstResponder === editor
+        }
+        try await waitUntil("empty composer did not expand after focus") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            guard let currentSurface = AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            ),
+                let currentEditor = AppViewTreeE2E.view(
+                    identifier: "ideas.composer.input",
+                    in: mainWindow
+                ) as? NSTextView,
+                let currentScrollView = currentEditor.enclosingScrollView
+            else { return false }
+            return AppViewTreeE2E.frameInWindow(for: currentSurface).height >= 111
+                && AppViewTreeE2E.frameInWindow(for: currentScrollView).height >= 68
         }
         let focusedCaretFrame = editor.firstRect(
             forCharacterRange: NSRange(location: 0, length: 0),
             actualRange: nil
         )
         try await click("ideas.composer.input", in: mainWindow, input: input)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        mainWindow.contentView?.layoutSubtreeIfNeeded()
 
-        let editorFrame = AppViewTreeE2E.frameInWindow(for: editor)
+        guard let scrollView = editor.enclosingScrollView else {
+            throw Failure.failed("Flylight composer lost its visible editor surface")
+        }
+        let editorFrame = AppViewTreeE2E.frameInWindow(for: scrollView)
         let surfaceFrame = AppViewTreeE2E.frameInWindow(for: surface)
         let placeholderFrame = mainWindow.convertToScreen(
             AppViewTreeE2E.frameInWindow(for: placeholder)
@@ -469,9 +594,9 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             actualRange: nil
         )
         let focusedOffset = abs(
-            focusedCaretFrame.midY - placeholderFrame.midY
+            focusedCaretFrame.maxY - placeholderFrame.maxY
         )
-        let verticalOffset = abs(caretFrame.midY - placeholderFrame.midY)
+        let verticalOffset = abs(caretFrame.maxY - placeholderFrame.maxY)
         let extraLineFrame = editor.layoutManager?.extraLineFragmentRect ?? .zero
         let extraLineInEditor = extraLineFrame.offsetBy(
             dx: editor.textContainerOrigin.x,
@@ -481,13 +606,15 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             editor.convert(extraLineInEditor, to: nil)
         )
         try await captureScreenshot("ideas-empty-focused.png", of: mainWindow)
-        guard editorFrame.height <= 60,
-              surfaceFrame.height <= 60,
-              abs(editorFrame.minY - surfaceFrame.minY) <= 1,
-              verticalOffset <= 6
+        let actionChromeHeight = surfaceFrame.height - editorFrame.height
+        guard (68 ... 180).contains(editorFrame.height),
+              (111 ... 222).contains(surfaceFrame.height),
+              (41 ... 52).contains(actionChromeHeight),
+              abs(editorFrame.maxY - surfaceFrame.maxY) <= 1,
+              focusedOffset <= 2,
+              verticalOffset <= 2
         else {
-            let scrollView = editor.enclosingScrollView
-            let clipView = scrollView?.contentView
+            let clipView = scrollView.contentView
             let extraLine = editor.layoutManager?.extraLineFragmentRect
             let editorTop = editor.convert(
                 NSRect(x: 0, y: 0, width: 1, height: 1),
@@ -498,7 +625,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 to: nil
             )
             throw Failure.failed(
-                "empty composer left phantom space: editor=\(editorFrame), surface=\(surfaceFrame), focusedOffset=\(focusedOffset), caretOffset=\(verticalOffset), editorBounds=\(editor.bounds), visible=\(editor.visibleRect), flipped=\(editor.isFlipped), editorTop=\(editorTop), editorBottom=\(editorBottom), inset=\(editor.textContainerInset), containerOrigin=\(editor.textContainerOrigin), extraLine=\(String(describing: extraLine)), extraLineScreen=\(extraLineInScreen), placeholder=\(placeholderFrame), focusedCaret=\(focusedCaretFrame), caret=\(caretFrame), scrollFrame=\(String(describing: scrollView?.frame)), scrollBounds=\(String(describing: scrollView?.bounds)), clipFrame=\(String(describing: clipView?.frame)), clipBounds=\(String(describing: clipView?.bounds)), clipFlipped=\(String(describing: clipView?.isFlipped))"
+                "Flylight composer geometry broke its integrated surface: editor=\(editorFrame), surface=\(surfaceFrame), actionChrome=\(actionChromeHeight), focusedOffset=\(focusedOffset), caretOffset=\(verticalOffset), editorBounds=\(editor.bounds), visible=\(editor.visibleRect), flipped=\(editor.isFlipped), editorTop=\(editorTop), editorBottom=\(editorBottom), inset=\(editor.textContainerInset), containerOrigin=\(editor.textContainerOrigin), extraLine=\(String(describing: extraLine)), extraLineScreen=\(extraLineInScreen), placeholder=\(placeholderFrame), focusedCaret=\(focusedCaretFrame), caret=\(caretFrame), scrollFrame=\(scrollView.frame), scrollBounds=\(scrollView.bounds), clipFrame=\(clipView.frame), clipBounds=\(clipView.bounds), clipFlipped=\(clipView.isFlipped)"
             )
         }
     }
@@ -509,6 +636,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         mainWindow: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
+        let originalFrame = mainWindow.frame
         if store.isDetailRailExpanded {
             try await click(
                 "shell.detail-rail.toggle",
@@ -541,6 +669,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
         try await captureScreenshot("ideas-detail-collapsed.png", of: mainWindow)
 
+        mainWindow.setContentSize(NSSize(width: 960, height: 720))
+
         try await click(
             "shell.detail-rail.toggle",
             in: mainWindow,
@@ -562,6 +692,10 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 in: mainWindow
             ).flatMap(AppViewTreeE2E.verificationText) == selectedIdea.body
         }
+        try assertFlylightRailActionsAreReadable(
+            store: store,
+            mainWindow: mainWindow
+        )
         try await captureScreenshot("ideas-detail-expanded.png", of: mainWindow)
 
         try await click(
@@ -587,12 +721,113 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 ) != nil
                 && cards.count == expectedIdeaIDs.count
         }
+        mainWindow.setFrame(originalFrame, display: true)
+    }
+
+    private func assertFlylightRailActionsAreReadable(
+        store: NoonmarkStore,
+        mainWindow: NSWindow
+    ) throws {
+        guard let idea = store.selectedIdea,
+              let rail = AppViewTreeE2E.view(
+                  identifier: "shell.detail-rail",
+                  in: mainWindow
+              ),
+              let edit = AppViewTreeE2E.view(
+                  identifier: "ideas.inspector.edit.\(idea.id)",
+                  in: mainWindow
+              ),
+              let sticky = AppViewTreeE2E.view(
+                  identifier: "ideas.inspector.sticky.\(idea.id)",
+                  in: mainWindow
+              )
+        else {
+            throw Failure.failed("Flylight rail action targets were missing")
+        }
+        mainWindow.contentView?.layoutSubtreeIfNeeded()
+        let railFrame = AppViewTreeE2E.frameInWindow(for: rail)
+        let editFrame = AppViewTreeE2E.frameInWindow(for: edit)
+        let stickyFrame = AppViewTreeE2E.frameInWindow(for: sticky)
+        guard editFrame.width >= 84,
+              stickyFrame.width >= 120,
+              editFrame.intersects(stickyFrame) == false,
+              railFrame.contains(editFrame),
+              railFrame.contains(stickyFrame)
+        else {
+            throw Failure.failed(
+                "Flylight rail actions clipped at 960x720: rail=\(railFrame), edit=\(editFrame), sticky=\(stickyFrame)"
+            )
+        }
     }
 
     private struct ComposerDraft {
         let text: String
         let body: String
         var suggestionsCheckpoint: String?
+    }
+
+    private func exerciseComposerTools(
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let editor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView else {
+            throw Failure.failed("Flylight composer tools lost their editor")
+        }
+
+        try input.typeUnicode("toolbar")
+        try await waitUntil("Flylight formatting fixture did not reach the editor") {
+            editor.string == "toolbar" && store.ideaText == "toolbar"
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+
+        let formatProbe = MenuTrackingProbe()
+        defer { formatProbe.stop() }
+        try await click(
+            "ideas.composer.tool.format",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight format menu did not begin tracking") {
+            formatProbe.didBeginTracking
+        }
+        try input.postKey(keyCode: 125)
+        try input.postKey(keyCode: 36)
+        try await waitUntil("Flylight format menu did not apply bold Markdown") {
+            formatProbe.didEndTracking
+                && editor.string == "**toolbar**"
+                && store.ideaText == "**toolbar**"
+        }
+
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitUntil("Flylight formatting fixture did not clear") {
+            editor.string.isEmpty && store.ideaText.isEmpty
+        }
+        try await click(
+            "ideas.composer.tool.label",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight label tool did not insert its token") {
+            editor.string == "#" && store.ideaText == "#"
+        }
+        try await click(
+            "ideas.composer.tool.category",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight category tool did not preserve the label token") {
+            editor.string == "# @" && store.ideaText == "# @"
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitUntil("Flylight classification tool fixture did not clear") {
+            editor.string.isEmpty && store.ideaText.isEmpty
+        }
     }
 
     private func saveComposerIdea(
@@ -637,7 +872,12 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             try input.typeUnicode(draft.text)
         }
         try await waitUntil("ideas composer did not receive real text input") {
-            editor.string == draft.text && store.ideaText == draft.text
+            editor.string == draft.text
+                && store.ideaText == draft.text
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.surface",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "dirty"
         }
 
         try input.postKey(keyCode: 36, modifiers: [.command])
@@ -659,6 +899,10 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             return AppViewTreeE2E.verificationText(for: card) == draft.body
                 && timelineCount(in: mainWindow)
                 == store.visibleIdeaCount
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.surface",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "success"
         }
         guard let created else {
             throw Failure.failed("saved idea disappeared from the timeline")
@@ -672,6 +916,80 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("ideas day section header was missing")
         }
         return created
+    }
+
+    private func exerciseComposerFailure(
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        guard let editor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView else {
+            throw Failure.failed("failure-state composer editor was missing")
+        }
+        try await click("ideas.composer.input", in: mainWindow, input: input)
+        try input.typeUnicode(Self.failedDraft)
+        try await waitUntil("failure-state draft did not become dirty") {
+            editor.string == Self.failedDraft
+                && store.ideaText == Self.failedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.surface",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "dirty"
+        }
+        try input.postKey(keyCode: 36, modifiers: [.command])
+        try await waitUntil("failed publish did not enter the failed state") {
+            store.ideaComposerSession.submissionState == .failed
+        }
+        guard store.ideaText == Self.failedDraft else {
+            throw Failure.failed("failed publish changed the composer draft")
+        }
+        guard store.engine.ideaTimeline().isEmpty else {
+            throw Failure.failed("failed publish inserted an idea")
+        }
+        try await waitUntil("failed publish did not render its failure state") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "failed"
+        }
+        try assertCompleteSidebar(
+            in: mainWindow,
+            checkpoint: "ideas-composer-failed"
+        )
+        try await waitUntil("failed publish did not expose actionable retry") {
+            guard let retry = AppViewTreeE2E.view(
+                identifier: "ideas.composer.primary",
+                in: mainWindow
+            ) else { return false }
+            return AppViewTreeE2E.verificationText(for: retry)
+                == store.copy.ideaRetryAction
+                && AppViewTreeE2E.buttonInteractionTarget(
+                    overlapping: retry
+                ) != nil
+        }
+        try await waitUntil("failed publish did not explain the failure in place") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.composer.message",
+                in: mainWindow
+            ) != nil
+        }
+        try await click("ideas.composer.primary", in: mainWindow, input: input)
+        try await waitUntil("retry did not preserve the failed draft in place") {
+            store.ideaComposerSession.submissionState == .failed
+                && store.ideaText == Self.failedDraft
+                && store.engine.ideaTimeline().isEmpty
+        }
+        try await captureScreenshot("ideas-composer-failed.png", of: mainWindow)
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitUntil("failure-state draft did not clear") {
+            editor.string.isEmpty
+                && store.ideaText.isEmpty
+                && store.ideaComposerSession.submissionState == .idle
+        }
     }
 
     private func exerciseFilter(
@@ -837,6 +1155,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func exerciseInlineEdit(
+        alphaID: IdeaID,
         betaID: IdeaID,
         store: NoonmarkStore,
         mainWindow: NSWindow,
@@ -848,6 +1167,66 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(Self.betaSwitchedBody)
+        let alphaBeforeSwitch = store.engine.ideas[alphaID]
+        _ = try await beginInlineEditor(
+            ideaID: alphaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await waitUntil("switching inline cards did not save the first draft") {
+            store.editingIdeaID == alphaID
+                && store.engine.ideas[betaID]?.body == Self.betaSwitchedBody
+        }
+        try await click(
+            "ideas.card.edit.cancel.\(alphaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("clicking Cancel mutated the second idea") {
+            store.editingIdeaID == nil
+                && store.engine.ideas[alphaID]?.body == alphaBeforeSwitch?.body
+                && store.engine.ideas[alphaID]?.updatedAt == alphaBeforeSwitch?.updatedAt
+        }
+
+        let betaBeforeTools = store.engine.ideas[betaID]
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try await click(
+            "ideas.card.edit-field.\(betaID).tool.label",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("inline Markdown tool ended the edit session") {
+            store.editingIdeaID == betaID
+                && editor.string.hasPrefix("#")
+                && store.ideaEditText == editor.string
+        }
+        try await click(
+            "ideas.card.edit.cancel.\(betaID)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("cancelling an inline tool edit changed persistence") {
+            store.editingIdeaID == nil
+                && store.engine.ideas[betaID]?.body == betaBeforeTools?.body
+                && store.engine.ideas[betaID]?.updatedAt == betaBeforeTools?.updatedAt
+        }
+
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await captureScreenshot("ideas-inline-edit.png", of: mainWindow)
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(Self.betaEditedBody)
         try await waitUntil("idea inline edit did not receive typed text") {
@@ -887,6 +1266,69 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 ).flatMap(AppViewTreeE2E.verificationText)
                 == Self.betaEditedBody
         }
+
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode("   ")
+        try await click(
+            "sidebar.nav.stickyNotes",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("invalid inline draft did not block navigation") {
+            store.page == .ideas
+                && store.editingIdeaID == betaID
+                && store.engine.ideas[betaID]?.body == Self.betaEditedBody
+                && mainWindow.firstResponder === editor
+        }
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("failed preflight still exposed local search UI") {
+            store.ideaFilterText.isEmpty
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) == nil
+                && store.editingIdeaID == betaID
+                && mainWindow.firstResponder === editor
+        }
+        try await click(
+            "ideas.card.edit.cancel.\(betaID)",
+            in: mainWindow,
+            input: input
+        )
+
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(Self.betaNavigationBody)
+        try await click(
+            "sidebar.nav.stickyNotes",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("valid inline draft was not saved before navigation") {
+            store.page == .stickyNotes
+                && store.editingIdeaID == nil
+                && store.engine.ideas[betaID]?.body == Self.betaNavigationBody
+        }
+        try await openIdeasPageFromSidebar(
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
 
         editor = try await beginInlineEditor(
             ideaID: betaID,
@@ -1273,6 +1715,9 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try await waitUntil("idea capture field did not become first responder") {
             editor = panel.firstResponder as? NSTextView
             return editor != nil
+                && panel.isKeyWindow
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    == ProcessInfo.processInfo.processIdentifier
         }
         try input.typeUnicode(Self.deltaBody)
         try await waitUntil("idea capture panel did not receive real text input") {
@@ -1296,6 +1741,47 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             NSWorkspace.shared.frontmostApplication?.processIdentifier
                 == finder.processIdentifier
         }
+    }
+
+    private func exerciseCancellationPersistenceProof(
+        idea: IdeaEntry,
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let expectedUpdatedAtBits = Int64(
+            bitPattern: idea.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        let editor = try await beginInlineEditor(
+            ideaID: idea.id,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(Self.cancellationAttemptBody)
+        try await waitUntil("cancellation proof draft did not reach the editor") {
+            editor.string == Self.cancellationAttemptBody
+                && store.ideaEditText == Self.cancellationAttemptBody
+        }
+        try await click(
+            "ideas.card.edit.cancel.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("cancellation proof changed the in-memory idea") {
+            store.editingIdeaID == nil
+                && store.engine.ideas[idea.id]?.body == Self.cancellationProofBody
+                && store.engine.ideas[idea.id]?.updatedAt == idea.updatedAt
+        }
+        let proof = "\(idea.id.description)\t\(expectedUpdatedAtBits)\n"
+        try proof.write(
+            to: screenshotDirectory.appendingPathComponent(
+                "cancel-sqlite-proof.tsv"
+            ),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func leaveDraftForRestart(
@@ -1463,6 +1949,9 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func captureScreenshot(_ name: String, of window: NSWindow) async throws {
+        if AppViewTreeE2E.view(identifier: "shell.sidebar", in: window) != nil {
+            try assertCompleteSidebar(in: window, checkpoint: name)
+        }
         do {
             try AppE2EScreenshot.captureContent(
                 of: window,
@@ -1473,6 +1962,53 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 "idea capture screenshot \(name) failed: "
                     + error.localizedDescription
             )
+        }
+    }
+
+    private func assertCompleteSidebar(
+        in window: NSWindow,
+        checkpoint: String
+    ) throws {
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard let sidebar = AppViewTreeE2E.view(
+            identifier: "shell.sidebar",
+            in: window
+        ) else {
+            throw Failure.failed("sidebar disappeared at \(checkpoint)")
+        }
+        let sidebarFrame = AppViewTreeE2E.frameInWindow(for: sidebar)
+        guard let contentView = window.contentView else {
+            throw Failure.failed("window content disappeared at \(checkpoint)")
+        }
+        let contentFrame = AppViewTreeE2E.frameInWindow(for: contentView)
+        let pageIDs = [
+            "day", "pool", "future", "recurring",
+            "unfinished", "completed", "calendar", "zhulong",
+            "stickyNotes", "ideas"
+        ]
+        for pageID in pageIDs {
+            let identifier = "sidebar.nav.\(pageID)"
+            guard let item = AppViewTreeE2E.view(
+                identifier: identifier,
+                in: window
+            ), item.isHiddenOrHasHiddenAncestor == false,
+                item.alphaValue > 0
+            else {
+                throw Failure.failed(
+                    "sidebar item \(pageID) disappeared at \(checkpoint)"
+                )
+            }
+            let itemFrame = AppViewTreeE2E.frameInWindow(for: item)
+            guard itemFrame.isEmpty == false,
+                  sidebarFrame.contains(itemFrame),
+                  contentFrame.contains(itemFrame)
+            else {
+                throw Failure.failed(
+                    "sidebar item \(pageID) was clipped at \(checkpoint): "
+                        + "content=\(contentFrame),sidebar=\(sidebarFrame),"
+                        + "item=\(itemFrame)"
+                )
+            }
         }
     }
 
@@ -1512,7 +2048,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             guard let currentView = AppViewTreeE2E.view(
                 identifier: identifier,
                 in: expectedWindow
-            ), currentView.window === expectedWindow,
+            ),
+                currentView.window === expectedWindow,
                 currentView.isHiddenOrHasHiddenAncestor == false
             else {
                 throw Failure.failed(
@@ -1553,9 +2090,18 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 guard attempt < 2,
                       isActivationInterruption(error)
                 else {
+                    let targetReport = (try? resolveTarget())?.report
+                        ?? "unavailable"
+                    let frontmost = NSWorkspace.shared.frontmostApplication
+                    let frontmostReport = [
+                        "pid=\(frontmost?.processIdentifier.description ?? "nil")",
+                        "bundle=\(frontmost?.bundleIdentifier ?? "nil")",
+                        "currentPID=\(ProcessInfo.processInfo.processIdentifier)"
+                    ].joined(separator: ",")
                     throw Failure.failed(
                         "idea capture WindowServer click failed for \(identifier): "
                             + error.localizedDescription
+                            + ",target={\(targetReport)},frontmost={\(frontmostReport)}"
                     )
                 }
                 try await Task.sleep(nanoseconds: 50_000_000)

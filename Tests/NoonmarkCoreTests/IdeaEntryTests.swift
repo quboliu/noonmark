@@ -91,6 +91,28 @@ final class IdeaEntryTests: XCTestCase {
         XCTAssertEqual(updated.updatedAt, editAt)
     }
 
+    func testEditIdeaAtomicallyUpdatesBodyAndClassification() throws {
+        let engine = NoonmarkEngine()
+        let catalog = try seedClassificationCatalog(in: engine)
+        let labelID = try XCTUnwrap(catalog.labelIDs.first)
+        let idea = try engine.appendIdea(body: "旧正文", now: now)
+        let editAt = now.addingTimeInterval(10)
+
+        try engine.editIdea(
+            id: idea.id,
+            body: "新正文",
+            categoryID: catalog.categoryID,
+            labelIDs: [labelID],
+            now: editAt
+        )
+
+        let updated = try XCTUnwrap(engine.ideas[idea.id])
+        XCTAssertEqual(updated.body, "新正文")
+        XCTAssertEqual(updated.categoryID, catalog.categoryID)
+        XCTAssertEqual(updated.labelIDs, [labelID])
+        XCTAssertEqual(updated.updatedAt, editAt)
+    }
+
     func testEditIdeaRejectsEmptyBodyAndBackwardsClock() throws {
         let engine = NoonmarkEngine()
         let idea = try engine.appendIdea(body: "守住内容", now: now)

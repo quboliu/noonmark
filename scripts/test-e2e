@@ -3868,6 +3868,10 @@ run_idea_capture_probe() {
   local exercise_log="$idea_dir/exercise.log"
   local verify_result="$idea_dir/verify-result.txt"
   local verify_log="$idea_dir/verify.log"
+  local cancel_proof="$idea_dir/cancel-sqlite-proof.tsv"
+  local cancel_id
+  local cancel_updated_at_bits
+  local cancel_sql_probe
   local idea_sql_probe
   local screenshot
 
@@ -3935,8 +3939,30 @@ run_idea_capture_probe() {
          AND pinned_at IS NULL)
     FROM idea_entries;
   ")"
-  if [[ "$idea_sql_probe" != "5 3 1 2 1 1 0 1 1 1 0" ]]; then
+  if [[ "$idea_sql_probe" != "6 4 1 2 1 1 0 1 1 1 0" ]]; then
     echo "idea capture SQLite probe failed: ${idea_sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  if [[ ! -s "$cancel_proof" ]]; then
+    echo "idea capture cancellation SQLite proof was not created" >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r cancel_id cancel_updated_at_bits < "$cancel_proof"
+  if [[ ! "$cancel_id" =~ ^[0-9A-Fa-f-]{36}$ ]] \
+    || [[ ! "$cancel_updated_at_bits" =~ ^-?[0-9]+$ ]]; then
+    echo "idea capture cancellation SQLite proof was malformed" >&2
+    exit 1
+  fi
+  cancel_sql_probe="$(sqlite3 -noheader "$idea_db" "
+    SELECT count(*) FROM idea_entries
+    WHERE id = '$cancel_id'
+      AND body = 'e2e cancellation persistence proof'
+      AND updated_at_bits = $cancel_updated_at_bits
+      AND deleted_at IS NULL;
+  ")"
+  if [[ "$cancel_sql_probe" != "1" ]]; then
+    echo "idea capture cancellation changed body or updated_at_bits in SQLite" >&2
     exit 1
   fi
 
@@ -3944,6 +3970,7 @@ run_idea_capture_probe() {
     ideas-empty.png \
     ideas-detail-collapsed.png \
     ideas-detail-expanded.png \
+    ideas-composer-failed.png \
     ideas-composer-saved.png \
     ideas-filtered.png \
     ideas-classification-filtered.png \
@@ -3960,7 +3987,7 @@ run_idea_capture_probe() {
     fi
   done
 
-  echo "E2E Flylight composer/Markdown/filter/edit/delete, hidden tombstones, Sticky Note modes, panel, hotkey, restart, and SQLite probe: $idea_db (probe=$idea_sql_probe)"
+  echo "E2E Flylight composer/Markdown/filter/edit/delete, cancel invariants, hidden tombstones, Sticky Note modes, panel, hotkey, restart, and SQLite probe: $idea_db (probe=$idea_sql_probe cancel=$cancel_sql_probe)"
 }
 
 run_native_command_surface_probe() {

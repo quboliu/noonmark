@@ -6,9 +6,11 @@ cd "$repo_root"
 
 markdown_editor="App/NoonmarkMacApp/MarkdownEditing.swift"
 flylight_page="App/NoonmarkMacApp/IdeasPage.swift"
+flylight_composer="App/NoonmarkMacApp/FlylightComposerSurface.swift"
 sticky_page="App/NoonmarkMacApp/StickyNotesPage.swift"
 flylight_e2e="App/NoonmarkMacApp/IdeaCaptureE2EAutomation.swift"
 detail_rails="App/NoonmarkMacApp/WorkspaceDetailRails.swift"
+native_workspace="App/NoonmarkMacApp/NativeWorkspaceSplitView.swift"
 presentation="App/NoonmarkMacApp/NoonmarkStore+PresentationUndo.swift"
 ui_contract="Sources/NoonmarkMacUIContract/MacUIDesignContract.swift"
 notes_copy="App/NoonmarkMacApp/AppCopy+Ideas.swift"
@@ -36,17 +38,55 @@ require_literal \
   "$markdown_editor" \
   'Markdown placeholder escaped the native editor coordinate space'
 require_literal \
-  'identifier: "ideas.composer.surface"' \
-  "$flylight_page" \
+  'identifier: "\(identifier).surface"' \
+  "$flylight_composer" \
   'Flylight composer has no measurable surface boundary'
 require_literal \
-  'surfaceFrame.height <= 60' \
+  '(111 ... 222).contains(surfaceFrame.height)' \
   "$flylight_e2e" \
-  'Flylight E2E no longer rejects a vertically inflated empty composer'
+  'Flylight E2E no longer constrains the focused Composer work surface'
 require_literal \
-  'verticalOffset <= 6' \
+  '(41 ... 52).contains(actionChromeHeight)' \
+  "$flylight_e2e" \
+  'Flylight E2E no longer constrains integrated action chrome'
+require_literal \
+  'verticalOffset <= 2' \
   "$flylight_e2e" \
   'Flylight E2E no longer rejects placeholder/caret drift'
+require_literal \
+  'case pristine' \
+  "$flylight_composer" \
+  'Flylight composer lost its deterministic pristine/dirty state machine'
+require_literal \
+  'case success' \
+  "$flylight_composer" \
+  'Flylight composer lost visible success state'
+require_literal \
+  'store.copy.ideaRetryAction' \
+  "$flylight_composer" \
+  'Flylight failure no longer exposes a local retry action'
+require_literal \
+  'if state == .failed { return true }' \
+  "$flylight_composer" \
+  'Flylight retry action became disabled by its retained failure message'
+require_literal \
+  'try await click("ideas.composer.primary"' \
+  "$flylight_e2e" \
+  'Flylight E2E no longer physically retries a failed publish'
+require_literal \
+  'contentFrame.contains(itemFrame)' \
+  "$flylight_e2e" \
+  'Flylight E2E no longer rejects navigation pushed outside the window'
+for controller in sidebarController contentController detailController; do
+  require_literal \
+    "$controller.sizingOptions = []" \
+    "$native_workspace" \
+    "nested $controller can push ideal height into the workspace"
+done
+require_literal \
+  'cancel-sqlite-proof.tsv' \
+  "$flylight_e2e" \
+  'Flylight explicit cancel lost its SQLite exact-value proof'
 require_literal \
   'Sticky Note source navigation did not reveal its Flylight card' \
   "$flylight_e2e" \

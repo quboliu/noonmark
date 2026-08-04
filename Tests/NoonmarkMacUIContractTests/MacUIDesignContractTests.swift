@@ -389,6 +389,15 @@ final class MacUIDesignContractTests: XCTestCase {
             [
                 .persistentComposer,
                 .composerSharedWithGlobalCapture,
+                .integratedComposerSurface,
+                .composerFormattingToolbar,
+                .composerPrimaryAction,
+                .composerSecondaryAction,
+                .composerInlineStatus,
+                .composerDeterministicStateMachine,
+                .composerRetryAction,
+                .composerSuccessFeedback,
+                .composerSharedActionChrome,
                 .composerSavesOnCommandReturn,
                 .composerDraftSurvivesDismissal,
                 .composerClassificationTokens,
@@ -410,9 +419,12 @@ final class MacUIDesignContractTests: XCTestCase {
                 .ideaCardDeleteAction,
                 .doubleClickInlineEdit,
                 .inlineEditField,
+                .inlineEditUsesComposerSurface,
                 .inlineEditCommandReturnSave,
                 .inlineEditEscapeCancel,
                 .inlineEditBlurSave,
+                .inlineEditContextChangePreflight,
+                .inlineEditExplicitCancelNoPersistence,
                 .singleLineEmptyState,
                 .ideaCardAddToStickyNoteAction,
                 .ideaCardRemoveFromStickyNoteAction,
@@ -421,9 +433,17 @@ final class MacUIDesignContractTests: XCTestCase {
                 .singleFilterIndicatorVisualUnit
             ]
         )
-        XCTAssertEqual(MacUIIdeasPageLayout.composerMinimumHeight, 54)
-        XCTAssertEqual(MacUIIdeasPageLayout.composerMaximumHeight, 132)
-        XCTAssertEqual(MacUIIdeasPageLayout.composerCornerRadius, 8)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerIdleHeight, 64)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerExpandedMinimumHeight, 112)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerMaximumHeight, 220)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerCornerRadius, 12)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionBarHeight, 42)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerToolHitTarget, 28)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionButtonHeight, 32)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionSpacing, 8)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerHorizontalTextInset, 16)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerTopTextInset, 13)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerPersistentToolCount, 3)
         XCTAssertEqual(MacUIIdeasPageLayout.composerFilterSpacing, 10)
         XCTAssertEqual(MacUIIdeasPageLayout.timelineSectionSpacing, 18)
         XCTAssertEqual(MacUIIdeasPageLayout.sectionHeaderBottomPadding, 4)
@@ -742,6 +762,12 @@ final class MacUIDesignContractTests: XCTestCase {
                 .italic,
                 .inlineCode,
                 .link,
+                .heading,
+                .unorderedList,
+                .orderedList,
+                .taskList,
+                .quote,
+                .codeBlock,
                 .indent,
                 .hardLineBreak
             ]

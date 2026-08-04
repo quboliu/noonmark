@@ -92,8 +92,8 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
         onDismiss: (() -> Void)?
     ) {
         if window?.isVisible == true {
-            window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            window?.makeKeyAndOrderFront(nil)
             model.requestFocus()
             return
         }
@@ -103,9 +103,10 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
         model.prepareForPresentation()
         window?.title = store.copy.ideaCapturePanelTitle
         positionOverMainWindow()
+        NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        model.requestFocus()
     }
 
     func refreshLocalizedChrome() {
@@ -196,6 +197,17 @@ private struct NoonmarkIdeaCaptureView: View {
 
     private var issueMessage: String? {
         store.ideaDraftIssueMessage(for: session.text)
+            ?? session.failureMessage
+    }
+
+    private var composerState: FlylightComposerState {
+        FlylightComposerState(
+            session.submissionState,
+            isDirty: session.text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false,
+            isInvalid: issueMessage != nil
+        )
     }
 
     var body: some View {
@@ -211,55 +223,28 @@ private struct NoonmarkIdeaCaptureView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            MarkdownEditor(
+            FlylightComposerSurface(
                 text: text,
+                mode: .globalCapture,
+                state: composerState,
+                issueMessage: issueMessage,
+                identifier: "idea-capture.field",
                 placeholder: store.copy.ideaCapturePanelPlaceholder,
-                style: .body,
-                onCommit: model.submit,
-                onEscape: model.onClose,
-                nativeAccessibilityIdentifier: "idea-capture.field",
+                primaryIdentifier: "idea-capture.add",
+                secondaryIdentifier: "idea-capture.cancel",
                 focusesOnAppear: true,
-                focusRequest: model.focusRequest
-            )
-            .background(
-                RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8).stroke(Theme.lineSubtle)
-            )
-
-            if let issueMessage {
-                Text(issueMessage)
-                    .font(.noonmarkSystem(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.warn)
-            }
-
-            HStack {
-                Spacer()
-                Button(store.copy.cancel) {
+                focusRequest: model.focusRequest,
+                onSubmit: model.submit,
+                onSecondary: {
                     model.onClose?()
                 }
-                .keyboardShortcut(.cancelAction)
-                Button(store.copy.addIdeaAction) {
-                    model.submit()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .accessibilityIdentifier("idea-capture.add")
-                .background {
-                    AppE2EViewAnchor(identifier: "idea-capture.add")
-                }
-                .disabled(
-                    session.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || issueMessage != nil
-                )
-            }
+            )
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 16)
         .background(Theme.background)
-        .onChange(of: session.text, initial: true) { _, _ in
+        .onChange(of: issueMessage, initial: true) { _, _ in
             model.updatePresentation(showsIssue: issueMessage != nil)
         }
         .background {

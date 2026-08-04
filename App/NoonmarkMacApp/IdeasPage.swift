@@ -32,7 +32,7 @@ struct IdeasPage: View {
             guard let editingID = store.editingIdeaID,
                   ids.contains(editingID) == false
             else { return }
-            store.cancelIdeaEdit()
+            _ = store.endIdeaEdit(reason: .navigation)
         }
     }
 }
@@ -45,11 +45,13 @@ private struct IdeaPageToolbar: View {
         HStack(spacing: 8) {
             Button {
                 if searchIsPresented {
-                    store.dismissIdeaSearch()
-                    searchIsPresented = false
+                    if store.dismissIdeaSearch() {
+                        searchIsPresented = false
+                    }
                 } else {
-                    store.showRecentIdeas()
-                    searchIsPresented = true
+                    if store.showRecentIdeas() {
+                        searchIsPresented = true
+                    }
                 }
             } label: {
                 Label(
@@ -67,11 +69,13 @@ private struct IdeaPageToolbar: View {
             }
 
             Button {
-                searchIsPresented = false
-                if store.ideaBrowseMode == .review {
+                let didChange = if store.ideaBrowseMode == .review {
                     store.showRecentIdeas()
                 } else {
                     store.showIdeaReview()
+                }
+                if didChange {
+                    searchIsPresented = false
                 }
             } label: {
                 Label(
@@ -273,30 +277,35 @@ private struct IdeaComposer: View {
         store.ideaClassificationToken(for: session.text)
     }
 
+    private var issueMessage: String? {
+        store.ideaDraftIssueMessage(for: session.text)
+            ?? session.failureMessage
+    }
+
+    private var composerState: FlylightComposerState {
+        FlylightComposerState(
+            session.submissionState,
+            isDirty: session.text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false,
+            isInvalid: issueMessage != nil
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            MarkdownEditor(
+            FlylightComposerSurface(
                 text: text,
+                mode: .pageCreate,
+                state: composerState,
+                issueMessage: issueMessage,
+                identifier: "ideas.composer",
                 placeholder: store.copy.ideaComposerPlaceholder,
-                style: .body,
-                onCommit: {
+                onSubmit: {
                     _ = store.appendIdeaFromComposer()
                 },
-                nativeAccessibilityIdentifier: "ideas.composer"
+                onSecondary: session.dismiss
             )
-            .background(
-                RoundedRectangle(
-                    cornerRadius: NoonmarkVisualMetrics.ideasComposerCornerRadius
-                ).fill(Theme.controlFill)
-            )
-            .overlay(
-                RoundedRectangle(
-                    cornerRadius: NoonmarkVisualMetrics.ideasComposerCornerRadius
-                ).stroke(Theme.lineSubtle)
-            )
-            .background {
-                AppE2EViewAnchor(identifier: "ideas.composer.surface")
-            }
 
             if store.shouldShowIdeaClassificationSuggestions(
                 for: session.text
@@ -318,12 +327,6 @@ private struct IdeaComposer: View {
                     )
                 }
             }
-
-            if let issue = store.ideaDraftIssueMessage(for: session.text) {
-                Text(issue)
-                    .font(.noonmarkSystem(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.warn)
-            }
         }
     }
 }
@@ -331,10 +334,17 @@ private struct IdeaComposer: View {
 private struct IdeaFilterField: View {
     @EnvironmentObject private var store: NoonmarkStore
 
+    private var filterText: Binding<String> {
+        Binding(
+            get: { store.ideaFilterText },
+            set: { store.updateIdeaFilterText($0) }
+        )
+    }
+
     var body: some View {
         TextField(
             store.copy.ideaFilterPlaceholder,
-            text: $store.ideaFilterText
+            text: filterText
         )
         .textFieldStyle(.plain)
         .font(.noonmarkSystem(size: 12.5))
@@ -353,11 +363,6 @@ private struct IdeaFilterField: View {
                 identifier: "ideas.filter",
                 verificationText: store.ideaFilterText
             )
-        }
-        .onChange(of: store.ideaFilterText) { _, text in
-            if text.isEmpty == false {
-                store.showRecentIdeas()
-            }
         }
     }
 }
@@ -456,6 +461,7 @@ private struct IdeaCardView: View {
     @EnvironmentObject private var store: NoonmarkStore
     let idea: IdeaEntry
     @ObservedObject var editorSession: IdeaInlineEditorSession
+    @State private var isHovering = false
 
     private var isEditing: Bool {
         editorSession.ideaID == idea.id
@@ -480,20 +486,27 @@ private struct IdeaCardView: View {
         .padding(.vertical, NoonmarkVisualMetrics.ideasCardVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Theme.controlFill : Color.clear)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(rowBackground)
         )
         .contentShape(Rectangle())
         .onTapGesture {
             store.selectIdea(idea.id)
         }
         .overlay {
-            AppE2EViewAnchor(
-                identifier: "ideas.card.\(idea.id)",
-                verificationText: idea.body
-            )
-            .allowsHitTesting(false)
+            ZStack {
+                if isSelected, isEditing == false {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Theme.accentStroke, lineWidth: 1)
+                }
+                AppE2EViewAnchor(
+                    identifier: "ideas.card.\(idea.id)",
+                    verificationText: idea.body
+                )
+                .allowsHitTesting(false)
+            }
         }
+        .onHover { isHovering = $0 }
     }
 
     private var displayBody: some View {
@@ -508,8 +521,9 @@ private struct IdeaCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    store.selectIdea(idea.id)
-                    store.beginIdeaEdit(idea)
+                    if store.beginIdeaEdit(idea) {
+                        store.selectIdea(idea.id)
+                    }
                 }
                 .background {
                     AppE2EViewAnchor(
@@ -522,42 +536,47 @@ private struct IdeaCardView: View {
                     .font(.noonmarkSystem(size: 11))
                     .foregroundStyle(Theme.text3)
                     .monospacedDigit()
+                if editorSession.lastSavedIdeaID == idea.id,
+                   editorSession.saveState == .succeeded
+                {
+                    Text(store.copy.ideaEditSucceededStatus)
+                        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.ok)
+                        .accessibilityIdentifier(
+                            "ideas.card.saved-state.\(idea.id)"
+                        )
+                }
                 IdeaCardClassificationLine(idea: idea)
+                if idea.pinnedAt != nil {
+                    Label("Sticky Note", systemImage: "note.text")
+                        .labelStyle(.titleAndIcon)
+                        .font(.noonmarkSystem(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.navStickyNotes)
+                        .accessibilityIdentifier(
+                            "ideas.card.sticky-state.\(idea.id)"
+                        )
+                }
                 Spacer(minLength: 8)
-                IdeaCardOverflowMenu(idea: idea)
+                IdeaCardOverflowMenu(
+                    idea: idea,
+                    isProminent: isHovering || isSelected
+                )
             }
         }
     }
 
     private var editingBody: some View {
-        Group {
-            IdeaEditComposer(
-                session: editorSession,
-                idea: idea
-            )
-            if editorSession.saveState == .failed {
-                Text(store.copy.ideaEditSaveFailed)
-                    .font(.noonmarkSystem(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.warn)
-            }
-            HStack(spacing: 12) {
-                TaskNoteTextActionControl(
-                    title: store.copy.ideaSaveEditAction,
-                    identifier: "ideas.card.edit.save.\(idea.id)",
-                    emphasis: .accent
-                ) {
-                    _ = store.commitIdeaEdit()
-                }
-                TaskNoteTextActionControl(
-                    title: store.copy.ideaCancelEditAction,
-                    identifier: "ideas.card.edit.cancel.\(idea.id)",
-                    emphasis: .secondary
-                ) {
-                    store.cancelIdeaEdit()
-                }
-                Spacer()
-            }
-        }
+        IdeaEditComposer(
+            session: editorSession,
+            idea: idea
+        )
+    }
+
+    private var rowBackground: Color {
+        if isEditing { return Theme.accentSoftWash }
+        if isSelected { return Theme.accentSoftMuted }
+        if isHovering { return Theme.listRowHover }
+        return .clear
     }
 }
 
@@ -620,30 +639,76 @@ private struct IdeaEditComposer: View {
         )
     }
 
-    var body: some View {
-        MarkdownEditor(
-            text: text,
-            placeholder: store.copy.ideaEditPlaceholder,
-            style: .body,
-            onCommit: {
-                _ = store.commitIdeaEdit()
-            },
-            onEscape: {
-                store.cancelIdeaEdit()
-            },
-            onEndEditing: {
-                guard session.ideaID == idea.id else { return }
-                _ = store.commitIdeaEdit()
-            },
-            nativeAccessibilityIdentifier: "ideas.card.edit-field.\(idea.id)",
-            focusesOnAppear: true
+    private var activeToken: NewTaskClassificationToken? {
+        store.ideaClassificationToken(for: session.draftText)
+    }
+
+    private var issueMessage: String? {
+        store.ideaDraftIssueMessage(for: session.draftText)
+            ?? session.failureMessage
+    }
+
+    private var composerState: FlylightComposerState {
+        FlylightComposerState(
+            session.saveState,
+            isDirty: session.isDirty,
+            isInvalid: issueMessage != nil
         )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            FlylightComposerSurface(
+                text: text,
+                mode: .inlineEdit,
+                state: composerState,
+                issueMessage: issueMessage,
+                identifier: "ideas.card.edit-field.\(idea.id)",
+                placeholder: store.copy.ideaEditPlaceholder,
+                primaryIdentifier: "ideas.card.edit.save.\(idea.id)",
+                secondaryIdentifier: "ideas.card.edit.cancel.\(idea.id)",
+                focusesOnAppear: true,
+                onSubmit: {
+                    _ = store.endIdeaEdit(reason: .submit)
+                },
+                onSecondary: {
+                    _ = store.endIdeaEdit(reason: .explicitCancel)
+                },
+                onBlur: {
+                    guard session.ideaID == idea.id else { return true }
+                    return store.endIdeaEdit(reason: .blur)
+                }
+            )
+
+            if store.shouldShowIdeaClassificationSuggestions(
+                for: session.draftText
+            ), let activeToken {
+                NewTaskClassificationSuggestionList(
+                    tokenKind: activeToken.kind,
+                    suggestions: Array(
+                        store.ideaClassificationSuggestions(
+                            for: session.draftText
+                        ).prefix(6)
+                    ),
+                    accessibilityIdentifier:
+                    "ideas.card.edit.suggestions.\(idea.id)"
+                ) { suggestion in
+                    session.updateText(
+                        store.completeIdeaClassificationToken(
+                            in: session.draftText,
+                            with: suggestion.name
+                        )
+                    )
+                }
+            }
+        }
     }
 }
 
 private struct IdeaCardOverflowMenu: View {
     @EnvironmentObject private var store: NoonmarkStore
     let idea: IdeaEntry
+    let isProminent: Bool
 
     var body: some View {
         Menu {
@@ -681,6 +746,11 @@ private struct IdeaCardOverflowMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .opacity(isProminent ? 1 : 0.24)
+        .animation(
+            Theme.shouldReduceMotion ? nil : .easeOut(duration: 0.12),
+            value: isProminent
+        )
         .disabled(store.editingIdeaID != nil)
         .accessibilityLabel(store.copy.ideaActionsAccessibilityLabel)
         .accessibilityIdentifier("ideas.card.menu.\(idea.id)")

@@ -743,8 +743,34 @@ public final class NoonmarkEngine {
         body: String,
         now: Date = Date()
     ) throws {
+        let idea = try activeIdea(id)
+        try editIdea(
+            id: id,
+            body: body,
+            categoryID: idea.categoryID,
+            labelIDs: idea.labelIDs,
+            now: now
+        )
+    }
+
+    public func editIdea(
+        id: IdeaID,
+        body: String,
+        categoryID: TaskCategoryID?,
+        labelIDs: [TaskLabelID],
+        now: Date = Date()
+    ) throws {
+        try validateIdeaClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs
+        )
         var idea = try activeIdea(id)
         try idea.edit(body: body, now: now)
+        try idea.setClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now
+        )
         ideas[idea.id] = idea
     }
 

@@ -46,6 +46,12 @@ struct NativeWorkspaceSplitView: NSViewControllerRepresentable {
                     AppE2EViewAnchor(identifier: "shell.detail-rail")
                 }
         )
+        // The containing representable owns the workspace size. Child SwiftUI
+        // surfaces may grow internally (for example, an inline validation
+        // message) but must never push an ideal height back into NSSplitView.
+        sidebarController.sizingOptions = []
+        contentController.sizingOptions = []
+        detailController.sizingOptions = []
 
         let sidebarItem = NSSplitViewItem(
             sidebarWithViewController: sidebarController

@@ -5,6 +5,9 @@ import NoonmarkMacRuntime
 extension NoonmarkStore {
     func selectPage(_ next: Page) {
         let nextPage = visiblePage(for: next)
+        if page == .ideas, nextPage != .ideas {
+            guard prepareForIdeaContextChange() else { return }
+        }
         if nextPage == .calendar, page != .calendar {
             isDetailRailExpanded = false
         }

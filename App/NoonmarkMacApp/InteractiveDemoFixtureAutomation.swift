@@ -639,6 +639,21 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               .flatMap(AppViewTreeE2E.verificationText)
               == context.store.copy.navIdeas,
               AppViewTreeE2E.view(identifier: "ideas.composer") != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.primary"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.secondary"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.label"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.category"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.format"
+              ) != nil,
               context.store.detailRailRoute == .flylight,
               AppViewTreeE2E.view(identifier: "shell.detail-rail") != nil,
               inspectorMatchesSelection,

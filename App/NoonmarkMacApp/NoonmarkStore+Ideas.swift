@@ -87,22 +87,43 @@ extension NoonmarkStore {
         return idea
     }
 
-    func showRecentIdeas() {
+    @discardableResult
+    func showRecentIdeas() -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaBrowseMode = .recent
+        return true
     }
 
-    func dismissIdeaSearch() {
+    @discardableResult
+    func dismissIdeaSearch() -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaFilterText = ""
+        return true
     }
 
-    func showIdeaReview() {
+    @discardableResult
+    func showIdeaReview() -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaFilterText = ""
-        clearIdeaClassificationFilter()
+        ideaClassificationFilter = nil
         ideaBrowseMode = .review
+        return true
     }
 
-    func refreshIdeaReview() {
+    @discardableResult
+    func refreshIdeaReview() -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaReviewSeed &+= 1
+        return true
+    }
+
+    func updateIdeaFilterText(_ text: String) {
+        guard ideaFilterText != text else { return }
+        guard prepareForIdeaContextChange() else { return }
+        ideaFilterText = text
+        if text.isEmpty == false {
+            ideaBrowseMode = .recent
+        }
     }
 
     func selectIdea(_ id: IdeaID) {
@@ -162,15 +183,21 @@ extension NoonmarkStore {
         }
     }
 
+    @discardableResult
     func selectIdeaClassificationFilter(
         _ component: IdeaClassificationComponent
-    ) {
+    ) -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaBrowseMode = .recent
         ideaClassificationFilter = component.selection
+        return true
     }
 
-    func clearIdeaClassificationFilter() {
+    @discardableResult
+    func clearIdeaClassificationFilter() -> Bool {
+        guard prepareForIdeaContextChange() else { return false }
         ideaClassificationFilter = nil
+        return true
     }
 
     func isIdeaClassificationFilterActive(
@@ -242,7 +269,9 @@ extension NoonmarkStore {
 
     private func commitIdeaDraft(_ draft: IdeaDraft) -> Bool {
         guard draft.issue == nil else {
-            showToast(copy.ideaMultipleCategories)
+            ideaComposerSession.setFailureMessage(
+                copy.ideaMultipleCategories
+            )
             return false
         }
         guard draft.body.isEmpty == false else { return false }
@@ -266,11 +295,12 @@ extension NoonmarkStore {
                 )
             }
             resolveOperationFailure(.ideaMutation)
-            showToast(copy.ideaSavedToast)
             return true
         } catch let error as IdeaDraftClassificationError {
             if case let .unresolved(names) = error {
-                showToast(copy.ideaUnresolvedClassification(names))
+                ideaComposerSession.setFailureMessage(
+                    copy.ideaUnresolvedClassification(names)
+                )
             }
             return false
         } catch {
@@ -279,38 +309,96 @@ extension NoonmarkStore {
         }
     }
 
-    func beginIdeaEdit(_ idea: IdeaEntry) {
-        ideaInlineEditorSession.begin(id: idea.id, body: idea.body)
+    @discardableResult
+    func beginIdeaEdit(_ idea: IdeaEntry) -> Bool {
+        if let activeID = ideaInlineEditorSession.ideaID {
+            if activeID == idea.id {
+                return true
+            }
+            guard endIdeaEdit(reason: .navigation) else {
+                return false
+            }
+        }
+        return ideaInlineEditorSession.begin(
+            id: idea.id,
+            body: editableIdeaDraft(for: idea)
+        )
+    }
+
+    /// Every mutation that can hide the active card goes through this gate.
+    /// A failed save leaves both the editor and its current context intact.
+    @discardableResult
+    func prepareForIdeaContextChange() -> Bool {
+        guard ideaInlineEditorSession.ideaID != nil else { return true }
+        return endIdeaEdit(reason: .navigation)
     }
 
     func cancelIdeaEdit() {
-        ideaInlineEditorSession.cancel()
+        _ = endIdeaEdit(reason: .explicitCancel)
     }
 
     @discardableResult
     func commitIdeaEdit() -> Bool {
-        ideaInlineEditorSession.save { [self] id, body in
+        endIdeaEdit(reason: .submit)
+    }
+
+    @discardableResult
+    func endIdeaEdit(reason: IdeaInlineEditorEndReason) -> Bool {
+        ideaInlineEditorSession.end(reason: reason) { [self] id, body in
             persistIdeaEdit(id: id, body: body)
         }
     }
 
     private func persistIdeaEdit(id: IdeaID, body: String) -> Bool {
+        let draft = IdeaDraftParser.parse(body)
+        guard draft.issue == nil else {
+            ideaInlineEditorSession.setFailureMessage(
+                copy.ideaMultipleCategories
+            )
+            return false
+        }
+        guard draft.body.isEmpty == false else { return false }
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshot(.editIdea)
             ) { candidate, moment in
+                let resolution = resolveIdeaDraftClassification(
+                    draft,
+                    in: candidate
+                )
+                guard resolution.unresolvedNames.isEmpty else {
+                    throw IdeaDraftClassificationError
+                        .unresolved(resolution.unresolvedNames)
+                }
                 try candidate.editIdea(
                     id: id,
-                    body: body,
+                    body: draft.body,
+                    categoryID: resolution.categoryID,
+                    labelIDs: resolution.labelIDs,
                     now: moment.instant
                 )
             }
             resolveOperationFailure(.ideaMutation)
             return true
+        } catch let error as IdeaDraftClassificationError {
+            if case let .unresolved(names) = error {
+                ideaInlineEditorSession.setFailureMessage(
+                    copy.ideaUnresolvedClassification(names)
+                )
+            }
+            return false
         } catch {
             showOperationFailure(.ideaMutation, error: error)
             return false
         }
+    }
+
+    private func editableIdeaDraft(for idea: IdeaEntry) -> String {
+        let classification = ideaClassificationComponents(for: idea)
+            .map(\.displayName)
+            .joined(separator: " ")
+        guard classification.isEmpty == false else { return idea.body }
+        return "\(idea.body)\n\(classification)"
     }
 
     @discardableResult

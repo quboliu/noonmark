@@ -24,7 +24,7 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertEqual(capturedBody, "第一行\n第二行 #记录")
         XCTAssertEqual(session.text, "")
         XCTAssertEqual(repository.load(), "")
-        XCTAssertEqual(session.submissionState, .idle)
+        XCTAssertEqual(session.submissionState, .succeeded)
     }
 
     func testComposerPersistsEveryRevisionAndRetainsFailedSubmission() {
@@ -34,12 +34,16 @@ final class IdeaCaptureSessionTests: XCTestCase {
         let session = IdeaComposerSession(repository: repository)
 
         session.updateText("  尚未保存的想法\n")
-        let saved = session.submit { _ in false }
+        let saved = session.submit { _ in
+            session.setFailureMessage("分类不存在")
+            return false
+        }
 
         XCTAssertFalse(saved)
         XCTAssertEqual(session.text, "  尚未保存的想法\n")
         XCTAssertEqual(repository.load(), "  尚未保存的想法\n")
         XCTAssertEqual(session.submissionState, .failed)
+        XCTAssertEqual(session.failureMessage, "分类不存在")
     }
 
     func testComposerRejectsWhitespaceWithoutCallingCapture() {
@@ -75,7 +79,8 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertEqual(observed?.1, "修改后的想法")
         XCTAssertNil(session.ideaID)
         XCTAssertEqual(session.draftText, "")
-        XCTAssertEqual(session.saveState, .idle)
+        XCTAssertEqual(session.saveState, .succeeded)
+        XCTAssertEqual(session.lastSavedIdeaID, id)
     }
 
     func testInlineEditorKeepsRecoverableDraftWhenSaveFails() {
@@ -84,13 +89,44 @@ final class IdeaCaptureSessionTests: XCTestCase {
         session.begin(id: id, body: "原文")
         session.updateText("不能丢的修改")
 
-        let saved = session.save { _, _ in false }
+        let saved = session.save { _, _ in
+            session.setFailureMessage("写入失败")
+            return false
+        }
 
         XCTAssertFalse(saved)
         XCTAssertEqual(session.ideaID, id)
         XCTAssertEqual(session.draftText, "不能丢的修改")
         XCTAssertEqual(session.originalText, "原文")
         XCTAssertEqual(session.saveState, .failed)
+        XCTAssertEqual(session.failureMessage, "写入失败")
+    }
+
+    func testInlineEditorBeginningTheSameIdeaDoesNotOverwriteDirtyDraft() {
+        let id = IdeaID()
+        let session = IdeaInlineEditorSession()
+        session.begin(id: id, body: "原文")
+        session.updateText("不能被重复双击覆盖的修改")
+
+        session.begin(id: id, body: "原文")
+
+        XCTAssertEqual(session.ideaID, id)
+        XCTAssertEqual(session.originalText, "原文")
+        XCTAssertEqual(session.draftText, "不能被重复双击覆盖的修改")
+    }
+
+    func testInlineEditorRefusesToReplaceAnActiveIdeaWithoutEndingIt() {
+        let firstID = IdeaID()
+        let secondID = IdeaID()
+        let session = IdeaInlineEditorSession()
+        session.begin(id: firstID, body: "第一条原文")
+        session.updateText("第一条不能丢的修改")
+
+        session.begin(id: secondID, body: "第二条原文")
+
+        XCTAssertEqual(session.ideaID, firstID)
+        XCTAssertEqual(session.originalText, "第一条原文")
+        XCTAssertEqual(session.draftText, "第一条不能丢的修改")
     }
 
     func testInlineEditorEscapeCancelsWithoutSaving() {
@@ -104,6 +140,47 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertNil(session.ideaID)
         XCTAssertEqual(session.draftText, "")
         XCTAssertEqual(session.saveState, .idle)
+    }
+
+    func testInlineEditorExplicitCancelSuppressesFollowingBlurPersistence() {
+        let id = IdeaID()
+        let session = IdeaInlineEditorSession()
+        var persistedBodies: [String] = []
+        session.begin(id: id, body: "原文")
+        session.updateText("必须放弃的修改")
+
+        XCTAssertTrue(
+            session.end(reason: .explicitCancel) { _, body in
+                persistedBodies.append(body)
+                return true
+            }
+        )
+        XCTAssertFalse(
+            session.end(reason: .blur) { _, body in
+                persistedBodies.append(body)
+                return true
+            }
+        )
+
+        XCTAssertTrue(persistedBodies.isEmpty)
+        XCTAssertNil(session.ideaID)
+    }
+
+    func testInlineEditorBlurPersistsDirtyDraftThroughTheSameEndPath() {
+        let id = IdeaID()
+        let session = IdeaInlineEditorSession()
+        var persistedBody: String?
+        session.begin(id: id, body: "原文")
+        session.updateText("失焦时保存")
+
+        let saved = session.end(reason: .blur) { _, body in
+            persistedBody = body
+            return true
+        }
+
+        XCTAssertTrue(saved)
+        XCTAssertEqual(persistedBody, "失焦时保存")
+        XCTAssertNil(session.ideaID)
     }
 
     private func makeIsolatedDefaults() -> (String, UserDefaults) {

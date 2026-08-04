@@ -457,6 +457,15 @@ public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
 public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
     case persistentComposer
     case composerSharedWithGlobalCapture
+    case integratedComposerSurface
+    case composerFormattingToolbar
+    case composerPrimaryAction
+    case composerSecondaryAction
+    case composerInlineStatus
+    case composerDeterministicStateMachine
+    case composerRetryAction
+    case composerSuccessFeedback
+    case composerSharedActionChrome
     case composerSavesOnCommandReturn
     case composerDraftSurvivesDismissal
     case composerClassificationTokens
@@ -478,9 +487,12 @@ public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
     case ideaCardDeleteAction
     case doubleClickInlineEdit
     case inlineEditField
+    case inlineEditUsesComposerSurface
     case inlineEditCommandReturnSave
     case inlineEditEscapeCancel
     case inlineEditBlurSave
+    case inlineEditContextChangePreflight
+    case inlineEditExplicitCancelNoPersistence
     case singleLineEmptyState
     case ideaCardAddToStickyNoteAction
     case ideaCardRemoveFromStickyNoteAction
@@ -490,9 +502,17 @@ public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIIdeasPageLayout {
-    public static let composerMinimumHeight = 54.0
-    public static let composerMaximumHeight = 132.0
-    public static let composerCornerRadius = 8.0
+    public static let composerIdleHeight = 64.0
+    public static let composerExpandedMinimumHeight = 112.0
+    public static let composerMaximumHeight = 220.0
+    public static let composerCornerRadius = 12.0
+    public static let composerActionBarHeight = 42.0
+    public static let composerToolHitTarget = 28.0
+    public static let composerActionButtonHeight = 32.0
+    public static let composerActionSpacing = 8.0
+    public static let composerHorizontalTextInset = 16.0
+    public static let composerTopTextInset = 13.0
+    public static let composerPersistentToolCount = 3
     public static let composerFilterSpacing = 10.0
     public static let timelineSectionSpacing = 18.0
     public static let sectionHeaderBottomPadding = 4.0
@@ -719,6 +739,12 @@ public enum MacUIMarkdownEditingCommand: String, CaseIterable, Sendable {
     case italic
     case inlineCode
     case link
+    case heading
+    case unorderedList
+    case orderedList
+    case taskList
+    case quote
+    case codeBlock
     case indent
     case hardLineBreak
 }

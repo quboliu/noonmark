@@ -126,6 +126,108 @@ extension AppCopy {
         language == .chinese ? "记录飞光" : "Capture Flylight"
     }
 
+    var ideaPublishAction: String {
+        language == .chinese ? "发布" : "Publish"
+    }
+
+    var ideaCollapseComposerAction: String {
+        language == .chinese ? "收起" : "Collapse"
+    }
+
+    var ideaExpandComposerAction: String {
+        language == .chinese ? "展开" : "Expand"
+    }
+
+    var ideaContinueLaterAction: String {
+        language == .chinese ? "稍后继续" : "Continue later"
+    }
+
+    var ideaDraftRetainedStatus: String {
+        language == .chinese ? "草稿已保留" : "Draft retained"
+    }
+
+    var ideaDirtyPublishStatus: String {
+        language == .chinese ? "⌘↩ 发布" : "⌘↩ Publish"
+    }
+
+    var ideaDirtyEditStatus: String {
+        language == .chinese ? "⌘↩ 保存" : "⌘↩ Save"
+    }
+
+    var ideaSavingLocallyStatus: String {
+        language == .chinese ? "正在写入本机" : "Saving locally"
+    }
+
+    var ideaPublishSucceededStatus: String {
+        language == .chinese ? "✓ 已记录" : "✓ Captured"
+    }
+
+    var ideaEditSucceededStatus: String {
+        language == .chinese ? "✓ 已保存" : "✓ Saved"
+    }
+
+    var ideaRetryAction: String {
+        language == .chinese ? "重试" : "Retry"
+    }
+
+    var ideaPublishingStatus: String {
+        language == .chinese ? "发布中" : "Publishing"
+    }
+
+    var ideaSavingEditStatus: String {
+        language == .chinese ? "保存中" : "Saving"
+    }
+
+    var ideaPublishFailed: String {
+        language == .chinese
+            ? "发布失败，草稿仍在这里，请重试。"
+            : "Publish failed. Your draft is still here; try again."
+    }
+
+    var ideaLabelTool: String {
+        language == .chinese ? "插入标签" : "Insert label"
+    }
+
+    var ideaCategoryTool: String {
+        language == .chinese ? "插入分组" : "Insert group"
+    }
+
+    var ideaFormattingTool: String {
+        language == .chinese ? "Markdown 格式" : "Markdown formatting"
+    }
+
+    var ideaFormatBold: String { language == .chinese ? "加粗" : "Bold" }
+
+    var ideaFormatItalic: String { language == .chinese ? "斜体" : "Italic" }
+
+    var ideaFormatLink: String { language == .chinese ? "链接" : "Link" }
+
+    var ideaFormatInlineCode: String {
+        language == .chinese ? "行内代码" : "Inline code"
+    }
+
+    func ideaFormatHeading(_ level: Int) -> String {
+        language == .chinese ? "\(level) 级标题" : "Heading \(level)"
+    }
+
+    var ideaFormatUnorderedList: String {
+        language == .chinese ? "无序列表" : "Bulleted list"
+    }
+
+    var ideaFormatOrderedList: String {
+        language == .chinese ? "有序列表" : "Numbered list"
+    }
+
+    var ideaFormatTaskList: String {
+        language == .chinese ? "任务列表" : "Task list"
+    }
+
+    var ideaFormatQuote: String { language == .chinese ? "引用" : "Quote" }
+
+    var ideaFormatCodeBlock: String {
+        language == .chinese ? "代码块" : "Code block"
+    }
+
     var editIdeaAction: String {
         language == .chinese ? "编辑飞光" : "Edit Flylight"
     }
@@ -145,7 +247,7 @@ extension AppCopy {
     }
 
     var ideaSaveEditAction: String {
-        language == .chinese ? "保存" : "Save"
+        language == .chinese ? "保存修改" : "Save changes"
     }
 
     var ideaCancelEditAction: String {
@@ -156,14 +258,16 @@ extension AppCopy {
         language == .chinese ? "已删除飞光" : "Flylight deleted"
     }
 
-    var ideaSavedToast: String {
-        language == .chinese ? "已记录飞光" : "Flylight captured"
-    }
-
     var ideaEditSaveFailed: String {
         language == .chinese
             ? "保存失败，修改仍保留在这里，请重试。"
             : "Save failed. Your edit is still here; try again."
+    }
+
+    var ideaContentRequired: String {
+        language == .chinese
+            ? "飞光内容不能为空，修改仍保留在这里。"
+            : "Flylight content cannot be empty. Your edit is still here."
     }
 
     // MARK: - Sticky Note projection

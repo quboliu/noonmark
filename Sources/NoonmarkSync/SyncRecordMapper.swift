@@ -51,6 +51,7 @@ public struct SyncRecordMapper: Sendable {
             + snapshot.definitions.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.traces.map { try record(for: $0, modifiedBy: deviceID) }
             + snapshot.subtasks.map { try record(for: $0, modifiedBy: deviceID) }
+            + snapshot.ideas.map { try record(for: $0, modifiedBy: deviceID) }
             + [
                 try record(
                     for: AppPreferencesEnvelope(
@@ -169,6 +170,19 @@ public struct SyncRecordMapper: Sendable {
         )
     }
 
+    public func record(for idea: IdeaEntry, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
+        try makeRecord(
+            header: RecordHeader(
+                id: "idea:\(idea.id.rawValue.uuidString)",
+                type: .ideaEntry,
+                entityID: idea.id.rawValue.uuidString,
+                modifiedAt: idea.updatedAt,
+                deviceID: deviceID
+            ),
+            payload: idea
+        )
+    }
+
     public func record(for envelope: AppPreferencesEnvelope, modifiedBy deviceID: SyncDeviceID) throws -> SyncRecord {
         var canonicalEnvelope = envelope
         let usesUnspecifiedWriter =
@@ -256,6 +270,8 @@ public struct SyncRecordMapper: Sendable {
             return .dayTrace(try decodeDayTrace(record))
         case .subtask:
             return .subtask(try decodeSubtask(record))
+        case .ideaEntry:
+            return .ideaEntry(try decodeIdeaEntry(record))
         case .appPreferences:
             return .appPreferences(try decodeAppPreferences(record))
         case .classificationBaseline:
@@ -342,6 +358,22 @@ public struct SyncRecordMapper: Sendable {
             throw SyncRecordMapperError.invalidPayload(.subtask)
         }
         return subtask
+    }
+
+    public func decodeIdeaEntry(_ record: SyncRecord) throws -> IdeaEntry {
+        try require(record, type: .ideaEntry)
+        let idea = try decode(IdeaEntry.self, from: record)
+        try requireIdentity(
+            record,
+            id: "idea:\(idea.id.description)",
+            entityID: idea.id.description
+        )
+        guard record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                == idea.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw SyncRecordMapperError.invalidPayload(.ideaEntry)
+        }
+        return idea
     }
 
     public func decodeAppPreferences(_ record: SyncRecord) throws -> AppPreferencesEnvelope {

@@ -24,6 +24,7 @@ public final class NoonmarkEngine {
     public private(set) var definitions: [TaskDefinitionID: TaskDefinition]
     public private(set) var traces: [DayTraceID: DayTrace]
     public private(set) var subtasks: [SubtaskID: Subtask]
+    public private(set) var ideas: [IdeaID: IdeaEntry]
     public private(set) var preferences: AppPreferences
     var classificationState: TaskClassificationState
 
@@ -34,6 +35,7 @@ public final class NoonmarkEngine {
         self.definitions = [:]
         self.traces = [:]
         self.subtasks = [:]
+        self.ideas = [:]
         self.preferences = AppPreferences()
         self.classificationState = TaskClassificationState()
     }
@@ -51,6 +53,7 @@ public final class NoonmarkEngine {
         definitions = Dictionary(uniqueKeysWithValues: snapshot.definitions.map { ($0.id, $0) })
         traces = Dictionary(uniqueKeysWithValues: snapshot.traces.map { ($0.id, $0) })
         subtasks = Dictionary(uniqueKeysWithValues: snapshot.subtasks.map { ($0.id, $0) })
+        ideas = Dictionary(uniqueKeysWithValues: snapshot.ideas.map { ($0.id, $0) })
         preferences = snapshot.preferences
         classificationState = snapshot.classifications
     }
@@ -66,6 +69,7 @@ public final class NoonmarkEngine {
         definitions = source.definitions
         traces = source.traces
         subtasks = source.subtasks
+        ideas = source.ideas
         preferences = source.preferences
         classificationState = source.classificationState
     }
@@ -106,7 +110,13 @@ public final class NoonmarkEngine {
                 return $0.id.description < $1.id.description
             },
             preferences: preferences,
-            classifications: classificationState
+            classifications: classificationState,
+            ideas: ideas.values.sorted {
+                if $0.createdAt == $1.createdAt {
+                    return $0.id.description < $1.id.description
+                }
+                return $0.createdAt < $1.createdAt
+            }
         )
     }
 
@@ -158,6 +168,7 @@ public final class NoonmarkEngine {
         definitions = candidate.definitions
         traces = candidate.traces
         subtasks = candidate.subtasks
+        ideas = candidate.ideas
         preferences = candidate.preferences
         classificationState = candidate.classificationState
     }
@@ -704,6 +715,265 @@ public final class NoonmarkEngine {
             ownerUpdatedAt: chain.createdAt
         )
         chains[chain.id] = chain
+    }
+
+    @discardableResult
+    public func appendIdea(
+        body: String,
+        categoryID: TaskCategoryID? = nil,
+        labelIDs: [TaskLabelID] = [],
+        now: Date = Date()
+    ) throws -> IdeaEntry {
+        try validateIdeaClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs
+        )
+        let idea = try IdeaEntry(
+            body: body,
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now
+        )
+        ideas[idea.id] = idea
+        return idea
+    }
+
+    public func editIdea(
+        id: IdeaID,
+        body: String,
+        now: Date = Date()
+    ) throws {
+        let idea = try activeIdea(id)
+        try editIdea(
+            id: id,
+            body: body,
+            categoryID: idea.categoryID,
+            labelIDs: idea.labelIDs,
+            now: now
+        )
+    }
+
+    public func editIdea(
+        id: IdeaID,
+        body: String,
+        categoryID: TaskCategoryID?,
+        labelIDs: [TaskLabelID],
+        now: Date = Date()
+    ) throws {
+        try validateIdeaClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs
+        )
+        var idea = try activeIdea(id)
+        try idea.edit(body: body, now: now)
+        try idea.setClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now
+        )
+        ideas[idea.id] = idea
+    }
+
+    public func deleteIdea(
+        id: IdeaID,
+        now: Date = Date()
+    ) throws {
+        var idea = try activeIdea(id)
+        try idea.delete(now: now)
+        ideas[idea.id] = idea
+    }
+
+    public func setIdeaClassification(
+        id: IdeaID,
+        categoryID: TaskCategoryID?,
+        labelIDs: [TaskLabelID] = [],
+        now: Date = Date()
+    ) throws {
+        try validateIdeaClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs
+        )
+        var idea = try activeIdea(id)
+        try idea.setClassification(
+            categoryID: categoryID,
+            labelIDs: labelIDs,
+            now: now
+        )
+        ideas[idea.id] = idea
+    }
+
+    public func pinIdea(
+        id: IdeaID,
+        now: Date = Date()
+    ) throws {
+        var idea = try activeIdea(id)
+        try idea.pin(now: now)
+        ideas[idea.id] = idea
+    }
+
+    public func unpinIdea(
+        id: IdeaID,
+        now: Date = Date()
+    ) throws {
+        var idea = try activeIdea(id)
+        try idea.unpin(now: now)
+        ideas[idea.id] = idea
+    }
+
+    public func restoreIdea(
+        id: IdeaID,
+        body: String,
+        now: Date = Date()
+    ) throws {
+        guard var idea = ideas[id] else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try idea.restore(body: body, now: now)
+        ideas[idea.id] = idea
+    }
+
+    public func ideaTimeline(filter: String? = nil) -> [IdeaEntry] {
+        ideaTimeline(filter: IdeaTimelineFilter(text: filter))
+    }
+
+    public func ideaTimeline(filter: IdeaTimelineFilter) -> [IdeaEntry] {
+        visibleIdeas(matching: filter, pinned: false)
+            .sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt > $1.createdAt
+                }
+                return $0.id.description > $1.id.description
+            }
+    }
+
+    public func pinnedIdeas(
+        filter: IdeaTimelineFilter = IdeaTimelineFilter()
+    ) -> [IdeaEntry] {
+        visibleIdeas(matching: filter, pinned: true)
+            .sorted {
+                if $0.pinnedAt != $1.pinnedAt {
+                    return ($0.pinnedAt ?? .distantPast)
+                        > ($1.pinnedAt ?? .distantPast)
+                }
+                return $0.id.description > $1.id.description
+            }
+    }
+
+    /// Tombstoned ideas, newest deletion first. Tombstones are never hard
+    /// purged: sync convergence relies on them, so the trash is a projection,
+    /// not a queue for physical deletion.
+    public func ideaTrash() -> [IdeaEntry] {
+        ideas.values
+            .filter(\.isDeleted)
+            .sorted {
+                if $0.deletedAt != $1.deletedAt {
+                    return ($0.deletedAt ?? .distantPast)
+                        > ($1.deletedAt ?? .distantPast)
+                }
+                return $0.id.description > $1.id.description
+            }
+    }
+
+    public func ideaTimelineByDay(
+        filter: String? = nil,
+        calendar: Calendar = .current
+    ) -> [IdeaDayGroup] {
+        ideaTimelineByDay(
+            filter: IdeaTimelineFilter(text: filter),
+            calendar: calendar
+        )
+    }
+
+    public func ideaTimelineByDay(
+        filter: IdeaTimelineFilter,
+        calendar: Calendar = .current
+    ) -> [IdeaDayGroup] {
+        var ideasByDate: [LocalDate: [IdeaEntry]] = [:]
+        for idea in ideaTimeline(filter: filter) {
+            let components = calendar.dateComponents(
+                [.year, .month, .day],
+                from: idea.createdAt
+            )
+            guard let year = components.year,
+                  let month = components.month,
+                  let day = components.day
+            else { continue }
+            ideasByDate[LocalDate(year: year, month: month, day: day), default: []]
+                .append(idea)
+        }
+        return ideasByDate
+            .map { IdeaDayGroup(date: $0.key, ideas: $0.value) }
+            .sorted { $0.date > $1.date }
+    }
+
+    private func visibleIdeas(
+        matching filter: IdeaTimelineFilter,
+        pinned: Bool
+    ) -> [IdeaEntry] {
+        let needle = filter.text?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ideas.values
+            .filter { idea in
+                guard idea.isDeleted == false else { return false }
+                guard (idea.pinnedAt != nil) == pinned else { return false }
+                if let categoryID = filter.categoryID,
+                   idea.categoryID != categoryID
+                {
+                    return false
+                }
+                if let labelID = filter.labelID,
+                   idea.labelIDs.contains(labelID) == false
+                {
+                    return false
+                }
+                guard needle.isEmpty == false else { return true }
+                return ideaMatchesSearchText(idea, text: needle)
+            }
+    }
+
+    /// Search text spans the memo body and the user-visible names of its
+    /// category and labels. The query itself remains transient and is never
+    /// copied into persisted facts or diagnostics.
+    func ideaMatchesSearchText(_ idea: IdeaEntry, text: String) -> Bool {
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needle.isEmpty == false else { return true }
+        if idea.body.localizedCaseInsensitiveContains(needle) {
+            return true
+        }
+        if let categoryID = idea.categoryID {
+            let categoryName = classificationState.categories[categoryID]?.name
+            if categoryName?.localizedCaseInsensitiveContains(needle) == true {
+                return true
+            }
+        }
+        return idea.labelIDs.contains { labelID in
+            classificationState.labels[labelID]?
+                .name.localizedCaseInsensitiveContains(needle) == true
+        }
+    }
+
+    private func activeIdea(_ id: IdeaID) throws -> IdeaEntry {
+        guard let idea = ideas[id], idea.isDeleted == false else {
+            throw NoonmarkError.notFound("idea")
+        }
+        return idea
+    }
+
+    private func validateIdeaClassification(
+        categoryID: TaskCategoryID?,
+        labelIDs: [TaskLabelID]
+    ) throws {
+        guard categoryID.map({
+            classificationState.categories[$0] != nil
+        }) ?? true,
+            labelIDs.allSatisfy({
+                classificationState.labels[$0] != nil
+            })
+        else {
+            throw NoonmarkError.invalidTransition(
+                "idea classification references a missing item"
+            )
+        }
     }
 
     public func renameTaskTitle(

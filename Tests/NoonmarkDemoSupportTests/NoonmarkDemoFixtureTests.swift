@@ -273,6 +273,51 @@ struct NoonmarkDemoFixtureTests {
         }
     }
 
+    @Test("基线包含跨天、归类、编辑、Sticky Note 与隐藏墓碑的真实飞光时间线")
+    func coversIdeaCaptureTimeline() throws {
+        let fixture = try NoonmarkDemoFixture.make(
+            anchorDate: anchorDate
+        )
+        let engine = fixture.engine
+        let timeline = engine.ideaCollection(
+            .recent,
+            today: anchorDate
+        ).ideas
+
+        #expect(timeline.count == 8)
+        #expect(engine.snapshot().ideas.count == 9)
+        #expect(engine.ideaCollection(.recent, today: anchorDate).groups.count >= 3)
+        #expect(timeline.contains { $0.labelIDs.isEmpty == false })
+        #expect(timeline.contains { $0.categoryID != nil })
+        #expect(timeline.contains { $0.updatedAt > $0.createdAt })
+        let stickyNotes = engine.pinnedIdeas()
+        #expect(stickyNotes.count == 3)
+        #expect(stickyNotes.allSatisfy { $0.pinnedAt != nil })
+        let stickyNoteIDs = Set(stickyNotes.map(\.id))
+        #expect(timeline.filter { stickyNoteIDs.contains($0.id) }.count == 3)
+        let tombstoned = engine.snapshot().ideas.filter { $0.isDeleted }
+        #expect(tombstoned.count == 1)
+        #expect(engine.ideaTrash().count == 1)
+        let tombstonedIDs = Set(tombstoned.map(\.id))
+        #expect(timeline.allSatisfy { tombstonedIDs.contains($0.id) == false })
+        #expect(timeline.contains {
+            $0.body == "数据口径注释确认由周报模板统一维护，恢复这条留作月底跟进提醒。"
+                && $0.updatedAt > $0.createdAt
+                && $0.deletedAt == nil
+        })
+        #expect(fixture.report.ideaCount == 8)
+        #expect(fixture.report.ideaDayCount == 7)
+        #expect(fixture.report.ideaReviewCandidateCount == 2)
+        #expect(fixture.report.labeledIdeaCount == 4)
+        #expect(fixture.report.categorizedIdeaCount == 2)
+        #expect(fixture.report.editedIdeaCount == 5)
+        #expect(fixture.report.tombstonedIdeaCount == 1)
+        #expect(fixture.report.ideaTimelineTombstoneLeakCount == 0)
+        #expect(fixture.report.stickyNoteCount == 3)
+        #expect(fixture.report.restoredIdeaCount == 1)
+        #expect(fixture.report.isComplete)
+    }
+
     @Test("相同锚点生成相同语义覆盖清单")
     func producesDeterministicSemanticReport() throws {
         let first = try NoonmarkDemoFixture.make(

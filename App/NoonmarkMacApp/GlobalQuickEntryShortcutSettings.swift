@@ -7,6 +7,48 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
     @EnvironmentObject private var coordinator:
         GlobalQuickEntryShortcutCoordinator
 
+    var body: some View {
+        GlobalShortcutSettingsContent(
+            coordinator: coordinator,
+            title: store.copy.globalQuickEntryShortcutTitle,
+            restoreDefaultTitle: store.copy
+                .globalQuickEntryShortcutRestoreDefault,
+            defaultShortcut: .standard,
+            runningBoundary: store.copy
+                .globalQuickEntryShortcutRunningBoundary,
+            accessibilityPrefix: "settings.preferences.global-shortcut"
+        )
+    }
+}
+
+struct GlobalIdeaCaptureShortcutSettingsSection: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    @EnvironmentObject private var coordinator:
+        GlobalIdeaCaptureShortcutCoordinator
+
+    var body: some View {
+        GlobalShortcutSettingsContent(
+            coordinator: coordinator,
+            title: store.copy.globalIdeaCaptureShortcutTitle,
+            restoreDefaultTitle: store.copy
+                .globalIdeaCaptureShortcutRestoreDefault,
+            defaultShortcut: .ideaCaptureStandard,
+            runningBoundary: store.copy
+                .globalIdeaCaptureShortcutRunningBoundary,
+            accessibilityPrefix: "settings.preferences.idea-capture-shortcut"
+        )
+    }
+}
+
+private struct GlobalShortcutSettingsContent: View {
+    @EnvironmentObject private var store: NoonmarkStore
+    @ObservedObject var coordinator: GlobalQuickEntryShortcutCoordinator
+    let title: String
+    let restoreDefaultTitle: String
+    let defaultShortcut: GlobalQuickEntryShortcut
+    let runningBoundary: String
+    let accessibilityPrefix: String
+
     private var enabledBinding: Binding<Bool> {
         Binding(
             get: { coordinator.preference.isEnabled },
@@ -46,7 +88,7 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
     }
 
     var body: some View {
-        SettingSection(title: store.copy.globalQuickEntryShortcutTitle) {
+        SettingSection(title: title) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     Toggle(
@@ -55,7 +97,7 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
                     )
                     .toggleStyle(.checkbox)
                     .accessibilityIdentifier(
-                        "settings.preferences.global-shortcut.enabled"
+                        "\(accessibilityPrefix).enabled"
                     )
 
                     Spacer()
@@ -67,7 +109,9 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
                         recordingHint: store.copy
                             .globalQuickEntryShortcutRecording,
                         unsupportedKeyHint: store.copy
-                            .globalQuickEntryShortcutUnsupportedKey
+                            .globalQuickEntryShortcutUnsupportedKey,
+                        accessibilityIdentifier:
+                        "\(accessibilityPrefix).recorder"
                     ) { shortcut in
                         coordinator.apply(
                             GlobalQuickEntryShortcutPreference(
@@ -78,7 +122,7 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
                     }
                     .frame(width: 158, height: 28)
                     .accessibilityIdentifier(
-                        "settings.preferences.global-shortcut.recorder"
+                        "\(accessibilityPrefix).recorder"
                     )
                 }
 
@@ -87,23 +131,23 @@ struct GlobalQuickEntryShortcutSettingsSection: View {
                     .foregroundStyle(statusPresentation.color)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(
-                        "settings.preferences.global-shortcut.status"
+                        "\(accessibilityPrefix).status"
                     )
 
-                Button(store.copy.globalQuickEntryShortcutRestoreDefault) {
+                Button(restoreDefaultTitle) {
                     coordinator.apply(
                         GlobalQuickEntryShortcutPreference(
                             isEnabled: coordinator.preference.isEnabled,
-                            shortcut: .standard
+                            shortcut: defaultShortcut
                         )
                     )
                 }
                 .buttonStyle(.link)
                 .accessibilityIdentifier(
-                    "settings.preferences.global-shortcut.restore-default"
+                    "\(accessibilityPrefix).restore-default"
                 )
 
-                Text(store.copy.globalQuickEntryShortcutRunningBoundary)
+                Text(runningBoundary)
                     .font(.noonmarkSystem(size: 11.5))
                     .foregroundStyle(Theme.text3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -150,12 +194,13 @@ private struct GlobalShortcutRecorder: NSViewRepresentable {
     let idleHint: String
     let recordingHint: String
     let unsupportedKeyHint: String
+    let accessibilityIdentifier: String
     let onRecord: (GlobalQuickEntryShortcut) -> Void
 
     func makeNSView(context: Context) -> GlobalShortcutRecorderButton {
         let button = GlobalShortcutRecorderButton()
         button.identifier = NSUserInterfaceItemIdentifier(
-            "settings.preferences.global-shortcut.recorder"
+            accessibilityIdentifier
         )
         button.bezelStyle = .rounded
         button.setButtonType(.momentaryPushIn)

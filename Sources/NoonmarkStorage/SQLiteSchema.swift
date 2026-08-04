@@ -50,7 +50,7 @@ private final class SQLitePreparedStoreRegistry: @unchecked Sendable {
 }
 
 public enum SQLiteSchema {
-    public static let version = 15
+    public static let version = 17
 
     public static let statements: [String] = [
         """
@@ -2293,6 +2293,31 @@ public enum SQLiteSchema {
         ON subtasks(lineage_id)
         """,
         """
+        CREATE TABLE IF NOT EXISTS idea_entries (
+            id TEXT PRIMARY KEY NOT NULL,
+            body TEXT NOT NULL,
+            category_id TEXT,
+            label_ids_json TEXT NOT NULL CHECK (
+                json_valid(label_ids_json)
+                AND json_type(label_ids_json) = 'array'
+            ),
+            created_at TEXT NOT NULL,
+            created_at_bits INTEGER NOT NULL CHECK (typeof(created_at_bits) = 'integer'),
+            updated_at TEXT NOT NULL,
+            updated_at_bits INTEGER NOT NULL CHECK (typeof(updated_at_bits) = 'integer'),
+            deleted_at TEXT,
+            deleted_at_bits INTEGER CHECK (
+                deleted_at_bits IS NULL OR typeof(deleted_at_bits) = 'integer'
+            ),
+            pinned_at TEXT,
+            pinned_at_bits INTEGER CHECK (
+                pinned_at_bits IS NULL OR typeof(pinned_at_bits) = 'integer'
+            ),
+            CHECK ((deleted_at IS NULL) = (deleted_at_bits IS NULL)),
+            CHECK ((pinned_at IS NULL) = (pinned_at_bits IS NULL))
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS sync_settings (
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT,
@@ -2324,7 +2349,7 @@ public enum SQLiteSchema {
             entity_type TEXT NOT NULL CHECK (
                 entity_type IN (
                     'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
-                    'dayTrace', 'subtask', 'appPreferences',
+                    'dayTrace', 'subtask', 'ideaEntry', 'appPreferences',
                     'classificationBaseline', 'classificationCommit',
                     'traceClassificationEvent'
                 )
@@ -2379,7 +2404,7 @@ public enum SQLiteSchema {
             entity_type TEXT NOT NULL CHECK (
                 entity_type IN (
                     'day', 'taskCycleSeries', 'taskChain', 'taskDefinition',
-                    'dayTrace', 'subtask', 'appPreferences',
+                    'dayTrace', 'subtask', 'ideaEntry', 'appPreferences',
                     'classificationBaseline', 'classificationCommit',
                     'traceClassificationEvent'
                 )
@@ -2800,6 +2825,11 @@ extension SQLiteSchema {
             return
         }
 
+        if storedVersion == 15 {
+            try migrateVersion15ToCurrent(on: database)
+            return
+        }
+
         let objectCount = try integerValue(
             """
             SELECT COUNT(*)
@@ -2827,6 +2857,139 @@ extension SQLiteSchema {
             throw error
         }
         try validateCurrentSchema(on: database)
+    }
+
+    /// The immediately previous private release used v15. The v17 feature
+    /// extends its schema only by adding `idea_entries` and accepting the new
+    /// entity type in two sync tables. Preserve every old row while replacing
+    /// only the check-constrained table definitions inside one transaction.
+    private static func migrateVersion15ToCurrent(
+        on database: OpaquePointer?
+    ) throws {
+        try enableConcurrentFileBackedReads(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            try execute(currentSchemaStatement(
+                containing: "CREATE TABLE IF NOT EXISTS idea_entries"
+            ), on: database)
+            try migrateVersion15ChangeJournal(on: database)
+            try migrateVersion15PendingDownloads(on: database)
+            try execute("PRAGMA user_version = \(version)", on: database)
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+        try validateCurrentSchema(on: database)
+    }
+
+    private static func migrateVersion15ChangeJournal(
+        on database: OpaquePointer?
+    ) throws {
+        try execute(
+            "DROP INDEX IF EXISTS idx_change_journal_state_changed_at",
+            on: database
+        )
+        try execute(
+            "ALTER TABLE change_journal RENAME TO change_journal_v15",
+            on: database
+        )
+        try execute(currentSchemaStatement(
+            containing: "CREATE TABLE IF NOT EXISTS change_journal"
+        ), on: database)
+        try execute(
+            """
+            INSERT INTO change_journal (
+                id, entity_type, entity_id, operation, changed_at,
+                changed_at_bits, device_id, sync_state, retry_count,
+                last_error, record_payload
+            )
+            SELECT
+                id, entity_type, entity_id, operation, changed_at,
+                changed_at_bits, device_id, sync_state, retry_count,
+                last_error, record_payload
+            FROM change_journal_v15
+            """,
+            on: database
+        )
+        try execute("DROP TABLE change_journal_v15", on: database)
+        try execute(currentSchemaStatement(
+            containing: "CREATE INDEX IF NOT EXISTS idx_change_journal_state_changed_at"
+        ), on: database)
+    }
+
+    private static func migrateVersion15PendingDownloads(
+        on database: OpaquePointer?
+    ) throws {
+        try execute(
+            "DROP INDEX IF EXISTS idx_sync_pending_download_dependency",
+            on: database
+        )
+        try execute(
+            "ALTER TABLE sync_pending_download_dependencies RENAME TO sync_pending_download_dependencies_v15",
+            on: database
+        )
+        try execute(
+            "ALTER TABLE sync_pending_download_records RENAME TO sync_pending_download_records_v15",
+            on: database
+        )
+        try execute(currentSchemaStatement(
+            containing: "CREATE TABLE IF NOT EXISTS sync_pending_download_records"
+        ), on: database)
+        try execute(currentSchemaStatement(
+            containing: "CREATE TABLE IF NOT EXISTS sync_pending_download_dependencies"
+        ), on: database)
+        try execute(
+            """
+            INSERT INTO sync_pending_download_records (
+                record_id, generation_id, entity_type, entity_id, operation,
+                modified_at_bits, modified_by_device_id, payload,
+                reactivation_witnesses, first_seen_at_bits,
+                last_attempted_at_bits, attempt_count
+            )
+            SELECT
+                record_id, generation_id, entity_type, entity_id, operation,
+                modified_at_bits, modified_by_device_id, payload,
+                reactivation_witnesses, first_seen_at_bits,
+                last_attempted_at_bits, attempt_count
+            FROM sync_pending_download_records_v15
+            """,
+            on: database
+        )
+        try execute(
+            """
+            INSERT INTO sync_pending_download_dependencies (
+                record_id, dependency_kind, dependency_id
+            )
+            SELECT record_id, dependency_kind, dependency_id
+            FROM sync_pending_download_dependencies_v15
+            """,
+            on: database
+        )
+        try execute(
+            "DROP TABLE sync_pending_download_dependencies_v15",
+            on: database
+        )
+        try execute(
+            "DROP TABLE sync_pending_download_records_v15",
+            on: database
+        )
+        try execute(currentSchemaStatement(
+            containing: "CREATE INDEX IF NOT EXISTS idx_sync_pending_download_dependency"
+        ), on: database)
+    }
+
+    private static func currentSchemaStatement(
+        containing declaration: String
+    ) throws -> String {
+        guard let statement = statements.first(where: {
+            $0.contains(declaration)
+        }) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "current schema is missing \(declaration)"
+            )
+        }
+        return statement
     }
 
     private static func preparedStoreIdentity(

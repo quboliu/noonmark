@@ -6,6 +6,7 @@ import NoonmarkMacRuntime
     func showAboutAction(_ sender: Any?)
     func showSettingsAction(_ sender: Any?)
     func showQuickEntryAction(_ sender: Any?)
+    func showIdeaCaptureAction(_ sender: Any?)
     func showSearchAction(_ sender: Any?)
     func exportDataAction(_ sender: Any?)
     func importDataAction(_ sender: Any?)
@@ -23,6 +24,7 @@ enum NoonmarkMenuAction {
     static let showAbout = #selector(NoonmarkMenuCommandTarget.showAboutAction(_:))
     static let showSettings = #selector(NoonmarkMenuCommandTarget.showSettingsAction(_:))
     static let showQuickEntry = #selector(NoonmarkMenuCommandTarget.showQuickEntryAction(_:))
+    static let showIdeaCapture = #selector(NoonmarkMenuCommandTarget.showIdeaCaptureAction(_:))
     static let showSearch = #selector(NoonmarkMenuCommandTarget.showSearchAction(_:))
     static let exportData = #selector(NoonmarkMenuCommandTarget.exportDataAction(_:))
     static let importData = #selector(NoonmarkMenuCommandTarget.importDataAction(_:))
@@ -97,6 +99,12 @@ enum NoonmarkMainMenuFactory {
             copy.quickEntryCommand,
             action: NoonmarkMenuAction.showQuickEntry,
             key: "n",
+            target: target,
+            to: fileMenu
+        )
+        addItem(
+            copy.ideaCaptureCommand,
+            action: NoonmarkMenuAction.showIdeaCapture,
             target: target,
             to: fileMenu
         )

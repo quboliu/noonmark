@@ -985,6 +985,14 @@ public final class SQLiteEngineRepository {
             ),
             into: database
         )
+        try upsert(
+            changedValues(
+                snapshot.ideas,
+                from: oldSnapshot.ideas,
+                identifiedBy: \.id
+            ),
+            into: database
+        )
         if snapshot.classifications != oldSnapshot.classifications {
             try upsertClassificationRelations(
                 snapshot.classifications,
@@ -1811,6 +1819,17 @@ private extension SQLiteEngineRepository {
     }
 }
 
+private struct SQLiteIdeaEntryPayload: Encodable {
+    let id: IdeaID
+    let body: String
+    let categoryID: TaskCategoryID?
+    let labelIDs: [TaskLabelID]
+    let createdAt: Date
+    let updatedAt: Date
+    let deletedAt: Date?
+    let pinnedAt: Date?
+}
+
 private extension SQLiteEngineRepository {
     func loadSnapshot(from database: Database?) throws -> NoonmarkSnapshot {
         return NoonmarkSnapshot(
@@ -1821,7 +1840,8 @@ private extension SQLiteEngineRepository {
             traces: try loadTraces(from: database),
             subtasks: try loadSubtasks(from: database),
             preferences: try loadPreferences(from: database),
-            classifications: try loadTaskClassifications(from: database)
+            classifications: try loadTaskClassifications(from: database),
+            ideas: try loadIdeas(from: database)
         )
     }
 
@@ -2203,6 +2223,54 @@ private extension SQLiteEngineRepository {
             try run(relationSQL, on: database) { statement in
                 bind(subtask.carriedFromSubtaskID?.rawValue.uuidString, to: 1, in: statement)
                 bind(subtask.id.rawValue, to: 2, in: statement)
+            }
+        }
+    }
+
+    func upsert(_ ideas: [IdeaEntry], into database: Database?) throws {
+        let sql = """
+        INSERT INTO idea_entries(
+            id, body, category_id, label_ids_json,
+            created_at, created_at_bits,
+            updated_at, updated_at_bits,
+            deleted_at, deleted_at_bits,
+            pinned_at, pinned_at_bits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            body = excluded.body,
+            category_id = excluded.category_id,
+            label_ids_json = excluded.label_ids_json,
+            created_at = excluded.created_at,
+            created_at_bits = excluded.created_at_bits,
+            updated_at = excluded.updated_at,
+            updated_at_bits = excluded.updated_at_bits,
+            deleted_at = excluded.deleted_at,
+            deleted_at_bits = excluded.deleted_at_bits,
+            pinned_at = excluded.pinned_at,
+            pinned_at_bits = excluded.pinned_at_bits
+        """
+        for idea in ideas {
+            try run(sql, on: database) { statement in
+                bind(idea.id.rawValue, to: 1, in: statement)
+                bind(idea.body, to: 2, in: statement)
+                bind(idea.categoryID?.rawValue.uuidString, to: 3, in: statement)
+                bind(
+                    try taskCycleDomainJSON(
+                        idea.labelIDs,
+                        description: "idea label IDs"
+                    ),
+                    to: 4,
+                    in: statement
+                )
+                bind(idea.createdAt, to: 5, in: statement)
+                try bindExactDate(idea.createdAt, to: 6, in: statement)
+                bind(idea.updatedAt, to: 7, in: statement)
+                try bindExactDate(idea.updatedAt, to: 8, in: statement)
+                bind(idea.deletedAt, to: 9, in: statement)
+                try bindExactDate(idea.deletedAt, to: 10, in: statement)
+                bind(idea.pinnedAt, to: 11, in: statement)
+                try bindExactDate(idea.pinnedAt, to: 12, in: statement)
             }
         }
     }
@@ -4332,6 +4400,66 @@ private extension SQLiteEngineRepository {
             )
             subtask.draftCancellationID = try optionalUUID(statement, 16)
             return subtask
+        }
+    }
+
+    func loadIdeas(from database: Database?) throws -> [IdeaEntry] {
+        let rows = try query(
+            """
+            SELECT id, body, category_id, label_ids_json,
+                   created_at, created_at_bits,
+                   updated_at, updated_at_bits,
+                   deleted_at, deleted_at_bits,
+                   pinned_at, pinned_at_bits
+            FROM idea_entries
+            ORDER BY created_at, id
+            """,
+            on: database
+        ) { statement in
+            SQLiteIdeaEntryPayload(
+                id: IdeaID(try uuid(statement, 0)),
+                body: try string(statement, 1),
+                categoryID: try optionalUUID(statement, 2).map(TaskCategoryID.init),
+                labelIDs: try taskCycleDomainValue(
+                    [TaskLabelID].self,
+                    from: string(statement, 3),
+                    description: "idea label IDs"
+                ),
+                createdAt: try validatedExactDate(
+                    statement,
+                    textIndex: 4,
+                    bitsIndex: 5
+                ),
+                updatedAt: try validatedExactDate(
+                    statement,
+                    textIndex: 6,
+                    bitsIndex: 7
+                ),
+                deletedAt: try optionalExactDate(
+                    statement,
+                    textIndex: 8,
+                    bitsIndex: 9
+                ),
+                pinnedAt: try optionalExactDate(
+                    statement,
+                    textIndex: 10,
+                    bitsIndex: 11
+                )
+            )
+        }
+        return try rows.map { payload in
+            let data = try ExactDateJSONCoding.encoder(
+                nonFiniteDateDescription: "domain JSON date must be finite"
+            ).encode(payload)
+            do {
+                return try ExactDateJSONCoding.decoder(
+                    nonFiniteDateDescription: "domain JSON date must be finite"
+                ).decode(IdeaEntry.self, from: data)
+            } catch {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "invalid stored idea entry: \(error.localizedDescription)"
+                )
+            }
         }
     }
 

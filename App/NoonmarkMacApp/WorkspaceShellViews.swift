@@ -26,6 +26,10 @@ struct Sidebar: View {
             .filter { store.visibleNavigationPages.contains($0) }
     }
 
+    var notesPages: [NoonmarkStore.Page] {
+        [.stickyNotes, .ideas]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarHeader
@@ -48,6 +52,24 @@ struct Sidebar: View {
                     .padding(.vertical, 10)
             }
             ForEach(tracePages) { page in
+                NavItem(
+                    page: page,
+                    label: store.navigationLabel(for: page),
+                    count: store.navigationCount(for: page),
+                    isCompact: store.isSidebarExpanded == false
+                )
+            }
+
+            if store.isSidebarExpanded {
+                NavGroupTitle(store.copy.notesGroup)
+                    .padding(.top, 12)
+            } else {
+                Divider()
+                    .overlay(Theme.lineSubtle)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 10)
+            }
+            ForEach(notesPages) { page in
                 NavItem(
                     page: page,
                     label: store.navigationLabel(for: page),
@@ -194,6 +216,10 @@ struct MainSurface: View {
             switch store.page {
             case .day:
                 DayTodoPage()
+            case .stickyNotes:
+                StickyNotesPage()
+            case .ideas:
+                IdeasPage()
             case .pool:
                 TaskPoolPage()
             case .future:

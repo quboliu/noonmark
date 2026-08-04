@@ -180,7 +180,7 @@ struct CurrentSyncRecordMerger {
             try validateTaskDefinitionRecord(record)
         case .dayTrace:
             try validateDayTraceRecord(record)
-        case .subtask, .appPreferences:
+        case .subtask, .ideaEntry, .appPreferences:
             try validateLeafCurrentRecord(record)
         case .classificationBaseline, .classificationCommit,
              .traceClassificationEvent:
@@ -270,6 +270,8 @@ struct CurrentSyncRecordMerger {
         switch record.entityType {
         case .subtask:
             try validateSubtaskRecord(record)
+        case .ideaEntry:
+            try validateIdeaEntryRecord(record)
         case .appPreferences:
             _ = try mapper.decodeAppPreferences(record)
         case .day, .taskCycleSeries, .taskChain, .taskDefinition, .dayTrace,
@@ -284,6 +286,16 @@ struct CurrentSyncRecordMerger {
         try subtask.validateIntegrity()
         guard record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
                 == subtask.updatedAt.timeIntervalSinceReferenceDate.bitPattern
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
+        }
+    }
+
+    private func validateIdeaEntryRecord(_ record: SyncRecord) throws {
+        let idea = try mapper.decodeIdeaEntry(record)
+        guard IdeaEntryValidator.firstIssue(in: [idea]) == nil,
+              record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
+                == idea.updatedAt.timeIntervalSinceReferenceDate.bitPattern
         else {
             throw CurrentSyncRecordMergeError.invalidContentClock
         }
@@ -639,7 +651,8 @@ struct CurrentSyncRecordMerger {
                     ))
                 case .dayTrace:
                     evidence.traces.append(try mapper.decodeDayTrace(record))
-                case .day, .taskCycleSeries, .taskDefinition, .subtask, .appPreferences,
+                case .day, .taskCycleSeries, .taskDefinition, .subtask, .ideaEntry,
+                     .appPreferences,
                      .classificationBaseline, .classificationCommit,
                      .traceClassificationEvent:
                     break
@@ -703,7 +716,8 @@ struct CurrentSyncRecordMerger {
                 case .taskChain:
                     let chain = try mapper.decodeTaskChain(record)
                     context.chainsByID[chain.id] = chain
-                case .taskCycleSeries, .taskDefinition, .dayTrace, .subtask, .appPreferences,
+                case .taskCycleSeries, .taskDefinition, .dayTrace, .subtask, .ideaEntry,
+                     .appPreferences,
                      .classificationBaseline, .classificationCommit,
                      .traceClassificationEvent:
                     break
@@ -761,6 +775,11 @@ struct CurrentSyncRecordMerger {
             )
         case .subtask:
             return try mergeSubtask(
+                existing: existing,
+                incoming: incoming
+            )
+        case .ideaEntry:
+            return try mergeIdeaEntry(
                 existing: existing,
                 incoming: incoming
             )
@@ -1179,6 +1198,21 @@ struct CurrentSyncRecordMerger {
             return existingSubtask.status == .cancelledDraft
                 ? existing
                 : incoming
+        }
+        return lwwWinner(existing, incoming)
+    }
+
+    private func mergeIdeaEntry(
+        existing: SyncRecord,
+        incoming: SyncRecord
+    ) throws -> SyncRecord {
+        let existingIdea = try mapper.decodeIdeaEntry(existing)
+        let incomingIdea = try mapper.decodeIdeaEntry(incoming)
+        guard IdeaEntryValidator.firstIssue(in: [existingIdea]) == nil,
+              IdeaEntryValidator.firstIssue(in: [incomingIdea]) == nil,
+              existingIdea.createdAt == incomingIdea.createdAt
+        else {
+            throw CurrentSyncRecordMergeError.invalidContentClock
         }
         return lwwWinner(existing, incoming)
     }

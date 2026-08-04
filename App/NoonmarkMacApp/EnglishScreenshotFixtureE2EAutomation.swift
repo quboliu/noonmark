@@ -560,6 +560,13 @@ struct EnglishScreenshotFixtureE2EAutomation: LaunchAutomationRunnable {
                 [subtask.createdAt, subtask.updatedAt]
                     + [subtask.completedAt, subtask.settledAt].compactMap { $0 }
             }
+        case .ideaEntry:
+            snapshot.ideas.first(where: {
+                $0.id.description == entry.entityID
+            }).map { idea in
+                [idea.createdAt, idea.updatedAt]
+                    + [idea.deletedAt].compactMap { $0 }
+            }
         case .appPreferences, .classificationBaseline,
              .classificationCommit,
              .traceClassificationEvent:
@@ -769,7 +776,7 @@ private enum EnglishScreenshotUIVerifier {
             try completedEvidence(store: store)
         case .calendar:
             try calendarEvidence(store: store)
-        case .recurring, .settings, .zhulong:
+        case .recurring, .settings, .zhulong, .stickyNotes, .ideas:
             throw EnglishScreenshotFixtureE2EAutomation.Failure.failed(
                 "populated screenshot verifier does not apply to this page"
             )

@@ -282,13 +282,42 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("baseline fixture was not committed to SQLite")
         }
 
-        try NoonmarkDataPackage.write(importEngine.snapshot(), to: fixtureURL)
+        try writePreviousReleaseDataPackage(
+            importEngine.snapshot(),
+            to: fixtureURL
+        )
         try NoonmarkDataPackage.write(decoyEngine.snapshot(), to: decoyURL)
 
         guard FileManager.default.fileExists(atPath: fixtureURL.path),
               FileManager.default.fileExists(atPath: decoyURL.path)
         else {
             throw Failure.failed("import fixture and decoy JSON files were not created")
+        }
+    }
+
+    private func writePreviousReleaseDataPackage(
+        _ snapshot: NoonmarkSnapshot,
+        to url: URL
+    ) throws {
+        let currentData = try NoonmarkDataPackage.encode(snapshot)
+        guard var envelope = try JSONSerialization.jsonObject(
+            with: currentData
+        ) as? [String: Any],
+            var legacySnapshot = envelope["snapshot"] as? [String: Any]
+        else {
+            throw Failure.failed(
+                "could not build the previous-release import fixture"
+            )
+        }
+        envelope["formatVersion"] = NoonmarkDataPackage.legacyFormatVersion
+        legacySnapshot.removeValue(forKey: "ideas")
+        envelope["snapshot"] = legacySnapshot
+        let legacyData = try canonicalJSON(envelope)
+        try legacyData.write(to: url, options: .atomic)
+        guard try NoonmarkDataPackage.read(from: url) == snapshot else {
+            throw Failure.failed(
+                "previous-release import fixture did not round-trip"
+            )
         }
     }
 

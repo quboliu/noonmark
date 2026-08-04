@@ -10,6 +10,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
         case subtasks
         case preferences
         case classifications
+        case ideas
     }
 
     public var days: [Day]
@@ -20,6 +21,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
     public var subtasks: [Subtask]
     public var preferences: AppPreferences
     public var classifications: TaskClassificationState
+    public var ideas: [IdeaEntry]
 
     public init(
         days: [Day],
@@ -29,7 +31,8 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
         traces: [DayTrace],
         subtasks: [Subtask],
         preferences: AppPreferences,
-        classifications: TaskClassificationState
+        classifications: TaskClassificationState,
+        ideas: [IdeaEntry] = []
     ) {
         self.days = days
         self.taskCycleSeries = taskCycleSeries
@@ -39,6 +42,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
         self.subtasks = subtasks
         self.preferences = preferences
         self.classifications = classifications
+        self.ideas = ideas
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +61,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
             TaskClassificationState.self,
             forKey: .classifications
         )
+        ideas = try container.decode([IdeaEntry].self, forKey: .ideas)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -69,6 +74,7 @@ public struct NoonmarkSnapshot: Codable, Equatable, Sendable {
         try container.encode(subtasks, forKey: .subtasks)
         try container.encode(preferences, forKey: .preferences)
         try container.encode(classifications, forKey: .classifications)
+        try container.encode(ideas, forKey: .ideas)
     }
 }
 
@@ -162,6 +168,7 @@ public extension NoonmarkSnapshot {
         for subtask in subtasks {
             try subtask.validateIntegrity()
         }
+        try validateIdeaEntries()
         let definitionsByID = Dictionary(
             uniqueKeysWithValues: definitions.map { ($0.id, $0) }
         )
@@ -224,6 +231,54 @@ public extension NoonmarkSnapshot {
         guard subtaskIDs.count == subtasks.count else {
             throw NoonmarkError.invalidInput(
                 "snapshot contains duplicate subtask identities"
+            )
+        }
+        guard Set(ideas.map(\.id)).count == ideas.count else {
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate idea identities"
+            )
+        }
+    }
+
+    private func validateIdeaEntries() throws {
+        switch IdeaEntryValidator.firstIssue(in: ideas) {
+        case .none:
+            break
+        case .duplicateIdentity:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains duplicate idea identities"
+            )
+        case .invalidTimestamps:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains invalid idea timestamps"
+            )
+        case .invalidTombstone:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains an invalid idea tombstone"
+            )
+        case .invalidActiveBody:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains an invalid active idea"
+            )
+        case .duplicateLabels:
+            throw NoonmarkError.invalidInput(
+                "idea contains duplicate labels"
+            )
+        case .invalidPin:
+            throw NoonmarkError.invalidInput(
+                "snapshot contains an invalid idea pin"
+            )
+        }
+        let activeIdeas = ideas.filter { $0.isDeleted == false }
+        guard activeIdeas.allSatisfy({ idea in
+            (idea.categoryID.map { classifications.categories[$0] != nil }
+                ?? true)
+                && idea.labelIDs.allSatisfy {
+                    classifications.labels[$0] != nil
+                }
+        }) else {
+            throw NoonmarkError.invalidInput(
+                "idea references missing classification"
             )
         }
     }

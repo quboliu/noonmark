@@ -63,6 +63,7 @@ struct AppCopy {
 
     var planGroup: String { language == .chinese ? "计划" : "Plan" }
     var traceGroup: String { language == .chinese ? "轨迹" : "Trace" }
+    var notesGroup: String { language == .chinese ? "札记" : "Notes" }
     var navDay: String { "Day Todo" }
     var navPool: String { language == .chinese ? "任务池" : "Task Pool" }
     var navFuture: String { language == .chinese ? "未来计划" : "Upcoming" }

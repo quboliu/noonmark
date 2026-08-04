@@ -6,5 +6,6 @@ scripts/test-integration
 scripts/test-system
 scripts/test-deterministic-sim
 scripts/test-e2e
+scripts/test-interactive-demo-fixture
 scripts/test-tencent-ime-input-matrix
 scripts/test-tencent-ime-termination-persistence

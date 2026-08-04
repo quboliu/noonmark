@@ -49,5 +49,55 @@ FAIL-2026-08-02-09	fast	scripts/test-dmg-evidence-contract	scripts/check	拒绝 
 FAIL-2026-08-02-09	fast	scripts/test-dmg-window-identity-contract	scripts/check	区分空 manifest bootstrap 与非空且缺少换行的损坏 manifest
 FAIL-2026-08-02-09	symptom	scripts/test-dmg-install	scripts/release-private-dmg	受控 dmg-validation 路径真实生成并绑定安装 artifact inventory
 FAIL-2026-08-02-09	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 动态验收在安全 inventory 生成或绑定失败时阻断发行
-FAIL-2026-08-04-01	fast	scripts/test-sync-merge-failure-reason-contract	scripts/check	合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码，拒绝退回到裸 202
-FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实同步失败、锁等待、修改拒绝、重启与 Help 菜单导出的诊断采集闭环
+FAIL-2026-08-04-22	fast	scripts/test-sync-merge-failure-reason-contract	scripts/check	合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码，拒绝退回到裸 202
+FAIL-2026-08-04-22	symptom	scripts/test-e2e	scripts/test-all	真实同步失败、锁等待、修改拒绝、重启与 Help 菜单导出的诊断采集闭环
+FAIL-2026-08-04-23	fast	scripts/test-unit	scripts/check	上一版 SQLite v15 必须原地升级并保留资料与 sync journal，canonical JSON v6 必须导入为当前 snapshot
+FAIL-2026-08-04-23	symptom	scripts/test-e2e	scripts/test-all	真实 File → Import 必须接受 canonical JSON v6，并完成确认、SQLite 替换与重启回读
+FAIL-2026-08-03-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 覆盖 pinIdea/unpinIdea、tombstone 清除 pinnedAt 与恢复不复活置顶的领域语义
+FAIL-2026-08-03-01	symptom	scripts/test-e2e	scripts/test-all	真实 App pin→unpin 溢出菜单场景，菜单项陈旧无法取消置顶即判红
+FAIL-2026-08-03-02	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 覆盖双击进入后的保存、取消、失焦与失败保留状态
+FAIL-2026-08-03-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理双击想法正文，原位编辑器未出现或未聚焦即判红
+FAIL-2026-08-03-03	fast	scripts/test-unit	scripts/check	IdeaDraftParser 固定保留多行正文并只剥离分组／标签 token
+FAIL-2026-08-03-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 多行想法经物理输入、保存、SQLite 与第二个 App process 回读后必须逐行一致
+FAIL-2026-08-04-01	fast	scripts/test-notes-ui-contract	scripts/check	约束原生 placeholder、共享 editor 自测高度、飞光收起／工作态、action chrome 与几何断言不漂移
+FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 聚焦空飞光 composer，动画完成后的可见 editor、surface、action chrome 或 placeholder／caret 顶线错位即判红
+FAIL-2026-08-04-02	fast	scripts/test-notes-ui-contract	scripts/check	强制单一应用自有下拉触发器，拒绝旧双按钮与逐模式瞬态锚点
+FAIL-2026-08-04-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以 WindowServer 打开下拉清单并选择两种视图，菜单 tracking 或选择失败即判红
+FAIL-2026-08-04-03	fast	scripts/test-unit	scripts/check	固定飞光 Markdown 转义标记、裸 URL 与 active-token 共用保护范围，任何正文剥离即判红
+FAIL-2026-08-04-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理输入带 @ 的裸 URL，经保存、SQLite 与第二个 App process 回读后必须逐字一致
+FAIL-2026-08-04-04	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 固定同 ID 幂等、异 ID 拒绝覆盖、失败草稿保留与显式取消压制 blur
+FAIL-2026-08-04-04	symptom	scripts/test-e2e	scripts/test-all	真实 App 双击切换、无效／有效导航与取消后的 SQLite body／updated_at_bits 精确对账
+FAIL-2026-08-04-05	fast	scripts/test-notes-ui-contract	scripts/check	强制 failed 非空飞光草稿保持可重试，并保留本地重试文案与真实物理点击路径
+FAIL-2026-08-04-05	symptom	scripts/test-e2e	scripts/test-all	真实 App 触发发布失败、显示原位说明、物理点击重试并证明草稿保留与零误写
+FAIL-2026-08-04-06	fast	scripts/test-notes-ui-contract	scripts/check	强制三个嵌套 Hosting Controller 关闭理想尺寸反推，并保留 window content containment 断言
+FAIL-2026-08-04-06	symptom	scripts/test-e2e	scripts/test-all	真实 App 展开失败说明及窄窗口右栏时，计划／轨迹／札记十个导航项必须全部留在窗口内
+FAIL-2026-08-04-07	fast	scripts/test-notes-ui-contract	scripts/check	强制删除在持久化前经过 active editor preflight，并保留详情栏删除失败断言
+FAIL-2026-08-04-07	symptom	scripts/test-e2e	scripts/test-all	真实 App 以无效行内草稿从详情栏物理删除，条目、草稿与焦点必须原位保留
+FAIL-2026-08-04-08	fast	scripts/test-unit	scripts/check	IdeaDraftParser 固定带空格分类名的可逆引号编码与 parse round-trip
+FAIL-2026-08-04-08	symptom	scripts/test-e2e	scripts/test-all	真实 App 创建 Client Work 分类飞光并双击编辑，原生 editor、保存与 SQLite 身份不得漂移
+FAIL-2026-08-04-09	fast	scripts/test-notes-ui-contract	scripts/check	分类建议必须归共享 FlylightComposerSurface 所有，并保留全局面板候选断言
+FAIL-2026-08-04-09	symptom	scripts/test-e2e	scripts/test-all	真实 NSPanel 输入分类前缀、物理选择建议、发布、重启与 SQLite 回读
+FAIL-2026-08-04-10	fast	scripts/test-notes-ui-contract	scripts/check	拒绝 whole-surface expansion 动画，并保留成功态工作高度与集合顺序约束
+FAIL-2026-08-04-10	symptom	scripts/test-e2e	scripts/test-all	真实 App 发布后延迟取证 Composer 工作态高度、集合 frame 与无重叠截图
+FAIL-2026-08-04-11	fast	scripts/test-notes-ui-contract	scripts/check	区分 NSPanel key 身份与普通主窗口 main+key 身份，禁止错误统一条件
+FAIL-2026-08-04-11	symptom	scripts/test-e2e	scripts/test-all	真实全局飞光面板经 WindowServer 激活并物理点击分类建议
+FAIL-2026-08-04-12	fast	scripts/test-notes-ui-contract	scripts/check	编辑器失败保留诊断 evidence-only seam，并拒绝叠加全局 failure notice
+FAIL-2026-08-04-12	symptom	scripts/test-e2e	scripts/test-all	真实 SQLite writer failure 只显示本地恢复面，同时保留草稿、焦点、选区、诊断与成功重试
+FAIL-2026-08-04-13	fast	scripts/test-unit	scripts/check	IdeaComposerSession 与 IdeaInlineEditorSession 固定 durable commit 后可观察 saving 再进入 success
+FAIL-2026-08-04-13	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理保存新飞光与旧飞光时必须出现可截图的 saving frame
+FAIL-2026-08-04-14	fast	scripts/test-notes-ui-contract	scripts/check	年度 Demo manifest 必须声明飞光物理编辑与全局候选两条交互已验证
+FAIL-2026-08-04-14	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo App 物理双击、取消、保存、恢复正文，并在全局面板选择工程分组候选
+FAIL-2026-08-04-15	fast	scripts/test-notes-ui-contract	scripts/check	强制脏草稿明确收起优先于非空正文，并保留年度 Demo 物理交互断言
+FAIL-2026-08-04-15	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理输入脏草稿、点击收起、对账紧凑几何与原文，再重新展开
+FAIL-2026-08-04-16	fast	scripts/test-notes-ui-contract	scripts/check	分类与 Sticky Note 来源导航必须保留一等浏览位置快照及恢复动作
+FAIL-2026-08-04-16	symptom	scripts/test-e2e	scripts/test-all	真实 App 从过滤集合打开 Sticky Note 来源并物理恢复过滤、选择与可见集合
+FAIL-2026-08-04-17	fast	scripts/test-notes-ui-contract	scripts/check	飞光编辑器必须显式提供稳定 accessibility label，禁止继续从 placeholder 派生
+FAIL-2026-08-04-17	symptom	scripts/test-e2e	scripts/test-all	真实 NSTextView 在空态与脏草稿态分别对账飞光正文 label 与动态 value
+FAIL-2026-08-04-18	fast	scripts/test-runtime-profile-isolation	scripts/check	Demo 验收与交互入口必须在构建前强制稳定 Apple Development UI 签名
+FAIL-2026-08-04-18	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo App 每次重建后仍可取得 WindowServer event-posting 权限并完成物理交互
+FAIL-2026-08-04-19	fast	scripts/test-notes-ui-contract	scripts/check	飞光回看刷新按钮必须在应用拥有的触发器边界保留稳定物理输入锚点
+FAIL-2026-08-04-19	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理刷新回看 seed，并经 Sticky Note 来源跳转恢复原模式与精确 seed
+FAIL-2026-08-04-20	fast	scripts/test-runtime-profile-isolation	scripts/check	Demo 交互入口必须分离 fixture installer 与 LaunchServices 纯展示进程
+FAIL-2026-08-04-20	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo fixture 对账后必须终止 installer，再由 LaunchServices 无自动化参数重开并稳定存活
+FAIL-2026-08-04-21	fast	scripts/test-notes-ui-contract	scripts/check	Demo 保存后必须等待飞光正文锚点重新挂载、可见并与持久化正文一致
+FAIL-2026-08-04-21	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo 必须完成飞光保存、正文恢复和后续 WindowServer 交互并产出 ready manifest

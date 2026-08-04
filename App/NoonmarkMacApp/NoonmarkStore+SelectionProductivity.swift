@@ -5,6 +5,10 @@ import NoonmarkMacRuntime
 extension NoonmarkStore {
     func selectPage(_ next: Page) {
         let nextPage = visiblePage(for: next)
+        if page == .ideas, nextPage != .ideas {
+            guard prepareForIdeaContextChange() else { return }
+            restoreIdeaBrowseLocationForNavigation()
+        }
         if nextPage == .calendar, page != .calendar {
             isDetailRailExpanded = false
         }
@@ -437,7 +441,7 @@ extension NoonmarkStore {
                     }
                 return parent + children
             }
-        case .calendar, .zhulong, .settings:
+        case .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             return []
         }
     }
@@ -504,7 +508,7 @@ extension NoonmarkStore {
             selectLaunchUnfinishedItem()
         case .completed:
             selectLaunchCompletedItem()
-        case .calendar, .zhulong, .settings:
+        case .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             break
         }
     }

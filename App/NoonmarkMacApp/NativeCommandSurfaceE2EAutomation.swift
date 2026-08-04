@@ -1185,6 +1185,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         try assertActions(
             [
                 NoonmarkMenuAction.showQuickEntry,
+                NoonmarkMenuAction.showIdeaCapture,
                 NoonmarkMenuAction.exportData,
                 NoonmarkMenuAction.importData,
                 #selector(NSWindow.performClose(_:))
@@ -1224,6 +1225,7 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             (NoonmarkMenuAction.showAbout, copy.aboutApp),
             (NoonmarkMenuAction.showSettings, copy.settingsCommand),
             (NoonmarkMenuAction.showQuickEntry, copy.quickEntryCommand),
+            (NoonmarkMenuAction.showIdeaCapture, copy.ideaCaptureCommand),
             (NoonmarkMenuAction.exportData, copy.exportJSON),
             (NoonmarkMenuAction.importData, copy.importData),
             (#selector(NSWindow.performClose(_:)), copy.closeWindow),

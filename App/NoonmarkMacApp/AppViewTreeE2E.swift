@@ -52,19 +52,26 @@ enum AppViewTreeE2E {
     }
 
     static func view(identifier: String, in window: NSWindow) -> NSView? {
+        let matches = visibleViews(identifier: identifier, in: window)
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    private static func visibleViews(
+        identifier: String,
+        in window: NSWindow
+    ) -> [NSView] {
         guard window.isVisible,
               window.isMiniaturized == false,
               window.alphaValue > 0,
               let rootView = window.contentView?.superview ?? window.contentView
         else {
-            return nil
+            return []
         }
-        let matches = allViews(from: rootView).filter {
+        return allViews(from: rootView).filter {
             $0.identifier?.rawValue == identifier
                 && isVisible($0, in: [window])
         }
-        guard matches.count == 1 else { return nil }
-        return matches[0]
     }
 
     static func hasNoVisibleView(identifier: String) -> Bool {
@@ -464,6 +471,45 @@ enum AppViewTreeE2E {
     static func click(identifier: String) -> Bool {
         guard let view = view(identifier: identifier) else { return false }
         return click(view)
+    }
+
+    static func selectMenuItem(
+        identifier: String,
+        downArrowCount: Int
+    ) -> Bool {
+        guard downArrowCount > 0,
+              let view = view(identifier: identifier),
+              let window = view.window,
+              click(view)
+        else {
+            return false
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime + 0.04
+        let keyCodes = Array(
+            repeating: UInt16(125),
+            count: downArrowCount
+        ) + [UInt16(36)]
+        for (index, keyCode) in keyCodes.enumerated() {
+            let characters = keyCode == 125
+                ? String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                : "\r"
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: timestamp + (Double(index) * 0.01),
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            ) else {
+                return false
+            }
+            NSApp.postEvent(event, atStart: false)
+        }
+        return true
     }
 
     static func sendKey(_ navigationKey: DateNavigationKey) -> Bool {

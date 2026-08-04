@@ -655,7 +655,7 @@ struct SidebarAnalysisModel {
                 zhulongIntent: store.copy.completionReviewIntent,
                 zhulongScopes: [.completedPool]
             )
-        case .day, .recurring, .calendar, .zhulong, .settings:
+        case .day, .recurring, .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             return nil
         }
     }
@@ -945,6 +945,8 @@ struct DetailRail: View {
         switch route {
         case .calendar:
             EmptyView()
+        case .flylight:
+            FlylightRail()
         case .selection:
             selectionDetail
         case .zhulong:
@@ -961,6 +963,136 @@ struct DetailRail: View {
             } else {
                 RailHint(text: hint)
                     .padding(.top, 40)
+            }
+        }
+    }
+
+    private struct FlylightRail: View {
+        @EnvironmentObject private var store: NoonmarkStore
+
+        var body: some View {
+            if let idea = store.selectedIdea {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(store.copy.ideaInspectorTitle)
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .tracking(0.6)
+                    MarkdownText(
+                        idea.body,
+                        e2eIdentifier: "ideas.inspector.markdown.\(idea.id)"
+                    )
+                    .font(.noonmarkSystem(size: 14.5, weight: .regular))
+                    .foregroundStyle(Theme.text1)
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 16)
+
+                    FlylightRailSection(
+                        title: store.copy.ideaInspectorRecordedAt
+                    ) {
+                        Text(store.displayDateTime(idea.createdAt))
+                    }
+
+                    if let classification = store.ideaClassificationLine(
+                        for: idea
+                    ) {
+                        FlylightRailSection(
+                            title: store.copy.ideaInspectorClassification
+                        ) {
+                            Text(classification)
+                        }
+                    }
+
+                    FlylightRailSection(
+                        title: store.copy.ideaInspectorActions
+                    ) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                FlylightActionButton(
+                                    title: store.copy.editIdeaAction,
+                                    identifier: "ideas.inspector.edit.\(idea.id)",
+                                    emphasis: .primary
+                                ) {
+                                    store.beginIdeaEdit(idea)
+                                }
+                                Spacer(minLength: 0)
+                                Menu {
+                                    Button(
+                                        store.copy.deleteIdeaAction,
+                                        role: .destructive
+                                    ) {
+                                        _ = store.deleteIdea(idea.id)
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .accessibilityIdentifier(
+                                    "ideas.inspector.menu.\(idea.id)"
+                                )
+                                .background {
+                                    AppE2EViewAnchor(
+                                        identifier: "ideas.inspector.menu.\(idea.id)"
+                                    )
+                                }
+                                .accessibilityLabel(
+                                    store.copy.ideaActionsAccessibilityLabel
+                                )
+                            }
+                            FlylightActionButton(
+                                title: idea.pinnedAt == nil
+                                    ? store.copy.addToStickyNotesAction
+                                    : store.copy.removeFromStickyNotesAction,
+                                identifier: "ideas.inspector.sticky.\(idea.id)",
+                                emphasis: .secondary
+                            ) {
+                                if idea.pinnedAt == nil {
+                                    _ = store.addIdeaToStickyNotes(idea.id)
+                                } else {
+                                    _ = store.removeIdeaFromStickyNotes(idea.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "ideas.inspector.idea.\(idea.id)",
+                        verificationText: idea.body
+                    )
+                }
+            } else {
+                Text(store.copy.ideaInspectorEmptyState)
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 16)
+            }
+        }
+    }
+
+    private struct FlylightRailSection<Content: View>: View {
+        let title: String
+        @ViewBuilder let content: Content
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.noonmarkSystem(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+                content
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 18)
+            .padding(.bottom, 18)
+            .overlay(alignment: .top) {
+                Divider().overlay(Theme.lineSubtle)
             }
         }
     }

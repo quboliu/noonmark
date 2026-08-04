@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
 source scripts/interactive-demo-screenshot-contract
 source scripts/runtime-evidence
 
@@ -86,6 +88,9 @@ for expected in \
   '"dayTodoMixedStatusSectionCount" : 2' \
   '"dayTodoGroupingPresentationVerified" : true' \
   '"taskCollectionCategoryVisibilityVerified" : true' \
+  '"ideasPresentationVerified" : true' \
+  '"flylightEditingInteractionVerified" : true' \
+  '"flylightGlobalSuggestionVerified" : true' \
   '"completedPoolRowHierarchyVerified" : true' \
   '"visibleScopeReauthorizationCardCount" : 0' \
   '"scopeAuthorizationUIVerified" : true' \
@@ -143,6 +148,36 @@ collapsible_trail_count="$(
 continuable_unfinished_count="$(
   plutil -extract core.continuableUnfinishedTaskCount raw -o - "$result_path"
 )"
+idea_count="$(
+  plutil -extract core.ideaCount raw -o - "$result_path"
+)"
+idea_day_count="$(
+  plutil -extract core.ideaDayCount raw -o - "$result_path"
+)"
+idea_review_candidate_count="$(
+  plutil -extract core.ideaReviewCandidateCount raw -o - "$result_path"
+)"
+labeled_idea_count="$(
+  plutil -extract core.labeledIdeaCount raw -o - "$result_path"
+)"
+categorized_idea_count="$(
+  plutil -extract core.categorizedIdeaCount raw -o - "$result_path"
+)"
+edited_idea_count="$(
+  plutil -extract core.editedIdeaCount raw -o - "$result_path"
+)"
+tombstoned_idea_count="$(
+  plutil -extract core.tombstonedIdeaCount raw -o - "$result_path"
+)"
+idea_tombstone_leak_count="$(
+  plutil -extract core.ideaTimelineTombstoneLeakCount raw -o - "$result_path"
+)"
+sticky_note_count="$(
+  plutil -extract core.stickyNoteCount raw -o - "$result_path"
+)"
+restored_idea_count="$(
+  plutil -extract core.restoredIdeaCount raw -o - "$result_path"
+)"
 if [[ "$single_day_completed_count" -lt 365 \
       || "$ordinary_single_day_completed_count" -lt 365 \
       || "$cycle_single_day_completed_count" != "0" \
@@ -154,7 +189,17 @@ if [[ "$single_day_completed_count" -lt 365 \
       || "$cycle_ended_count" != "3" \
       || "$cycle_stopped_count" != "3" \
       || "$collapsible_trail_count" -lt 12 \
-      || "$continuable_unfinished_count" -lt 1 ]]; then
+      || "$continuable_unfinished_count" -lt 1 \
+      || "$idea_count" != "8" \
+      || "$idea_day_count" != "7" \
+      || "$idea_review_candidate_count" -lt 1 \
+      || "$labeled_idea_count" -lt 1 \
+      || "$categorized_idea_count" -lt 1 \
+      || "$edited_idea_count" -lt 1 \
+      || "$tombstoned_idea_count" != "1" \
+      || "$idea_tombstone_leak_count" != "0" \
+      || "$sticky_note_count" -lt 3 \
+      || "$restored_idea_count" -lt 1 ]]; then
   echo "demo fixture task and cycle counts drifted" >&2
   sed -n '1,200p' "$result_path" >&2
   exit 1
@@ -218,5 +263,39 @@ runtime_evidence_assert_clean_logs \
   "interactive demo fixture" \
   "$app_log" \
   "$runtime_console_log"
+
+kill -TERM "$app_pid" >/dev/null 2>&1 || true
+wait "$app_pid" 2>/dev/null || true
+app_pid=""
+
+open -n "$app_path" --args \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale zh_Hans_SG \
+  --e2e-zhulong-sidecar-key \
+  --page ideas
+
+for _ in {1..100}; do
+  candidate_pid="$(pgrep -x "$app_executable_name" | tail -n 1 || true)"
+  if [[ -n "$candidate_pid" ]]; then
+    app_pid="$candidate_pid"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ -z "$app_pid" ]]; then
+  echo "verified Demo fixture could not reopen as a presentation App" >&2
+  exit 1
+fi
+
+for _ in {1..20}; do
+  if ! kill -0 "$app_pid" >/dev/null 2>&1; then
+    echo "Demo presentation App exited after LaunchServices reopen" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
 
 echo "interactive demo fixture: ok"

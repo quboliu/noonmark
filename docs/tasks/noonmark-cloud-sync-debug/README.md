@@ -2,7 +2,7 @@
 
 - Task-ID：`noonmark-cloud-sync-debug`
 - 风险等级：P
-- 状态：诊断实现、运行隔离与自动化故障闭环已落地；2026-08-04 同类故障复发的真实诊断证据（`FAIL-2026-08-04-01`）已到达并完成层级归因，合并拒绝 reason 子码诊断增强已实现；等待私有候选 DMG `0.2.1 (6)` 最终交付
+- 状态：诊断实现、运行隔离与自动化故障闭环已落地；2026-08-04 同类故障复发的真实诊断证据（`FAIL-2026-08-04-22`）已到达并完成层级归因，合并拒绝 reason 子码诊断增强已实现；等待私有候选 DMG `0.2.1 (6)` 最终交付
 
 ## 目标
 
@@ -24,7 +24,7 @@
 
 ## 已交付
 
-- 版本与发行身份能力已经落地；当前候选预留为 `0.2.1 (6)`，包含 0.2.0 (5) 的 MainActor 饥饿根因修复、WindowServer 发行验证回归修复与腾讯输入发行门禁收敛，以及 `FAIL-2026-08-04-01` 复发诊断后落地的 current-record 合并拒绝 reason 子码（250-259）。build 6 在真实 `dmg-validation`、完整 `make check` 与最终 clean-source 重打全部通过前不得宣称已交付。“关于晷迹”与发行 manifest 可对账 Version、Build、Commit、UTC Build Date、OS 与架构，打包链另外保留 Mach-O UUID、binary SHA、dSYM 和 DMG identity。
+- 版本与发行身份能力已经落地；当前候选预留为 `0.2.1 (6)`，包含 0.2.0 (5) 的 MainActor 饥饿根因修复、WindowServer 发行验证回归修复与腾讯输入发行门禁收敛，以及 `FAIL-2026-08-04-22` 复发诊断后落地的 current-record 合并拒绝 reason 子码（250-259）。build 6 在真实 `dmg-validation`、完整 `make check` 与最终 clean-source 重打全部通过前不得宣称已交付。“关于晷迹”与发行 manifest 可对账 Version、Build、Commit、UTC Build Date、OS 与架构，打包链另外保留 Mach-O UUID、binary SHA、dSYM 和 DMG identity。
 - 同步、任务修改、持久化、启动与退出路径写入固定 schema 的强类型事件；operation ID、incident ID 与 active marker 可跨重启关联，长时间同步只记录安全进度变化与有界心跳。
 - App 管理的证据按实际 allocated size 执行 4 MiB 硬上限与 7 天保留；critical drop、compaction、corrupt、oversized 与 Metric eviction 均进入 manifest，不把缺失伪装成完整证据。用户主动导出的 `.noonmarkdiagnostics` 另受 8 MiB 硬上限约束。
 - 诊断文件操作固定在初始化时持有的目录 descriptor 下；读取、轮替、删除和 MetricKit 采集均验证文件身份、owner、link count 与类型，并对序列耗尽 fail-open 关闭 file sink。

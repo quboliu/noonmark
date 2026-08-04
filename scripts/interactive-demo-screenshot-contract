@@ -5,6 +5,12 @@ readonly NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT=900
 readonly -a NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS=(
   pool
   day
+  ideas
+  ideas-inline-edit
+  ideas-inline-saving
+  stickyNotes
+  stickyNotes-stream
+  stickyNotes-wall
   future
   recurring
   unfinished
@@ -15,6 +21,7 @@ readonly -a NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS=(
 
 readonly -a NOONMARK_INTERACTIVE_DEMO_DOCUMENTATION_SCREENSHOTS=(
   quick-entry
+  idea-capture-suggestions
   settings-general
   settings-groups
   settings-data

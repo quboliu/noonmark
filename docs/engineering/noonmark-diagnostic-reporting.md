@@ -21,7 +21,7 @@
 5. 底层错误只按白名单 domain 与数字 code 分析。SQLite primary／extended code、POSIX code、CloudKit code和持久化 sync reason 必须分别保留；不得从 UI 文案反推底层根因。current-record 合并拒绝除兜底 `syncProtocol:202` 外，会以 `250-259` 子码标明被违反的合并规则（250 记录头不一致、251 内容／突变时钟、252-255 各实体身份冲突、256 复活见证、257 附言条目、258 附言创建时钟冲突、259 payload 无法解码或校验失败）；子码只标识规则，不包含记录身份、实体内容或时间戳。
 6. 若有 `.ips`，以候选 DMG manifest 绑定的 Mach-O UUID、最终签名 binary SHA、dSYM UUID 与 inventory 完成对账后再符号化。MetricKit 未送达不代表没有 crash 或 hang。
 
-首次报告的同步停滞、修改被拒绝与重启后同步未完成，当时没有足够现场证据可以认定根因。自动化中的 lock wait、写入失败或 SIGKILL 是采集能力探针，不是对真实事故原因的替代解释。2026-08-04 同类事故复发时（案例 `FAIL-2026-08-04-01`），诊断包已能证明失败发生在 current-record 合并／校验层（`syncProtocol:7` + detail `202`），并排除账户、网络、磁盘与锁竞争；自合并拒绝 reason 子码（250-259）落地后，下一次复发即可由 `failureDetail` 直接读出被违反的合并规则。
+首次报告的同步停滞、修改被拒绝与重启后同步未完成，当时没有足够现场证据可以认定根因。自动化中的 lock wait、写入失败或 SIGKILL 是采集能力探针，不是对真实事故原因的替代解释。2026-08-04 同类事故复发时（案例 `FAIL-2026-08-04-22`），诊断包已能证明失败发生在 current-record 合并／校验层（`syncProtocol:7` + detail `202`），并排除账户、网络、磁盘与锁竞争；自合并拒绝 reason 子码（250-259）落地后，下一次复发即可由 `failureDetail` 直接读出被违反的合并规则。
 
 ## 隐私与边界
 

@@ -638,6 +638,258 @@ extension [TaskNoteEntry] {
     }
 }
 
+public enum IdeaEntryValidationIssue: Equatable, Sendable {
+    case duplicateIdentity
+    case invalidTimestamps
+    case invalidTombstone
+    case invalidActiveBody
+    case duplicateLabels
+    case invalidPin
+}
+
+public enum IdeaEntryValidator {
+    public static func firstIssue(
+        in entries: [IdeaEntry]
+    ) -> IdeaEntryValidationIssue? {
+        guard Set(entries.map(\.id)).count == entries.count else {
+            return .duplicateIdentity
+        }
+        for entry in entries {
+            guard TaskNoteEntry.isValidMutationTime(
+                entry.updatedAt,
+                notBefore: entry.createdAt
+            ) else {
+                return .invalidTimestamps
+            }
+            guard Set(entry.labelIDs).count == entry.labelIDs.count else {
+                return .duplicateLabels
+            }
+            if let pinnedAt = entry.pinnedAt {
+                guard TaskNoteEntry.isValidMutationTime(
+                    pinnedAt,
+                    notBefore: entry.createdAt
+                ), TaskNoteEntry.isValidMutationTime(
+                    entry.updatedAt,
+                    notBefore: pinnedAt
+                ) else {
+                    return .invalidPin
+                }
+            }
+            if let deletedAt = entry.deletedAt {
+                // Tombstoning always clears pinnedAt, so a restore returns the
+                // idea unpinned; projections never surface tombstones anyway.
+                guard entry.pinnedAt == nil else {
+                    return .invalidPin
+                }
+                guard TaskNoteEntry.isValidMutationTime(
+                    deletedAt,
+                    notBefore: entry.createdAt
+                ), deletedAt == entry.updatedAt,
+                      entry.body.isEmpty,
+                      entry.categoryID == nil,
+                      entry.labelIDs.isEmpty
+                else {
+                    return .invalidTombstone
+                }
+            } else {
+                guard TaskNoteEntry.normalizedBody(entry.body) == entry.body else {
+                    return .invalidActiveBody
+                }
+            }
+        }
+        return nil
+    }
+}
+
+public struct IdeaEntry: Codable, Equatable, Identifiable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case body
+        case categoryID
+        case labelIDs
+        case createdAt
+        case updatedAt
+        case deletedAt
+        case pinnedAt
+    }
+
+    public let id: IdeaID
+    public private(set) var body: String
+    public private(set) var categoryID: TaskCategoryID?
+    public private(set) var labelIDs: [TaskLabelID]
+    public let createdAt: Date
+    public private(set) var updatedAt: Date
+    public private(set) var deletedAt: Date?
+    public private(set) var pinnedAt: Date?
+
+    init(
+        id: IdeaID = IdeaID(),
+        body: String,
+        categoryID: TaskCategoryID? = nil,
+        labelIDs: [TaskLabelID] = [],
+        now: Date
+    ) throws {
+        guard let normalizedBody = TaskNoteEntry.normalizedBody(body) else {
+            throw NoonmarkError.invalidTransition("idea body cannot be empty")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: now)
+        self.id = id
+        self.body = normalizedBody
+        self.categoryID = categoryID
+        self.labelIDs = Self.normalizedLabelIDs(labelIDs)
+        self.createdAt = now
+        self.updatedAt = now
+        self.deletedAt = nil
+        self.pinnedAt = nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(IdeaID.self, forKey: .id)
+        body = try container.decode(String.self, forKey: .body)
+        categoryID = try container.decodeIfPresent(
+            TaskCategoryID.self,
+            forKey: .categoryID
+        )
+        labelIDs = try container.decode([TaskLabelID].self, forKey: .labelIDs)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        pinnedAt = try container.decodeIfPresent(Date.self, forKey: .pinnedAt)
+
+        if let issue = IdeaEntryValidator.firstIssue(in: [self]) {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Invalid idea entry: \(issue)"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(body, forKey: .body)
+        try container.encodeIfPresent(categoryID, forKey: .categoryID)
+        try container.encode(labelIDs, forKey: .labelIDs)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
+        try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+    }
+
+    public var isDeleted: Bool { deletedAt != nil }
+
+    mutating func edit(body: String, now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        guard let normalizedBody = TaskNoteEntry.normalizedBody(body) else {
+            throw NoonmarkError.invalidTransition("idea body cannot be empty")
+        }
+        self.body = normalizedBody
+        updatedAt = now
+    }
+
+    mutating func delete(now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        body = ""
+        categoryID = nil
+        labelIDs = []
+        // Tombstoning also drops the pin: projections never surface
+        // tombstones, and restore returns the idea unpinned, which keeps
+        // restore semantics free of resurrected pin state.
+        pinnedAt = nil
+        updatedAt = now
+        deletedAt = now
+    }
+
+    mutating func pin(now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        pinnedAt = now
+        updatedAt = now
+    }
+
+    mutating func unpin(now: Date) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        pinnedAt = nil
+        updatedAt = now
+    }
+
+    mutating func restore(body: String, now: Date) throws {
+        guard isDeleted else {
+            throw NoonmarkError.invalidTransition(
+                "only tombstoned ideas can be restored"
+            )
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        // Tombstones strip content for sync convergence, so a restore must
+        // supply a fresh non-empty body to satisfy the active-body invariant.
+        guard let normalizedBody = TaskNoteEntry.normalizedBody(body) else {
+            throw NoonmarkError.invalidTransition("idea body cannot be empty")
+        }
+        self.body = normalizedBody
+        updatedAt = now
+        deletedAt = nil
+    }
+
+    mutating func setClassification(
+        categoryID: TaskCategoryID?,
+        labelIDs: [TaskLabelID],
+        now: Date
+    ) throws {
+        guard !isDeleted else {
+            throw NoonmarkError.notFound("idea")
+        }
+        try TaskNoteEntry.validateMutationTime(now, notBefore: updatedAt)
+        self.categoryID = categoryID
+        self.labelIDs = Self.normalizedLabelIDs(labelIDs)
+        updatedAt = now
+    }
+
+    static func normalizedLabelIDs(_ labelIDs: [TaskLabelID]) -> [TaskLabelID] {
+        var seen = Set<TaskLabelID>()
+        return labelIDs.filter { seen.insert($0).inserted }
+    }
+}
+
+public struct IdeaDayGroup: Equatable, Sendable {
+    public let date: LocalDate
+    public let ideas: [IdeaEntry]
+
+    public init(date: LocalDate, ideas: [IdeaEntry]) {
+        self.date = date
+        self.ideas = ideas
+    }
+}
+
+public struct IdeaTimelineFilter: Equatable, Sendable {
+    public var text: String?
+    public var categoryID: TaskCategoryID?
+    public var labelID: TaskLabelID?
+
+    public init(
+        text: String? = nil,
+        categoryID: TaskCategoryID? = nil,
+        labelID: TaskLabelID? = nil
+    ) {
+        self.text = text
+        self.categoryID = categoryID
+        self.labelID = labelID
+    }
+}
+
 public struct TaskDefinition: Codable, Equatable, Sendable {
     public var id: TaskDefinitionID
     public var chainID: TaskChainID

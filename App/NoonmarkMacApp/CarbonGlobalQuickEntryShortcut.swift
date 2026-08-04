@@ -4,8 +4,13 @@ import NoonmarkMacRuntime
 
 @MainActor
 final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutRegistering {
-    private static let signature: UInt32 = 0x4E4D_5145
+    /// Distinct signature per registrar instance: every hotkey event reaches
+    /// every installed handler, so each registrar must only answer its own
+    /// signature. The idea-capture registrar passes its own value.
+    static let quickEntrySignature: UInt32 = 0x4E4D_5145
+    static let ideaCaptureSignature: UInt32 = 0x4E4D_4945
 
+    private let signature: UInt32
     private var eventHandler: EventHandlerRef?
     private var currentHotKey: EventHotKeyRef?
     private var currentShortcut: GlobalQuickEntryShortcut?
@@ -13,7 +18,8 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
     private var nextIdentifier: UInt32 = 1
     private var onTrigger: (@MainActor () -> Void)?
 
-    init() {
+    init(signature: UInt32 = quickEntrySignature) {
+        self.signature = signature
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -58,7 +64,7 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
             UInt32(shortcut.key.virtualKeyCode),
             carbonModifiers(for: shortcut.modifiers),
             EventHotKeyID(
-                signature: Self.signature,
+                signature: signature,
                 id: identifier
             ),
             GetApplicationEventTarget(),
@@ -101,7 +107,7 @@ final class CarbonGlobalQuickEntryShortcutRegistrar: GlobalQuickEntryShortcutReg
             &identifier
         )
         guard status == noErr,
-              identifier.signature == Self.signature,
+              identifier.signature == signature,
               identifier.id == currentIdentifier
         else {
             return OSStatus(eventNotHandledErr)

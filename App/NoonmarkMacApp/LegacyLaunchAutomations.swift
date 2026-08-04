@@ -156,6 +156,7 @@ struct LaunchAutomation {
             GlobalQuickEntryShortcutE2EAutomation.fromCommandLine(),
             to: &actions
         )
+        append(IdeaCaptureE2EAutomation.fromCommandLine(), to: &actions)
         append(CompletionControlE2EAutomation.fromCommandLine(), to: &actions)
         append(WorkspaceProductivityE2EAutomation.fromCommandLine(), to: &actions)
         append(SelectionFocusVisualE2EAutomation.fromCommandLine(), to: &actions)

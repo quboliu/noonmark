@@ -137,6 +137,7 @@ struct SettingsPreferenceCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 GlobalQuickEntryShortcutSettingsSection()
+                GlobalIdeaCaptureShortcutSettingsSection()
                 DisclosureGroup(
                     store.copy.settingsPoemTitle,
                     isExpanded: $poemIsExpanded

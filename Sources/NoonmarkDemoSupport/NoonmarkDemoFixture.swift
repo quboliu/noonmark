@@ -29,13 +29,14 @@ public struct NoonmarkDemoFixture {
             engine: engine,
             dates: Array(storyDates.suffix(10))
         )
-        try story.replay()
+        let ideaStoryFacts = try story.replay()
         let report = NoonmarkDemoCoverageReport(
             engine: engine,
             storyDates: storyDates,
             anchorDate: anchorDate,
             repeatedFeatureCounts: historyResult.featureCounts,
-            featureReplayDates: historyResult.featureReplayDates
+            featureReplayDates: historyResult.featureReplayDates,
+            restoredIdeaCount: ideaStoryFacts.restoredIdeaCount
         )
         guard report.isComplete else {
             throw NoonmarkDemoFixtureError.incompleteCoverage(
@@ -190,6 +191,16 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let recurringCollectionLeakCount: Int
     public let openParentWithCompletedChildrenCount: Int
     public let completedParentWithCompletedChildrenCount: Int
+    public let ideaCount: Int
+    public let ideaDayCount: Int
+    public let ideaReviewCandidateCount: Int
+    public let labeledIdeaCount: Int
+    public let categorizedIdeaCount: Int
+    public let editedIdeaCount: Int
+    public let tombstonedIdeaCount: Int
+    public let ideaTimelineTombstoneLeakCount: Int
+    public let stickyNoteCount: Int
+    public let restoredIdeaCount: Int
 
     public var missingRequirements: [String] {
         var missing: [String] = []
@@ -370,6 +381,32 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
             "父任务完成后的简洁子任务层级",
             into: &missing
         )
+        require(ideaCount >= 6, "飞光时间线至少六条", into: &missing)
+        require(ideaDayCount >= 3, "飞光跨多个自然日", into: &missing)
+        require(
+            ideaReviewCandidateCount > 0,
+            "至少一条可进入回看的旧飞光",
+            into: &missing
+        )
+        require(labeledIdeaCount > 0, "带标签的飞光", into: &missing)
+        require(categorizedIdeaCount > 0, "带分组的飞光", into: &missing)
+        require(editedIdeaCount > 0, "编辑过的飞光", into: &missing)
+        require(
+            tombstonedIdeaCount > 0,
+            "删除后的飞光墓碑仍在状态中",
+            into: &missing
+        )
+        require(
+            ideaTimelineTombstoneLeakCount == 0,
+            "飞光时间线不包含墓碑",
+            into: &missing
+        )
+        require(stickyNoteCount >= 3, "至少三条 Sticky Note", into: &missing)
+        require(
+            restoredIdeaCount > 0,
+            "至少一条经底层兼容命令重建的飞光",
+            into: &missing
+        )
         return missing
     }
 
@@ -382,7 +419,8 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         storyDates: [LocalDate],
         anchorDate: LocalDate,
         repeatedFeatureCounts: NoonmarkDemoRepeatedFeatureCounts,
-        featureReplayDates: [LocalDate]
+        featureReplayDates: [LocalDate],
+        restoredIdeaCount: Int
     ) {
         let snapshot = engine.snapshot()
         fixtureProfile = "annual-v1"
@@ -590,6 +628,31 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
                 $0.parentCompletion != nil
                     && $0.completedChildren.isEmpty == false
             }
+        let ideaTimeline = engine.ideaCollection(
+            .recent,
+            today: anchorDate
+        ).ideas
+        ideaCount = ideaTimeline.count
+        ideaDayCount = Set(ideaTimeline.compactMap {
+            DemoCalendar.localDate(of: $0.createdAt)
+        }).count
+        ideaReviewCandidateCount = engine.ideaCollection(
+            .review(seed: 0, count: 5, excludingRecentDays: 7),
+            today: anchorDate
+        ).ideas.count
+        labeledIdeaCount = ideaTimeline.count {
+            $0.labelIDs.isEmpty == false
+        }
+        categorizedIdeaCount = ideaTimeline.count {
+            $0.categoryID != nil
+        }
+        editedIdeaCount = ideaTimeline.count {
+            $0.updatedAt > $0.createdAt
+        }
+        tombstonedIdeaCount = snapshot.ideas.count { $0.isDeleted }
+        ideaTimelineTombstoneLeakCount = ideaTimeline.count { $0.isDeleted }
+        stickyNoteCount = engine.pinnedIdeas().count
+        self.restoredIdeaCount = restoredIdeaCount
     }
 
     private func require(
@@ -1602,7 +1665,7 @@ private struct DemoStory {
         clock = DemoClock()
     }
 
-    mutating func replay() throws {
+    mutating func replay() throws -> DemoStoryIdeaFacts {
         let taskIDs = try createTaskPool()
         let cycleSeriesIDs = try createCycleSeries()
         try replayFirstFiveDays(
@@ -1614,6 +1677,7 @@ private struct DemoStory {
             cycleSeriesID: cycleSeriesIDs.active
         )
         try addTodayAndFutureState(taskIDs)
+        let ideaFacts = try addIdeaCapture()
         _ = try engine.stopTaskCycleSeries(
             seriesID: cycleSeriesIDs.stoppable,
             today: dates[9],
@@ -1630,6 +1694,7 @@ private struct DemoStory {
         )
         try addReviews()
         try engine.snapshot().validateIntegrity()
+        return ideaFacts
     }
 
     private func createCycleSeries() throws -> DemoCycleSeriesIDs {
@@ -2403,6 +2468,130 @@ private struct DemoStory {
         )
     }
 
+    private func addIdeaCapture() throws -> DemoStoryIdeaFacts {
+        let researchClassification = try ideaClassificationIDs(
+            categoryName: "研究",
+            labelNames: ["访谈", "洞察"]
+        )
+        let releaseIdea = try engine.appendIdea(
+            body: "访谈里好几个人提到 onboarding 第一屏不知道先点哪里，先记下来，走查时验证。",
+            categoryID: researchClassification.categoryID,
+            labelIDs: researchClassification.labelIDs,
+            now: time(on: dates[0], hour: 21, minute: 5)
+        )
+        let expenseIdea = try engine.appendIdea(
+            body: "差旅报销能不能攒到月底批量处理？每次都打断半个下午。",
+            now: time(on: dates[1], hour: 12, minute: 40)
+        )
+        let hoverIdea = try engine.appendIdea(
+            body: "首页交互稿的悬停反馈有点保守，交付前再想想。",
+            now: time(on: dates[3], hour: 16, minute: 20)
+        )
+        try engine.editIdea(
+            id: hoverIdea.id,
+            body: "首页交互稿的悬停反馈有点保守；和设计对齐后决定保留大字号方案，交付稿里注明。",
+            now: time(on: dates[5], hour: 9, minute: 15)
+        )
+        let staleExperimentIdea = try engine.appendIdea(
+            body: "旧增长实验的原始数据要不要归档？明天问数据组。",
+            now: time(on: dates[5], hour: 22, minute: 10)
+        )
+        try engine.deleteIdea(
+            id: staleExperimentIdea.id,
+            now: time(on: dates[6], hour: 8, minute: 30)
+        )
+        let walkthroughClassification = try ideaClassificationIDs(
+            labelNames: ["走查"]
+        )
+        _ = try engine.appendIdea(
+            body: "可用性走查的意外发现：空标题占位比想象中更容易误触，值得单独跟进。",
+            labelIDs: walkthroughClassification.labelIDs,
+            now: time(on: dates[6], hour: 19, minute: 45)
+        )
+        let dataCaliberIdea = try engine.appendIdea(
+            body: "周报数据口径的注释要不要单独维护？下周对齐前别再改模板。",
+            now: time(on: dates[7], hour: 18, minute: 5)
+        )
+        let handoffIdea = try engine.appendIdea(
+            body: "交接材料里的接口清单可以抽成模板，下个项目直接复用。",
+            now: time(on: dates[8], hour: 13, minute: 30)
+        )
+        let handoffClassification = try ideaClassificationIDs(
+            categoryName: "协作",
+            labelNames: ["交接"]
+        )
+        try engine.setIdeaClassification(
+            id: handoffIdea.id,
+            categoryID: handoffClassification.categoryID,
+            labelIDs: handoffClassification.labelIDs,
+            now: time(on: dates[8], hour: 14, minute: 5)
+        )
+        try engine.deleteIdea(
+            id: dataCaliberIdea.id,
+            now: time(on: dates[9], hour: 8, minute: 45)
+        )
+        let releaseClassification = try ideaClassificationIDs(
+            labelNames: ["发布"]
+        )
+        _ = try engine.appendIdea(
+            body: "审阅发布说明时想到：已知限制应该附上临时绕过方法，减少支持成本。",
+            labelIDs: releaseClassification.labelIDs,
+            now: time(on: dates[9], hour: 9, minute: 20)
+        )
+        let attentionIdea = try engine.appendIdea(
+            body: "连续用了十天，Sticky Note 比长清单更能压住注意力，写进复盘。",
+            now: time(on: dates[9], hour: 15, minute: 10)
+        )
+        try engine.pinIdea(
+            id: expenseIdea.id,
+            now: time(on: dates[9], hour: 15, minute: 20)
+        )
+        try engine.pinIdea(
+            id: handoffIdea.id,
+            now: time(on: dates[9], hour: 15, minute: 21)
+        )
+        try engine.pinIdea(
+            id: attentionIdea.id,
+            now: time(on: dates[9], hour: 15, minute: 22)
+        )
+        _ = releaseIdea
+        try engine.restoreIdea(
+            id: dataCaliberIdea.id,
+            body: "数据口径注释确认由周报模板统一维护，恢复这条留作月底跟进提醒。",
+            now: time(on: dates[9], hour: 15, minute: 25)
+        )
+        return DemoStoryIdeaFacts(restoredIdeaCount: 1)
+    }
+
+    private func ideaClassificationIDs(
+        categoryName: String? = nil,
+        labelNames: [String] = []
+    ) throws -> (categoryID: TaskCategoryID?, labelIDs: [TaskLabelID]) {
+        let classifications = engine.snapshot().classifications
+        var categoryID: TaskCategoryID?
+        if let categoryName {
+            guard let match = classifications.categories.first(where: {
+                $0.value.name == categoryName
+            }) else {
+                throw NoonmarkDemoFixtureError.incompleteCoverage([
+                    "飞光分组 \(categoryName)"
+                ])
+            }
+            categoryID = match.key
+        }
+        let labelIDs = try labelNames.map { name in
+            guard let match = classifications.labels.first(where: {
+                $0.value.name == name
+            }) else {
+                throw NoonmarkDemoFixtureError.incompleteCoverage([
+                    "飞光标签 \(name)"
+                ])
+            }
+            return match.key
+        }
+        return (categoryID, labelIDs)
+    }
+
     private func addReviews() throws {
         for (index, date) in dates.dropLast().enumerated() {
             engine.updateDailyReview(
@@ -2537,6 +2726,10 @@ private struct DemoStory {
     }
 }
 
+private struct DemoStoryIdeaFacts {
+    let restoredIdeaCount: Int
+}
+
 private struct DemoCycleSeriesIDs {
     let active: TaskCycleSeriesID
     let stoppable: TaskCycleSeriesID
@@ -2620,6 +2813,20 @@ private enum DemoCalendar {
               let day = components.day
         else {
             throw NoonmarkDemoFixtureError.invalidDateRange
+        }
+        return LocalDate(year: year, month: month, day: day)
+    }
+
+    static func localDate(of timestamp: Date) -> LocalDate? {
+        let components = calendar.dateComponents(
+            [.year, .month, .day],
+            from: timestamp
+        )
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day
+        else {
+            return nil
         }
         return LocalDate(year: year, month: month, day: day)
     }

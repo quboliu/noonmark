@@ -14,6 +14,12 @@ extension NoonmarkStore {
         NewTaskDraftParser.activeToken(in: draft)
     }
 
+    func ideaClassificationToken(
+        for draft: String
+    ) -> NewTaskClassificationToken? {
+        IdeaDraftParser.activeToken(in: draft)
+    }
+
     func newTaskSlashCommandMatches(_ draft: String) -> Bool {
         guard let query = NewTaskDraftParser.activeCommandQuery(
             in: draft
@@ -50,6 +56,26 @@ extension NoonmarkStore {
         }
     }
 
+    func ideaClassificationSuggestions(
+        for draft: String
+    ) -> [ClassificationCatalogItemProjection] {
+        guard let token = ideaClassificationToken(for: draft) else { return [] }
+        switch token.kind {
+        case .label:
+            let selectedKeys = Set(
+                IdeaDraftParser.parse(draft).labelNames.map(
+                    ClassificationNameCanonicalizer.canonicalKey
+                )
+            )
+            return orderedActiveLabelSuggestions(
+                query: token.query,
+                excludingCanonicalKeys: selectedKeys
+            )
+        case .category:
+            return orderedActiveCategorySuggestions(query: token.query)
+        }
+    }
+
     func shouldShowNewTaskClassificationSuggestions(
         for draft: String
     ) -> Bool {
@@ -57,11 +83,25 @@ extension NoonmarkStore {
             && newTaskClassificationSuggestions(for: draft).isEmpty == false
     }
 
+    func shouldShowIdeaClassificationSuggestions(
+        for draft: String
+    ) -> Bool {
+        ideaClassificationToken(for: draft) != nil
+            && ideaClassificationSuggestions(for: draft).isEmpty == false
+    }
+
     func completeNewTaskClassificationToken(
         in draft: String,
         with name: String
     ) -> String {
         NewTaskDraftParser.completingActiveToken(in: draft, with: name)
+    }
+
+    func completeIdeaClassificationToken(
+        in draft: String,
+        with name: String
+    ) -> String {
+        IdeaDraftParser.completingActiveToken(in: draft, with: name)
     }
 
     func newTaskDraftIssueMessage(for draft: String) -> String? {

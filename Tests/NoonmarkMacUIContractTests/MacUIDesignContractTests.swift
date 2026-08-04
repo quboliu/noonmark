@@ -368,6 +368,8 @@ final class MacUIDesignContractTests: XCTestCase {
             contract.pages,
             [
                 .dayTodo,
+                .stickyNotes,
+                .ideas,
                 .taskPool,
                 .futurePlans,
                 .recurringPlans,
@@ -376,6 +378,113 @@ final class MacUIDesignContractTests: XCTestCase {
                 .calendar,
                 .zhulong
             ]
+        )
+    }
+
+    func testIdeasPageKeepsComposerTimelineAndMinimalCards() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(
+            contract.ideasPageElements,
+            [
+                .persistentComposer,
+                .composerSharedWithGlobalCapture,
+                .integratedComposerSurface,
+                .composerFormattingToolbar,
+                .composerPrimaryAction,
+                .composerSecondaryAction,
+                .composerInlineStatus,
+                .composerDeterministicStateMachine,
+                .composerRetryAction,
+                .composerSuccessFeedback,
+                .composerSharedActionChrome,
+                .composerSavesOnCommandReturn,
+                .composerDraftSurvivesDismissal,
+                .composerClassificationTokens,
+                .composerClassificationSuggestions,
+                .secondCategoryTokenBlocked,
+                .searchCollection,
+                .reviewCollection,
+                .substringFiltering,
+                .reverseChronologicalTimeline,
+                .naturalDaySections,
+                .daySectionHeader,
+                .collapsibleSharedDetailRail,
+                .ideaCard,
+                .ideaCardPresentationSeam,
+                .ideaCardTimestamp,
+                .ideaCardClassificationLine,
+                .ideaCardOverflowMenu,
+                .ideaCardEditAction,
+                .ideaCardDeleteAction,
+                .doubleClickInlineEdit,
+                .inlineEditField,
+                .inlineEditUsesComposerSurface,
+                .inlineEditCommandReturnSave,
+                .inlineEditEscapeCancel,
+                .inlineEditBlurSave,
+                .inlineEditContextChangePreflight,
+                .inlineEditExplicitCancelNoPersistence,
+                .singleLineEmptyState,
+                .ideaCardAddToStickyNoteAction,
+                .ideaCardRemoveFromStickyNoteAction,
+                .classificationLineClickToFilter,
+                .activeClassificationFilterIndicator,
+                .singleFilterIndicatorVisualUnit
+            ]
+        )
+        XCTAssertEqual(MacUIIdeasPageLayout.composerIdleHeight, 64)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerExpandedMinimumHeight, 112)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerMaximumHeight, 220)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerCornerRadius, 12)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionBarHeight, 42)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerToolHitTarget, 28)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionButtonHeight, 32)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerActionSpacing, 8)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerHorizontalTextInset, 16)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerTopTextInset, 13)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerPersistentToolCount, 3)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerFilterSpacing, 10)
+        XCTAssertEqual(MacUIIdeasPageLayout.timelineSectionSpacing, 18)
+        XCTAssertEqual(MacUIIdeasPageLayout.sectionHeaderBottomPadding, 4)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardHorizontalPadding, 12)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardVerticalPadding, 10)
+        XCTAssertEqual(MacUIIdeasPageLayout.cardMetadataSpacing, 6)
+        XCTAssertTrue(MacUIIdeasPageLayout.cardSeparatesWithSingleDivider)
+        XCTAssertTrue(MacUIIdeasPageLayout.classificationLineOnlyWhenClassified)
+        XCTAssertEqual(MacUIIdeasPageLayout.emptyStateVisualUnitCount, 1)
+        XCTAssertEqual(MacUIIdeasPageLayout.filterIndicatorVisualUnitCount, 1)
+        XCTAssertEqual(MacUIIdeasPageLayout.readableTimelineMaximumWidth, 760)
+        XCTAssertTrue(MacUIIdeasPageLayout.usesSharedDetailRail)
+        XCTAssertTrue(
+            MacUIIdeasPageLayout.classificationFilterCombinesWithSubstringFilter
+        )
+    }
+
+    func testStickyNotesPageUsesOneDropdownAndSharedContent() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(
+            contract.stickyNotesPageElements,
+            [
+                .singleDropdownPresentationMenu,
+                .currentPresentationInMenuLabel,
+                .streamPresentation,
+                .wallPresentation,
+                .sharedItemContent,
+                .sourceFlylightNavigation,
+                .localPresentationPreference
+            ]
+        )
+        XCTAssertEqual(
+            MacUIStickyNotesPageLayout.presentationMenuVisualUnitCount,
+            1
+        )
+        XCTAssertTrue(
+            MacUIStickyNotesPageLayout.presentationsShareItemContent
+        )
+        XCTAssertTrue(
+            MacUIStickyNotesPageLayout.presentationPreferenceIsLocal
         )
     }
 
@@ -653,6 +762,12 @@ final class MacUIDesignContractTests: XCTestCase {
                 .italic,
                 .inlineCode,
                 .link,
+                .heading,
+                .unorderedList,
+                .orderedList,
+                .taskList,
+                .quote,
+                .codeBlock,
                 .indent,
                 .hardLineBreak
             ]

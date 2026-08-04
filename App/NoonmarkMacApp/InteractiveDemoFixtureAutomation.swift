@@ -282,6 +282,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 taskPoolProviderReportPresentationVerified:
                 analysisReportContractVerified,
                 taskCollectionCategoryVisibilityVerified: false,
+                ideasPresentationVerified: false,
+                flylightEditingInteractionVerified: false,
+                flylightGlobalSuggestionVerified: false,
                 calendarRecurringBoundaryVerified: false,
                 taskCyclePresentationVerified: false,
                 zhulongHeaderComposerHierarchyVerified: true
@@ -412,7 +415,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let nextIndex = index + 1
         guard context.cases.indices.contains(nextIndex) else {
             guard AppViewTreeE2E.click(
-                identifier: "sidebar.nav.calendar"
+                identifier: "sidebar.nav.ideas"
             )
             else {
                 AppViewTreeE2E.writeDump(beside: resultURL)
@@ -423,7 +426,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 )
                 return
             }
-            retryCalendarRecurringBoundary(
+            verifyIdeasPresentation(
                 context: context,
                 remainingAttempts: 100
             )
@@ -462,7 +465,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.identifiers(
                 withPrefix: "task-cycle-track."
             )?.isEmpty == true
-        case .recurring, .calendar, .zhulong, .settings:
+        case .recurring, .calendar, .zhulong, .settings, .stickyNotes, .ideas:
             true
         }
     }
@@ -524,6 +527,1098 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     }
 
     @MainActor
+    private func verifyIdeasPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光最近集合骨架未稳定"
+                ),
+                on: context.store
+            )
+            return
+        }
+        if context.store.isDetailRailExpanded == false {
+            guard AppViewTreeE2E.click(
+                identifier: "shell.detail-rail.toggle"
+            ) else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    verifyIdeasPresentation(
+                        context: context,
+                        remainingAttempts: remainingAttempts - 1
+                    )
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        let timelineGroups = context.store.ideaTimelineGroups
+        let projectedIdeas = context.engine.ideaCollection(
+            .recent,
+            today: context.store.today
+        ).ideas
+        let stickyNotes = context.engine.pinnedIdeas()
+        let expectedCardIdentifiers = Set(projectedIdeas.map {
+            "ideas.card.\($0.id)"
+        })
+        let timelineGroupIdeaIDs = Set(timelineGroups.flatMap { group in
+            group.ideas.map(\.id)
+        })
+        let tombstonedIdeaIDs = context.engine.ideas.values
+            .filter { $0.isDeleted }
+            .map(\.id)
+        let topGroupIsFullyVisible = timelineGroups.first.map { group in
+            AppViewTreeE2E.view(identifier: "ideas.day.\(group.date)")
+                != nil
+                && group.ideas.allSatisfy { idea in
+                    AppViewTreeE2E.view(
+                        identifier: "ideas.card.\(idea.id)"
+                    )
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+                }
+        } ?? false
+        // Card sub-anchors (overflow menu, inline edit field, classification
+        // filter buttons and actions) extend the card identifier with a
+        // dotted suffix; the projection check only concerns the cards
+        // themselves.
+        let visibleCardIdentifiers = AppViewTreeE2E.identifiers(
+            withPrefix: "ideas.card."
+        ).map { identifiers in
+            Set(identifiers.filter { identifier in
+                identifier.dropFirst("ideas.card.".count)
+                    .contains(".") == false
+            })
+        } ?? []
+        let visibleCardsMatchProjection = visibleCardIdentifiers
+            .isEmpty == false
+            && visibleCardIdentifiers.isSubset(
+                of: expectedCardIdentifiers
+            )
+            && visibleCardIdentifiers.allSatisfy { identifier in
+                guard let idea = projectedIdeas.first(where: {
+                    identifier == "ideas.card.\($0.id)"
+                }) else {
+                    return false
+                }
+                return AppViewTreeE2E.view(identifier: identifier)
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        let stickySourcesStayInFlylight = stickyNotes.count >= 3
+            && AppViewTreeE2E.view(identifier: "ideas.pinned") == nil
+            && stickyNotes.allSatisfy { idea in
+                timelineGroupIdeaIDs.contains(idea.id)
+                    && AppViewTreeE2E.view(
+                        identifier: "ideas.card.\(idea.id)"
+                    )
+                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        let tombstonesStayHidden = tombstonedIdeaIDs.allSatisfy {
+            AppViewTreeE2E.hasNoVisibleView(
+                identifier: "ideas.card.\($0)"
+            )
+        }
+        let inspectorMatchesSelection = context.store.selectedIdea.map(
+            { idea in
+                AppViewTreeE2E.view(
+                    identifier: "ideas.inspector.idea.\(idea.id)"
+                ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        ) == true
+        guard context.store.page == .ideas,
+              timelineGroups.isEmpty == false,
+              tombstonedIdeaIDs.isEmpty == false,
+              AppViewTreeE2E.activateMainWindow(),
+              AppViewTreeE2E.view(identifier: "ideas.page")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == context.store.copy.navIdeas,
+              AppViewTreeE2E.view(identifier: "ideas.composer") != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.primary"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.secondary"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.label"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.category"
+              ) != nil,
+              AppViewTreeE2E.view(
+                  identifier: "ideas.composer.tool.format"
+              ) != nil,
+              context.store.detailRailRoute == .flylight,
+              AppViewTreeE2E.view(identifier: "shell.detail-rail") != nil,
+              inspectorMatchesSelection,
+              AppViewTreeE2E.view(identifier: "ideas.filter") == nil,
+              AppViewTreeE2E.view(identifier: "ideas.timeline")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(projectedIdeas.count)",
+              topGroupIsFullyVisible,
+              visibleCardsMatchProjection,
+              stickySourcesStayInFlylight,
+              tombstonesStayHidden
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        Task { @MainActor in
+            do {
+                try await verifyFlylightEditingAndSuggestions(
+                    idea: timelineGroups[0].ideas[0],
+                    context: context
+                )
+                let verifiedContext = DemoCollectionCheckContext(
+                    fixture: context.fixture,
+                    engine: context.engine,
+                    sessions: context.sessions,
+                    store: context.store,
+                    presentationVerification:
+                    context.presentationVerification
+                        .verifyingFlylightInteractions(),
+                    cases: context.cases
+                )
+                guard AppViewTreeE2E.click(
+                    identifier: "ideas.search.toggle"
+                ) else {
+                    throw InteractiveDemoFixtureError
+                        .taskCollectionPresentationFailed(
+                            "飞光搜索动作无法点击"
+                        )
+                }
+                verifyIdeasSearchPresentation(
+                    context: verifiedContext,
+                    expectedRecentCount: projectedIdeas.count,
+                    remainingAttempts: 100
+                )
+            } catch {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(error, on: context.store)
+            }
+        }
+    }
+
+    @MainActor
+    private func verifyFlylightEditingAndSuggestions(
+        idea: IdeaEntry,
+        context: DemoCollectionCheckContext
+    ) async throws {
+        guard let mainWindow = NSApp.windows.first(where: {
+            $0 is NoonmarkWindow && $0.isVisible && $0.isMiniaturized == false
+        }) else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        let input = try WindowServerInputDriver(
+            requestEventAccessIfNeeded: true
+        )
+        let original = idea
+
+        guard let composerEditor = AppViewTreeE2E.view(
+            identifier: "ideas.composer.input",
+            in: mainWindow
+        ) as? NSTextView else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        let collapsedDraft = "演示中暂时收起、稍后继续的飞光草稿 @工"
+        try await demoClick(
+            "ideas.composer.input",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光草稿收起验收没有取得焦点") {
+            mainWindow.firstResponder === composerEditor
+        }
+        try input.typeUnicode(collapsedDraft)
+        try await waitForFlylightDemo("飞光草稿收起验收文本没有进入编辑器") {
+            composerEditor.string == collapsedDraft
+                && context.store.ideaText == collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) != nil
+        }
+        try await demoClick(
+            "ideas.composer.secondary",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光脏草稿没有在保留正文时收起") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            guard let surface = AppViewTreeE2E.view(
+                identifier: "ideas.composer.surface",
+                in: mainWindow
+            ) else { return false }
+            return mainWindow.firstResponder !== composerEditor
+                && (62 ... 72).contains(
+                    AppViewTreeE2E.frameInWindow(for: surface).height
+                )
+                && composerEditor.string == collapsedDraft
+                && context.store.ideaText == collapsedDraft
+                && composerEditor.accessibilityLabel()
+                == context.store.copy.ideaBodyAccessibilityLabel
+                && composerEditor.accessibilityValue() == collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) == nil
+        }
+        try await demoClick(
+            "ideas.composer.secondary",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光脏草稿收起后无法重新展开") {
+            mainWindow.firstResponder === composerEditor
+                && composerEditor.string == collapsedDraft
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.suggestions",
+                    in: mainWindow
+                ) != nil
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitForFlylightDemo("飞光草稿收起验收文本没有清理") {
+            composerEditor.string.isEmpty && context.store.ideaText.isEmpty
+        }
+
+        try await demoDoubleClick(
+            "ideas.card.body.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光双击没有进入原位编辑") {
+            context.store.editingIdeaID == idea.id
+                && mainWindow.firstResponder is NSTextView
+        }
+        let originalEditableText = context.store.ideaEditText
+        try captureTaskCollectionScreenshot(named: "ideas-inline-edit")
+        try await demoClick(
+            "ideas.card.edit.cancel.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光取消没有保留原事实") {
+            context.store.editingIdeaID == nil
+                && context.store.engine.ideas[idea.id]?.body == original.body
+                && context.store.engine.ideas[idea.id]?.updatedAt
+                == original.updatedAt
+        }
+
+        try await demoDoubleClick(
+            "ideas.card.body.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光保存验收没有重新进入编辑") {
+            context.store.editingIdeaID == idea.id
+                && mainWindow.firstResponder is NSTextView
+        }
+        let editedBody = "演示验收\n\(originalEditableText)"
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(editedBody)
+        try await waitForFlylightDemo("飞光保存验收文本没有进入编辑器") {
+            context.store.ideaEditText == editedBody
+        }
+        try await demoClick(
+            "ideas.card.edit.save.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光保存中状态不可观察") {
+            context.store.ideaInlineEditorSession.saveState == .saving
+                && context.store.editingIdeaID == idea.id
+        }
+        try captureTaskCollectionScreenshot(named: "ideas-inline-saving")
+        try await waitForFlylightDemo("飞光保存动作没有写入正文") {
+            context.store.editingIdeaID == nil
+                && context.store.engine.ideas[idea.id]?.body
+                == "演示验收\n\(original.body)"
+        }
+        try await waitForFlylightCardBody(
+            ideaID: idea.id,
+            body: "演示验收\n\(original.body)",
+            in: mainWindow
+        )
+
+        try await demoDoubleClick(
+            "ideas.card.body.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光验收正文无法恢复") {
+            context.store.editingIdeaID == idea.id
+                && mainWindow.firstResponder is NSTextView
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(originalEditableText)
+        try await demoClick(
+            "ideas.card.edit.save.\(idea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光验收后没有恢复 fixture 正文") {
+            guard context.store.editingIdeaID == nil,
+                  let restored = context.store.engine.ideas[idea.id]
+            else { return false }
+            return restored.body == original.body
+                && restored.categoryID == original.categoryID
+                && restored.labelIDs == original.labelIDs
+                && restored.pinnedAt == original.pinnedAt
+        }
+        try await waitForFlylightCardBody(
+            ideaID: idea.id,
+            body: original.body,
+            in: mainWindow
+        )
+
+        let ideaCount = context.store.engine.ideaTimeline().count
+        try input.postKey(keyCode: 34, modifiers: [.control, .shift])
+        var panel: NSWindow?
+        try await waitForFlylightDemo("全局飞光速记没有打开") {
+            panel = NSApp.windows.first {
+                $0.identifier
+                    == NoonmarkIdeaCaptureWindowController.windowIdentifier
+                    && $0.isVisible
+            }
+            return panel?.firstResponder is NSTextView
+        }
+        guard let panel, let panelEditor = panel.firstResponder as? NSTextView
+        else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        try input.typeUnicode("@工")
+        try await waitForFlylightDemo("全局飞光速记没有显示工程分组候选") {
+            panelEditor.string == "@工"
+                && AppViewTreeE2E.view(
+                    identifier: "idea-capture.field.suggestions",
+                    in: panel
+                ).flatMap(AppViewTreeE2E.verificationText)?.contains("工程")
+                == true
+        }
+        try captureDemoScreenshot(
+            named: "idea-capture-suggestions",
+            of: panel
+        )
+        try await demoClick(
+            "idea-capture.field.suggestions",
+            in: panel,
+            input: input
+        )
+        try await waitForFlylightDemo("全局飞光分组候选没有完成 token") {
+            panelEditor.string == "@工程 "
+                && context.store.ideaText == "@工程 "
+        }
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.postKey(keyCode: 51)
+        try await waitForFlylightDemo("全局飞光候选验收草稿没有清空") {
+            panelEditor.string.isEmpty && context.store.ideaText.isEmpty
+        }
+        try input.postKey(keyCode: 53)
+        try await waitForFlylightDemo("全局飞光候选验收面板没有关闭") {
+            panel.isVisible == false
+                && context.store.engine.ideaTimeline().count == ideaCount
+        }
+        try await activateDemoWindow(mainWindow)
+
+        guard let sourceIdea = context.store.stickyNoteIdeas.first else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        let sourceFilter = sourceIdea.body.components(
+            separatedBy: .newlines
+        ).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard sourceFilter.isEmpty == false else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        let sourceSelection = context.store.selectedIdeaID
+        try await demoClick(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光来源浏览验收没有展开搜索") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) != nil
+        }
+        try await demoClick(
+            "ideas.filter",
+            in: mainWindow,
+            input: input
+        )
+        try input.typeUnicode(sourceFilter)
+        try await waitForFlylightDemo("飞光来源浏览验收没有建立稳定集合") {
+            context.store.ideaFilterText == sourceFilter
+                && context.store.displayedIdeaCollection.ideas.map(\.id)
+                == [sourceIdea.id]
+        }
+        try await demoClick(
+            "sidebar.nav.stickyNotes",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光来源浏览验收无法打开 Sticky Note") {
+            context.store.page == .stickyNotes
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.item.\(sourceIdea.id)",
+                    in: mainWindow
+                ) != nil
+        }
+        try await demoDoubleClick(
+            "sticky-notes.item.\(sourceIdea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("Sticky Note 来源没有定位到飞光") {
+            context.store.page == .ideas
+                && context.store.selectedIdeaID == sourceIdea.id
+                && context.store.ideaFilterText.isEmpty
+                && context.store.canRestoreIdeaBrowseLocation
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.browse.restore",
+                    in: mainWindow
+                ) != nil
+        }
+        try await demoClick(
+            "ideas.browse.restore",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("Sticky Note 来源没有恢复此前浏览位置") {
+            context.store.ideaFilterText == sourceFilter
+                && context.store.selectedIdeaID == sourceSelection
+                && context.store.canRestoreIdeaBrowseLocation == false
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) != nil
+        }
+        try await demoClick(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光来源浏览验收没有恢复最近集合") {
+            context.store.ideaFilterText.isEmpty
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) == nil
+        }
+        try await demoClick(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光来源浏览验收没有进入回看") {
+            context.store.ideaBrowseMode == .review
+        }
+        let priorReviewSeed = context.store.ideaReviewSeed
+        try await demoClick(
+            "ideas.review.refresh",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("飞光来源浏览验收没有刷新回看") {
+            context.store.ideaReviewSeed == priorReviewSeed &+ 1
+        }
+        let sourceReviewSeed = context.store.ideaReviewSeed
+        try await demoClick(
+            "sidebar.nav.stickyNotes",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("回看来源验收无法打开 Sticky Note") {
+            context.store.page == .stickyNotes
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.item.\(sourceIdea.id)",
+                    in: mainWindow
+                ) != nil
+        }
+        try await demoDoubleClick(
+            "sticky-notes.item.\(sourceIdea.id)",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("回看来源没有定位到飞光") {
+            context.store.page == .ideas
+                && context.store.ideaBrowseMode == .recent
+                && context.store.canRestoreIdeaBrowseLocation
+        }
+        try await demoClick(
+            "ideas.browse.restore",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("回看来源没有恢复模式与随机种子") {
+            context.store.ideaBrowseMode == .review
+                && context.store.ideaReviewSeed == sourceReviewSeed
+                && context.store.canRestoreIdeaBrowseLocation == false
+        }
+        try await demoClick(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitForFlylightDemo("回看来源验收没有返回最近集合") {
+            context.store.ideaBrowseMode == .recent
+        }
+    }
+
+    @MainActor
+    private func captureDemoScreenshot(
+        named name: String,
+        of window: NSWindow
+    ) throws {
+        try AppE2EScreenshot.captureContent(
+            of: window,
+            to: resultURL.deletingLastPathComponent()
+                .appendingPathComponent("\(name).png")
+        )
+    }
+
+    @MainActor
+    private func waitForFlylightDemo(
+        _ failure: String,
+        condition: () -> Bool
+    ) async throws {
+        for _ in 0 ..< 120 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw InteractiveDemoFixtureError
+            .taskCollectionPresentationFailed(failure)
+    }
+
+    @MainActor
+    private func waitForFlylightCardBody(
+        ideaID: IdeaID,
+        body: String,
+        in window: NSWindow
+    ) async throws {
+        try await waitForFlylightDemo("飞光保存后正文没有重新挂载") {
+            guard let cardBody = AppViewTreeE2E.view(
+                identifier: "ideas.card.body.\(ideaID)",
+                in: window
+            ) else {
+                return false
+            }
+            return cardBody.isHiddenOrHasHiddenAncestor == false
+                && cardBody.visibleRect.isEmpty == false
+                && AppViewTreeE2E.verificationText(for: cardBody) == body
+        }
+    }
+
+    @MainActor
+    private func activateDemoWindow(_ window: NSWindow) async throws {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try await waitForFlylightDemo("飞光验收窗口无法成为输入目标") {
+            NSApp.isActive && window.isKeyWindow
+        }
+    }
+
+    @MainActor
+    private func demoClick(
+        _ identifier: String,
+        in window: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let resolveTarget = try demoTargetResolver(
+            identifier: identifier,
+            in: window,
+            input: input
+        )
+        try await activateDemoWindow(window)
+        try await input.postClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+    }
+
+    @MainActor
+    private func demoDoubleClick(
+        _ identifier: String,
+        in window: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let resolveTarget = try demoTargetResolver(
+            identifier: identifier,
+            in: window,
+            input: input
+        )
+        try await activateDemoWindow(window)
+        try await input.postDoubleClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+    }
+
+    @MainActor
+    private func demoTargetResolver(
+        identifier: String,
+        in window: NSWindow,
+        input: WindowServerInputDriver
+    ) throws -> @MainActor @Sendable () throws
+        -> WindowServerInputDriver.PointerCoordinate
+    {
+        {
+            guard let anchor = AppViewTreeE2E.view(
+                identifier: identifier,
+                in: window
+            ) else {
+                throw InteractiveDemoFixtureError
+                    .taskCollectionPresentationFailed(
+                        "飞光验收目标不存在：\(identifier)"
+                    )
+            }
+            if let buttonTarget = AppViewTreeE2E.buttonInteractionTarget(
+                overlapping: anchor
+            ) {
+                return try input.pointerCoordinate(
+                    windowPoint: buttonTarget.windowPoint,
+                    in: window
+                )
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: anchor)
+            let visibleFrame = anchor.convert(anchor.visibleRect, to: nil)
+            let clickableFrame = frame.intersection(visibleFrame)
+            guard clickableFrame.isNull == false,
+                  clickableFrame.isEmpty == false
+            else {
+                throw InteractiveDemoFixtureError
+                    .taskCollectionPresentationFailed(
+                        "飞光验收目标不可见：\(identifier)"
+                    )
+            }
+            return try input.pointerCoordinate(
+                windowPoint: NSPoint(
+                    x: clickableFrame.midX,
+                    y: clickableFrame.midY
+                ),
+                in: window
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyIdeasSearchPresentation(
+        context: DemoCollectionCheckContext,
+        expectedRecentCount: Int,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光搜索输入面未展开"
+                ),
+                on: context.store
+            )
+            return
+        }
+        guard AppViewTreeE2E.view(identifier: "ideas.filter")
+            .flatMap(AppViewTreeE2E.verificationText) == "",
+            AppViewTreeE2E.view(identifier: "ideas.collection")
+            .flatMap(AppViewTreeE2E.verificationText) == "recent"
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasSearchPresentation(
+                    context: context,
+                    expectedRecentCount: expectedRecentCount,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard AppViewTreeE2E.click(identifier: "ideas.search.toggle") else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光搜索收起动作无法点击"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyIdeasSearchDismissed(
+            context: context,
+            expectedRecentCount: expectedRecentCount,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyIdeasSearchDismissed(
+        context: DemoCollectionCheckContext,
+        expectedRecentCount: Int,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光搜索输入面未收起"
+                ),
+                on: context.store
+            )
+            return
+        }
+        guard AppViewTreeE2E.view(identifier: "ideas.filter") == nil,
+              context.store.ideaBrowseMode == .recent
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasSearchDismissed(
+                    context: context,
+                    expectedRecentCount: expectedRecentCount,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard AppViewTreeE2E.click(identifier: "ideas.review.toggle") else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光回看动作无法点击"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyIdeasReviewPresentation(
+            context: context,
+            expectedRecentCount: expectedRecentCount,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyIdeasReviewPresentation(
+        context: DemoCollectionCheckContext,
+        expectedRecentCount: Int,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光回看集合未与领域投影对齐"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let reviewIdeas = context.engine.ideaCollection(
+            .review(
+                seed: context.store.ideaReviewSeed,
+                count: 5,
+                excludingRecentDays: 7
+            ),
+            today: context.store.today
+        ).ideas
+        let reviewCardsAreVisible = reviewIdeas.allSatisfy { idea in
+            AppViewTreeE2E.view(identifier: "ideas.card.\(idea.id)")
+                .flatMap(AppViewTreeE2E.verificationText) == idea.body
+        }
+        let inspectorMatchesSelection = context.store.selectedIdea.map(
+            { idea in
+                AppViewTreeE2E.view(
+                    identifier: "ideas.inspector.idea.\(idea.id)"
+                ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+            }
+        ) == true
+        guard reviewIdeas.isEmpty == false,
+              context.store.ideaBrowseMode == .review,
+              AppViewTreeE2E.view(identifier: "ideas.collection")
+              .flatMap(AppViewTreeE2E.verificationText) == "review",
+              AppViewTreeE2E.view(identifier: "ideas.timeline")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(reviewIdeas.count)",
+              reviewCardsAreVisible,
+              inspectorMatchesSelection
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasReviewPresentation(
+                    context: context,
+                    expectedRecentCount: expectedRecentCount,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard AppViewTreeE2E.click(identifier: "ideas.review.toggle") else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光无法从回看返回最近集合"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyIdeasRecentRestored(
+            context: context,
+            expectedRecentCount: expectedRecentCount,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyIdeasRecentRestored(
+        context: DemoCollectionCheckContext,
+        expectedRecentCount: Int,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光最近集合没有在回看后恢复"
+                ),
+                on: context.store
+            )
+            return
+        }
+        guard context.store.ideaBrowseMode == .recent,
+              AppViewTreeE2E.view(identifier: "ideas.collection")
+              .flatMap(AppViewTreeE2E.verificationText) == "recent",
+              AppViewTreeE2E.view(identifier: "ideas.timeline")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(expectedRecentCount)",
+              AppViewTreeE2E.view(identifier: "ideas.filter") == nil
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasRecentRestored(
+                    context: context,
+                    expectedRecentCount: expectedRecentCount,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(page: .ideas)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        let tombstones = context.engine.ideaTrash()
+        guard tombstones.isEmpty == false,
+              AppViewTreeE2E.view(identifier: "sidebar.nav.memoTrash") == nil,
+              AppViewTreeE2E.view(identifier: "ideas.trash") == nil,
+              (AppViewTreeE2E.identifiers(
+                  withPrefix: "ideas.trash.item."
+              ) ?? []).isEmpty
+        else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "飞光墓碑不应暴露回收站或恢复 UI"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let stickyNotesContext = DemoCollectionCheckContext(
+            fixture: context.fixture,
+            engine: context.engine,
+            sessions: context.sessions,
+            store: context.store,
+            presentationVerification:
+            context.presentationVerification
+                .verifyingIdeasPresentation(),
+            cases: context.cases
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard AppViewTreeE2E.click(
+                identifier: "sidebar.nav.stickyNotes"
+            )
+            else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError
+                        .taskCollectionPresentationFailed(
+                            "飞光验收后无法切换到 Sticky Note"
+                        ),
+                    on: context.store
+                )
+                return
+            }
+            verifyStickyNotesStreamPresentation(
+                context: stickyNotesContext,
+                remainingAttempts: 100
+            )
+        }
+    }
+
+    @MainActor
+    private func verifyStickyNotesStreamPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 清单流未与飞光投影对齐"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let stickyNotes = context.engine.pinnedIdeas()
+        guard context.store.page == .stickyNotes,
+              AppViewTreeE2E.view(identifier: "sticky-notes.page")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == "\(stickyNotes.count)"
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        if AppViewTreeE2E.view(identifier: "sticky-notes.presentation")
+            .flatMap(AppViewTreeE2E.verificationText) != "stream"
+        {
+            guard AppViewTreeE2E.selectMenuItem(
+                identifier: "sticky-notes.mode",
+                downArrowCount: 1
+            ) else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    verifyStickyNotesStreamPresentation(
+                        context: context,
+                        remainingAttempts: remainingAttempts - 1
+                    )
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        guard stickyNotes.count >= 3,
+              stickyNotes.allSatisfy({ idea in
+                  AppViewTreeE2E.view(
+                      identifier: "sticky-notes.item.\(idea.id)"
+                  ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+              }),
+              AppViewTreeE2E.view(identifier: "sticky-notes.empty") == nil
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesStreamPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(named: "stickyNotes-stream")
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        guard AppViewTreeE2E.selectMenuItem(
+            identifier: "sticky-notes.mode",
+            downArrowCount: 2
+        ) else {
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 清单流验收后无法切换到便签墙"
+                ),
+                on: context.store
+            )
+            return
+        }
+        verifyStickyNotesWallPresentation(
+            context: context,
+            remainingAttempts: 100
+        )
+    }
+
+    @MainActor
+    private func verifyStickyNotesWallPresentation(
+        context: DemoCollectionCheckContext,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 便签墙未与飞光投影对齐"
+                ),
+                on: context.store
+            )
+            return
+        }
+        let stickyNotes = context.engine.pinnedIdeas()
+        guard context.store.page == .stickyNotes,
+              AppViewTreeE2E.view(identifier: "sticky-notes.presentation")
+              .flatMap(AppViewTreeE2E.verificationText) == "wall",
+              stickyNotes.allSatisfy({ idea in
+                  AppViewTreeE2E.view(
+                      identifier: "sticky-notes.item.\(idea.id)"
+                  ).flatMap(AppViewTreeE2E.verificationText) == idea.body
+              })
+        else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyStickyNotesWallPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        do {
+            try captureTaskCollectionScreenshot(named: "stickyNotes-wall")
+            try captureTaskCollectionScreenshot(page: .stickyNotes)
+        } catch {
+            finishWithFailure(error, on: context.store)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard AppViewTreeE2E.click(identifier: "sidebar.nav.calendar") else {
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                        "Sticky Note 验收后无法切换到日历"
+                    ),
+                    on: context.store
+                )
+                return
+            }
+            retryCalendarRecurringBoundary(
+                context: context,
+                remainingAttempts: 100
+            )
+        }
+    }
+
+    @MainActor
     private func retryCalendarRecurringBoundary(
         context: DemoCollectionCheckContext,
         remainingAttempts: Int
@@ -531,7 +1626,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         guard remainingAttempts > 0 else {
             AppViewTreeE2E.writeDump(beside: resultURL)
             finishWithFailure(
-                InteractiveDemoFixtureError.presentationContractFailed,
+                InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                    "Sticky Note 验收后日历页面没有呈现"
+                ),
                 on: context.store
             )
             return
@@ -1535,6 +2632,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func captureTaskCollectionScreenshot(page: NoonmarkStore.Page) throws {
+        try captureTaskCollectionScreenshot(named: page.rawValue)
+    }
+
+    @MainActor
+    private func captureTaskCollectionScreenshot(named name: String) throws {
         guard let window = NSApp.windows.first(where: {
             $0 is NoonmarkWindow
                 && $0.isVisible
@@ -1549,7 +2651,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 of: window,
                 to: resultURL.deletingLastPathComponent()
                     .appendingPathComponent(
-                        "task-collection-\(page.rawValue).png"
+                        "task-collection-\(name).png"
                     )
             )
         } catch {
@@ -2389,6 +3491,12 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               presentationVerification
               .taskCollectionCategoryVisibilityVerified,
               presentationVerification
+              .ideasPresentationVerified,
+              presentationVerification
+              .flylightEditingInteractionVerified,
+              presentationVerification
+              .flylightGlobalSuggestionVerified,
+              presentationVerification
               .calendarRecurringBoundaryVerified,
               presentationVerification
               .taskCyclePresentationVerified,
@@ -2444,6 +3552,15 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             taskCollectionCategoryVisibilityVerified:
             presentationVerification
                 .taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            presentationVerification
+                .ideasPresentationVerified,
+            flylightEditingInteractionVerified:
+            presentationVerification
+                .flylightEditingInteractionVerified,
+            flylightGlobalSuggestionVerified:
+            presentationVerification
+                .flylightGlobalSuggestionVerified,
             calendarRecurringBoundaryVerified:
             presentationVerification
                 .calendarRecurringBoundaryVerified,
@@ -2495,6 +3612,9 @@ private struct InteractiveDemoPresentationVerification {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let ideasPresentationVerified: Bool
+    let flylightEditingInteractionVerified: Bool
+    let flylightGlobalSuggestionVerified: Bool
     let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool
@@ -2510,6 +3630,63 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified:
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified: true,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
+            flylightEditingInteractionVerified:
+            flylightEditingInteractionVerified,
+            flylightGlobalSuggestionVerified:
+            flylightGlobalSuggestionVerified,
+            calendarRecurringBoundaryVerified:
+            calendarRecurringBoundaryVerified,
+            taskCyclePresentationVerified:
+            taskCyclePresentationVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+
+    func verifyingIdeasPresentation() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified: true,
+            flylightEditingInteractionVerified:
+            flylightEditingInteractionVerified,
+            flylightGlobalSuggestionVerified:
+            flylightGlobalSuggestionVerified,
+            calendarRecurringBoundaryVerified:
+            calendarRecurringBoundaryVerified,
+            taskCyclePresentationVerified:
+            taskCyclePresentationVerified,
+            zhulongHeaderComposerHierarchyVerified:
+            zhulongHeaderComposerHierarchyVerified
+        )
+    }
+
+    func verifyingFlylightInteractions() -> Self {
+        Self(
+            scopeAuthorizationUIVerified:
+            scopeAuthorizationUIVerified,
+            taskPoolStatisticsPresentationVerified:
+            taskPoolStatisticsPresentationVerified,
+            taskPoolProviderBoundaryVerified:
+            taskPoolProviderBoundaryVerified,
+            taskPoolProviderReportPresentationVerified:
+            taskPoolProviderReportPresentationVerified,
+            taskCollectionCategoryVisibilityVerified:
+            taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
+            flylightEditingInteractionVerified: true,
+            flylightGlobalSuggestionVerified: true,
             calendarRecurringBoundaryVerified:
             calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified:
@@ -2531,6 +3708,12 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified:
             taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
+            flylightEditingInteractionVerified:
+            flylightEditingInteractionVerified,
+            flylightGlobalSuggestionVerified:
+            flylightGlobalSuggestionVerified,
             calendarRecurringBoundaryVerified: true,
             taskCyclePresentationVerified:
             taskCyclePresentationVerified,
@@ -2551,6 +3734,12 @@ private struct InteractiveDemoPresentationVerification {
             taskPoolProviderReportPresentationVerified,
             taskCollectionCategoryVisibilityVerified:
             taskCollectionCategoryVisibilityVerified,
+            ideasPresentationVerified:
+            ideasPresentationVerified,
+            flylightEditingInteractionVerified:
+            flylightEditingInteractionVerified,
+            flylightGlobalSuggestionVerified:
+            flylightGlobalSuggestionVerified,
             calendarRecurringBoundaryVerified:
             calendarRecurringBoundaryVerified,
             taskCyclePresentationVerified: true,
@@ -2676,6 +3865,9 @@ private struct InteractiveDemoManifest: Codable {
     let taskPoolProviderBoundaryVerified: Bool
     let taskPoolProviderReportPresentationVerified: Bool
     let taskCollectionCategoryVisibilityVerified: Bool
+    let ideasPresentationVerified: Bool
+    let flylightEditingInteractionVerified: Bool
+    let flylightGlobalSuggestionVerified: Bool
     let calendarRecurringBoundaryVerified: Bool
     let taskCyclePresentationVerified: Bool
     let zhulongHeaderComposerHierarchyVerified: Bool

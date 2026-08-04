@@ -465,6 +465,7 @@ struct NewTaskSlashCommandSuggestion: View {
 struct NewTaskClassificationSuggestionList: View {
     let tokenKind: NewTaskClassificationTokenKind
     let suggestions: [ClassificationCatalogItemProjection]
+    var accessibilityIdentifier = "new-task.classification-suggestions"
     let onSelect: (ClassificationCatalogItemProjection) -> Void
 
     var body: some View {
@@ -499,10 +500,10 @@ struct NewTaskClassificationSuggestionList: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.lineSubtle))
         .shadow(color: Theme.shadowSubtle, radius: 8, y: 4)
-        .accessibilityIdentifier("new-task.classification-suggestions")
+        .accessibilityIdentifier(accessibilityIdentifier)
         .background {
             AppE2EViewAnchor(
-                identifier: "new-task.classification-suggestions",
+                identifier: accessibilityIdentifier,
                 verificationText:
                     "\(String(tokenKind.marker)):"
                     + suggestions.map(\.name).joined(separator: ",")

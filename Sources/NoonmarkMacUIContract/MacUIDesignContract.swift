@@ -427,6 +427,8 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
 
 public enum MacUIPage: String, CaseIterable, Sendable {
     case dayTodo
+    case stickyNotes
+    case ideas
     case taskPool
     case futurePlans
     case recurringPlans
@@ -450,6 +452,96 @@ public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
     case specialistAssistantEntrances
     case directWorkflowStart
     case noDecorativeComposerAction
+}
+
+public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
+    case persistentComposer
+    case composerSharedWithGlobalCapture
+    case integratedComposerSurface
+    case composerFormattingToolbar
+    case composerPrimaryAction
+    case composerSecondaryAction
+    case composerInlineStatus
+    case composerDeterministicStateMachine
+    case composerRetryAction
+    case composerSuccessFeedback
+    case composerSharedActionChrome
+    case composerSavesOnCommandReturn
+    case composerDraftSurvivesDismissal
+    case composerClassificationTokens
+    case composerClassificationSuggestions
+    case secondCategoryTokenBlocked
+    case searchCollection
+    case reviewCollection
+    case substringFiltering
+    case reverseChronologicalTimeline
+    case naturalDaySections
+    case daySectionHeader
+    case collapsibleSharedDetailRail
+    case ideaCard
+    case ideaCardPresentationSeam
+    case ideaCardTimestamp
+    case ideaCardClassificationLine
+    case ideaCardOverflowMenu
+    case ideaCardEditAction
+    case ideaCardDeleteAction
+    case doubleClickInlineEdit
+    case inlineEditField
+    case inlineEditUsesComposerSurface
+    case inlineEditCommandReturnSave
+    case inlineEditEscapeCancel
+    case inlineEditBlurSave
+    case inlineEditContextChangePreflight
+    case inlineEditExplicitCancelNoPersistence
+    case singleLineEmptyState
+    case ideaCardAddToStickyNoteAction
+    case ideaCardRemoveFromStickyNoteAction
+    case classificationLineClickToFilter
+    case activeClassificationFilterIndicator
+    case singleFilterIndicatorVisualUnit
+}
+
+public enum MacUIIdeasPageLayout {
+    public static let composerIdleHeight = 64.0
+    public static let composerExpandedMinimumHeight = 112.0
+    public static let composerMaximumHeight = 220.0
+    public static let composerCornerRadius = 12.0
+    public static let composerActionBarHeight = 42.0
+    public static let composerToolHitTarget = 28.0
+    public static let composerActionButtonHeight = 32.0
+    public static let composerActionSpacing = 8.0
+    public static let composerHorizontalTextInset = 16.0
+    public static let composerTopTextInset = 13.0
+    public static let composerPersistentToolCount = 3
+    public static let composerFilterSpacing = 10.0
+    public static let timelineSectionSpacing = 18.0
+    public static let sectionHeaderBottomPadding = 4.0
+    public static let cardHorizontalPadding = 12.0
+    public static let cardVerticalPadding = 10.0
+    public static let cardMetadataSpacing = 6.0
+    public static let cardSeparatesWithSingleDivider = true
+    public static let classificationLineOnlyWhenClassified = true
+    public static let emptyStateVisualUnitCount = 1
+    public static let filterIndicatorVisualUnitCount = 1
+    public static let classificationFilterCombinesWithSubstringFilter = true
+    public static let readableTimelineMaximumWidth = 760.0
+    public static let usesSharedDetailRail = true
+}
+
+public enum MacUIStickyNotesPageElement: String, CaseIterable, Sendable {
+    case singleDropdownPresentationMenu
+    case currentPresentationInMenuLabel
+    case streamPresentation
+    case wallPresentation
+    case sharedItemContent
+    case sourceFlylightNavigation
+    case localPresentationPreference
+}
+
+public enum MacUIStickyNotesPageLayout {
+    public static let presentationMenuVisualUnitCount = 1
+    public static let presentationsShareItemContent = true
+    public static let presentationPreferenceIsLocal = true
 }
 
 public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
@@ -647,6 +739,12 @@ public enum MacUIMarkdownEditingCommand: String, CaseIterable, Sendable {
     case italic
     case inlineCode
     case link
+    case heading
+    case unorderedList
+    case orderedList
+    case taskList
+    case quote
+    case codeBlock
     case indent
     case hardLineBreak
 }
@@ -935,6 +1033,8 @@ public struct MacUIDesignContract: Sendable {
     public let navigationElements: [MacUINavigationElement]
     public let pages: [MacUIPage]
     public let zhulongHomeElements: [MacUIZhulongHomeElement]
+    public let ideasPageElements: [MacUIIdeasPageElement]
+    public let stickyNotesPageElements: [MacUIStickyNotesPageElement]
     public let dayTodoElements: [MacUIDayTodoElement]
     public let taskPoolElements: [MacUITaskPoolElement]
     public let futurePlanElements: [MacUIFuturePlanElement]
@@ -958,6 +1058,8 @@ public struct MacUIDesignContract: Sendable {
         navigationElements: [MacUINavigationElement] = MacUINavigationElement.allCases,
         pages: [MacUIPage] = MacUIPage.allCases,
         zhulongHomeElements: [MacUIZhulongHomeElement] = MacUIZhulongHomeElement.allCases,
+        ideasPageElements: [MacUIIdeasPageElement] = MacUIIdeasPageElement.allCases,
+        stickyNotesPageElements: [MacUIStickyNotesPageElement] = MacUIStickyNotesPageElement.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
         taskPoolElements: [MacUITaskPoolElement] = MacUITaskPoolElement.allCases,
         futurePlanElements: [MacUIFuturePlanElement] = MacUIFuturePlanElement.allCases,
@@ -980,6 +1082,8 @@ public struct MacUIDesignContract: Sendable {
         self.navigationElements = navigationElements
         self.pages = pages
         self.zhulongHomeElements = zhulongHomeElements
+        self.ideasPageElements = ideasPageElements
+        self.stickyNotesPageElements = stickyNotesPageElements
         self.dayTodoElements = dayTodoElements
         self.taskPoolElements = taskPoolElements
         self.futurePlanElements = futurePlanElements

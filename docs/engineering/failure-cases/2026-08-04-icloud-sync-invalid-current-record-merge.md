@@ -1,4 +1,4 @@
-# FAIL-2026-08-04-01：iCloud 同步 current-record 合并拒绝循环
+# FAIL-2026-08-04-22：iCloud 同步 current-record 合并拒绝循环
 
 - 状态：处理中
 - 必需门禁：fast,symptom

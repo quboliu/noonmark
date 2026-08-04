@@ -111,6 +111,7 @@ e2e_owned_artifact_roots=(
   artifacts/e2e-english-native-command-stress
   artifacts/e2e-global-quick-entry
   artifacts/e2e-header-navigation-hit-target
+  artifacts/e2e-idea-capture
   artifacts/e2e-keyboard-date
   artifacts/e2e-lifecycle
   artifacts/e2e-markdown-editor
@@ -232,6 +233,7 @@ only_mode_specs=(
   "NOONMARK_E2E_COMPLETION_SEQUENCE_ONLY:completion-sequence"
   "NOONMARK_E2E_WINDOW_STATE_ONLY:window-state"
   "NOONMARK_E2E_GLOBAL_QUICK_ENTRY_ONLY:global-quick-entry"
+  "NOONMARK_E2E_IDEA_CAPTURE_ONLY:idea-capture"
   "NOONMARK_E2E_NATIVE_COMMANDS_ONLY:native-commands"
   "NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands"
   "NOONMARK_E2E_COMPLETION_CONTROL_ONLY:completion-control"
@@ -3857,6 +3859,137 @@ run_global_quick_entry_shortcut_probe() {
     --e2e-global-quick-entry-result-url "$PWD/$shortcut_result"
 
   echo "E2E global Quick Entry from Finder: $shortcut_result"
+}
+
+run_idea_capture_probe() {
+  local idea_dir="artifacts/e2e-idea-capture"
+  local idea_db="$idea_dir/Noonmark.sqlite"
+  local exercise_result="$idea_dir/exercise-result.txt"
+  local exercise_log="$idea_dir/exercise.log"
+  local verify_result="$idea_dir/verify-result.txt"
+  local verify_log="$idea_dir/verify.log"
+  local cancel_proof="$idea_dir/cancel-sqlite-proof.tsv"
+  local cancel_id
+  local cancel_updated_at_bits
+  local cancel_sql_probe
+  local idea_sql_probe
+  local screenshot
+
+  rm -rf "$idea_dir"
+  mkdir -p "$idea_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "idea capture exercise" \
+    "$exercise_result" \
+    "$exercise_log" \
+    --data-url "$PWD/$idea_db" \
+    --page day \
+    --e2e-reset-selection \
+    --e2e-seed-default-state \
+    --e2e-idea-capture exercise \
+    --e2e-idea-capture-result-url "$PWD/$exercise_result" \
+    --e2e-idea-capture-screenshot-dir "$PWD/$idea_dir"
+
+  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
+    "idea capture restart verification" \
+    "$verify_result" \
+    "$verify_log" \
+    --data-url "$PWD/$idea_db" \
+    --page ideas \
+    --e2e-reset-selection \
+    --e2e-idea-capture verify \
+    --e2e-idea-capture-result-url "$PWD/$verify_result" \
+    --e2e-idea-capture-screenshot-dir "$PWD/$idea_dir"
+
+  idea_sql_probe="$(sqlite3 -noheader -separator ' ' "$idea_db" "
+    SELECT
+      count(*),
+      (SELECT count(*) FROM idea_entries WHERE deleted_at IS NULL),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = '## e2e Flylight alpha edited' || char(10)
+         || '- second line https://example.com/@user'
+         AND deleted_at IS NULL
+         AND category_id IS NOT NULL
+         AND json_array_length(label_ids_json) = 1),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = ''
+         AND deleted_at IS NOT NULL
+         AND typeof(deleted_at_bits) = 'integer'
+         AND updated_at_bits = deleted_at_bits),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = 'e2e panel idea gamma' AND deleted_at IS NULL),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = 'e2e hotkey idea delta' AND deleted_at IS NULL),
+      (SELECT count(*) FROM idea_entries
+       WHERE body IN ('e2e idea beta marker', 'e2e idea beta edited',
+                      'e2e idea epsilon marker', 'e2e draft discarded')),
+      (SELECT count(*) FROM idea_entries
+       WHERE deleted_at IS NULL AND pinned_at IS NOT NULL),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = 'e2e panel idea gamma'
+         AND pinned_at IS NOT NULL
+         AND typeof(pinned_at_bits) = 'integer'),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = '## e2e Flylight alpha edited' || char(10)
+         || '- second line https://example.com/@user'
+         AND pinned_at IS NULL),
+      (SELECT count(*) FROM idea_entries
+       WHERE body = 'e2e idea beta restored'
+         AND deleted_at IS NULL
+         AND pinned_at IS NULL)
+    FROM idea_entries;
+  ")"
+  if [[ "$idea_sql_probe" != "6 4 1 2 1 1 0 1 1 1 0" ]]; then
+    echo "idea capture SQLite probe failed: ${idea_sql_probe:-missing}" >&2
+    exit 1
+  fi
+
+  if [[ ! -s "$cancel_proof" ]]; then
+    echo "idea capture cancellation SQLite proof was not created" >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r cancel_id cancel_updated_at_bits < "$cancel_proof"
+  if [[ ! "$cancel_id" =~ ^[0-9A-Fa-f-]{36}$ ]] \
+    || [[ ! "$cancel_updated_at_bits" =~ ^-?[0-9]+$ ]]; then
+    echo "idea capture cancellation SQLite proof was malformed" >&2
+    exit 1
+  fi
+  cancel_sql_probe="$(sqlite3 -noheader "$idea_db" "
+    SELECT count(*) FROM idea_entries
+    WHERE id = '$cancel_id'
+      AND body = 'e2e cancellation persistence proof'
+      AND updated_at_bits = $cancel_updated_at_bits
+      AND deleted_at IS NULL;
+  ")"
+  if [[ "$cancel_sql_probe" != "1" ]]; then
+    echo "idea capture cancellation changed body or updated_at_bits in SQLite" >&2
+    exit 1
+  fi
+
+  for screenshot in \
+    ideas-empty.png \
+    ideas-detail-collapsed.png \
+    ideas-detail-expanded.png \
+    ideas-composer-failed.png \
+    ideas-composer-saving.png \
+    ideas-composer-saved.png \
+    ideas-filtered.png \
+    ideas-classification-filtered.png \
+    ideas-edited.png \
+    ideas-inline-saving.png \
+    ideas-empty-focused.png \
+    sticky-notes-wall.png \
+    sticky-notes-selected.png \
+    sticky-notes-restart.png \
+    idea-capture-panel.png \
+    ideas-restart.png; do
+    if [[ ! -s "$idea_dir/$screenshot" ]]; then
+      echo "idea capture screenshot was not created: $idea_dir/$screenshot" >&2
+      exit 1
+    fi
+  done
+
+  echo "E2E Flylight composer/Markdown/filter/edit/delete, cancel invariants, hidden tombstones, Sticky Note modes, panel, hotkey, restart, and SQLite probe: $idea_db (probe=$idea_sql_probe cancel=$cancel_sql_probe)"
 }
 
 run_native_command_surface_probe() {
@@ -10796,6 +10929,11 @@ if [[ "${NOONMARK_E2E_GLOBAL_QUICK_ENTRY_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${NOONMARK_E2E_IDEA_CAPTURE_ONLY:-0}" == "1" ]]; then
+  run_idea_capture_probe
+  exit 0
+fi
+
 if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
   native_stress_dir="artifacts/e2e-native-command-stress"
   rm -rf "$native_stress_dir"
@@ -11109,6 +11247,8 @@ run_workspace_restoration_probe
 run_window_close_behavior_probe
 
 run_global_quick_entry_shortcut_probe
+
+run_idea_capture_probe
 
 run_native_command_surface_probe
 

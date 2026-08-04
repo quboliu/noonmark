@@ -105,7 +105,7 @@ public struct SyncSnapshotDiffer: Sendable {
         case .appPreferences:
             preferencesPayload
         case .day, .taskCycleSeries, .taskDefinition, .dayTrace, .subtask,
-             .classificationBaseline, .classificationCommit,
+             .ideaEntry, .classificationBaseline, .classificationCommit,
              .traceClassificationEvent:
             nil
         }
@@ -437,6 +437,7 @@ public struct SyncSnapshotDiffer: Sendable {
             to: newSnapshot.traces
         )
         entities += changedSubtasks(from: oldSnapshot.subtasks, to: newSnapshot.subtasks)
+        entities += changedIdeas(from: oldSnapshot.ideas, to: newSnapshot.ideas)
 
         let themeChanged = oldSnapshot.preferences.theme != newSnapshot.preferences.theme
         let languageChanged = oldSnapshot.preferences.language != newSnapshot.preferences.language
@@ -504,6 +505,13 @@ public struct SyncSnapshotDiffer: Sendable {
         let oldByID = Dictionary(uniqueKeysWithValues: oldSubtasks.map { ($0.id, $0) })
         return newSubtasks.compactMap { subtask in
             oldByID[subtask.id] == subtask ? nil : ChangedEntity(type: .subtask, id: subtask.id.rawValue.uuidString)
+        }
+    }
+
+    private func changedIdeas(from oldIdeas: [IdeaEntry], to newIdeas: [IdeaEntry]) -> [ChangedEntity] {
+        let oldByID = Dictionary(uniqueKeysWithValues: oldIdeas.map { ($0.id, $0) })
+        return newIdeas.compactMap { idea in
+            oldByID[idea.id] == idea ? nil : ChangedEntity(type: .ideaEntry, id: idea.id.rawValue.uuidString)
         }
     }
 }

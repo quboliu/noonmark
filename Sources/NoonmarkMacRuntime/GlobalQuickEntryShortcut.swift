@@ -143,6 +143,11 @@ public struct GlobalQuickEntryShortcut: Codable, Equatable, Hashable, Sendable {
         modifiers: [.control, .shift]
     )
 
+    public static let ideaCaptureStandard = Self(
+        key: .i,
+        modifiers: [.control, .shift]
+    )
+
     public var displayText: String {
         var result = ""
         if modifiers.contains(.control) {
@@ -177,6 +182,11 @@ public struct GlobalQuickEntryShortcutPreference: Codable, Equatable, Sendable {
         isEnabled: true,
         shortcut: .standard
     )
+
+    public static let ideaCaptureStandard = Self(
+        isEnabled: true,
+        shortcut: .ideaCaptureStandard
+    )
 }
 
 @MainActor
@@ -189,23 +199,28 @@ public protocol GlobalShortcutPreferenceStoring: AnyObject {
 public final class GlobalShortcutPreferenceRepository: GlobalShortcutPreferenceStoring {
     public static let defaultStorageKey =
         "Noonmark.GlobalQuickEntryShortcut.v1"
+    public static let defaultIdeaCaptureStorageKey =
+        "Noonmark.GlobalIdeaCaptureShortcut.v1"
 
     private let defaults: UserDefaults
     private let storageKey: String
+    private let defaultPreference: GlobalQuickEntryShortcutPreference
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     public init(
         defaults: UserDefaults = .standard,
-        storageKey: String = defaultStorageKey
+        storageKey: String = defaultStorageKey,
+        defaultPreference: GlobalQuickEntryShortcutPreference = .standard
     ) {
         self.defaults = defaults
         self.storageKey = storageKey
+        self.defaultPreference = defaultPreference
     }
 
     public func load() -> GlobalQuickEntryShortcutPreference {
         guard let storedValue = defaults.object(forKey: storageKey) else {
-            return .standard
+            return defaultPreference
         }
         guard let data = storedValue as? Data,
               let preference = try? decoder.decode(
@@ -215,7 +230,7 @@ public final class GlobalShortcutPreferenceRepository: GlobalShortcutPreferenceS
         else {
             return GlobalQuickEntryShortcutPreference(
                 isEnabled: false,
-                shortcut: .standard
+                shortcut: defaultPreference.shortcut
             )
         }
         return preference
@@ -238,6 +253,20 @@ public enum GlobalQuickEntryShortcutValidation: Equatable, Sendable {
 public enum GlobalShortcutSnapshot: Equatable, Sendable {
     case available(Set<GlobalQuickEntryShortcut>)
     case unavailable
+
+    /// Adds a shortcut reserved outside the main-menu command catalog, such
+    /// as the sibling global hotkey, so the policy rejects reusing it.
+    /// Unavailable stays unavailable to keep the fail-closed discipline.
+    public func insertingReserved(
+        _ shortcut: GlobalQuickEntryShortcut
+    ) -> GlobalShortcutSnapshot {
+        switch self {
+        case let .available(shortcuts):
+            .available(shortcuts.union([shortcut]))
+        case .unavailable:
+            .unavailable
+        }
+    }
 }
 
 public struct GlobalQuickEntryShortcutPolicy: Sendable {
@@ -297,7 +326,7 @@ public enum GlobalShortcutRegistrationStatus: Equatable, Sendable {
 }
 
 @MainActor
-public final class GlobalQuickEntryShortcutCoordinator: ObservableObject {
+public class GlobalQuickEntryShortcutCoordinator: ObservableObject {
     @Published public private(set) var preference:
         GlobalQuickEntryShortcutPreference
     @Published public private(set) var status:
@@ -405,3 +434,11 @@ public final class GlobalQuickEntryShortcutCoordinator: ObservableObject {
         status = .active
     }
 }
+
+/// Distinct type for the global idea-capture hotkey so the app can inject
+/// both coordinators as separate environment objects while sharing all of
+/// the quick-entry registration, validation and persistence behavior.
+@MainActor
+public final class GlobalIdeaCaptureShortcutCoordinator:
+    GlobalQuickEntryShortcutCoordinator
+{}

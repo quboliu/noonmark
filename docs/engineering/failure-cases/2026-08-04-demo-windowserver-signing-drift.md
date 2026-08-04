@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-18：Demo 重建后失去 WindowServer 输入授权
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 10:24 -04:00
 - 影响版本／构建：`477cb3d43d58823906503e86f4d79d329f15df5e` 至修复前工作树
 - 引入提交：`477cb3d43d58823906503e86f4d79d329f15df5e` `fix(flylight): 补齐编辑恢复与真实交互门禁`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：当前 Codex agent；由该提交对应工作会话、Demo 物理交互入口与运行取证确认
-- 修复提交：待回填
+- 修复提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec`
 
 ## 用户症状与影响
 
@@ -41,7 +41,8 @@ Demo 两个构建调用者没有设置 `NOONMARK_REQUIRE_STABLE_UI_SIGNING=1`。
 ## 验证结果
 
 - 原故障症状与 ad-hoc 签名证据已取得。
-- `scripts/test-runtime-profile-isolation`、重跑 Demo 与完整 `make check` 待最终回填。
+- `scripts/test-runtime-profile-isolation` 通过；稳定 Apple Development 签名 Demo 只请求 CG event-posting 权限，真实交互、SQLite 与 sidecar 对账通过。
+- 完整 `make check` 通过；全量报告为 1500 项测试、0 失败。
 
 ## 永久门禁
 

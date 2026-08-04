@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-11：飞光 E2E 把 key panel 错当成 main window
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 09:16 -04:00
 - 影响版本／构建：`ff86af0a1fa47518667348e3df0d61d1c9caf09e` 至 `0d62105`
 - 引入提交：`ff86af0a1fa47518667348e3df0d61d1c9caf09e` `feat(ideas): 原生想法记录与置顶、回收站、标签过滤`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec`
 
 ## 用户症状与影响
 
@@ -41,7 +41,7 @@ E2E helper 把 `isMainWindow && isKeyWindow` 当成所有 `NSWindow` 子类的�
 
 - 原始激活错误消失。
 - 全局面板建议物理点击、发布、主窗口回归及 SQLite 对账通过。
-- 完整 `make check` 尚待最终执行。
+- `make test-demo-fixture` 与完整 `make check` 均通过；全量报告为 1500 项测试、0 失败。
 
 ## 永久门禁
 

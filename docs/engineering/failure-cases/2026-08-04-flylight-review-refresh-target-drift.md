@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-19：飞光回看刷新按钮目标漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 10:56 -04:00
 - 影响版本／构建：2026-08-04 当前工作树构建的隔离 E2E App
 - 引入提交：`7a639ee4deac5969a103796076e9147c7fb54a3b feat(ideas): 重做想法捕捉与浏览骨架`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec`
 
 ## 用户症状与影响
 
@@ -18,7 +18,7 @@
 - 2026-08-03：`7a639ee4` 加入回看刷新按钮，只设置 SwiftUI accessibility identifier，没有应用拥有的稳定命中锚点。
 - 2026-08-04 10:56：本轮扩展真实来源恢复 E2E，首次物理点击「换一组」，稳定返回 `target changed before mouseDown`。
 - 2026-08-04：源码和失败日志对账确认按钮动作、回看模式与前台 App 身份均正确；缺失的是 mouseDown 前可复核的稳定目标。
-- 2026-08-04：锚点移动到 Button 触发器背景，等待同一路径转绿。
+- 2026-08-04：锚点移动到 Button 触发器背景，同一路径重跑转绿。
 
 ## 复现与证据
 
@@ -56,9 +56,9 @@ target changed before mouseDown: ideas.review.refresh,target={unavailable}
 
 ## 验证结果
 
-- 待重跑 `scripts/test-notes-ui-contract`。
-- 待重跑 `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`。
-- 待重跑 `make test-demo-fixture` 与 `make check`。
+- `scripts/test-notes-ui-contract` 通过，稳定触发器边界进入 fast gate。
+- `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e` 通过，物理刷新与精确 review seed 来源恢复均转绿。
+- `make test-demo-fixture` 与完整 `make check` 均通过；全量报告为 1500 项测试、0 失败。
 
 ## 永久门禁
 

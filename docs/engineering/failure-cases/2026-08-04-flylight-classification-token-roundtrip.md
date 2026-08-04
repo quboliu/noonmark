@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-08：飞光分类名在再次编辑时不可逆
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 09:02 -04:00
 - 影响版本／构建：`1e2f45ad68a821e24d76a0d6442418f3d338aed9` 至 `0d62105`
 - 引入提交：`1e2f45ad68a821e24d76a0d6442418f3d338aed9` `feat(flylight): 重构飞光输入与编辑体验`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：当前 Codex agent；由该提交对应工作会话、Git 记录与 K3 review 确认
-- 修复提交：待回填
+- 修复提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec`
 
 ## 用户症状与影响
 
@@ -41,7 +41,7 @@
 
 - `NewTaskDraftParserTests` 14／14 通过。
 - 真实 App 的 `Client Work` 创建、双击编辑、分类身份、重启与 SQLite 对账通过。
-- 完整 `make check` 尚待最终执行。
+- `make test-demo-fixture` 与完整 `make check` 均通过；全量报告为 1500 项测试、0 失败。
 
 ## 永久门禁
 

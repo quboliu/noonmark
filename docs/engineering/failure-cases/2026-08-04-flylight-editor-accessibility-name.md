@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-17：飞光编辑器用 placeholder 冒充 accessibility 名称
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 10:03 -04:00
 - 影响版本／构建：`3ab199ec94e5de9e2bf6b0143a11f173e2fa63c6` 至修复前工作树
 - 引入提交：`3ab199ec94e5de9e2bf6b0143a11f173e2fa63c6` `feat(notes): 建立飞光与 Sticky Note 多视图`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：当前 Codex agent；由该提交对应工作会话、Git blame 与正式 review 确认
-- 修复提交：待回填
+- 修复提交：`9a60f1094a8c9802aa0d45768bb25d9cded1bcec`
 
 ## 用户症状与影响
 
@@ -42,7 +42,7 @@ VoiceOver 把整段「记录一条飞光，支持 Markdown……」placeholder �
 
 - `swift build` 通过。
 - 定向真实 `.app` E2E 在空态与脏草稿态对账原生 label／value 均通过。
-- Demo 与完整 `make check` 待最终回填。
+- `make test-demo-fixture` 与完整 `make check` 均通过；全量报告为 1500 项测试、0 失败。
 
 ## 永久门禁
 

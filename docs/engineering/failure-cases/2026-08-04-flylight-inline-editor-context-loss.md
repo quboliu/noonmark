@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-04：飞光行内编辑上下文切换丢失草稿
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04 04:55 -04:00
 - 影响版本／构建：`f3886fca472bfc86a6050ca6db52e492f41384ff` 之后、尚未提交的飞光编辑器重构工作树
 - 引入提交：尚未进入 Git commit；故障由本轮未提交的 `IdeaInlineEditorSession.begin` 重构首次引入并在提交前拦截
 - Git author／committer：不适用；故障变更尚未提交
 - 实际修改者：当前 Codex agent；由本轮工作树 diff、红测及会话记录确认
-- 修复提交：待回填
+- 修复提交：`1e2f45ad68a821e24d76a0d6442418f3d338aed9`
 
 ## 用户症状与影响
 
@@ -60,7 +60,7 @@
 
 ## 发行与回滚
 
-本轮仅使用固定 `e2e` profile，不启动或读取 production。修复提交确定前案例保持处理中。若最终门禁失败，停止交付并回退整组未提交的飞光编辑器 cutover；不得恢复无 guard 的 session begin 或先 mutation 后保存的导航顺序。
+本轮仅使用固定 `e2e` profile，不启动或读取 production。修复已随 `1e2f45ad68a821e24d76a0d6442418f3d338aed9` 进入版本历史。若后续门禁回归，停止交付并回退整组飞光编辑器 cutover；不得恢复无 guard 的 session begin 或先 mutation 后保存的导航顺序。
 
 ## 教训与永久约束
 

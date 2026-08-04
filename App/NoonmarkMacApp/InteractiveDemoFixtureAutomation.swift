@@ -848,6 +848,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 && context.store.engine.ideas[idea.id]?.body
                 == "演示验收\n\(original.body)"
         }
+        try await waitForFlylightCardBody(
+            ideaID: idea.id,
+            body: "演示验收\n\(original.body)",
+            in: mainWindow
+        )
 
         try await demoDoubleClick(
             "ideas.card.body.\(idea.id)",
@@ -874,6 +879,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 && restored.labelIDs == original.labelIDs
                 && restored.pinnedAt == original.pinnedAt
         }
+        try await waitForFlylightCardBody(
+            ideaID: idea.id,
+            body: original.body,
+            in: mainWindow
+        )
 
         let ideaCount = context.store.engine.ideaTimeline().count
         try input.postKey(keyCode: 34, modifiers: [.control, .shift])
@@ -1092,6 +1102,25 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         }
         throw InteractiveDemoFixtureError
             .taskCollectionPresentationFailed(failure)
+    }
+
+    @MainActor
+    private func waitForFlylightCardBody(
+        ideaID: IdeaID,
+        body: String,
+        in window: NSWindow
+    ) async throws {
+        try await waitForFlylightDemo("飞光保存后正文没有重新挂载") {
+            guard let cardBody = AppViewTreeE2E.view(
+                identifier: "ideas.card.body.\(ideaID)",
+                in: window
+            ) else {
+                return false
+            }
+            return cardBody.isHiddenOrHasHiddenAncestor == false
+                && cardBody.visibleRect.isEmpty == false
+                && AppViewTreeE2E.verificationText(for: cardBody) == body
+        }
     }
 
     @MainActor

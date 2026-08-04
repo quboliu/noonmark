@@ -208,6 +208,14 @@ require_literal \
   "$demo_automation" \
   'annual Demo no longer records physical Flylight editing and suggestion coverage'
 require_literal \
+  'try await waitForFlylightCardBody(' \
+  "$demo_automation" \
+  'annual Demo can continue before a saved Flylight card body is mounted'
+require_literal \
+  '飞光保存后正文没有重新挂载' \
+  "$demo_automation" \
+  'annual Demo lost its saved Flylight card body readiness assertion'
+require_literal \
   '飞光脏草稿没有在保留正文时收起' \
   "$demo_automation" \
   'annual Demo no longer proves dirty Flylight draft collapse and accessibility recovery'

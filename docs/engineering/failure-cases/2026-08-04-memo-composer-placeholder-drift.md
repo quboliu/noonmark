@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-01：飞光空输入框提示与光标错位
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-03 23:41 -04:00
 - 影响版本／构建：`7a639ee4deac5969a103796076e9147c7fb54a3b` 所构建的隔离 Demo／E2E App
 - 引入提交：`23a406e28bb6f0c8e049b5880c2314af9d82c110 feat(app): 收敛任务操作与详情编辑`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；仓库只能证明 Git identity，不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`3ab199ec94e5de9e2bf6b0143a11f173e2fa63c6`
 
 ## 用户症状与影响
 

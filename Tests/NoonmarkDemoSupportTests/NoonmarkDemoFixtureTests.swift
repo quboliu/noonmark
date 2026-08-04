@@ -304,6 +304,7 @@ struct NoonmarkDemoFixtureTests {
         })
         #expect(fixture.report.ideaCount == 7)
         #expect(fixture.report.ideaDayCount == 6)
+        #expect(fixture.report.ideaReviewCandidateCount == 2)
         #expect(fixture.report.labeledIdeaCount == 4)
         #expect(fixture.report.categorizedIdeaCount == 2)
         #expect(fixture.report.editedIdeaCount == 3)

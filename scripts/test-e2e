@@ -3902,7 +3902,7 @@ run_idea_capture_probe() {
       count(*),
       (SELECT count(*) FROM idea_entries WHERE deleted_at IS NULL),
       (SELECT count(*) FROM idea_entries
-       WHERE body = 'e2e idea alpha'
+       WHERE body = 'e2e idea alpha' || char(10) || 'second line'
          AND deleted_at IS NULL
          AND category_id IS NOT NULL
          AND json_array_length(label_ids_json) = 1),
@@ -3925,7 +3925,8 @@ run_idea_capture_probe() {
          AND pinned_at IS NOT NULL
          AND typeof(pinned_at_bits) = 'integer'),
       (SELECT count(*) FROM idea_entries
-       WHERE body = 'e2e idea alpha' AND pinned_at IS NULL),
+       WHERE body = 'e2e idea alpha' || char(10) || 'second line'
+         AND pinned_at IS NULL),
       (SELECT count(*) FROM idea_entries
        WHERE body = 'e2e idea beta restored'
          AND deleted_at IS NULL
@@ -3939,6 +3940,7 @@ run_idea_capture_probe() {
 
   for screenshot in \
     ideas-empty.png \
+    ideas-compact-stream.png \
     ideas-composer-saved.png \
     ideas-filtered.png \
     ideas-classification-filtered.png \

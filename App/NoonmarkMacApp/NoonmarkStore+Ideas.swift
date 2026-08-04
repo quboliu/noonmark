@@ -13,6 +13,11 @@ enum IdeaClassificationFilterSelection: Equatable {
     case label(TaskLabelID)
 }
 
+enum IdeaBrowseMode: Equatable {
+    case recent
+    case review
+}
+
 /// One clickable classification component on an idea card.
 struct IdeaClassificationComponent: Equatable {
     let selection: IdeaClassificationFilterSelection
@@ -29,6 +34,82 @@ struct IdeaClassificationComponent: Equatable {
 }
 
 extension NoonmarkStore {
+    private var recentIdeaCollectionQuery: IdeaCollectionQuery {
+        let filter = ideaTimelineFilter
+        switch (filter.text, filter.categoryID, filter.labelID) {
+        case (nil, nil, nil):
+            return .recent
+        case let (text?, nil, nil):
+            return .search(text: text)
+        case let (nil, categoryID?, nil):
+            return .category(categoryID)
+        case let (nil, nil, labelID?):
+            return .label(labelID)
+        default:
+            return .filtered(filter)
+        }
+    }
+
+    private var recentIdeaCollection: IdeaCollectionProjection {
+        engine.ideaCollection(recentIdeaCollectionQuery, today: today)
+    }
+
+    var displayedIdeaCollection: IdeaCollectionProjection {
+        switch ideaBrowseMode {
+        case .recent:
+            recentIdeaCollection
+        case .review:
+            engine.ideaCollection(
+                .review(
+                    seed: ideaReviewSeed,
+                    count: 5,
+                    excludingRecentDays: 7
+                ),
+                today: today
+            )
+        }
+    }
+
+    var displayedIdeaGroups: [IdeaDayGroup] {
+        displayedIdeaCollection.groups
+    }
+
+    var selectedIdea: IdeaEntry? {
+        let collection = displayedIdeaCollection
+        let visibleIDs = Set(collection.ideas.map(\.id))
+        guard let selectedIdeaID,
+              visibleIDs.contains(selectedIdeaID),
+              let idea = engine.ideas[selectedIdeaID],
+              idea.isDeleted == false
+        else {
+            return collection.pinnedIdeas.first
+                ?? collection.groups.first?.ideas.first
+        }
+        return idea
+    }
+
+    func showRecentIdeas() {
+        ideaBrowseMode = .recent
+    }
+
+    func dismissIdeaSearch() {
+        ideaFilterText = ""
+    }
+
+    func showIdeaReview() {
+        ideaFilterText = ""
+        clearIdeaClassificationFilter()
+        ideaBrowseMode = .review
+    }
+
+    func refreshIdeaReview() {
+        ideaReviewSeed &+= 1
+    }
+
+    func selectIdea(_ id: IdeaID) {
+        selectedIdeaID = id
+    }
+
     var ideaTimelineFilter: IdeaTimelineFilter {
         var filter = IdeaTimelineFilter(
             text: ideaFilterText.isEmpty ? nil : ideaFilterText
@@ -45,21 +126,21 @@ extension NoonmarkStore {
     }
 
     var ideaTimelineGroups: [IdeaDayGroup] {
-        engine.ideaTimelineByDay(filter: ideaTimelineFilter)
+        recentIdeaCollection.groups
     }
 
     var pinnedIdeas: [IdeaEntry] {
-        engine.pinnedIdeas(filter: ideaTimelineFilter)
+        recentIdeaCollection.pinnedIdeas
     }
 
     var ideaTrashItems: [IdeaEntry] {
-        engine.ideaTrash()
+        engine.ideaCollection(.trash, today: today).ideas
     }
 
     /// Total active ideas regardless of filter: distinguishes "no ideas at
     /// all" from "no filter match" for the empty state.
     var visibleIdeaCount: Int {
-        engine.ideaTimeline().count + engine.pinnedIdeas().count
+        engine.ideaCollection(.recent, today: today).ideas.count
     }
 
     var hasVisibleIdeas: Bool {
@@ -87,6 +168,7 @@ extension NoonmarkStore {
     func selectIdeaClassificationFilter(
         _ component: IdeaClassificationComponent
     ) {
+        ideaBrowseMode = .recent
         ideaClassificationFilter = component.selection
     }
 
@@ -139,7 +221,7 @@ extension NoonmarkStore {
     }
 
     func ideaDraftIssueMessage(for draft: String) -> String? {
-        switch parsedTaskDraft(draft).issue {
+        switch IdeaDraftParser.parse(draft).issue {
         case .multipleCategories:
             copy.ideaMultipleCategories
         case nil:
@@ -149,25 +231,24 @@ extension NoonmarkStore {
 
     @discardableResult
     func appendIdeaFromComposer() -> Bool {
-        let draft = parsedTaskDraft(ideaText)
-        guard commitIdeaDraft(draft) else { return false }
-        ideaText = ""
-        return true
+        ideaComposerSession.submit { [self] body in
+            commitIdeaDraft(IdeaDraftParser.parse(body))
+        }
     }
 
     /// Plain-text entry point for the global idea-capture panel; shares the
     /// composer's parser, classification resolution and mutation discipline.
     @discardableResult
     func appendIdea(text: String) -> Bool {
-        commitIdeaDraft(parsedTaskDraft(text))
+        commitIdeaDraft(IdeaDraftParser.parse(text))
     }
 
-    private func commitIdeaDraft(_ draft: NewTaskDraft) -> Bool {
+    private func commitIdeaDraft(_ draft: IdeaDraft) -> Bool {
         guard draft.issue == nil else {
             showToast(copy.ideaMultipleCategories)
             return false
         }
-        guard draft.title.isEmpty == false else { return false }
+        guard draft.body.isEmpty == false else { return false }
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshot(.addIdea)
@@ -181,7 +262,7 @@ extension NoonmarkStore {
                         .unresolved(resolution.unresolvedNames)
                 }
                 return try candidate.appendIdea(
-                    body: draft.title,
+                    body: draft.body,
                     categoryID: resolution.categoryID,
                     labelIDs: resolution.labelIDs,
                     now: moment.instant
@@ -202,26 +283,21 @@ extension NoonmarkStore {
     }
 
     func beginIdeaEdit(_ idea: IdeaEntry) {
-        editingIdeaID = idea.id
-        ideaEditText = idea.body
+        ideaInlineEditorSession.begin(id: idea.id, body: idea.body)
     }
 
     func cancelIdeaEdit() {
-        editingIdeaID = nil
-        ideaEditText = ""
+        ideaInlineEditorSession.cancel()
     }
 
     @discardableResult
     func commitIdeaEdit() -> Bool {
-        guard let id = editingIdeaID else { return false }
-        let body = ideaEditText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard body.isEmpty == false else {
-            return deleteIdea(id)
+        ideaInlineEditorSession.save { [self] id, body in
+            persistIdeaEdit(id: id, body: body)
         }
-        guard body != engine.ideas[id]?.body else {
-            cancelIdeaEdit()
-            return true
-        }
+    }
+
+    private func persistIdeaEdit(id: IdeaID, body: String) -> Bool {
         do {
             try commitEngineMutation(
                 undoPolicy: .snapshot(.editIdea)
@@ -232,7 +308,6 @@ extension NoonmarkStore {
                     now: moment.instant
                 )
             }
-            cancelIdeaEdit()
             resolveOperationFailure(.ideaMutation)
             return true
         } catch {
@@ -342,7 +417,7 @@ extension NoonmarkStore {
     }
 
     private func resolveIdeaDraftClassification(
-        _ draft: NewTaskDraft,
+        _ draft: IdeaDraft,
         in candidate: NoonmarkEngine
     ) -> (
         categoryID: TaskCategoryID?,

@@ -701,8 +701,10 @@ final class NoonmarkStore: ObservableObject {
     let poolTextDraft = NoonmarkTextInputDraft()
     let detailSubtaskTextDraft = NoonmarkTextInputDraft()
     let detailNoteTextDraft = NoonmarkTextInputDraft()
-    let ideaTextDraft = NoonmarkTextInputDraft()
-    let ideaEditTextDraft = NoonmarkTextInputDraft()
+    let ideaComposerSession = IdeaComposerSession(
+        repository: IdeaComposerDraftRepository()
+    )
+    let ideaInlineEditorSession = IdeaInlineEditorSession()
     let ideaRestoreTextDraft = NoonmarkTextInputDraft()
     let inputDraftFlushCoordinator =
         InputDraftFlushCoordinator()
@@ -719,13 +721,13 @@ final class NoonmarkStore: ObservableObject {
     }
 
     var ideaText: String {
-        get { ideaTextDraft.text }
-        set { ideaTextDraft.text = newValue }
+        get { ideaComposerSession.text }
+        set { ideaComposerSession.updateText(newValue) }
     }
 
     var ideaEditText: String {
-        get { ideaEditTextDraft.text }
-        set { ideaEditTextDraft.text = newValue }
+        get { ideaInlineEditorSession.draftText }
+        set { ideaInlineEditorSession.updateText(newValue) }
     }
 
     var ideaRestoreText: String {
@@ -735,9 +737,12 @@ final class NoonmarkStore: ObservableObject {
 
     @Published var ideaFilterText = ""
     @Published var ideaClassificationFilter: IdeaClassificationFilterSelection?
+    @Published var ideaBrowseMode: IdeaBrowseMode = .recent
+    @Published var ideaReviewSeed: UInt64 = 0
+    @Published var selectedIdeaID: IdeaID?
     @Published var isIdeaTrashExpanded = false
     @Published var restoringIdeaID: IdeaID?
-    @Published var editingIdeaID: IdeaID?
+    var editingIdeaID: IdeaID? { ideaInlineEditorSession.ideaID }
     @Published var showingPicker: DatePickerPurpose?
     @Published var showingFromPoolPicker = false
     @Published var showingChangeDialog = false

@@ -901,11 +901,29 @@ public final class NoonmarkEngine {
                     return false
                 }
                 guard needle.isEmpty == false else { return true }
-                return idea.body.range(
-                    of: needle,
-                    options: [.caseInsensitive]
-                ) != nil
+                return ideaMatchesSearchText(idea, text: needle)
             }
+    }
+
+    /// Search text spans the memo body and the user-visible names of its
+    /// category and labels. The query itself remains transient and is never
+    /// copied into persisted facts or diagnostics.
+    func ideaMatchesSearchText(_ idea: IdeaEntry, text: String) -> Bool {
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needle.isEmpty == false else { return true }
+        if idea.body.localizedCaseInsensitiveContains(needle) {
+            return true
+        }
+        if let categoryID = idea.categoryID {
+            let categoryName = classificationState.categories[categoryID]?.name
+            if categoryName?.localizedCaseInsensitiveContains(needle) == true {
+                return true
+            }
+        }
+        return idea.labelIDs.contains { labelID in
+            classificationState.labels[labelID]?
+                .name.localizedCaseInsensitiveContains(needle) == true
+        }
     }
 
     private func activeIdea(_ id: IdeaID) throws -> IdeaEntry {

@@ -5,18 +5,60 @@ extension AppCopy {
 
     var ideasSubtitle: String {
         language == .chinese
-            ? "随手记下还没决定去向的灵感，不打断当前工作。"
-            : "Capture thoughts before you decide where they go."
+            ? "先记下来，再决定它要去哪里。"
+            : "Capture it first, then decide where it belongs."
     }
 
     var ideaComposerPlaceholder: String {
         language == .chinese
-            ? "记录一个想法，可用 #标签、@分组，⌘回车保存，Esc 清空"
-            : "Capture an idea; use #labels, @group, ⌘Return to save, Esc to clear"
+            ? "记录一个想法，可用 #标签、@分组，⌘回车保存；草稿自动保留"
+            : "Capture an idea; use #labels or @group, ⌘Return to save; drafts persist"
     }
 
     var ideaFilterPlaceholder: String {
-        language == .chinese ? "过滤想法…" : "Filter ideas…"
+        language == .chinese ? "搜索正文或标签…" : "Search text or labels…"
+    }
+
+    var ideaSearchAction: String {
+        language == .chinese ? "搜索" : "Search"
+    }
+
+    var ideaReviewAction: String {
+        language == .chinese ? "回看" : "Review"
+    }
+
+    func ideaRecentContext(_ count: Int) -> String {
+        language == .chinese ? "最近 · \(count)" : "Recent · \(count)"
+    }
+
+    func ideaReviewContext(_ count: Int) -> String {
+        language == .chinese
+            ? "回看 · 来自一周以前 · \(count)"
+            : "Review · older than one week · \(count)"
+    }
+
+    var ideaReviewRefreshAction: String {
+        language == .chinese ? "换一组" : "Refresh"
+    }
+
+    var ideaInspectorTitle: String {
+        language == .chinese ? "想法详情" : "Idea details"
+    }
+
+    var ideaInspectorRecordedAt: String {
+        language == .chinese ? "记录时间" : "Captured"
+    }
+
+    var ideaInspectorClassification: String {
+        language == .chinese ? "分类" : "Classification"
+    }
+
+    var ideaInspectorActions: String {
+        language == .chinese ? "操作" : "Actions"
+    }
+
+    var ideaInspectorEmptyState: String {
+        language == .chinese ? "选择一条想法查看详情。" : "Select an idea to inspect it."
     }
 
     var ideaEmptyState: String {
@@ -29,6 +71,12 @@ extension AppCopy {
         language == .chinese
             ? "没有匹配这个想法过滤词的内容。"
             : "No ideas match this filter."
+    }
+
+    var ideaReviewEmptyState: String {
+        language == .chinese
+            ? "暂时没有一周以前的想法可回看。"
+            : "No ideas older than one week are ready to review."
     }
 
     var ideaMultipleCategories: String {
@@ -80,6 +128,12 @@ extension AppCopy {
 
     var ideaSavedToast: String {
         language == .chinese ? "已记录想法" : "Idea captured"
+    }
+
+    var ideaEditSaveFailed: String {
+        language == .chinese
+            ? "保存失败，修改仍保留在这里，请重试。"
+            : "Save failed. Your edit is still here; try again."
     }
 
     // MARK: - 想法置顶（Pinned Ideas）
@@ -166,8 +220,8 @@ extension AppCopy {
 
     var ideaCapturePanelHint: String {
         language == .chinese
-            ? "想法会进入「想法」页面时间线；回车保存，Esc 关闭。"
-            : "Saved to the Ideas timeline. Return to save, Esc to close."
+            ? "想法会进入「想法」时间线；回车换行，⌘回车保存，Esc 关闭。"
+            : "Saved to Ideas. Return adds a line, ⌘Return saves, Esc closes."
     }
 
     var ideaCapturePanelPlaceholder: String {

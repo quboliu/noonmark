@@ -455,24 +455,32 @@ public enum MacUIZhulongHomeElement: String, CaseIterable, Sendable {
 
 public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
     case persistentComposer
+    case composerSharedWithGlobalCapture
     case composerSavesOnCommandReturn
-    case composerClearsOnEscape
+    case composerDraftSurvivesDismissal
     case composerClassificationTokens
     case composerClassificationSuggestions
     case secondCategoryTokenBlocked
-    case filterField
+    case searchCollection
+    case reviewCollection
     case substringFiltering
     case reverseChronologicalTimeline
     case naturalDaySections
     case daySectionHeader
+    case wideTimelineInspector
+    case compactContinuousStream
     case ideaCard
+    case ideaCardPresentationSeam
     case ideaCardTimestamp
     case ideaCardClassificationLine
     case ideaCardOverflowMenu
     case ideaCardEditAction
     case ideaCardDeleteAction
+    case doubleClickInlineEdit
     case inlineEditField
-    case inlineEditEmptySaveDeletes
+    case inlineEditCommandReturnSave
+    case inlineEditEscapeCancel
+    case inlineEditBlurSave
     case singleLineEmptyState
     case pinnedSectionAboveTimeline
     case pinnedSectionUsesDayHeaderTypography
@@ -504,6 +512,9 @@ public enum MacUIIdeasPageLayout {
     public static let trashHasNoHardDelete = true
     public static let filterIndicatorVisualUnitCount = 1
     public static let classificationFilterCombinesWithSubstringFilter = true
+    public static let readableTimelineMaximumWidth = 760.0
+    public static let wideInspectorWidth = 300.0
+    public static let wideLayoutMinimumWidth = 760.0
 }
 
 public enum MacUIDayTodoElement: String, CaseIterable, Sendable {

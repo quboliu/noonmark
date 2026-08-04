@@ -193,6 +193,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let completedParentWithCompletedChildrenCount: Int
     public let ideaCount: Int
     public let ideaDayCount: Int
+    public let ideaReviewCandidateCount: Int
     public let labeledIdeaCount: Int
     public let categorizedIdeaCount: Int
     public let editedIdeaCount: Int
@@ -382,6 +383,11 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         )
         require(ideaCount >= 6, "想法时间线至少六条", into: &missing)
         require(ideaDayCount >= 3, "想法跨多个自然日", into: &missing)
+        require(
+            ideaReviewCandidateCount > 0,
+            "至少一条可进入回看的旧想法",
+            into: &missing
+        )
         require(labeledIdeaCount > 0, "带标签的想法", into: &missing)
         require(categorizedIdeaCount > 0, "带分组的想法", into: &missing)
         require(editedIdeaCount > 0, "编辑过的想法", into: &missing)
@@ -627,6 +633,10 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         ideaDayCount = Set(ideaTimeline.compactMap {
             DemoCalendar.localDate(of: $0.createdAt)
         }).count
+        ideaReviewCandidateCount = engine.ideaCollection(
+            .review(seed: 0, count: 5, excludingRecentDays: 7),
+            today: anchorDate
+        ).ideas.count
         labeledIdeaCount = ideaTimeline.count {
             $0.labelIDs.isEmpty == false
         }

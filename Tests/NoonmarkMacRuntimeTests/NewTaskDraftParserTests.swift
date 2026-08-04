@@ -2,6 +2,17 @@
 import XCTest
 
 final class NewTaskDraftParserTests: XCTestCase {
+    func testIdeaDraftPreservesLineBreaksWhileRemovingClassificationTokens() {
+        let draft = IdeaDraftParser.parse(
+            "第一行原样保留\n第二行继续说明 #灵感 @工作"
+        )
+
+        XCTAssertEqual(draft.body, "第一行原样保留\n第二行继续说明")
+        XCTAssertEqual(draft.categoryName, "工作")
+        XCTAssertEqual(draft.labelNames, ["灵感"])
+        XCTAssertNil(draft.issue)
+    }
+
     func testParsesLabelsAndOneCategoryWithoutLeakingTokensIntoTitle() {
         let draft = NewTaskDraftParser.parse(
             "准备发布 @工作 #紧急 #本周"

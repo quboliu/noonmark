@@ -54,6 +54,86 @@ public struct NewTaskDraft: Equatable, Sendable {
     }
 }
 
+public enum IdeaDraftIssue: Equatable, Sendable {
+    case multipleCategories([String])
+}
+
+/// Parsed idea input keeps authored line breaks while separating the optional
+/// classification tokens from the memo body. Task titles deliberately use a
+/// different, single-line normalization policy.
+public struct IdeaDraft: Equatable, Sendable {
+    public let body: String
+    public let categoryName: String?
+    public let labelNames: [String]
+    public let issue: IdeaDraftIssue?
+
+    public init(
+        body: String,
+        categoryName: String?,
+        labelNames: [String],
+        issue: IdeaDraftIssue?
+    ) {
+        self.body = body
+        self.categoryName = categoryName
+        self.labelNames = labelNames
+        self.issue = issue
+    }
+}
+
+public enum IdeaDraftParser {
+    public static func parse(_ rawText: String) -> IdeaDraft {
+        let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.isEmpty == false else {
+            return IdeaDraft(
+                body: "",
+                categoryName: nil,
+                labelNames: [],
+                issue: nil
+            )
+        }
+
+        let occurrences = NewTaskDraftParser.classificationTokenOccurrences(
+            in: raw
+        )
+        let categoryNames = occurrences
+            .filter { $0.kind == .category }
+            .map(\.name)
+        let issue: IdeaDraftIssue? = categoryNames.count > 1
+            ? .multipleCategories(categoryNames)
+            : nil
+
+        return IdeaDraft(
+            body: body(removing: occurrences, from: raw),
+            categoryName: categoryNames.count == 1 ? categoryNames[0] : nil,
+            labelNames: occurrences
+                .filter { $0.kind == .label }
+                .map(\.name),
+            issue: issue
+        )
+    }
+
+    private static func body(
+        removing occurrences: [TokenOccurrence],
+        from raw: String
+    ) -> String {
+        var result = ""
+        var cursor = raw.startIndex
+        for occurrence in occurrences {
+            var lowerBound = occurrence.range.lowerBound
+            if lowerBound > cursor {
+                let preceding = raw.index(before: lowerBound)
+                if raw[preceding] == " " || raw[preceding] == "\t" {
+                    lowerBound = preceding
+                }
+            }
+            result.append(contentsOf: raw[cursor ..< lowerBound])
+            cursor = occurrence.range.upperBound
+        }
+        result.append(contentsOf: raw[cursor...])
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 public enum NewTaskDraftParser {
     public static func parse(_ rawText: String) -> NewTaskDraft {
         let raw = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,7 +153,7 @@ public enum NewTaskDraftParser {
                 in: .whitespacesAndNewlines
             )
         } ?? raw
-        let occurrences = tokenOccurrences(in: taskContent)
+        let occurrences = classificationTokenOccurrences(in: taskContent)
         let categoryNames = occurrences
             .filter { $0.kind == .category }
             .map(\.name)
@@ -149,7 +229,9 @@ public enum NewTaskDraftParser {
         return "\(prefix)\(marker)\(encoded(name)) "
     }
 
-    private static func tokenOccurrences(in raw: String) -> [TokenOccurrence] {
+    fileprivate static func classificationTokenOccurrences(
+        in raw: String
+    ) -> [TokenOccurrence] {
         var occurrences: [TokenOccurrence] = []
         var index = raw.startIndex
         while index < raw.endIndex {

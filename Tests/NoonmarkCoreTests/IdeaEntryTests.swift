@@ -271,6 +271,77 @@ final class IdeaEntryTests: XCTestCase {
         XCTAssertEqual(groups[1].ideas.map(\.id), [second.id, first.id])
     }
 
+    func testReviewCollectionExcludesRecentIdeasAndIsDeterministic() throws {
+        let engine = NoonmarkEngine()
+        let oldOne = try engine.appendIdea(
+            body: "一个月前",
+            now: Date(timeIntervalSince1970: 1_797_235_200)
+        )
+        let oldTwo = try engine.appendIdea(
+            body: "两周前",
+            now: Date(timeIntervalSince1970: 1_798_531_200)
+        )
+        _ = try engine.appendIdea(
+            body: "昨天",
+            now: Date(timeIntervalSince1970: 1_799_913_600)
+        )
+        let query = IdeaCollectionQuery.review(
+            seed: 42,
+            count: 2,
+            excludingRecentDays: 7
+        )
+
+        let first = engine.ideaCollection(
+            query,
+            today: LocalDate("2027-01-15"),
+            calendar: utcCalendar
+        )
+        let second = engine.ideaCollection(
+            query,
+            today: LocalDate("2027-01-15"),
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(first.ideas, second.ideas)
+        XCTAssertEqual(Set(first.ideas.map(\.id)), Set([oldOne.id, oldTwo.id]))
+        XCTAssertEqual(first.groups.flatMap(\.ideas), first.ideas)
+    }
+
+    func testIdeaCollectionKeepsPinnedSeparateAndAppliesOneCompositeFilter() throws {
+        let engine = NoonmarkEngine()
+        let catalog = try seedClassificationCatalog(in: engine)
+        let labelID = try XCTUnwrap(catalog.labelIDs.first)
+        let regular = try engine.appendIdea(
+            body: "正文命中",
+            categoryID: catalog.categoryID,
+            labelIDs: [labelID],
+            now: now
+        )
+        let pinned = try engine.appendIdea(
+            body: "另一个正文",
+            categoryID: catalog.categoryID,
+            labelIDs: [labelID],
+            now: now.addingTimeInterval(1)
+        )
+        try engine.pinIdea(id: pinned.id, now: now.addingTimeInterval(2))
+
+        let collection = engine.ideaCollection(
+            .filtered(
+                IdeaTimelineFilter(
+                    text: "产品",
+                    categoryID: catalog.categoryID,
+                    labelID: labelID
+                )
+            ),
+            today: LocalDate("2027-01-15"),
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(collection.ideas.map(\.id), [pinned.id, regular.id])
+        XCTAssertEqual(collection.pinnedIdeas.map(\.id), [pinned.id])
+        XCTAssertEqual(collection.groups.flatMap(\.ideas).map(\.id), [regular.id])
+    }
+
     func testNextMutationDateAdvancesPastPersistedIdeaClock() throws {
         let engine = NoonmarkEngine()
         let ideaAt = now.addingTimeInterval(100)
@@ -648,6 +719,18 @@ final class IdeaEntryTests: XCTestCase {
                 filter: IdeaTimelineFilter(text: "alpha", labelID: labelID)
             ).map(\.id),
             [labeled.id]
+        )
+        XCTAssertEqual(
+            engine.ideaTimeline(
+                filter: IdeaTimelineFilter(text: "产品")
+            ).map(\.id),
+            [both.id, labeled.id]
+        )
+        XCTAssertEqual(
+            engine.ideaTimeline(
+                filter: IdeaTimelineFilter(text: "灵感")
+            ).map(\.id),
+            [both.id, categorized.id]
         )
         XCTAssertEqual(
             engine.pinnedIdeas(

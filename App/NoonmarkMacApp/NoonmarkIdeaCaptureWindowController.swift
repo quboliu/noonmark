@@ -9,12 +9,15 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
     static let windowIdentifier = NSUserInterfaceItemIdentifier("Noonmark.IdeaCaptureWindow")
 
     private let store: NoonmarkStore
-    private let model = NoonmarkIdeaCaptureWindowModel()
+    private let model: NoonmarkIdeaCaptureWindowModel
     private var contentHeightObservation: AnyCancellable?
     private var onDismiss: (() -> Void)?
 
     init(store: NoonmarkStore) {
         self.store = store
+        model = NoonmarkIdeaCaptureWindowModel(
+            session: store.ideaComposerSession
+        )
         let root = NoonmarkIdeaCaptureView(model: model)
             .environmentObject(store)
             .preferredColorScheme(.light)
@@ -22,7 +25,7 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
         hostingView.sizingOptions = []
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 168),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 226),
             styleMask: [.titled, .closable, .fullSizeContentView, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -111,6 +114,7 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
 
     private func finishPresentation() {
         guard window?.isVisible == true else { return }
+        model.session.dismiss()
         window?.orderOut(nil)
         model.onSubmit = nil
         let dismiss = onDismiss
@@ -135,18 +139,19 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
 
 @MainActor
 final class NoonmarkIdeaCaptureWindowModel: ObservableObject {
-    @Published var text = ""
     @Published private(set) var focusRequest = 0
-    @Published fileprivate(set) var contentHeight: CGFloat = 168
+    @Published fileprivate(set) var contentHeight: CGFloat = 226
+    let session: IdeaComposerSession
     var onSubmit: ((String) -> Bool)?
     var onClose: (() -> Void)?
 
+    init(session: IdeaComposerSession) {
+        self.session = session
+    }
+
     func prepareForPresentation() {
-        if text.isEmpty == false {
-            text = ""
-        }
-        if contentHeight != 168 {
-            contentHeight = 168
+        if contentHeight != 226 {
+            contentHeight = 226
         }
         focusRequest &+= 1
     }
@@ -156,18 +161,15 @@ final class NoonmarkIdeaCaptureWindowModel: ObservableObject {
     }
 
     func updatePresentation(showsIssue: Bool) {
-        let nextContentHeight: CGFloat = 168 + (showsIssue ? 28 : 0)
+        let nextContentHeight: CGFloat = 226 + (showsIssue ? 28 : 0)
         guard contentHeight != nextContentHeight else { return }
         contentHeight = nextContentHeight
     }
 
     func submit() {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false else {
-            NSSound.beep()
-            return
-        }
-        guard onSubmit?(normalized) == true else {
+        guard session.submit(using: { [onSubmit] body in
+            onSubmit?(body) == true
+        }) else {
             NSSound.beep()
             return
         }
@@ -178,10 +180,22 @@ final class NoonmarkIdeaCaptureWindowModel: ObservableObject {
 private struct NoonmarkIdeaCaptureView: View {
     @EnvironmentObject private var store: NoonmarkStore
     @ObservedObject var model: NoonmarkIdeaCaptureWindowModel
-    @FocusState private var inputIsFocused: Bool
+    @ObservedObject private var session: IdeaComposerSession
+
+    init(model: NoonmarkIdeaCaptureWindowModel) {
+        self.model = model
+        session = model.session
+    }
+
+    private var text: Binding<String> {
+        Binding(
+            get: { session.text },
+            set: { session.updateText($0) }
+        )
+    }
 
     private var issueMessage: String? {
-        store.ideaDraftIssueMessage(for: model.text)
+        store.ideaDraftIssueMessage(for: session.text)
     }
 
     var body: some View {
@@ -197,15 +211,22 @@ private struct NoonmarkIdeaCaptureView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            TextField(store.copy.ideaCapturePanelPlaceholder, text: $model.text)
-                .textFieldStyle(.roundedBorder)
-                .font(.noonmarkSystem(size: 14))
-                .focused($inputIsFocused)
-                .onSubmit(model.submit)
-                .accessibilityIdentifier("idea-capture.field")
-                .background {
-                    AppE2EViewAnchor(identifier: "idea-capture.field")
-                }
+            MarkdownEditor(
+                text: text,
+                placeholder: store.copy.ideaCapturePanelPlaceholder,
+                style: .body,
+                onCommit: model.submit,
+                onEscape: model.onClose,
+                nativeAccessibilityIdentifier: "idea-capture.field",
+                focusesOnAppear: true,
+                focusRequest: model.focusRequest
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 8).fill(Theme.controlFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8).stroke(Theme.lineSubtle)
+            )
 
             if let issueMessage {
                 Text(issueMessage)
@@ -229,7 +250,7 @@ private struct NoonmarkIdeaCaptureView: View {
                     AppE2EViewAnchor(identifier: "idea-capture.add")
                 }
                 .disabled(
-                    model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    session.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || issueMessage != nil
                 )
             }
@@ -238,9 +259,7 @@ private struct NoonmarkIdeaCaptureView: View {
         .padding(.top, 18)
         .padding(.bottom, 16)
         .background(Theme.background)
-        .onAppear { inputIsFocused = true }
-        .onChange(of: model.focusRequest) { _, _ in inputIsFocused = true }
-        .onChange(of: model.text, initial: true) { _, _ in
+        .onChange(of: session.text, initial: true) { _, _ in
             model.updatePresentation(showsIssue: issueMessage != nil)
         }
         .background {

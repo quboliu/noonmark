@@ -150,6 +150,9 @@ idea_count="$(
 idea_day_count="$(
   plutil -extract core.ideaDayCount raw -o - "$result_path"
 )"
+idea_review_candidate_count="$(
+  plutil -extract core.ideaReviewCandidateCount raw -o - "$result_path"
+)"
 labeled_idea_count="$(
   plutil -extract core.labeledIdeaCount raw -o - "$result_path"
 )"
@@ -185,6 +188,7 @@ if [[ "$single_day_completed_count" -lt 365 \
       || "$continuable_unfinished_count" -lt 1 \
       || "$idea_count" != "7" \
       || "$idea_day_count" != "6" \
+      || "$idea_review_candidate_count" -lt 1 \
       || "$labeled_idea_count" -lt 1 \
       || "$categorized_idea_count" -lt 1 \
       || "$edited_idea_count" -lt 1 \

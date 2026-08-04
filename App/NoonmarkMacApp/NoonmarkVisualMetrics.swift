@@ -61,6 +61,15 @@ enum NoonmarkVisualMetrics {
     static let ideasCardMetadataSpacing = CGFloat(
         MacUIIdeasPageLayout.cardMetadataSpacing
     )
+    static let ideasReadableTimelineMaximumWidth = CGFloat(
+        MacUIIdeasPageLayout.readableTimelineMaximumWidth
+    )
+    static let ideasWideInspectorWidth = CGFloat(
+        MacUIIdeasPageLayout.wideInspectorWidth
+    )
+    static let ideasWideLayoutMinimumWidth = CGFloat(
+        MacUIIdeasPageLayout.wideLayoutMinimumWidth
+    )
 
     static let detailTitleDescriptionSpacing = CGFloat(
         MacUIDetailEditorLayout.titleDescriptionSpacing

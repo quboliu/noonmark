@@ -14,22 +14,24 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         case verify
     }
 
-    private static let alphaDraft = "e2e idea alpha #SwiftUI @工程"
-    private static let alphaBody = "e2e idea alpha"
+    private static let alphaDraft = "e2e idea alpha\nsecond line #SwiftUI @工程"
+    private static let alphaBody = "e2e idea alpha\nsecond line"
     private static let alphaCategoryName = "工程"
     private static let alphaLabelName = "SwiftUI"
     private static let betaBody = "e2e idea beta marker"
     private static let betaEditedBody = "e2e idea beta edited"
+    private static let betaAutosavedBody = "e2e idea beta autosaved"
+    private static let betaCancelledBody = "e2e idea beta must cancel"
     private static let betaRestoredBody = "e2e idea beta restored"
     private static let epsilonBody = "e2e idea epsilon marker"
     private static let discardedDraft = "e2e draft discarded"
     private static let gammaBody = "e2e panel idea gamma"
     private static let deltaBody = "e2e hotkey idea delta"
+    private static let restartDraft = "e2e draft survives process restart"
 
     // Card overflow menu order is pin/unpin, edit, delete; the first down
     // arrow highlights the first item once tracking begins.
     private static let cardMenuPinArrowCount = 1
-    private static let cardMenuEditArrowCount = 2
     private static let cardMenuDeleteArrowCount = 3
 
     private let mode: Mode
@@ -92,7 +94,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ComposerDraft(
                 text: Self.alphaDraft,
                 body: Self.alphaBody,
-                suggestionsCheckpoint: "e2e idea alpha #"
+                suggestionsCheckpoint: "e2e idea alpha\nsecond line #"
             ),
             store: store,
             mainWindow: mainWindow,
@@ -107,6 +109,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
+        try await exerciseResponsiveLayout(
+            expectedIdeaIDs: [beta.id, alpha.id],
+            store: store,
+            mainWindow: mainWindow
+        )
         try await exerciseFilter(
             alphaID: alpha.id,
             betaID: beta.id,
@@ -117,6 +124,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try await exerciseClassificationFilter(
             alpha: alpha,
             betaID: beta.id,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try await exerciseReview(
             store: store,
             mainWindow: mainWindow,
             input: input
@@ -175,6 +187,51 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
+        try await leaveDraftForRestart(
+            store: store,
+            input: input
+        )
+    }
+
+    private func exerciseReview(
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        try await click(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("idea review did not replace the recent collection") {
+            store.ideaBrowseMode == .review
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.collection",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "review"
+                && timelineCount(in: mainWindow) == 0
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.empty",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "review-empty"
+        }
+        try await click(
+            "ideas.review.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("idea review did not return to recent ideas") {
+            store.ideaBrowseMode == .recent
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.collection",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == "recent"
+                && timelineCount(in: mainWindow) == 2
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.empty",
+                    in: mainWindow
+                ) == nil
+        }
     }
 
     private func verify(on store: NoonmarkStore) async throws {
@@ -183,6 +240,14 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try await activate(mainWindow)
         try await waitUntil("ideas page did not render four cards after restart") {
             store.page == .ideas && timelineCount(in: mainWindow) == 4
+        }
+        try await waitUntil("idea composer draft did not survive process restart") {
+            guard let editor = AppViewTreeE2E.view(
+                identifier: "ideas.composer.input",
+                in: mainWindow
+            ) as? NSTextView else { return false }
+            return store.ideaText == Self.restartDraft
+                && editor.string == Self.restartDraft
         }
 
         for body in [Self.alphaBody, Self.betaRestoredBody, Self.deltaBody] {
@@ -229,7 +294,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("idea tombstone did not survive restart")
         }
         guard store.engine.ideaTimeline().contains(where: {
-            $0.body == Self.betaEditedBody || $0.body == Self.discardedDraft
+            $0.body == Self.betaEditedBody || $0.body == Self.betaAutosavedBody
+                || $0.body == Self.discardedDraft
                 || $0.body == Self.epsilonBody
         }) == false else {
             throw Failure.failed("deleted or discarded idea reappeared after restart")
@@ -294,6 +360,80 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             in: mainWindow
         ) != nil else {
             throw Failure.failed("ideas composer placeholder was missing")
+        }
+        guard AppViewTreeE2E.view(
+            identifier: "ideas.layout",
+            in: mainWindow
+        ).flatMap(AppViewTreeE2E.verificationText) == "wide",
+            AppViewTreeE2E.view(
+                identifier: "ideas.inspector",
+                in: mainWindow
+            ) != nil
+        else {
+            throw Failure.failed(
+                "default Ideas window did not use the wide timeline-inspector skeleton"
+            )
+        }
+    }
+
+    private func exerciseResponsiveLayout(
+        expectedIdeaIDs: [IdeaID],
+        store: NoonmarkStore,
+        mainWindow: NSWindow
+    ) async throws {
+        let originalFrame = mainWindow.frame
+        var compactFrame = originalFrame
+        compactFrame.origin.x = originalFrame.maxX
+            - NoonmarkVisualMetrics.minimumSize.width
+        compactFrame.size.width = NoonmarkVisualMetrics.minimumSize.width
+        mainWindow.setFrame(compactFrame, display: true)
+
+        do {
+            try await waitUntil("Ideas window did not enter compact continuous flow") {
+                mainWindow.contentView?.layoutSubtreeIfNeeded()
+                let cards = expectedIdeaIDs.compactMap { id in
+                    AppViewTreeE2E.view(
+                        identifier: "ideas.card.\(id)",
+                        in: mainWindow
+                    )
+                }
+                return store.displayedIdeaGroups.flatMap(\.ideas).map(\.id)
+                    == expectedIdeaIDs
+                    && cards.count == expectedIdeaIDs.count
+                    && cards.allSatisfy {
+                        $0.isHiddenOrHasHiddenAncestor == false
+                            && AppViewTreeE2E.frameInWindow(for: $0).isEmpty == false
+                    }
+                    && AppViewTreeE2E.view(
+                        identifier: "ideas.layout",
+                        in: mainWindow
+                    ).flatMap(AppViewTreeE2E.verificationText) == "compact"
+                    && AppViewTreeE2E.view(
+                        identifier: "ideas.inspector",
+                        in: mainWindow
+                    ) == nil
+                    && AppViewTreeE2E.view(
+                        identifier: "ideas.composer.input",
+                        in: mainWindow
+                    ) != nil
+            }
+            try await captureScreenshot("ideas-compact-stream.png", of: mainWindow)
+        } catch {
+            mainWindow.setFrame(originalFrame, display: true)
+            throw error
+        }
+
+        mainWindow.setFrame(originalFrame, display: true)
+        try await waitUntil("Ideas window did not restore its wide inspector layout") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            return AppViewTreeE2E.view(
+                identifier: "ideas.layout",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == "wide"
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.inspector",
+                    in: mainWindow
+                ) != nil
         }
     }
 
@@ -389,6 +529,17 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         mainWindow: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("ideas search field did not appear") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) != nil
+        }
         try await click("ideas.filter", in: mainWindow, input: input)
         try await waitUntil("ideas filter field did not accept focus") {
             mainWindow.firstResponder is NSTextView
@@ -412,6 +563,33 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try input.postKey(keyCode: 51)
         try await waitUntil("clearing the ideas filter did not restore the timeline") {
             store.ideaFilterText == "" && timelineCount(in: mainWindow) == 2
+        }
+
+        try input.typeUnicode(Self.alphaLabelName.lowercased())
+        try await waitUntil("ideas search did not match a label name") {
+            store.ideaFilterText == Self.alphaLabelName.lowercased()
+                && timelineCount(in: mainWindow) == 1
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(alphaID)",
+                    in: mainWindow
+                ) != nil
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(betaID)",
+                    in: mainWindow
+                ) == nil
+        }
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("closing search left an invisible filter active") {
+            store.ideaFilterText == ""
+                && timelineCount(in: mainWindow) == 2
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.filter",
+                    in: mainWindow
+                ) == nil
         }
     }
 
@@ -454,6 +632,17 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             of: mainWindow
         )
 
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("ideas search field did not reopen") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) != nil
+        }
         try await click("ideas.filter", in: mainWindow, input: input)
         try await waitUntil("ideas filter field did not accept focus") {
             mainWindow.firstResponder is NSTextView
@@ -501,26 +690,13 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         mainWindow: NSWindow,
         input: WindowServerInputDriver
     ) async throws {
-        try await chooseCardMenuItem(
-            cardID: betaID,
-            downArrowCount: Self.cardMenuEditArrowCount,
-            in: mainWindow,
+        var editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
             input: input
         )
-        var editor: NSTextView?
-        try await waitUntil("idea inline edit field did not take focus") {
-            guard store.editingIdeaID == betaID else { return false }
-            editor = AppViewTreeE2E.view(
-                identifier: "ideas.card.edit-field.\(betaID).input",
-                in: mainWindow
-            ) as? NSTextView
-            return editor != nil && editor?.window?.firstResponder === editor
-        }
-        guard let editor else {
-            throw Failure.failed("idea inline edit field disappeared")
-        }
-
-        try input.postKey(keyCode: 0, modifiers: [.control])
+        try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(Self.betaEditedBody)
         try await waitUntil("idea inline edit did not receive typed text") {
             editor.string == Self.betaEditedBody
@@ -540,6 +716,104 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             return AppViewTreeE2E.verificationText(for: card)
                 == Self.betaEditedBody
         }
+
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(Self.betaCancelledBody)
+        try input.postKey(keyCode: 53)
+        try await waitUntil("Escape did not cancel the inline edit") {
+            store.editingIdeaID == nil
+                && store.engine.ideas[betaID]?.body == Self.betaEditedBody
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(betaID)",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText)
+                == Self.betaEditedBody
+        }
+
+        editor = try await beginInlineEditor(
+            ideaID: betaID,
+            store: store,
+            mainWindow: mainWindow,
+            input: input
+        )
+        try input.postKey(keyCode: 0, modifiers: [.command])
+        try input.typeUnicode(Self.betaAutosavedBody)
+        try await waitUntil("inline edit autosave body did not reach the editor") {
+            editor.string == Self.betaAutosavedBody
+                && store.ideaEditText == Self.betaAutosavedBody
+        }
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("search field did not appear for inline edit blur") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) != nil
+        }
+        try await click(
+            "ideas.filter",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("inline edit did not save after losing focus") {
+            store.editingIdeaID == nil
+                && store.engine.ideas[betaID]?.body == Self.betaAutosavedBody
+                && mainWindow.firstResponder !== editor
+        }
+        try await click(
+            "ideas.search.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("inline edit autosave left search expanded") {
+            AppViewTreeE2E.view(
+                identifier: "ideas.filter",
+                in: mainWindow
+            ) == nil
+        }
+    }
+
+    private func beginInlineEditor(
+        ideaID: IdeaID,
+        store: NoonmarkStore,
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws -> NSTextView {
+        try await waitUntil("idea body did not render before inline editing") {
+            guard let body = AppViewTreeE2E.view(
+                identifier: "ideas.card.body.\(ideaID)",
+                in: mainWindow
+            ) else { return false }
+            return body.isHiddenOrHasHiddenAncestor == false
+                && body.visibleRect.isEmpty == false
+        }
+        try await doubleClick(
+            "ideas.card.body.\(ideaID)",
+            in: mainWindow,
+            input: input
+        )
+        var editor: NSTextView?
+        try await waitUntil("idea inline edit field did not take focus") {
+            guard store.editingIdeaID == ideaID else { return false }
+            editor = AppViewTreeE2E.view(
+                identifier: "ideas.card.edit-field.\(ideaID).input",
+                in: mainWindow
+            ) as? NSTextView
+            return editor != nil && editor?.window?.firstResponder === editor
+        }
+        guard let editor else {
+            throw Failure.failed("idea inline edit field disappeared")
+        }
+        return editor
     }
 
     private func exerciseDelete(
@@ -718,13 +992,16 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             from: captureItem
         )
         var panel = try await waitForPanel(expectedTitle: store.copy.ideaCapturePanelTitle)
+        var editor: NSTextView?
         try await waitUntil("idea capture panel did not focus its field") {
-            panel.isKeyWindow && panel.firstResponder is NSTextView
+            editor = panel.firstResponder as? NSTextView
+            return panel.isKeyWindow && editor != nil
         }
         try input.typeUnicode(Self.discardedDraft)
         try input.postKey(keyCode: 53)
         try await waitUntil("Escape did not close the panel without saving") {
             panel.isVisible == false
+                && store.ideaText == Self.discardedDraft
                 && store.engine.ideaTimeline().contains {
                     $0.body == Self.discardedDraft
                 } == false
@@ -737,13 +1014,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             from: captureItem
         )
         panel = try await waitForPanel(expectedTitle: store.copy.ideaCapturePanelTitle)
-        try await waitUntil("reopened panel did not focus its field") {
-            panel.isKeyWindow && panel.firstResponder is NSTextView
+        try await waitUntil("reopened panel did not restore and focus its draft") {
+            editor = panel.firstResponder as? NSTextView
+            return panel.isKeyWindow
+                && editor?.string == Self.discardedDraft
+                && store.ideaText == Self.discardedDraft
         }
+        try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(Self.gammaBody)
+        try await waitUntil("restored panel draft was not replaced") {
+            editor?.string == Self.gammaBody
+                && store.ideaText == Self.gammaBody
+        }
         try await captureScreenshot("idea-capture-panel.png", of: panel)
-        try input.postKey(keyCode: 36)
-        try await waitUntil("panel Return did not persist the idea") {
+        try input.postKey(keyCode: 36, modifiers: [.command])
+        try await waitUntil("panel Cmd+Return did not persist the idea") {
             panel.isVisible == false
                 && store.engine.ideaTimeline().contains {
                     $0.body == Self.gammaBody
@@ -840,8 +1125,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             panel.isVisible && panel.isKeyWindow && editor?.string == Self.deltaBody
         }
 
-        try input.postKey(keyCode: 36)
-        try await waitUntil("Return did not submit the global idea capture") {
+        try input.postKey(keyCode: 36, modifiers: [.command])
+        try await waitUntil("Cmd+Return did not submit the global idea capture") {
             panel.isVisible == false
                 && mainWindow.isVisible == false
                 && store.engine.ideaTimeline().contains {
@@ -851,6 +1136,34 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         try await waitUntil("idea capture did not restore Finder focus") {
             NSWorkspace.shared.frontmostApplication?.processIdentifier
                 == finder.processIdentifier
+        }
+    }
+
+    private func leaveDraftForRestart(
+        store: NoonmarkStore,
+        input: WindowServerInputDriver
+    ) async throws {
+        try input.postKey(keyCode: 34, modifiers: [.control, .shift])
+        let panel = try await waitForPanel(
+            expectedTitle: store.copy.ideaCapturePanelTitle
+        )
+        var editor: NSTextView?
+        try await waitUntil("restart draft panel did not focus its editor") {
+            editor = panel.firstResponder as? NSTextView
+            return panel.isKeyWindow && editor != nil
+        }
+        try input.typeUnicode(Self.restartDraft)
+        try await waitUntil("restart draft did not reach the shared composer") {
+            editor?.string == Self.restartDraft
+                && store.ideaText == Self.restartDraft
+        }
+        try input.postKey(keyCode: 53)
+        try await waitUntil("restart draft panel did not close safely") {
+            panel.isVisible == false
+                && store.ideaText == Self.restartDraft
+                && store.engine.ideaTimeline().contains {
+                    $0.body == Self.restartDraft
+                } == false
         }
     }
 
@@ -1058,6 +1371,53 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
         }
+    }
+
+    private func doubleClick(
+        _ identifier: String,
+        in expectedWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let resolveTarget:
+            @MainActor @Sendable () throws
+            -> WindowServerInputDriver.PointerCoordinate = {
+            guard let currentView = AppViewTreeE2E.view(
+                identifier: identifier,
+                in: expectedWindow
+            ), currentView.window === expectedWindow,
+                currentView.isHiddenOrHasHiddenAncestor == false
+            else {
+                throw Failure.failed(
+                    "idea edit target changed before double click: \(identifier)"
+                )
+            }
+            let frame = AppViewTreeE2E.frameInWindow(for: currentView)
+            let visibleFrame = currentView.convert(
+                currentView.visibleRect,
+                to: nil
+            )
+            let clickableFrame = frame.intersection(visibleFrame)
+            guard clickableFrame.isNull == false,
+                  clickableFrame.isEmpty == false
+            else {
+                throw Failure.failed(
+                    "idea edit target has no visible area: \(identifier)"
+                )
+            }
+            return try input.pointerCoordinate(
+                windowPoint: NSPoint(
+                    x: clickableFrame.midX,
+                    y: clickableFrame.midY
+                ),
+                in: expectedWindow
+            )
+        }
+        try await activate(expectedWindow)
+        try await input.postDoubleClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
     }
 
     private func isActivationInterruption(_ error: Error) -> Bool {

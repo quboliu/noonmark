@@ -387,24 +387,32 @@ final class MacUIDesignContractTests: XCTestCase {
             contract.ideasPageElements,
             [
                 .persistentComposer,
+                .composerSharedWithGlobalCapture,
                 .composerSavesOnCommandReturn,
-                .composerClearsOnEscape,
+                .composerDraftSurvivesDismissal,
                 .composerClassificationTokens,
                 .composerClassificationSuggestions,
                 .secondCategoryTokenBlocked,
-                .filterField,
+                .searchCollection,
+                .reviewCollection,
                 .substringFiltering,
                 .reverseChronologicalTimeline,
                 .naturalDaySections,
                 .daySectionHeader,
+                .wideTimelineInspector,
+                .compactContinuousStream,
                 .ideaCard,
+                .ideaCardPresentationSeam,
                 .ideaCardTimestamp,
                 .ideaCardClassificationLine,
                 .ideaCardOverflowMenu,
                 .ideaCardEditAction,
                 .ideaCardDeleteAction,
+                .doubleClickInlineEdit,
                 .inlineEditField,
-                .inlineEditEmptySaveDeletes,
+                .inlineEditCommandReturnSave,
+                .inlineEditEscapeCancel,
+                .inlineEditBlurSave,
                 .singleLineEmptyState,
                 .pinnedSectionAboveTimeline,
                 .pinnedSectionUsesDayHeaderTypography,
@@ -434,6 +442,9 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIIdeasPageLayout.trashCollapsedByDefault)
         XCTAssertTrue(MacUIIdeasPageLayout.trashHasNoHardDelete)
         XCTAssertEqual(MacUIIdeasPageLayout.filterIndicatorVisualUnitCount, 1)
+        XCTAssertEqual(MacUIIdeasPageLayout.readableTimelineMaximumWidth, 760)
+        XCTAssertEqual(MacUIIdeasPageLayout.wideInspectorWidth, 300)
+        XCTAssertEqual(MacUIIdeasPageLayout.wideLayoutMinimumWidth, 760)
         XCTAssertTrue(
             MacUIIdeasPageLayout.classificationFilterCombinesWithSubstringFilter
         )

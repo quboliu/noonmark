@@ -47,3 +47,7 @@ FAIL-2026-08-02-08	symptom	scripts/test-tencent-ime-input-matrix	scripts/test-al
 FAIL-2026-08-02-08	release	scripts/test-tencent-ime-release-smoke	scripts/release-private-dmg	真实腾讯拼音在 Day Todo 自动保存输入面完成组合提交、即时退出与重启 SQLite 回读
 FAIL-2026-08-03-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 覆盖 pinIdea/unpinIdea、tombstone 清除 pinnedAt 与恢复不复活置顶的领域语义
 FAIL-2026-08-03-01	symptom	scripts/test-e2e	scripts/test-all	真实 App pin→unpin 溢出菜单场景，菜单项陈旧无法取消置顶即判红
+FAIL-2026-08-03-02	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 覆盖双击进入后的保存、取消、失焦与失败保留状态
+FAIL-2026-08-03-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理双击想法正文，原位编辑器未出现或未聚焦即判红
+FAIL-2026-08-03-03	fast	scripts/test-unit	scripts/check	IdeaDraftParser 固定保留多行正文并只剥离分组／标签 token
+FAIL-2026-08-03-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 多行想法经物理输入、保存、SQLite 与第二个 App process 回读后必须逐行一致

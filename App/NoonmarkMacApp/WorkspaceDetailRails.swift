@@ -945,6 +945,8 @@ struct DetailRail: View {
         switch route {
         case .calendar:
             EmptyView()
+        case .flylight:
+            FlylightRail()
         case .selection:
             selectionDetail
         case .zhulong:
@@ -961,6 +963,103 @@ struct DetailRail: View {
             } else {
                 RailHint(text: hint)
                     .padding(.top, 40)
+            }
+        }
+    }
+
+    private struct FlylightRail: View {
+        @EnvironmentObject private var store: NoonmarkStore
+
+        var body: some View {
+            if let idea = store.selectedIdea {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(store.copy.ideaInspectorTitle)
+                        .font(.noonmarkSystem(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .tracking(0.6)
+                    MarkdownText(
+                        idea.body,
+                        e2eIdentifier: "ideas.inspector.markdown.\(idea.id)"
+                    )
+                    .font(.noonmarkSystem(size: 14.5, weight: .regular))
+                    .foregroundStyle(Theme.text1)
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 16)
+
+                    FlylightRailSection(
+                        title: store.copy.ideaInspectorRecordedAt
+                    ) {
+                        Text(store.displayDateTime(idea.createdAt))
+                    }
+
+                    if let classification = store.ideaClassificationLine(
+                        for: idea
+                    ) {
+                        FlylightRailSection(
+                            title: store.copy.ideaInspectorClassification
+                        ) {
+                            Text(classification)
+                        }
+                    }
+
+                    FlylightRailSection(
+                        title: store.copy.ideaInspectorActions
+                    ) {
+                        HStack(spacing: 12) {
+                            Button(store.copy.editIdeaAction) {
+                                store.beginIdeaEdit(idea)
+                            }
+                            Button(
+                                idea.pinnedAt == nil
+                                    ? store.copy.addToStickyNotesAction
+                                    : store.copy.removeFromStickyNotesAction
+                            ) {
+                                if idea.pinnedAt == nil {
+                                    _ = store.addIdeaToStickyNotes(idea.id)
+                                } else {
+                                    _ = store.removeIdeaFromStickyNotes(idea.id)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                    }
+                }
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "ideas.inspector.idea.\(idea.id)",
+                        verificationText: idea.body
+                    )
+                }
+            } else {
+                Text(store.copy.ideaInspectorEmptyState)
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 16)
+            }
+        }
+    }
+
+    private struct FlylightRailSection<Content: View>: View {
+        let title: String
+        @ViewBuilder let content: Content
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.noonmarkSystem(size: 10.5))
+                    .foregroundStyle(Theme.text3)
+                content
+                    .font(.noonmarkSystem(size: 12))
+                    .foregroundStyle(Theme.text2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 18)
+            .padding(.bottom, 18)
+            .overlay(alignment: .top) {
+                Divider().overlay(Theme.lineSubtle)
             }
         }
     }

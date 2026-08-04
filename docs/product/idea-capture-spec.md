@@ -49,7 +49,7 @@
 ### 浏览
 
 - 最近集合按创建时间倒序、按自然日分组；所有活动飞光都留在时间线，包括已经加入 Sticky Note 的条目。
-- 宽窗为时间线＋右侧详情，窄窗为同一投影的连续流。
+- 详情接入与计划、清单页相同的共享右侧详情栏；用户可用页头或栏边界动作收起／展开，收起后时间线占满主内容区，窗口恢复沿用统一工作区状态。
 - 卡片与详情使用同一个块级 Markdown renderer。
 - 搜索、分组／标签过滤与回看继续是互斥主集合，不堆叠多段列表。
 
@@ -73,7 +73,7 @@
 
 - **清单流**：稳定可扫读的单列布局，正文优先，保留时间与分类摘要。
 - **便签墙**：自适应多列布局，使用独立 presentation container；首版只建立轻量暖色便签基线，不固定未来纸张颜色、尺寸、旋转或自由排布规则。
-- 页面提供明确的视图切换操作；选择属于 profile 隔离的本机偏好，不进入 SQLite snapshot、数据包或同步。
+- 页面用一个显示当前视图的下拉清单提供视图切换，不横向铺开所有模式；选择属于 profile 隔离的本机偏好，不进入 SQLite snapshot、数据包或同步。
 - 两种布局复用同一个条目内容组件与操作模型；新增第三种视图不得修改领域实体或精选 mutation。
 
 ## 删除与墓碑
@@ -105,8 +105,8 @@
 
 ## 验证
 
-- fast gate：侧边栏三分组顺序、飞光语言、Sticky Note 操作、两种布局 seam、隐藏墓碑与 Markdown contract。
+- fast gate：侧边栏三分组顺序、飞光语言、共享可收起详情栏 route、Sticky Note 单一下拉入口、两种布局 seam、隐藏墓碑与 Markdown contract。
 - domain／storage：精选加入／移出、源条目继续出现在飞光、编辑同步、删除清除精选、SQLite round-trip 与 sync 收敛。
-- symptom gate：真实 `.app` 物理点击飞光加入 Sticky Note，切换两种展示视图，返回飞光仍可见，重启后关系与视图正确。
+- symptom gate：真实 `.app` 物理收起／展开飞光详情栏，并点击 Sticky Note 下拉清单切换两种展示视图；返回飞光仍可见，重启后关系与视图正确。
 - Demo：一年期 fixture 至少包含多条精选飞光，并由同一真实 Demo App 截取 Sticky Note 清单流、便签墙与飞光页面。
 - 最终运行 `make check`、隔离真实 App E2E 与 `make test-demo-fixture`；不得启动或读取 production App／资料。

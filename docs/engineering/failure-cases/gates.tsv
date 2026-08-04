@@ -53,7 +53,7 @@ FAIL-2026-08-03-03	fast	scripts/test-unit	scripts/check	IdeaDraftParser 固定�
 FAIL-2026-08-03-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 多行想法经物理输入、保存、SQLite 与第二个 App process 回读后必须逐行一致
 FAIL-2026-08-04-01	fast	scripts/test-notes-ui-contract	scripts/check	约束原生 placeholder、共享 editor 自测高度、飞光 surface 与几何断言不漂移
 FAIL-2026-08-04-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 聚焦空飞光 composer，surface 超高或 placeholder 与 caret 错位即判红
-FAIL-2026-08-04-02	fast	scripts/test-notes-ui-contract	scripts/check	拒绝瞬态 Picker Label，强制应用自有模式按钮与稳定逐模式锚点
-FAIL-2026-08-04-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以 WindowServer 点击清单流与便签墙，mouseDown 前目标身份漂移即判红
+FAIL-2026-08-04-02	fast	scripts/test-notes-ui-contract	scripts/check	强制单一应用自有下拉触发器，拒绝旧双按钮与逐模式瞬态锚点
+FAIL-2026-08-04-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以 WindowServer 打开下拉清单并选择两种视图，菜单 tracking 或选择失败即判红
 FAIL-2026-08-04-03	fast	scripts/test-unit	scripts/check	固定飞光 Markdown 转义标记、裸 URL 与 active-token 共用保护范围，任何正文剥离即判红
 FAIL-2026-08-04-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理输入带 @ 的裸 URL，经保存、SQLite 与第二个 App process 回读后必须逐字一致

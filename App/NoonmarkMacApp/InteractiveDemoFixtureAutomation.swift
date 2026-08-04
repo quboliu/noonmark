@@ -539,6 +539,26 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             )
             return
         }
+        if context.store.isDetailRailExpanded == false {
+            guard AppViewTreeE2E.click(
+                identifier: "shell.detail-rail.toggle"
+            ) else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    verifyIdeasPresentation(
+                        context: context,
+                        remainingAttempts: remainingAttempts - 1
+                    )
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                verifyIdeasPresentation(
+                    context: context,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
         let timelineGroups = context.store.ideaTimelineGroups
         let projectedIdeas = context.engine.ideaCollection(
             .recent,
@@ -619,9 +639,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               .flatMap(AppViewTreeE2E.verificationText)
               == context.store.copy.navIdeas,
               AppViewTreeE2E.view(identifier: "ideas.composer") != nil,
-              AppViewTreeE2E.view(identifier: "ideas.layout")
-              .flatMap(AppViewTreeE2E.verificationText) == "wide",
-              AppViewTreeE2E.view(identifier: "ideas.inspector") != nil,
+              context.store.detailRailRoute == .flylight,
+              AppViewTreeE2E.view(identifier: "shell.detail-rail") != nil,
               inspectorMatchesSelection,
               AppViewTreeE2E.view(identifier: "ideas.filter") == nil,
               AppViewTreeE2E.view(identifier: "ideas.timeline")
@@ -940,7 +959,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         if AppViewTreeE2E.view(identifier: "sticky-notes.presentation")
             .flatMap(AppViewTreeE2E.verificationText) != "stream"
         {
-            guard AppViewTreeE2E.click(identifier: "sticky-notes.mode.stream") else {
+            guard AppViewTreeE2E.selectMenuItem(
+                identifier: "sticky-notes.mode",
+                downArrowCount: 1
+            ) else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     verifyStickyNotesStreamPresentation(
                         context: context,
@@ -979,7 +1001,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             finishWithFailure(error, on: context.store)
             return
         }
-        guard AppViewTreeE2E.click(identifier: "sticky-notes.mode.wall") else {
+        guard AppViewTreeE2E.selectMenuItem(
+            identifier: "sticky-notes.mode",
+            downArrowCount: 2
+        ) else {
             finishWithFailure(
                 InteractiveDemoFixtureError.taskCollectionPresentationFailed(
                     "Sticky Note 清单流验收后无法切换到便签墙"

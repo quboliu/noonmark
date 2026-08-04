@@ -21,7 +21,7 @@ struct StickyNotesPage: View {
                 title: store.copy.navStickyNotes,
                 subtitle: store.copy.stickyNotesSubtitle
             ) {
-                StickyNotePresentationControl(selection: $presentationMode)
+                StickyNotePresentationMenu(selection: $presentationMode)
                 .background {
                     AppE2EViewAnchor(
                         identifier: "sticky-notes.mode",
@@ -97,67 +97,56 @@ struct StickyNotesPage: View {
     }
 }
 
-/// Stable, app-owned hit targets avoid relying on AppKit's transient Picker
-/// label hierarchy. This also leaves the visual treatment replaceable without
-/// changing the presentation preference or automation contract.
-private struct StickyNotePresentationControl: View {
+/// A single stable trigger owns the automation and accessibility identity;
+/// the native dropdown items remain replaceable presentation adapters.
+private struct StickyNotePresentationMenu: View {
     @EnvironmentObject private var store: NoonmarkStore
     @Binding var selection: StickyNotePresentationMode
 
     var body: some View {
-        HStack(spacing: 2) {
-            modeButton(
-                .stream,
-                title: store.copy.stickyNoteStreamMode,
-                systemImage: "list.bullet"
+        Menu {
+            ForEach(StickyNotePresentationMode.allCases) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    Label(
+                        title(for: mode),
+                        systemImage: selection == mode
+                            ? "checkmark"
+                            : mode.systemImage
+                    )
+                }
+            }
+        } label: {
+            Label(
+                title(for: selection),
+                systemImage: selection.systemImage
             )
-            modeButton(
-                .wall,
-                title: store.copy.stickyNoteWallMode,
-                systemImage: "rectangle.grid.2x2"
-            )
+            .font(.noonmarkSystem(size: 11.5, weight: .medium))
         }
-        .padding(2)
-        .frame(width: 188, height: 26)
-        .background(
-            RoundedRectangle(cornerRadius: 6).fill(Theme.chip)
-        )
-        .accessibilityElement(children: .contain)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .accessibilityLabel(store.copy.stickyNotePresentationMode)
         .accessibilityIdentifier("sticky-notes.mode")
     }
 
-    private func modeButton(
-        _ mode: StickyNotePresentationMode,
-        title: String,
-        systemImage: String
-    ) -> some View {
-        Button {
-            selection = mode
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.noonmarkSystem(size: 10.5, weight: .medium))
-                .foregroundStyle(selection == mode ? Theme.text1 : Theme.text3)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
+    private func title(for mode: StickyNotePresentationMode) -> String {
+        switch mode {
+        case .stream:
+            store.copy.stickyNoteStreamMode
+        case .wall:
+            store.copy.stickyNoteWallMode
         }
-        .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(selection == mode ? Theme.panel : Color.clear)
-                .shadow(
-                    color: selection == mode ? Theme.shadowSubtle : .clear,
-                    radius: 2,
-                    y: 1
-                )
-        )
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(selection == mode ? .isSelected : [])
-        .accessibilityIdentifier("sticky-notes.mode.\(mode.rawValue)")
-        .background {
-            AppE2EViewAnchor(
-                identifier: "sticky-notes.mode.\(mode.rawValue)"
-            )
+    }
+}
+
+private extension StickyNotePresentationMode {
+    var systemImage: String {
+        switch self {
+        case .stream:
+            "list.bullet"
+        case .wall:
+            "rectangle.grid.2x2"
         }
     }
 }

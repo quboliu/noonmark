@@ -368,6 +368,7 @@ final class MacUIDesignContractTests: XCTestCase {
             contract.pages,
             [
                 .dayTodo,
+                .stickyNotes,
                 .ideas,
                 .taskPool,
                 .futurePlans,
@@ -399,8 +400,7 @@ final class MacUIDesignContractTests: XCTestCase {
                 .reverseChronologicalTimeline,
                 .naturalDaySections,
                 .daySectionHeader,
-                .wideTimelineInspector,
-                .compactContinuousStream,
+                .collapsibleSharedDetailRail,
                 .ideaCard,
                 .ideaCardPresentationSeam,
                 .ideaCardTimestamp,
@@ -414,15 +414,11 @@ final class MacUIDesignContractTests: XCTestCase {
                 .inlineEditEscapeCancel,
                 .inlineEditBlurSave,
                 .singleLineEmptyState,
-                .pinnedSectionAboveTimeline,
-                .pinnedSectionUsesDayHeaderTypography,
-                .ideaCardPinAction,
-                .ideaCardUnpinAction,
+                .ideaCardAddToStickyNoteAction,
+                .ideaCardRemoveFromStickyNoteAction,
                 .classificationLineClickToFilter,
                 .activeClassificationFilterIndicator,
-                .singleFilterIndicatorVisualUnit,
-                .trashSectionCollapsedByDefault,
-                .trashRestoreRequiresNewBody
+                .singleFilterIndicatorVisualUnit
             ]
         )
         XCTAssertEqual(MacUIIdeasPageLayout.composerMinimumHeight, 54)
@@ -437,16 +433,38 @@ final class MacUIDesignContractTests: XCTestCase {
         XCTAssertTrue(MacUIIdeasPageLayout.cardSeparatesWithSingleDivider)
         XCTAssertTrue(MacUIIdeasPageLayout.classificationLineOnlyWhenClassified)
         XCTAssertEqual(MacUIIdeasPageLayout.emptyStateVisualUnitCount, 1)
-        XCTAssertTrue(MacUIIdeasPageLayout.pinnedSectionFloatsAboveTimeline)
-        XCTAssertTrue(MacUIIdeasPageLayout.pinnedSectionShowsCountOnly)
-        XCTAssertTrue(MacUIIdeasPageLayout.trashCollapsedByDefault)
-        XCTAssertTrue(MacUIIdeasPageLayout.trashHasNoHardDelete)
         XCTAssertEqual(MacUIIdeasPageLayout.filterIndicatorVisualUnitCount, 1)
         XCTAssertEqual(MacUIIdeasPageLayout.readableTimelineMaximumWidth, 760)
-        XCTAssertEqual(MacUIIdeasPageLayout.wideInspectorWidth, 300)
-        XCTAssertEqual(MacUIIdeasPageLayout.wideLayoutMinimumWidth, 760)
+        XCTAssertTrue(MacUIIdeasPageLayout.usesSharedDetailRail)
         XCTAssertTrue(
             MacUIIdeasPageLayout.classificationFilterCombinesWithSubstringFilter
+        )
+    }
+
+    func testStickyNotesPageUsesOneDropdownAndSharedContent() {
+        let contract = MacUIDesignContract.current
+
+        XCTAssertEqual(
+            contract.stickyNotesPageElements,
+            [
+                .singleDropdownPresentationMenu,
+                .currentPresentationInMenuLabel,
+                .streamPresentation,
+                .wallPresentation,
+                .sharedItemContent,
+                .sourceFlylightNavigation,
+                .localPresentationPreference
+            ]
+        )
+        XCTAssertEqual(
+            MacUIStickyNotesPageLayout.presentationMenuVisualUnitCount,
+            1
+        )
+        XCTAssertTrue(
+            MacUIStickyNotesPageLayout.presentationsShareItemContent
+        )
+        XCTAssertTrue(
+            MacUIStickyNotesPageLayout.presentationPreferenceIsLocal
         )
     }
 

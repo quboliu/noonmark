@@ -18,7 +18,8 @@ Sticky Note 页面可以显示清单流，但点击「便签墙」时，模式�
 - 2026-08-04：首版使用 SwiftUI `Picker(.segmented)`，并把验证锚点放在 Picker 的 `Label` 背景中。
 - 2026-08-04 02:02：隔离真实 App E2E 第一次执行视图切换，稳定以 `target changed before mouseDown` 判红。
 - 2026-08-04：视图树证明父 Picker 和清单流存在，但 `sticky-notes.mode.wall` 子目标不在失败时视图树内。
-- 2026-08-04：改为应用自有、身份稳定的双按钮展示控制；同一路径待重跑转绿。
+- 2026-08-04：改为应用自有、身份稳定的双按钮展示控制；同一路径重跑转绿。
+- 2026-08-04：产品后续要求收敛为单一下拉清单；稳定身份迁移到应用拥有的 `Menu` 触发器，原生菜单条目只在菜单 tracking 期间由键盘选择，不再承担长期锚点。
 
 ## 复现与证据
 
@@ -44,21 +45,21 @@ SwiftUI segmented Picker 的选项 Label 属于 AppKit 管理的瞬态内部层�
 
 ## 根因修复
 
-- 用 `StickyNotePresentationControl` 建立应用自有的两个 `Button` 命中区域。
-- 选择状态、视觉 surface 和 E2E 锚点都挂在稳定按钮边界上，不依赖 Picker 内部 Label。
-- 展示偏好和页面布局接口保持不变，修复只替换 presentation control adapter。
+- 用单一 `StickyNotePresentationMenu` 建立应用自有、身份稳定的下拉触发器。
+- 选择状态与 E2E 锚点挂在触发器边界；清单流／便签墙条目由原生菜单 tracking 选择，不给瞬态内部 Label 挂长期锚点。
+- 展示偏好和页面布局接口保持不变，presentation adapter 可继续扩展第三种视图。
 
 ## 验证结果
 
-- `scripts/test-notes-ui-contract`：通过，确认应用自有控制与两个模式锚点存在。
+- `scripts/test-notes-ui-contract`：通过，确认单一应用自有下拉触发器存在，且旧双按钮／逐模式锚点不再出现。
 - `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e`：exercise／verify 均为 `ok`；WindowServer 连续点击便签墙与清单流，重启后仍保留便签墙偏好。
 - `make test-demo-fixture`：通过；三条 Sticky Note 在清单流与便签墙中逐条对账。
 - `make check`：通过，1493 项测试无失败；两项 live iCloud 测试按既有环境约束跳过，其余 lint、format、真实 App、仿真、DMG 与故障案例门禁全部通过。
 
 ## 永久门禁
 
-- fast：`scripts/test-notes-ui-contract`，由 `scripts/check` 强制调用，拒绝把展示模式重新交给瞬态 Picker Label。
-- symptom：`scripts/test-e2e`，由 `scripts/test-all` 强制调用，以 WindowServer 依次点击便签墙和清单流，并在 mouseDown 前复核目标身份。
+- fast：`scripts/test-notes-ui-contract`，由 `scripts/check` 强制调用，要求单一下拉触发器，并拒绝旧双按钮与逐模式瞬态锚点。
+- symptom：`scripts/test-e2e`，由 `scripts/test-all` 强制调用，以 WindowServer 点击稳定触发器、等待原生菜单 tracking，再依次选择便签墙和清单流。
 
 ## 发行与回滚
 
@@ -66,4 +67,4 @@ SwiftUI segmented Picker 的选项 Label 属于 AppKit 管理的瞬态内部层�
 
 ## 教训与永久约束
 
-对必须承载真实交互门禁的模式切换，验证锚点必须位于应用拥有的稳定命中区域。不能把 SwiftUI Picker、Menu 或其他桥接控件的瞬态内部 Label 当作可长期识别的交互身份。
+对必须承载真实交互门禁的模式切换，验证锚点必须位于应用拥有的稳定命中区域。可以验证原生 Menu 的 tracking 与选择结果，但不能把 SwiftUI Picker、Menu 或其他桥接控件的瞬态内部 Label 当作可长期识别的交互身份。

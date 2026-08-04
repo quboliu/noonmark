@@ -8,6 +8,9 @@ markdown_editor="App/NoonmarkMacApp/MarkdownEditing.swift"
 flylight_page="App/NoonmarkMacApp/IdeasPage.swift"
 sticky_page="App/NoonmarkMacApp/StickyNotesPage.swift"
 flylight_e2e="App/NoonmarkMacApp/IdeaCaptureE2EAutomation.swift"
+detail_rails="App/NoonmarkMacApp/WorkspaceDetailRails.swift"
+presentation="App/NoonmarkMacApp/NoonmarkStore+PresentationUndo.swift"
+ui_contract="Sources/NoonmarkMacUIContract/MacUIDesignContract.swift"
 notes_copy="App/NoonmarkMacApp/AppCopy+Ideas.swift"
 store="App/NoonmarkMacApp/NoonmarkStore.swift"
 store_ideas="App/NoonmarkMacApp/NoonmarkStore+Ideas.swift"
@@ -81,17 +84,61 @@ require_literal \
   "$sticky_page" \
   'Sticky Note presentation is not separated from content'
 require_literal \
-  'private struct StickyNotePresentationControl' \
+  'private struct StickyNotePresentationMenu' \
   "$sticky_page" \
-  'Sticky Note presentation modes lost their app-owned hit targets'
+  'Sticky Note presentation is not exposed as one dropdown menu'
 require_literal \
-  'identifier: "sticky-notes.mode.\(mode.rawValue)"' \
+  'Menu {' \
   "$sticky_page" \
-  'Sticky Note mode controls have no stable per-mode evidence anchor'
+  'Sticky Note presentation menu lost its dropdown list'
+require_literal \
+  'identifier: "sticky-notes.mode"' \
+  "$sticky_page" \
+  'Sticky Note presentation menu has no stable trigger anchor'
 require_literal \
   'identifier: "sticky-notes.presentation"' \
   "$sticky_page" \
   'Sticky Note presentation modes have no runtime evidence anchor'
+require_literal \
+  'case flylight' \
+  "$presentation" \
+  'Flylight detail is not a first-class shared rail route'
+require_literal \
+  'return .flylight' \
+  "$presentation" \
+  'Flylight does not expose shared detail rail content'
+require_literal \
+  'case .flylight:' \
+  "$detail_rails" \
+  'Shared detail rail cannot render Flylight details'
+require_literal \
+  'FlylightRail()' \
+  "$detail_rails" \
+  'Flylight detail rail surface is missing'
+require_literal \
+  'case stickyNotes' \
+  "$ui_contract" \
+  'code-owned Mac UI contract omits the Sticky Note top-level page'
+require_literal \
+  'case singleDropdownPresentationMenu' \
+  "$ui_contract" \
+  'code-owned Mac UI contract omits the Sticky Note dropdown'
+require_literal \
+  'case ideaCardAddToStickyNoteAction' \
+  "$ui_contract" \
+  'Flylight UI contract does not describe the current Sticky Note intent'
+require_literal \
+  'exerciseFlylightDetailRail(' \
+  "$flylight_e2e" \
+  'real App E2E no longer collapses and expands the Flylight detail rail'
+require_literal \
+  'Flylight detail rail did not collapse after expansion' \
+  "$flylight_e2e" \
+  'real App E2E no longer physically collapses an expanded Flylight rail'
+require_literal \
+  'chooseStickyNotePresentation(' \
+  "$flylight_e2e" \
+  'real App E2E no longer selects Sticky Note views through the dropdown'
 require_literal \
   '(pinned + timeline)' \
   "$workspace" \
@@ -110,8 +157,17 @@ if /usr/bin/grep -Eq \
   exit 1
 fi
 
-if /usr/bin/grep -Eq 'Picker\(' "$sticky_page"; then
-  echo 'Sticky Note modes returned to a transient Picker label hierarchy' >&2
+if /usr/bin/grep -Eq \
+  'StickyNotePresentationControl|sticky-notes\.mode\.\\\(mode\.rawValue\\\)|ideas\.layout|private struct IdeaInspector' \
+  "$sticky_page" "$flylight_page"; then
+  echo 'Notes UI retained the old segmented mode control or embedded Flylight rail' >&2
+  exit 1
+fi
+
+if /usr/bin/grep -Eq \
+  'pinnedSectionAboveTimeline|pinnedSectionUsesDayHeaderTypography|ideaCardPinAction|ideaCardUnpinAction|trashSectionCollapsedByDefault|trashRestoreRequiresNewBody|pinnedSectionFloatsAboveTimeline|trashCollapsedByDefault|trashHasNoHardDelete' \
+  "$ui_contract"; then
+  echo 'Mac UI contract reintroduced retired Flylight pinned or trash UI' >&2
   exit 1
 fi
 

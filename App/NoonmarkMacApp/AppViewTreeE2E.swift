@@ -466,6 +466,45 @@ enum AppViewTreeE2E {
         return click(view)
     }
 
+    static func selectMenuItem(
+        identifier: String,
+        downArrowCount: Int
+    ) -> Bool {
+        guard downArrowCount > 0,
+              let view = view(identifier: identifier),
+              let window = view.window,
+              click(view)
+        else {
+            return false
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime + 0.04
+        let keyCodes = Array(
+            repeating: UInt16(125),
+            count: downArrowCount
+        ) + [UInt16(36)]
+        for (index, keyCode) in keyCodes.enumerated() {
+            let characters = keyCode == 125
+                ? String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                : "\r"
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: timestamp + (Double(index) * 0.01),
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            ) else {
+                return false
+            }
+            NSApp.postEvent(event, atStart: false)
+        }
+        return true
+    }
+
     static func sendKey(_ navigationKey: DateNavigationKey) -> Bool {
         guard let window = NSApp.keyWindow
             ?? NSApp.mainWindow

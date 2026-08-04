@@ -31,6 +31,7 @@ extension SQLiteLocalFirstSyncFailureReason {
 extension NoonmarkStore {
     enum DetailRailRoute: Equatable {
         case calendar
+        case flylight
         case selection
         case zhulong
         case dayReview
@@ -198,6 +199,9 @@ extension NoonmarkStore {
         }
         if page == .zhulong {
             return zhulongWorkspace.selectedSession == nil ? nil : .zhulong
+        }
+        if page == .ideas {
+            return .flylight
         }
         if hasActiveDetailSelection {
             return .selection

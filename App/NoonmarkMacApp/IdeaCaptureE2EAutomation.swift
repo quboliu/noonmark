@@ -120,10 +120,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
-        try await exerciseResponsiveLayout(
+        try await exerciseFlylightDetailRail(
             expectedIdeaIDs: [beta.id, alpha.id],
             store: store,
-            mainWindow: mainWindow
+            mainWindow: mainWindow,
+            input: input
         )
         try await exerciseFilter(
             alphaID: alpha.id,
@@ -395,17 +396,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 input: input
             )
         }
-        guard AppViewTreeE2E.view(
-            identifier: "ideas.layout",
-            in: mainWindow
-        ).flatMap(AppViewTreeE2E.verificationText) == "wide",
-            AppViewTreeE2E.view(
-                identifier: "ideas.inspector",
-                in: mainWindow
-            ) != nil
+        guard store.detailRailRoute == .flylight,
+              store.hasDetailRailContent
         else {
             throw Failure.failed(
-                "default Flylight window did not use the wide timeline-inspector skeleton"
+                "Flylight did not register its shared detail rail route"
             )
         }
     }
@@ -508,64 +503,89 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func exerciseResponsiveLayout(
+    private func exerciseFlylightDetailRail(
         expectedIdeaIDs: [IdeaID],
         store: NoonmarkStore,
-        mainWindow: NSWindow
+        mainWindow: NSWindow,
+        input: WindowServerInputDriver
     ) async throws {
-        let originalFrame = mainWindow.frame
-        var compactFrame = originalFrame
-        compactFrame.origin.x = originalFrame.maxX
-            - NoonmarkVisualMetrics.minimumSize.width
-        compactFrame.size.width = NoonmarkVisualMetrics.minimumSize.width
-        mainWindow.setFrame(compactFrame, display: true)
-
-        do {
-            try await waitUntil("Flylight window did not enter compact continuous flow") {
-                mainWindow.contentView?.layoutSubtreeIfNeeded()
-                let cards = expectedIdeaIDs.compactMap { id in
-                    AppViewTreeE2E.view(
-                        identifier: "ideas.card.\(id)",
-                        in: mainWindow
-                    )
-                }
-                return store.displayedIdeaGroups.flatMap(\.ideas).map(\.id)
-                    == expectedIdeaIDs
-                    && cards.count == expectedIdeaIDs.count
-                    && cards.allSatisfy {
-                        $0.isHiddenOrHasHiddenAncestor == false
-                            && AppViewTreeE2E.frameInWindow(for: $0).isEmpty == false
-                    }
-                    && AppViewTreeE2E.view(
-                        identifier: "ideas.layout",
-                        in: mainWindow
-                    ).flatMap(AppViewTreeE2E.verificationText) == "compact"
-                    && AppViewTreeE2E.view(
-                        identifier: "ideas.inspector",
-                        in: mainWindow
-                    ) == nil
-                    && AppViewTreeE2E.view(
-                        identifier: "ideas.composer.input",
-                        in: mainWindow
-                    ) != nil
-            }
-            try await captureScreenshot("ideas-compact-stream.png", of: mainWindow)
-        } catch {
-            mainWindow.setFrame(originalFrame, display: true)
-            throw error
+        if store.isDetailRailExpanded {
+            try await click(
+                "shell.detail-rail.toggle",
+                in: mainWindow,
+                input: input
+            )
         }
-
-        mainWindow.setFrame(originalFrame, display: true)
-        try await waitUntil("Flylight window did not restore its wide inspector layout") {
+        try await waitUntil("Flylight detail rail did not collapse") {
             mainWindow.contentView?.layoutSubtreeIfNeeded()
-            return AppViewTreeE2E.view(
-                identifier: "ideas.layout",
-                in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "wide"
+            let cards = expectedIdeaIDs.compactMap { id in
+                AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(id)",
+                    in: mainWindow
+                )
+            }
+            return store.detailRailRoute == .flylight
+                && store.isDetailRailExpanded == false
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "shell.detail-rail"
+                )
                 && AppViewTreeE2E.view(
-                    identifier: "ideas.inspector",
+                    identifier: "shell.detail-rail.toggle",
                     in: mainWindow
                 ) != nil
+                && cards.count == expectedIdeaIDs.count
+                && AppViewTreeE2E.view(
+                    identifier: "ideas.composer.input",
+                    in: mainWindow
+                ) != nil
+        }
+        try await captureScreenshot("ideas-detail-collapsed.png", of: mainWindow)
+
+        try await click(
+            "shell.detail-rail.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight detail rail did not expand") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            guard store.isDetailRailExpanded,
+                  AppViewTreeE2E.view(
+                      identifier: "shell.detail-rail",
+                      in: mainWindow
+                  ) != nil,
+                  let selectedIdea = store.selectedIdea
+            else {
+                return false
+            }
+            return AppViewTreeE2E.view(
+                identifier: "ideas.inspector.idea.\(selectedIdea.id)",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == selectedIdea.body
+        }
+        try await captureScreenshot("ideas-detail-expanded.png", of: mainWindow)
+
+        try await click(
+            "shell.detail-rail.toggle",
+            in: mainWindow,
+            input: input
+        )
+        try await waitUntil("Flylight detail rail did not collapse after expansion") {
+            mainWindow.contentView?.layoutSubtreeIfNeeded()
+            let cards = expectedIdeaIDs.compactMap { id in
+                AppViewTreeE2E.view(
+                    identifier: "ideas.card.\(id)",
+                    in: mainWindow
+                )
+            }
+            return store.isDetailRailExpanded == false
+                && AppViewTreeE2E.hasNoVisibleView(
+                    identifier: "shell.detail-rail"
+                )
+                && AppViewTreeE2E.view(
+                    identifier: "shell.detail-rail.toggle",
+                    in: mainWindow
+                ) != nil
+                && cards.count == expectedIdeaIDs.count
         }
     }
 
@@ -1049,21 +1069,17 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 in: mainWindow
             ).flatMap(AppViewTreeE2E.verificationText) == Self.alphaBody
         }
-        try await click("sticky-notes.mode.wall", in: mainWindow, input: input)
-        try await waitUntil("Sticky Note did not switch to note wall") {
-            AppViewTreeE2E.view(
-                identifier: "sticky-notes.presentation",
-                in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "wall"
-        }
+        try await chooseStickyNotePresentation(
+            .wall,
+            in: mainWindow,
+            input: input
+        )
         try await captureScreenshot("sticky-notes-wall.png", of: mainWindow)
-        try await click("sticky-notes.mode.stream", in: mainWindow, input: input)
-        try await waitUntil("Sticky Note did not switch back to stream") {
-            AppViewTreeE2E.view(
-                identifier: "sticky-notes.presentation",
-                in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "stream"
-        }
+        try await chooseStickyNotePresentation(
+            .stream,
+            in: mainWindow,
+            input: input
+        )
         try await doubleClick(
             "sticky-notes.item.\(alphaID)",
             in: mainWindow,
@@ -1192,7 +1208,11 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             mainWindow: mainWindow,
             input: input
         )
-        try await click("sticky-notes.mode.wall", in: mainWindow, input: input)
+        try await chooseStickyNotePresentation(
+            .wall,
+            in: mainWindow,
+            input: input
+        )
         try await waitUntil("Sticky Note wall did not render the panel Flylight") {
             AppViewTreeE2E.view(
                 identifier: "sticky-notes.presentation",
@@ -1327,6 +1347,37 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         // every selection waits for tracking to fully end before returning.
         try await waitUntil("idea card overflow menu did not end tracking") {
             probe.didEndTracking
+        }
+    }
+
+    private func chooseStickyNotePresentation(
+        _ mode: StickyNotePresentationMode,
+        in mainWindow: NSWindow,
+        input: WindowServerInputDriver
+    ) async throws {
+        let probe = MenuTrackingProbe()
+        defer { probe.stop() }
+        try await click("sticky-notes.mode", in: mainWindow, input: input)
+        try await waitUntil("Sticky Note presentation menu did not begin tracking") {
+            probe.didBeginTracking
+        }
+        let downArrowCount = mode == .stream ? 1 : 2
+        for _ in 0 ..< downArrowCount {
+            try input.postKey(keyCode: 125)
+        }
+        try input.postKey(keyCode: 36)
+        try await waitUntil("Sticky Note presentation menu did not end tracking") {
+            probe.didEndTracking
+        }
+        try await waitUntil("Sticky Note presentation did not change to \(mode.rawValue)") {
+            AppViewTreeE2E.view(
+                identifier: "sticky-notes.presentation",
+                in: mainWindow
+            ).flatMap(AppViewTreeE2E.verificationText) == mode.rawValue
+                && AppViewTreeE2E.view(
+                    identifier: "sticky-notes.mode",
+                    in: mainWindow
+                ).flatMap(AppViewTreeE2E.verificationText) == mode.rawValue
         }
     }
 

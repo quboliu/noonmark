@@ -427,6 +427,7 @@ public enum MacUINavigationElement: String, CaseIterable, Sendable {
 
 public enum MacUIPage: String, CaseIterable, Sendable {
     case dayTodo
+    case stickyNotes
     case ideas
     case taskPool
     case futurePlans
@@ -467,8 +468,7 @@ public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
     case reverseChronologicalTimeline
     case naturalDaySections
     case daySectionHeader
-    case wideTimelineInspector
-    case compactContinuousStream
+    case collapsibleSharedDetailRail
     case ideaCard
     case ideaCardPresentationSeam
     case ideaCardTimestamp
@@ -482,15 +482,11 @@ public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
     case inlineEditEscapeCancel
     case inlineEditBlurSave
     case singleLineEmptyState
-    case pinnedSectionAboveTimeline
-    case pinnedSectionUsesDayHeaderTypography
-    case ideaCardPinAction
-    case ideaCardUnpinAction
+    case ideaCardAddToStickyNoteAction
+    case ideaCardRemoveFromStickyNoteAction
     case classificationLineClickToFilter
     case activeClassificationFilterIndicator
     case singleFilterIndicatorVisualUnit
-    case trashSectionCollapsedByDefault
-    case trashRestoreRequiresNewBody
 }
 
 public enum MacUIIdeasPageLayout {
@@ -506,15 +502,26 @@ public enum MacUIIdeasPageLayout {
     public static let cardSeparatesWithSingleDivider = true
     public static let classificationLineOnlyWhenClassified = true
     public static let emptyStateVisualUnitCount = 1
-    public static let pinnedSectionFloatsAboveTimeline = true
-    public static let pinnedSectionShowsCountOnly = true
-    public static let trashCollapsedByDefault = true
-    public static let trashHasNoHardDelete = true
     public static let filterIndicatorVisualUnitCount = 1
     public static let classificationFilterCombinesWithSubstringFilter = true
     public static let readableTimelineMaximumWidth = 760.0
-    public static let wideInspectorWidth = 300.0
-    public static let wideLayoutMinimumWidth = 760.0
+    public static let usesSharedDetailRail = true
+}
+
+public enum MacUIStickyNotesPageElement: String, CaseIterable, Sendable {
+    case singleDropdownPresentationMenu
+    case currentPresentationInMenuLabel
+    case streamPresentation
+    case wallPresentation
+    case sharedItemContent
+    case sourceFlylightNavigation
+    case localPresentationPreference
+}
+
+public enum MacUIStickyNotesPageLayout {
+    public static let presentationMenuVisualUnitCount = 1
+    public static let presentationsShareItemContent = true
+    public static let presentationPreferenceIsLocal = true
 }
 
 public enum MacUIDayTodoElement: String, CaseIterable, Sendable {
@@ -1001,6 +1008,7 @@ public struct MacUIDesignContract: Sendable {
     public let pages: [MacUIPage]
     public let zhulongHomeElements: [MacUIZhulongHomeElement]
     public let ideasPageElements: [MacUIIdeasPageElement]
+    public let stickyNotesPageElements: [MacUIStickyNotesPageElement]
     public let dayTodoElements: [MacUIDayTodoElement]
     public let taskPoolElements: [MacUITaskPoolElement]
     public let futurePlanElements: [MacUIFuturePlanElement]
@@ -1025,6 +1033,7 @@ public struct MacUIDesignContract: Sendable {
         pages: [MacUIPage] = MacUIPage.allCases,
         zhulongHomeElements: [MacUIZhulongHomeElement] = MacUIZhulongHomeElement.allCases,
         ideasPageElements: [MacUIIdeasPageElement] = MacUIIdeasPageElement.allCases,
+        stickyNotesPageElements: [MacUIStickyNotesPageElement] = MacUIStickyNotesPageElement.allCases,
         dayTodoElements: [MacUIDayTodoElement] = MacUIDayTodoElement.allCases,
         taskPoolElements: [MacUITaskPoolElement] = MacUITaskPoolElement.allCases,
         futurePlanElements: [MacUIFuturePlanElement] = MacUIFuturePlanElement.allCases,
@@ -1048,6 +1057,7 @@ public struct MacUIDesignContract: Sendable {
         self.pages = pages
         self.zhulongHomeElements = zhulongHomeElements
         self.ideasPageElements = ideasPageElements
+        self.stickyNotesPageElements = stickyNotesPageElements
         self.dayTodoElements = dayTodoElements
         self.taskPoolElements = taskPoolElements
         self.futurePlanElements = futurePlanElements

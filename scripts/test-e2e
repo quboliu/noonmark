@@ -3942,7 +3942,8 @@ run_idea_capture_probe() {
 
   for screenshot in \
     ideas-empty.png \
-    ideas-compact-stream.png \
+    ideas-detail-collapsed.png \
+    ideas-detail-expanded.png \
     ideas-composer-saved.png \
     ideas-filtered.png \
     ideas-classification-filtered.png \

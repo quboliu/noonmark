@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-29：设置页诗文复选框命中目标漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05T02:12:00Z
 - 影响版本／构建：`d819ef02c2e9199a327cbbeedbe5da520e992468` 的 macOS E2E 构建
 - 引入提交：待以修复后的 Git 历史比对回填；目前无法从运行产物证明精确引入提交
 - Git author／committer：待回填
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`ff1c3f0dada9b01002775ecea3f72c76a0f1b1fa`、`ce8b892c3bea5a87a12c95a3f156ed0742ce0d0e`
 
 ## 用户症状与影响
 
@@ -36,19 +36,19 @@
 
 ## 根因与破坏机制
 
-旧自动化把 SwiftUI Toggle 的可访问性语义容器中心当作鼠标目标。该容器包含宽标签，但实际可操作的是左侧 AppKit `NSButton` 复选框；当界面重排或命中分派时，标签中心不保证触发复选框，形成偶发无效点击。首次根治实现又错误地从主窗口树枚举原生控件；Settings 是独立窗口，故解析器在已可见的锚点旁仍找不到 checkbox。最小 `scrollToVisible` 亦只保证像素级露出，未保证 focus ring 中心处于命中区域。
+旧自动化把 SwiftUI Toggle 的宽可访问性语义容器中心当作鼠标目标。运行时视图树证明左侧 `FocusRingNSButton` 可提供 checkbox 的几何中心，但 AppKit 对该原生按钮的直接 `hitTest` 返回空；WindowServer 输入实际先命中所属滚动容器的 `DocumentView`，再由 SwiftUI 分派动作。先前把“直接命中原生 NSButton”当作唯一真相，既会误点标签，也会把正确的滚动文档分派误判为失败。Settings 还是独立窗口，最小 `scrollToVisible` 亦只保证像素级露出，未保证控件中心处于可分派区域。
 
 ## 根因修复
 
-交互层先将已挂载的被动 E2E anchor 以 24pt 垂直边距滚入可点击区域，再只在该 anchor 所属的 Settings window 枚举可见原生 checkbox `NSButton`，验证其中心在锚点内且 hit-test 可达，并在 mouseDown 前再次解析后投递 WindowServer 输入。等待条件升级为真实 hit target 已解析，而非 anchor 的像素级可见。第一次实现错误地以 80% 面积重叠作判据，忽略了原生 focus ring 比 14×14pt checkbox glyph 更大；真实 E2E 已将该假设判红，现以控件中心的语义归属取代。不会改变偏好领域逻辑、同步语义或旧版资料迁移。
+交互层先将已挂载的被动 E2E anchor 滚入可点击区域，只在该 anchor 所属 Settings window 找到唯一可见原生 checkbox `NSButton`，以其中心验证几何归属与可见区域；再要求同一点在所属滚动容器 `DocumentView` 中可分派，才投递真实 WindowServer 输入。等待条件升级为可分派的文档命中和后续状态／持久化回读，而非 anchor 的像素级可见或直接 NSButton hit-test。点击轨迹额外记录稳定标识、交互边界与逻辑时钟，证明事件已投递且不记录业务内容。不会改变偏好领域逻辑、同步语义或旧版资料迁移。
 
 ## 验证结果
 
-待回填原始红色路径转绿、完整 E2E 和发行门禁结果。
+原始 Preferences logical-clock 红色路径已转绿；聚焦路径、完整 `scripts/test-e2e` 与 `make check` 均通过，完整 E2E 审计清单为 `suite_exit_status=0`。修复提交如上；最终 DMG 仍须以该提交之后的受控验证为准。
 
 ## 永久门禁
 
-- fast：`scripts/test-preferences-checkbox-interaction-target-contract`，由 `scripts/check` 强制调用。
+- fast：`scripts/test-preferences-checkbox-interaction-target-contract`，由 `scripts/check` 强制调用，固定验证 checkbox 几何归属与滚动文档分派边界。
 - symptom：`scripts/test-e2e` 的 Preferences logical-clock 原生设置路径。
 
 ## 发行与回滚

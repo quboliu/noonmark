@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-24：已完成页父任务选择命中 disclosure
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04T17:24:48Z
 - 影响版本／构建：0.2.1 (build 6)，`06464d75e50c8e6d31db5b681405cedf06e2b77e`
 - 引入提交：待确认；当前紧凑布局可稳定复现
 - Git author／committer：未知
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`a3f7d06da1fe735dfc63abf54c0567d3c7a667b1`（`fix(e2e): 避免完成页父任务选择命中展开按钮`）
 
 ## 用户症状与影响
 
@@ -27,7 +27,7 @@
 
 ## 验证结果
 
-待回填 focused E2E、完整 E2E 与修复提交。
+专项 task-cycle E2E、完整 `scripts/test-e2e` 与 `make check` 均通过；完整 E2E 审计清单为 `suite_exit_status=0`。修复提交如上。
 
 ## 永久门禁
 

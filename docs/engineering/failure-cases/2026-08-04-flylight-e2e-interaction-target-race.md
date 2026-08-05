@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-28：飞光 E2E 点击命中被动锚点或重挂载目标
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05T01:36:52Z
 - 影响版本／构建：0.2.1 (build 6)，`b895c8620b10a209db0c7815d2be6150f1aa550c`
 - 引入提交：`ff86af0a`（飞光 E2E 共享点击辅助函数首次按被动锚点中心取点）；后续 SwiftUI 重挂载可使该假设不成立
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（以完整 Git 记录为准）
 - 实际修改者：未知；Git identity 不能证明实际操作者。
-- 修复提交：待回填
+- 修复提交：`d819ef02c2e9199a327cbbeedbe5da520e992468`（`fix(e2e): 命中飞光真实交互控件`）
 
 ## 用户症状与影响
 
@@ -31,11 +31,11 @@
 
 ## 根因修复
 
-待回填：共享 helper 对原生文本编辑器直接验证 hit-test；其他被动锚点统一用 `buttonInteractionTarget` 的真实 hit-test 命中区，不再按几何重叠猜测输入控件。只对“目标在 mouseDown 前重挂载”的精确错误重新激活并解析，其他 WindowServer 或行为失败保持 fail-closed。
+共享 helper 对原生文本编辑器直接验证 hit-test；其他被动锚点统一用 `buttonInteractionTarget` 的真实 hit-test 命中区，不再按几何重叠猜测输入控件。只对“目标在 mouseDown 前重挂载”的精确错误重新激活并解析，其他 WindowServer 或行为失败保持 fail-closed。
 
 ## 验证结果
 
-待回填 fast contract、连续聚焦飞光 E2E、完整 E2E、`make check` 与修复提交。
+fast contract、连续聚焦飞光 E2E、完整 `scripts/test-e2e` 与 `make check` 均通过；完整 E2E 审计清单为 `suite_exit_status=0`。修复提交如上。
 
 ## 永久门禁
 

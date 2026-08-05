@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-25：全局 Quick Entry 未恢复原前台应用
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04T17:37:51Z
 - 影响版本／构建：0.2.1 (build 6)，`a3f7d06`
 - 引入提交：待确认；两个全局面板控制器均使用普通 activation
 - Git author／committer：未知
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`f979cd8fbd2c183a30ddbe27789bf6d090d485fd`（`fix(shortcut): 恢复全局录入后的前台应用`）
 
 ## 用户症状与影响
 
@@ -33,7 +33,7 @@
 
 ## 验证结果
 
-待回填 focused E2E、完整 E2E、`make check` 与修复提交。
+专项真实 E2E、完整 `scripts/test-e2e` 与 `make check` 均通过；完整 E2E 审计清单为 `suite_exit_status=0`。修复提交如上。
 
 ## 永久门禁
 

@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-23：上一版本机资料与 JSON 数据包在新版被拒绝
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-04（合并前发布兼容性审查）
 - 影响版本／构建：未发布的想法捕捉整合版本；从 0.2.0（5）升级会在启动或导入时被拒绝
 - 引入提交：`ff86af0a1fa47518667348e3df0d61d1c9caf09e` `feat(ideas): 原生想法记录与置顶、回收站、标签过滤`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 和现有 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`06464d75e50c8e6d31db5b681405cedf06e2b77e`（`merge(release): 整合同步诊断与飞光兼容性`）
 
 ## 用户症状与影响
 
@@ -46,9 +46,9 @@
 
 ## 验证结果
 
-- Fast：待最终 `make check` 回填。
-- Symptom：待最终真实 App E2E 回填。
-- 修复提交：待回填。
+- Fast：`make check` 审计清单（2026-08-05）为 `suite_exit_status=0`；其中 v15 原地升级和 canonical v6 导入两个 XCTest 均已通过。
+- Symptom：完整 `scripts/test-e2e` 为 `suite_exit_status=0`，真实 File → Import 路径完成 v6 包选择、确认、替换与重启回读。
+- 修复提交如上；发行候选仍须以该提交之后的最终 DMG 受控验证为准。
 
 ## 永久门禁
 

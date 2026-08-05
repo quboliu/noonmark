@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-30：全局飞光候选容器不是物理点击目标
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05T03:34:00Z
 - 影响版本／构建：`fda6a7a` 后的隔离 macOS E2E 构建
 - 引入提交：待以修复后的 Git 历史比对回填；当前运行产物只能证明 E2E target drift，不能证明精确引入提交
 - Git author／committer：待回填
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`bf4cc5f13a8cf582539bfff8f261e99519d1f1c8`（`fix(e2e): 命中飞光具体候选按钮`）
 
 ## 用户症状与影响
 
@@ -31,7 +31,7 @@ E2E 将整个候选列表容器当作可点击控件。该容器会随面板根�
 
 ## 验证结果
 
-待回填完整 E2E、Demo 与发行门禁。修复后飞光专项真实 E2E 已通过，fast contract 已通过。
+飞光专项真实 E2E、fast contract、完整 `scripts/test-e2e`、`make check` 与 Demo fixture 均通过；完整 E2E 审计清单为 `suite_exit_status=0`。最终 DMG 仍须以该提交之后的受控验证为准。
 
 ## 永久门禁
 

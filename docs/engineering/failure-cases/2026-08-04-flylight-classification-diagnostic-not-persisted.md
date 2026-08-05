@@ -1,13 +1,13 @@
 # FAIL-2026-08-04-27：飞光未解析分类诊断未持久化
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05T01:20:00Z
 - 影响版本／构建：0.2.1 (build 6)，`3224159`
 - 引入提交：`0341bccd6e54ac071aa095693b98bf16fa4b9833`（收窄修改拒绝的 failure 记录）；`06464d75e50c8e6d31db5b681405cedf06e2b77e`（新增飞光领域校验诊断但未扩大共享边界）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（两项提交）
 - 实际修改者：未知；Git identity 不能证明实际操作者。
-- 修复提交：待回填
+- 修复提交：`b895c8620b10a209db0c7815d2be6150f1aa550c`（`fix(diagnostics): 保留飞光分类拒绝错误码`）
 
 ## 用户症状与影响
 
@@ -35,11 +35,11 @@
 
 ## 根因修复
 
-待回填：修改共享 mutation rejection 边界，使每个错误都经现有白名单 mapper 生成并保存 `DiagnosticFailure`；不传递原始 Error、描述、userInfo 或业务文本。
+共享 mutation rejection 边界现让每个错误都经既有白名单 mapper 生成并保存 `DiagnosticFailure`；不传递原始 Error、描述、userInfo 或业务文本。
 
 ## 验证结果
 
-待回填 fast contract、聚焦真实飞光 E2E、完整 E2E、`make check` 与修复提交。
+fast contract、聚焦真实飞光 E2E、完整 `scripts/test-e2e` 与 `make check` 均通过；真实路径验证 `domainValidation/821` 已持久化，完整 E2E 审计清单为 `suite_exit_status=0`。修复提交如上。
 
 ## 永久门禁
 

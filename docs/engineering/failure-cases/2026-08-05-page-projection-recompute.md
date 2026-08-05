@@ -1,13 +1,13 @@
 # FAIL-2026-08-05-02：页面投影在每次 SwiftUI body 求值时重复全表扫描导致页面切换与滚动卡顿
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05（FAIL-2026-08-05-01 修复后的全局同类排查）
 - 影响版本／构建：0.2.1 (6) 及之前全部包含 Day Todo／任务池／日历等页面投影的构建
 - 引入提交：视图层投影调用随各页面逐步引入，无单一引入提交；逐行全扫模式自 TaskRow 初版即存在
 - Git author／committer：多提交累积，非单一来源
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`18690f19a87fc56bbc37fca7dc04864c6d66688e` fix(app): memoize page projections and rail statistics per engine revision
 
 ## 用户症状与影响
 
@@ -55,7 +55,7 @@
 - 新增 `Tests/NoonmarkMacRuntimeTests/RevisionMemoTests.swift`：同版本只算一次、版本变化重算、invalidate 强制重算、键值备忘逐键独立缓存、版本变化整体失效，全部通过；已登记进 `scripts/test-unit`。
 - `scripts/test-failure-case-gates` 通过。
 - SwiftLint／SwiftFormat 对改动文件无违规。
-- 症状级验证：待回填（年度 demo 基线 sample 对比）。
+- 症状级验证（2026-08-05）：年度 demo fixture 的页面切换耗时门禁实测转绿——修复后十个一级页面「page 赋值 → 就绪锚点出现」耗时 79-205ms，TOTAL 1414ms（`scripts/test-page-switch-latency` 判绿）；修复前仅已完成页单页即 5-6 秒。分组对拍确认计划组与轨迹组切换耗时拉平。
 
 ## 永久门禁
 

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source_file="App/NoonmarkMacApp/IdeaCaptureE2EAutomation.swift"
+
+rg -F 'currentView is NSTextView' "$source_file" >/dev/null
+rg -F 'currentView is NSTextField' "$source_file" >/dev/null
+rg -F 'AppViewTreeE2E.buttonInteractionTarget(' "$source_file" >/dev/null
+rg -F 'isTargetPresentationTransition(error)' "$source_file" >/dev/null
+rg -F 'idea capture target changed before mouseDown' "$source_file" >/dev/null
+
+echo "Idea capture interaction target contract passed"

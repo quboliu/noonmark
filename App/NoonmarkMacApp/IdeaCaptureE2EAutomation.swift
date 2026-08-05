@@ -2605,6 +2605,51 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                     "idea capture target changed before mouseDown: \(identifier)"
                 )
             }
+            let isDirectTextInput = currentView is NSTextView
+                || currentView is NSTextField
+            if isDirectTextInput {
+                guard currentView.window === expectedWindow,
+                      currentView.isHiddenOrHasHiddenAncestor == false
+                else {
+                    throw Failure.failed(
+                        "idea capture text input changed before mouseDown: "
+                            + identifier
+                    )
+                }
+                let textInputFrame = AppViewTreeE2E.frameInWindow(
+                    for: currentView
+                )
+                let point = NSPoint(
+                    x: textInputFrame.midX,
+                    y: textInputFrame.midY
+                )
+                let root = expectedWindow.contentView?.superview
+                    ?? expectedWindow.contentView
+                let rootPoint = root?.convert(point, from: nil)
+                guard let root,
+                      let rootPoint,
+                      let hitView = root.hitTest(rootPoint),
+                      hitView === currentView
+                        || hitView.isDescendant(of: currentView)
+                else {
+                    throw Failure.failed(
+                        "idea capture text input is not the physical target: "
+                            + identifier
+                    )
+                }
+                return try input.pointerCoordinate(
+                    windowPoint: point,
+                    in: expectedWindow
+                )
+            }
+            if let buttonTarget = AppViewTreeE2E.buttonInteractionTarget(
+                overlapping: currentView
+            ), buttonTarget.window === expectedWindow {
+                return try input.pointerCoordinate(
+                    windowPoint: buttonTarget.windowPoint,
+                    in: expectedWindow
+                )
+            }
             let frame = AppViewTreeE2E.frameInWindow(for: currentView)
             let visibleFrame = currentView.convert(
                 currentView.visibleRect,
@@ -2638,6 +2683,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             } catch {
                 guard attempt < 2,
                       isActivationInterruption(error)
+                        || isTargetPresentationTransition(error)
                 else {
                     let targetReport = (try? resolveTarget())?.report
                         ?? "unavailable"
@@ -2653,7 +2699,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                             + ",target={\(targetReport)},frontmost={\(frontmostReport)}"
                     )
                 }
-                try await Task.sleep(nanoseconds: 50_000_000)
+                await Task.yield()
             }
         }
     }
@@ -2714,6 +2760,21 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         return report.expectedWindowVisible
             && report.expectedWindowMiniaturized == false
             && (report.appActive == false || report.expectedWindowIsKey == false)
+    }
+
+    /// A passive SwiftUI E2E anchor can be replaced while the WindowServer
+    /// driver settles its pointer. Retry only this proven presentation
+    /// transition; all visibility, focus, and behavioural failures remain
+    /// fail-closed.
+    private func isTargetPresentationTransition(_ error: Error) -> Bool {
+        guard case let .failed(message) = error as? Failure else {
+            return false
+        }
+        return message.hasPrefix(
+            "idea capture target changed before mouseDown:"
+        ) || message.hasPrefix(
+            "idea capture text input changed before mouseDown:"
+        )
     }
 
     private func finderApplication() throws -> NSRunningApplication {

@@ -109,3 +109,5 @@ FAIL-2026-08-04-26	fast	scripts/test-selection-focus-activation-contract	scripts
 FAIL-2026-08-04-26	symptom	scripts/test-e2e	scripts/test-all	真实 WindowServer 指针点击 Day Todo 后必须保留前台身份并选中目标行
 FAIL-2026-08-04-27	fast	scripts/test-mutation-rejection-diagnostic-failure-contract	scripts/check	修改拒绝必须保留既有 mapper 生成的白名单 typed failure，不能只保留持久化错误
 FAIL-2026-08-04-27	symptom	scripts/test-e2e	scripts/test-all	真实飞光未解析分类必须保留草稿、拒绝写入并持久记录 domainValidation/821
+FAIL-2026-08-04-28	fast	scripts/test-idea-capture-interaction-target-contract	scripts/check	飞光 E2E 必须按真实 hit-test 解析文本／按钮命中区，并仅对 mouseDown 前重挂载重新解析目标
+FAIL-2026-08-04-28	symptom	scripts/test-e2e	scripts/test-all	真实飞光筛选与回看刷新必须通过 WindowServer 点击、焦点、持久化与重启路径

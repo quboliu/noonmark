@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+rg -F 'tell application id "app.noonmark.mac.e2e" to activate' scripts/test-e2e >/dev/null
+rg -F 'if [[ -n "$ui_entry_result" ]]; then' scripts/test-e2e >/dev/null
+rg -F 'UIEntryE2EStartGate.fromCommandLine(' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F 'try startGate.publishWaiting()' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F '"$(<"$ui_entry_result")" != waiting\|*' scripts/test-e2e >/dev/null
+rg -F 'AppViewTreeE2E.buttonInteractionTarget(overlapping:' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F 'currentApplication.activate(' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F 'from: frontmostApplication' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F 'requestWindowServerForegroundIfNeeded(window)' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+rg -F 'selection focus title-bar click left button down' App/NoonmarkMacApp/SelectionFocusVisualE2EAutomation.swift >/dev/null
+
+echo "Selection focus activation contract passed"

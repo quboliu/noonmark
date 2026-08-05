@@ -17,6 +17,7 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
     }
 
     private let resultURL: URL
+    private let startGateConfiguration: UIEntryE2EStartGate.Configuration
 
     static func fromCommandLine() -> Self? {
         guard let resultPath = AppLaunchArguments.value(
@@ -24,10 +25,45 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
         ) else {
             return nil
         }
-        return Self(resultURL: URL(fileURLWithPath: resultPath))
+        let resultURL = URL(fileURLWithPath: resultPath)
+        return Self(
+            resultURL: resultURL,
+            startGateConfiguration: UIEntryE2EStartGate.fromCommandLine(
+                resultURL: resultURL
+            )
+        )
     }
 
     func run(on store: NoonmarkStore) {
+        switch startGateConfiguration {
+        case .disabled:
+            runSelection(on: store)
+        case let .invalid(message):
+            try? writeResult("failed: selection focus start gate: \(message)")
+        case let .enabled(startGate):
+            do {
+                try startGate.publishWaiting()
+            } catch {
+                try? writeResult("failed: selection focus start gate: \(error.localizedDescription)")
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let expectedWindowNumber = try await startGate.waitForArm()
+                    try startGate.activateMainWindow(
+                        expectedWindowNumber: expectedWindowNumber
+                    )
+                    try await preparePointerSelectedRow(on: store)
+                    try writeResult("ok")
+                } catch {
+                    AppViewTreeE2E.writeDump(beside: resultURL)
+                    try? writeResult("failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func runSelection(on store: NoonmarkStore) {
         Task { @MainActor in
             do {
                 try await preparePointerSelectedRow(on: store)
@@ -67,11 +103,9 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func click(_ identifier: String, in window: NSWindow) async throws {
-        guard let view = AppViewTreeE2E.view(identifier: identifier),
-              view.window === window,
-              view.isHiddenOrHasHiddenAncestor == false,
-              view.bounds.width > 0,
-              view.bounds.height > 0
+        guard let anchor = AppViewTreeE2E.view(identifier: identifier),
+              anchor.window === window,
+              AppViewTreeE2E.buttonInteractionTarget(overlapping: anchor) != nil
         else {
             throw Failure.failed("selection focus click target is unavailable")
         }
@@ -80,25 +114,20 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
         let resolveTarget:
             @MainActor @Sendable () throws
             -> WindowServerInputDriver.PointerCoordinate = {
-            guard let currentView = AppViewTreeE2E.view(identifier: identifier),
-                  let currentWindow = currentView.window,
-                  currentWindow === window,
-                  currentWindow.isKeyWindow,
-                  currentView.isHiddenOrHasHiddenAncestor == false,
-                  currentView.bounds.width > 0,
-                  currentView.bounds.height > 0
+            guard let currentAnchor = AppViewTreeE2E.view(identifier: identifier),
+                  let target = AppViewTreeE2E.buttonInteractionTarget(
+                      overlapping: currentAnchor
+                  ),
+                  target.window === window,
+                  target.window.isKeyWindow
             else {
                 throw Failure.failed(
                     "selection focus target changed before mouseDown"
                 )
             }
-            let point = currentView.convert(
-                NSPoint(x: currentView.bounds.midX, y: currentView.bounds.midY),
-                to: nil
-            )
             return try input.pointerCoordinate(
-                windowPoint: point,
-                in: currentWindow
+                windowPoint: target.windowPoint,
+                in: target.window
             )
         }
 
@@ -133,11 +162,64 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func ensureMainWindowActive(_ window: NSWindow) async throws {
+        requestMainWindowActivation(window)
+        try await requestWindowServerForegroundIfNeeded(window)
+
+        var consecutiveActiveSamples = 0
+        for _ in 0 ..< 120 {
+            if NSApp.isActive && window.isMainWindow && window.isKeyWindow {
+                consecutiveActiveSamples += 1
+                if consecutiveActiveSamples >= 4 { return }
+            } else {
+                consecutiveActiveSamples = 0
+                requestMainWindowActivation(window)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw Failure.failed("selection focus window did not remain active")
+    }
+
+    private func requestWindowServerForegroundIfNeeded(
+        _ window: NSWindow
+    ) async throws {
+        guard NSApp.isActive == false || window.isKeyWindow == false else { return }
+        let input = try WindowServerInputDriver()
+        let titleBarPoint = CGPoint(
+            x: window.frame.midX,
+            y: CGDisplayBounds(CGMainDisplayID()).height - window.frame.maxY + 14
+        )
+        let gestureNumber = input.nextMouseGestureNumber()
+        try input.postMouse(
+            type: .leftMouseDown,
+            at: titleBarPoint,
+            gestureNumber: gestureNumber,
+            pressure: 1
+        )
+        try await Task.sleep(nanoseconds: 20_000_000)
+        try input.postMouse(
+            type: .leftMouseUp,
+            at: titleBarPoint,
+            gestureNumber: gestureNumber,
+            pressure: 0
+        )
+        try await waitUntil("selection focus title-bar click left button down") {
+            input.isLeftButtonDown == false
+        }
+    }
+
+    private func requestMainWindowActivation(_ window: NSWindow) {
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        NSRunningApplication.current.activate(options: [.activateAllWindows])
-        try await waitUntil("selection focus window did not become active") {
-            NSApp.isActive && window.isMainWindow && window.isKeyWindow
+        window.makeMain()
+        let currentApplication = NSRunningApplication.current
+        if let frontmostApplication = NSWorkspace.shared.frontmostApplication,
+           frontmostApplication.processIdentifier != currentApplication.processIdentifier
+        {
+            _ = currentApplication.activate(
+                from: frontmostApplication,
+                options: [.activateAllWindows]
+            )
+        } else {
+            currentApplication.activate(options: [.activateAllWindows])
         }
     }
 

@@ -105,3 +105,5 @@ FAIL-2026-08-04-24	fast	scripts/test-completed-hierarchy-parent-selection-contra
 FAIL-2026-08-04-24	symptom	scripts/test-e2e	scripts/test-all	真实完成页点击进行中父任务必须打开该父任务的分类编辑器，并完成 task-cycle 持久化与重启对账
 FAIL-2026-08-04-25	fast	scripts/test-global-panel-focus-restoration-contract	scripts/check	全局 Quick Entry 与飞光面板关闭后必须强制复原先前前台应用
 FAIL-2026-08-04-25	symptom	scripts/test-e2e	scripts/test-all	真实全局 Quick Entry 必须在提交后恢复 Finder 焦点并完成任务持久化
+FAIL-2026-08-04-26	fast	scripts/test-selection-focus-activation-contract	scripts/check	Day Todo 指针选择前必须连续确认主窗口仍为 active、main 与 key
+FAIL-2026-08-04-26	symptom	scripts/test-e2e	scripts/test-all	真实 WindowServer 指针点击 Day Todo 后必须保留前台身份并选中目标行

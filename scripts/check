@@ -95,6 +95,9 @@ run_check_suite() {
   echo "==> Global panel focus restoration contract"
   bash scripts/test-global-panel-focus-restoration-contract
 
+  echo "==> Selection focus activation contract"
+  bash scripts/test-selection-focus-activation-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

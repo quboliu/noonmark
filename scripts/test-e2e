@@ -1751,6 +1751,9 @@ capture_app_screenshot() {
       "${arguments[$index]}" == "--e2e-classification-overflow-ui-result-url" ||
       "${arguments[$index]}" == "--e2e-selection-focus-result-url" ]]; then
       ui_entry_result="${arguments[$((index + 1))]:-}"
+      if [[ "${arguments[$index]}" == "--e2e-selection-focus-result-url" ]]; then
+        uses_ui_entry_start_gate=1
+      fi
     fi
     if [[ "${arguments[$index]}" == "--e2e-english-ui-result-url" ]]; then
       english_ui_result="${arguments[$((index + 1))]:-}"
@@ -1878,6 +1881,17 @@ capture_app_screenshot() {
       close_ui_entry_start_gate
       continue
     fi
+    if [[ -n "$ui_entry_result" ]]; then
+      if ! /usr/bin/osascript \
+        -e 'tell application id "app.noonmark.mac.e2e" to activate' \
+        >>"$launch_log" 2>&1; then
+        echo "launch attempt=$launch_attempt e2e-foreground-activation=failed" \
+          >>"$launch_log"
+        terminate_e2e_app
+        close_ui_entry_start_gate
+        continue
+      fi
+    fi
     if [[ -z "$ui_entry_result" ]]; then
       sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
     fi
@@ -1937,7 +1951,8 @@ capture_app_screenshot() {
 
   if [[ -n "$ui_entry_result" && "$screenshot_name" != "pool-classification-overflow" ]]; then
     for _ in {1..80}; do
-      if [[ -f "$ui_entry_result" ]]; then
+      if [[ -f "$ui_entry_result" &&
+        "$(<"$ui_entry_result")" != waiting\|* ]]; then
         break
       fi
       sleep 0.1

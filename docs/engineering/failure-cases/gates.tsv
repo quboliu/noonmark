@@ -119,3 +119,6 @@ FAIL-2026-08-05-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 的 te
 FAIL-2026-08-05-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 已完成页与未完成页切换渲染路径；年度规模耗时由 demo 基线 sample 对账（修复前 1857/12219 采样在投影栈内）
 FAIL-2026-08-05-02	fast	scripts/test-unit	scripts/check	RevisionMemoTests 固定投影备忘的同版本单次计算与版本失效语义，NoonmarkCoreTests 引擎缩放测试继续承担引擎层
 FAIL-2026-08-05-02	symptom	scripts/test-page-switch-latency	scripts/test-interactive-demo-fixture	真实 App 年度基线十个一级页面「page 赋值 → 就绪锚点出现」墙钟耗时：每页 <1500ms、TOTAL <6000ms，报告缺失或缺页即判红
+FAIL-2026-08-05-03	fast	scripts/test-dmg-evidence-contract	scripts/check	dmg 证据契约 fixture 与真实 harness 菜单强证据串对齐，验证器期望回退到短串即判红
+FAIL-2026-08-05-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 路径保持可运行；菜单强证据串对账由 release 层承担
+FAIL-2026-08-05-03	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 dmg-validation 安装/退出/重启的菜单强证据串对账

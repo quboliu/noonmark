@@ -730,9 +730,9 @@ require_install_ledger_semantics() {
       awk -F $'\t' '$3 == "diagnostic-menu" { print $4 }' "$path"
     )"
     if [[ "$diagnostic_menu_detail" != \
-        "title=导出诊断资料… shortcut=none source=cghidEventTap" &&
+        "title=导出诊断资料… shortcut=none source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true" &&
       "$diagnostic_menu_detail" != \
-        "title=Export Diagnostics… shortcut=none source=cghidEventTap" ]] ||
+        "title=Export Diagnostics… shortcut=none source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true" ]] ||
       [[ "$(awk -F $'\t' '$3 == "diagnostic-preview" { print $4 }' "$path")" != \
         "schema=1 size=visible consent=visible focused=true default=exact" ]] ||
       [[ "$(awk -F $'\t' '$3 == "diagnostic-export-ui" { print $4 }' "$path")" != \
@@ -769,7 +769,7 @@ require_install_ledger_semantics() {
     return 1
   fi
   if [[ "$(awk -F $'\t' '$3 == "quit-menu" { print $4 }' "$path")" != \
-    "title=退出晷迹 shortcut=Command-q" ]] ||
+    "title=退出晷迹 shortcut=Command-q source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true" ]] ||
     [[ "$(awk -F $'\t' '$3 == "quit" { print $4 }' "$path")" != \
       "terminated via real App menu click" ]]; then
     echo "DMG install $mode ledger has an invalid native quit proof" >&2
@@ -784,12 +784,12 @@ require_install_ledger_semantics() {
     )"
     title_visible_pattern='^title=dmgvalidationtask visibleAXMatches=[1-9][0-9]*$'
     if [[ "$(awk -F $'\t' '$3 == "settings-menu" { print $4 }' "$path")" != \
-      "title=设置… shortcut=Command-," ]] ||
+      "title=设置… shortcut=Command-, source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true" ]] ||
       ! require_settings_window_geometry "$settings_window_detail" ||
       [[ "$(awk -F $'\t' '$3 == "settings-close" { print $4 }' "$path")" != \
         "closed with real WindowServer click" ]] ||
       [[ "$(awk -F $'\t' '$3 == "quick-entry-menu" { print $4 }' "$path")" != \
-        "title=快速记录… shortcut=Command-n" ]] ||
+        "title=快速记录… shortcut=Command-n source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true" ]] ||
       [[ "$(awk -F $'\t' '$3 == "quick-entry-input" { print $4 }' "$path")" != \
         "value=dmgvalidationtask source=cghidEventTap" ]] ||
       [[ "$(awk -F $'\t' '$3 == "quick-entry-add" { print $4 }' "$path")" != \

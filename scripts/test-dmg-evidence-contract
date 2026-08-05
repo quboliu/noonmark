@@ -652,14 +652,14 @@ cat >"$fixture_root/artifacts/dmg-install/exercise-ledger.tsv" <<EOF
 2026-07-17T00:00:01Z	PASS	activation	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app process_identifier=201 process_start_tvsec=1800000000 process_start_tvusec=123456 activation_policy=regular request_accepted=true active_before=false ax_frontmost_before=false active_after=true ax_frontmost_after=true
 2026-07-17T00:00:01Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:01Z	PASS	main-window	native AXWindow is visible
-2026-07-17T00:00:01Z	PASS	settings-menu	title=设置… shortcut=Command-,
+2026-07-17T00:00:01Z	PASS	settings-menu	title=设置… shortcut=Command-, source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true
 2026-07-17T00:00:01Z	PASS	settings-window	independent=true window=(0.0, 432.0, 820.0, 720.0) sidebar=(0.0, 484.0, 240.0, 668.0) content=(241.0, 484.0, 579.0, 668.0)
 2026-07-17T00:00:01Z	PASS	settings-close	closed with real WindowServer click
-2026-07-17T00:00:01Z	PASS	quick-entry-menu	title=快速记录… shortcut=Command-n
+2026-07-17T00:00:01Z	PASS	quick-entry-menu	title=快速记录… shortcut=Command-n source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true
 2026-07-17T00:00:01Z	PASS	quick-entry-input	value=dmgvalidationtask source=cghidEventTap
 2026-07-17T00:00:01Z	PASS	quick-entry-add	panel dismissed after real click
 2026-07-17T00:00:01Z	PASS	exercise-title-visible	title=dmgvalidationtask visibleAXMatches=2
-2026-07-17T00:00:01Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q
+2026-07-17T00:00:01Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true
 2026-07-17T00:00:01Z	PASS	quit	terminated via real App menu click
 2026-07-17T00:00:01Z	PASS	complete	mode=exercise
 EOF
@@ -672,7 +672,7 @@ cat >"$fixture_root/artifacts/dmg-install/restart-ledger.tsv" <<EOF
 2026-07-17T00:00:02Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:02Z	PASS	main-window	native AXWindow is visible
 2026-07-17T00:00:02Z	PASS	restart-title-visible	title=dmgvalidationtask visibleAXMatches=1
-2026-07-17T00:00:02Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q
+2026-07-17T00:00:02Z	PASS	quit-menu	title=退出晷迹 shortcut=Command-q source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true
 2026-07-17T00:00:02Z	PASS	quit	terminated via real App menu click
 2026-07-17T00:00:02Z	PASS	complete	mode=restart
 EOF
@@ -1047,7 +1047,7 @@ cat >"$diagnostic_ledger" <<EOF
 2026-07-17T00:00:04Z	PASS	target	bundle=app.noonmark.mac.dmg-validation path=$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app frontmost=true windows=1
 2026-07-17T00:00:04Z	PASS	diagnostic-locks-before-export	$diagnostic_lock_detail
 2026-07-17T00:00:04Z	PASS	diagnostic-window	window_number=403 frame=(0.0, 0.0, 1280.0, 800.0) focused=true exact=true
-2026-07-17T00:00:04Z	PASS	diagnostic-menu	title=导出诊断资料… shortcut=none source=cghidEventTap
+2026-07-17T00:00:04Z	PASS	diagnostic-menu	title=导出诊断资料… shortcut=none source=cghidEventTap pre_mouse_down=exact menu_closed=true left_button_up=true
 2026-07-17T00:00:04Z	PASS	diagnostic-preview	schema=1 size=visible consent=visible focused=true default=exact
 2026-07-17T00:00:04Z	PASS	diagnostic-export-ui	menu=physical preview=physical save_panel=physical path=selected toast=visible source=cghidEventTap
 2026-07-17T00:00:04Z	PASS	diagnostic-locks-after-export	$diagnostic_lock_detail

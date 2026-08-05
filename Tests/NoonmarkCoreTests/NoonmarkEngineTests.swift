@@ -4005,4 +4005,34 @@ final class NoonmarkEngineTests: XCTestCase {
             "2400 链规模耗时 \(large.elapsed)s，超出绝对上限"
         )
     }
+
+    /// FAIL-2026-08-05-02 门禁：引擎实例的任何原地变更都必须推进
+    /// mutationEpoch，否则 store 投影备忘层会把变更前的结果缓存给
+    /// 后续渲染（seed 与 E2E fixture 均走原地写入路径）。
+    func testMutationEpochAdvancesOnEveryInPlaceMutation() throws {
+        let engine = NoonmarkEngine()
+        let initial = engine.mutationEpoch
+        let chainID = try engine.createPoolTask(title: "epoch 任务", now: now)
+        let afterCreate = engine.mutationEpoch
+        XCTAssertGreaterThan(afterCreate, initial)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: day1,
+            today: day1,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertGreaterThan(engine.mutationEpoch, afterCreate)
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "子任务",
+            now: now.addingTimeInterval(2)
+        )
+        let afterSubtask = engine.mutationEpoch
+        try engine.completeSubtask(
+            subtaskID,
+            today: day1,
+            now: now.addingTimeInterval(3)
+        )
+        XCTAssertGreaterThan(engine.mutationEpoch, afterSubtask)
+    }
 }

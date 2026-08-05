@@ -16,17 +16,37 @@ public struct SnapshotUndoOutcome: Equatable, Sendable {
 }
 
 public final class NoonmarkEngine {
-    public private(set) var days: [LocalDate: Day]
+    /// 单调递增的内存数据版本：任何领域集合变更（包括对同一引擎实例的
+    /// 原地变更）都会推进。视图投影备忘层以此识别原地突变，不能只依赖
+    /// store 层的引擎赋值（E2E fixture 与 seed 等路径会原地写入）。
+    public private(set) var mutationEpoch: UInt64 = 0
+    public private(set) var days: [LocalDate: Day] {
+        didSet { mutationEpoch &+= 1 }
+    }
     public private(set) var taskCycleSeries: [
         TaskCycleSeriesID: TaskCycleSeries
-    ]
-    public private(set) var chains: [TaskChainID: TaskChain]
-    public private(set) var definitions: [TaskDefinitionID: TaskDefinition]
-    public private(set) var traces: [DayTraceID: DayTrace]
-    public private(set) var subtasks: [SubtaskID: Subtask]
-    public private(set) var ideas: [IdeaID: IdeaEntry]
-    public private(set) var preferences: AppPreferences
-    var classificationState: TaskClassificationState
+    ] { didSet { mutationEpoch &+= 1 } }
+    public private(set) var chains: [TaskChainID: TaskChain] {
+        didSet { mutationEpoch &+= 1 }
+    }
+    public private(set) var definitions: [TaskDefinitionID: TaskDefinition] {
+        didSet { mutationEpoch &+= 1 }
+    }
+    public private(set) var traces: [DayTraceID: DayTrace] {
+        didSet { mutationEpoch &+= 1 }
+    }
+    public private(set) var subtasks: [SubtaskID: Subtask] {
+        didSet { mutationEpoch &+= 1 }
+    }
+    public private(set) var ideas: [IdeaID: IdeaEntry] {
+        didSet { mutationEpoch &+= 1 }
+    }
+    public private(set) var preferences: AppPreferences {
+        didSet { mutationEpoch &+= 1 }
+    }
+    var classificationState: TaskClassificationState {
+        didSet { mutationEpoch &+= 1 }
+    }
 
     public init() {
         self.days = [:]

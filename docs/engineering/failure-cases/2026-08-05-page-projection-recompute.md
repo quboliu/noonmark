@@ -62,6 +62,15 @@
 - fast：`scripts/test-unit`（随 `make check` 执行）。引擎层缩放由 FAIL-2026-08-05-01 的 `testCompletedTaskHierarchiesStaysNearLinearAtAnnualScale` 继续承担；本层新增 `RevisionMemoTests` 固定备忘组件的同版本单次计算与版本失效语义。
 - symptom：`scripts/test-page-switch-latency`（由 `scripts/test-interactive-demo-fixture` 在 fixture 验收通过后强制调用，随 `make test-demo-fixture` 与 `scripts/test-all` 执行）。年度 demo fixture 自动化收尾阶段对全部十个一级页面（day、pool、future、recurring、unfinished、completed、calendar、zhulong、stickyNotes、ideas）实测「`store.page` 赋值 → 该页就绪锚点首次出现」的墙钟耗时：25ms 轮询（读数含最多一个轮询间隔的量化误差），单页 10 秒未就绪即判 fixture 失败；结果写入 demo 根的 `page-switch-latency.tsv`（每页一行 + TOTAL，本轮运行全新生成）。门禁脚本 fail-closed 校验报告存在、覆盖全部 10 页 + TOTAL、数值可解析、TOTAL 与分页之和一致、每页 < 1500ms、TOTAL < 6000ms。年度规模采样对账仍由 `make run-demo-app` 交互验收承担。
 
+## 发行验证捕获的后续回归与根本解加固
+
+0.2.2 候选发行链的完整 E2E 两次判红，根因均为同一模式（原地引擎变更绕过备忘失效）：
+
+1. `classification manager UI entry` 超时：`DefaultStateE2ESeedAutomation` 的 `seed()` 直接在引擎实例上原地写入，不触发 `engineRevision` 递增；与首帧渲染形成时序竞争时，任务池等备忘投影把 seed 前的空结果钉死，分组管理入口永不出现。套件高负载下必现，空闲环境单跑偶过。
+2. `lifecycle persistence setup` 失败（`changed target did not resolve to new task title`）：生命周期自动化的 `createScheduledTask` 同样原地写引擎；`selectTrace` 的可选集合经备忘的日投影过滤时选中被静默清空，`changeSelectedTrace` 静默返回，变更从未发生。隔离单跑稳定复现。
+
+根本解加固（不逐点修自动化）：`NoonmarkEngine` 新增 `mutationEpoch`（任何领域集合的 didSet 都推进），store 备忘 key 升级为 `ProjectionRevision(engineRevision, mutationEpoch)`。从此任何写入路径——lane 赋值、seed、E2E fixture、未来新路径——都自动使投影备忘失效，该失效模式在机制上关闭。fast 门禁新增 `testMutationEpochAdvancesOnEveryInPlaceMutation`（原地变更必须推进 epoch）。
+
 ## 发行与回滚
 
 不涉及安装、签名、启动、退出或发行产物，无需 release 门禁。回滚即还原本案例对应修复提交；无数据格式变更，回滚安全。

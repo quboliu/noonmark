@@ -669,44 +669,59 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    private struct NavigationCountsMemoKey: Equatable {
+    /// 投影备忘的数据版本：store 赋值递增的 engineRevision 加上引擎实例
+    /// 内部的 mutationEpoch，同时覆盖经 mutation lane 的赋值提交与
+    /// seed／E2E fixture 对同一引擎实例的原地变更两条写入路径。
+    private struct ProjectionRevision: Equatable {
         var engineRevision: UInt64
+        var mutationEpoch: UInt64
+    }
+
+    private var projectionRevision: ProjectionRevision {
+        ProjectionRevision(
+            engineRevision: engineRevision,
+            mutationEpoch: engine.mutationEpoch
+        )
+    }
+
+    private struct NavigationCountsMemoKey: Equatable {
+        var revision: ProjectionRevision
         var today: LocalDate
         var recurringVisibilityDays: Int
     }
 
     private struct FuturePlansMemoKey: Equatable {
-        var engineRevision: UInt64
+        var revision: ProjectionRevision
         var today: LocalDate
         var recurringVisibilityDays: Int
     }
 
     private struct TaskCycleTracksMemoKey: Equatable {
-        var engineRevision: UInt64
+        var revision: ProjectionRevision
         var today: LocalDate
     }
 
     private var completedPoolMemo =
-        RevisionMemo<UInt64, [CompletedPoolItem]>()
+        RevisionMemo<ProjectionRevision, [CompletedPoolItem]>()
     private var completedTaskHierarchiesMemo =
-        RevisionMemo<UInt64, [CompletedTaskHierarchy]>()
+        RevisionMemo<ProjectionRevision, [CompletedTaskHierarchy]>()
     private var unfinishedPoolMemo =
-        RevisionMemo<UInt64, [UnfinishedPoolItem]>()
-    private var taskPoolMemo = RevisionMemo<UInt64, [PoolTask]>()
+        RevisionMemo<ProjectionRevision, [UnfinishedPoolItem]>()
+    private var taskPoolMemo = RevisionMemo<ProjectionRevision, [PoolTask]>()
     private var taskPoolStatisticsMemo =
-        RevisionMemo<UInt64, TaskPoolStatisticsSnapshot>()
+        RevisionMemo<ProjectionRevision, TaskPoolStatisticsSnapshot>()
     private var dailyReviewStatsMemo =
-        KeyedRevisionMemo<UInt64, LocalDate, DailyReviewStats>()
+        KeyedRevisionMemo<ProjectionRevision, LocalDate, DailyReviewStats>()
     private var dayTodoViewMemo =
-        KeyedRevisionMemo<UInt64, LocalDate, DayTodoView>()
+        KeyedRevisionMemo<ProjectionRevision, LocalDate, DayTodoView>()
     private var presentableSubtasksMemo =
-        RevisionMemo<UInt64, [DayTraceID: [Subtask]]>()
+        RevisionMemo<ProjectionRevision, [DayTraceID: [Subtask]]>()
     private var changedSourceTraceIndexMemo =
-        RevisionMemo<UInt64, [DayTraceID: DayTraceID]>()
+        RevisionMemo<ProjectionRevision, [DayTraceID: DayTraceID]>()
     private var traceProgressMemo =
-        KeyedRevisionMemo<UInt64, DayTraceID, TraceProgress>()
+        KeyedRevisionMemo<ProjectionRevision, DayTraceID, TraceProgress>()
     private var taskClassificationMemo =
-        KeyedRevisionMemo<UInt64, TaskChainID, TaskClassificationProjection?>()
+        KeyedRevisionMemo<ProjectionRevision, TaskChainID, TaskClassificationProjection?>()
     private var navigationCountsMemo =
         RevisionMemo<NavigationCountsMemoKey, [Page: Int]>()
     private var futurePlansMemo =
@@ -714,44 +729,45 @@ final class NoonmarkStore: ObservableObject {
     private var taskCycleTracksMemo =
         RevisionMemo<TaskCycleTracksMemoKey, [TaskCycleTrack]>()
     private var calendarTracesMemo =
-        KeyedRevisionMemo<UInt64, LocalDate, [DayTrace]>()
+        KeyedRevisionMemo<ProjectionRevision, LocalDate, [DayTrace]>()
     private var calendarSummaryMemo =
-        KeyedRevisionMemo<UInt64, LocalDate, CalendarDaySummary>()
+        KeyedRevisionMemo<ProjectionRevision, LocalDate, CalendarDaySummary>()
     private var calendarReviewStatsMemo =
-        KeyedRevisionMemo<UInt64, LocalDate, DailyReviewStats>()
+        KeyedRevisionMemo<ProjectionRevision, LocalDate, DailyReviewStats>()
 
-    /// 按 engineRevision 备忘的投影层：同一数据版本只计算一次，
+    /// 按 projectionRevision 备忘的投影层：同一数据版本只计算一次，
     /// 供页面 body 与侧栏在单次渲染内多次读取而不重复全量投影。
-    /// engineRevision 在 engine didSet 里递增；依赖 today 或
-    /// recurringFuturePlanVisibility 的投影把二者纳入备忘 key，
-    /// 跨天或可见性偏好变化时即使引擎未变也会失效重算。
+    /// projectionRevision 由 engine didSet 递增的 engineRevision 与
+    /// 引擎原地变更递增的 mutationEpoch 组成，两条写入路径都会失效；
+    /// 依赖 today 或 recurringFuturePlanVisibility 的投影把二者纳入
+    /// 备忘 key，跨天或可见性偏好变化时即使引擎未变也会失效重算。
     func completedPool() -> [CompletedPoolItem] {
-        completedPoolMemo.value(at: engineRevision) {
+        completedPoolMemo.value(at: projectionRevision) {
             engine.completedPool()
         }
     }
 
     func completedTaskHierarchies() -> [CompletedTaskHierarchy] {
-        completedTaskHierarchiesMemo.value(at: engineRevision) {
+        completedTaskHierarchiesMemo.value(at: projectionRevision) {
             engine.completedTaskHierarchies()
         }
     }
 
     func unfinishedPool() -> [UnfinishedPoolItem] {
-        unfinishedPoolMemo.value(at: engineRevision) {
+        unfinishedPoolMemo.value(at: projectionRevision) {
             engine.unfinishedPool()
         }
     }
 
     func taskPool() -> [PoolTask] {
-        taskPoolMemo.value(at: engineRevision) {
+        taskPoolMemo.value(at: projectionRevision) {
             engine.taskPool()
         }
     }
 
     /// 任务池右栏统计：每条链的分类与回池轨迹只在同一数据版本内计算一次。
     func taskPoolStatistics() -> TaskPoolStatisticsSnapshot {
-        taskPoolStatisticsMemo.value(at: engineRevision) {
+        taskPoolStatisticsMemo.value(at: projectionRevision) {
             TaskPoolStatisticsSnapshot(
                 items: taskPool().map { task in
                     let classification = currentClassification(
@@ -781,19 +797,19 @@ final class NoonmarkStore: ObservableObject {
     /// 每日复盘统计：同一数据版本内按日期惰性备忘，
     /// ReviewRail 与近七天趋势共享同一组计算结果。
     func dailyReviewStats(for date: LocalDate) -> DailyReviewStats {
-        dailyReviewStatsMemo.value(for: date, at: engineRevision) { date in
+        dailyReviewStatsMemo.value(for: date, at: projectionRevision) { date in
             engine.dailyReviewStats(date: date)
         }
     }
 
     func dayTraces(for date: LocalDate) -> [DayTrace] {
-        dayTodoViewMemo.value(for: date, at: engineRevision) { date in
+        dayTodoViewMemo.value(for: date, at: projectionRevision) { date in
             engine.getDayTodo(date: date)
         }.traces
     }
 
     func presentableSubtasksByTraceID() -> [DayTraceID: [Subtask]] {
-        presentableSubtasksMemo.value(at: engineRevision) {
+        presentableSubtasksMemo.value(at: projectionRevision) {
             Dictionary(
                 grouping: engine.subtasks.values.filter {
                     $0.isUserPresentable
@@ -806,7 +822,7 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func changedSourceTraceIDs() -> [DayTraceID: DayTraceID] {
-        changedSourceTraceIndexMemo.value(at: engineRevision) {
+        changedSourceTraceIndexMemo.value(at: projectionRevision) {
             var index: [DayTraceID: DayTraceID] = [:]
             for trace in engine.traces.values {
                 guard let targetID = trace.changedToTraceID,
@@ -821,7 +837,7 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func traceProgress(for traceID: DayTraceID) -> TraceProgress {
-        traceProgressMemo.value(for: traceID, at: engineRevision) { traceID in
+        traceProgressMemo.value(for: traceID, at: projectionRevision) { traceID in
             engine.traceProgress(for: traceID)
         }
     }
@@ -829,7 +845,7 @@ final class NoonmarkStore: ObservableObject {
     func taskClassificationProjection(
         for chainID: TaskChainID
     ) -> TaskClassificationProjection? {
-        taskClassificationMemo.value(for: chainID, at: engineRevision) { chainID in
+        taskClassificationMemo.value(for: chainID, at: projectionRevision) { chainID in
             guard case let .task(projection) =
                 try? engine.classification(.task(chainID))
             else {
@@ -841,7 +857,7 @@ final class NoonmarkStore: ObservableObject {
 
     func navigationCounts() -> [Page: Int] {
         let key = NavigationCountsMemoKey(
-            engineRevision: engineRevision,
+            revision: projectionRevision,
             today: today,
             recurringVisibilityDays: recurringFuturePlanVisibility.dayCount
         )
@@ -866,7 +882,7 @@ final class NoonmarkStore: ObservableObject {
         recurringVisibilityDays: Int
     ) -> [FuturePlanItem] {
         let key = FuturePlansMemoKey(
-            engineRevision: engineRevision,
+            revision: projectionRevision,
             today: today,
             recurringVisibilityDays: recurringVisibilityDays
         )
@@ -880,7 +896,7 @@ final class NoonmarkStore: ObservableObject {
 
     func taskCycleTracks() -> [TaskCycleTrack] {
         let key = TaskCycleTracksMemoKey(
-            engineRevision: engineRevision,
+            revision: projectionRevision,
             today: today
         )
         return taskCycleTracksMemo.value(at: key) {
@@ -889,19 +905,19 @@ final class NoonmarkStore: ObservableObject {
     }
 
     func calendarTraces(for date: LocalDate) -> [DayTrace] {
-        calendarTracesMemo.value(for: date, at: engineRevision) { date in
+        calendarTracesMemo.value(for: date, at: projectionRevision) { date in
             engine.calendarTraces(for: date)
         }
     }
 
     func calendarSummary(for date: LocalDate) -> CalendarDaySummary {
-        calendarSummaryMemo.value(for: date, at: engineRevision) { date in
+        calendarSummaryMemo.value(for: date, at: projectionRevision) { date in
             engine.calendarSummary(for: date)
         }
     }
 
     func calendarReviewStats(date: LocalDate) -> DailyReviewStats {
-        calendarReviewStatsMemo.value(for: date, at: engineRevision) { date in
+        calendarReviewStatsMemo.value(for: date, at: projectionRevision) { date in
             engine.calendarReviewStats(date: date)
         }
     }

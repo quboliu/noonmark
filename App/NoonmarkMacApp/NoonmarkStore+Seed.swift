@@ -477,6 +477,10 @@ extension NoonmarkStore {
                 tomorrowNote: "",
                 now: seedNow(at: eventTime(day3, hour: 15, minute: 0))
             )
+            // seed() 直接在引擎实例上原地变更：memo 失效由引擎的
+            // mutationEpoch 覆盖，这里只需显式通知观察者刷新首个渲染帧，
+            // 避免与启动自动化形成时序竞争（套件高负载下必现）。
+            objectWillChange.send()
         } catch {
             throw NoonmarkSeedError(underlying: error)
         }

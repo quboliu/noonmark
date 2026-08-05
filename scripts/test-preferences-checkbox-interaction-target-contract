@@ -10,7 +10,8 @@ automation_source="App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift"
 
 rg -F 'static func checkboxInteractionTarget(' "$tree_source" >/dev/null
 rg -F 'anchorFrame.contains(' "$tree_source" >/dev/null
-rg -F 'root.hitTest(rootPoint)' "$tree_source" >/dev/null
+rg -F 'anchor.enclosingScrollView?.documentView' "$tree_source" >/dev/null
+rg -F 'hitView === documentView || hitView.isDescendant(of: documentView)' "$tree_source" >/dev/null
 rg -F 'AppE2EViewAnchor(' "$settings_source" >/dev/null
 rg -F 'identifier: "settings.preferences.poem.enabled"' "$settings_source" >/dev/null
 rg -F 'try await clickCheckbox(' "$automation_source" >/dev/null

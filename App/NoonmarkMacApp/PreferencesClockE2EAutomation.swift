@@ -1925,18 +1925,30 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))
         expectedWindow.contentView?.layoutSubtreeIfNeeded()
         expectedWindow.displayIfNeeded()
-        try await waitUntil(
-            "checkbox hit target was not visible after scrolling: \(identifier)"
-        ) {
-            guard let visibleAnchor = AppViewTreeE2E.view(
+        do {
+            try await waitUntil(
+                "checkbox hit target was not visible after scrolling: \(identifier)"
+            ) {
+                guard let visibleAnchor = AppViewTreeE2E.view(
+                    identifier: identifier,
+                    in: expectedWindow
+                ) else {
+                    return false
+                }
+                return AppViewTreeE2E.checkboxInteractionTarget(
+                    overlapping: visibleAnchor
+                ) != nil
+            }
+        } catch {
+            let diagnostics = AppViewTreeE2E.view(
                 identifier: identifier,
                 in: expectedWindow
-            ) else {
-                return false
-            }
-            return AppViewTreeE2E.checkboxInteractionTarget(
-                overlapping: visibleAnchor
-            ) != nil
+            ).map {
+                AppViewTreeE2E.checkboxInteractionTargetDiagnostics(
+                    overlapping: $0
+                )
+            } ?? "anchor=not-visible"
+            throw Failure.failed("\(error.localizedDescription); \(diagnostics)")
         }
     }
 

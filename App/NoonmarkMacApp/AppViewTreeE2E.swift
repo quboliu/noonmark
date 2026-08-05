@@ -373,10 +373,12 @@ enum AppViewTreeE2E {
     /// Resolves the native hit target for a SwiftUI checkbox semantic anchor.
     ///
     /// A checkbox's accessibility frame includes its label, but AppKit only
-    /// guarantees the small `NSButton` square is an actionable target. The
-    /// real control's centre must be inside the anchor. A native focus ring
-    /// may extend beyond the rendered checkbox glyph, so area containment
-    /// would wrongly reject the same control the user can click.
+    /// uses an `NSButton` only for checkbox geometry; SwiftUI receives the
+    /// pointer event through the enclosing scroll document. The native
+    /// control's centre must be inside the anchor and remain exposed through
+    /// that same document. A native focus ring may extend beyond the rendered
+    /// checkbox glyph, so area containment would wrongly reject the same
+    /// control the user can click.
     static func checkboxInteractionTarget(
         overlapping anchor: NSView
     ) -> ButtonInteractionTarget? {
@@ -405,13 +407,21 @@ enum AppViewTreeE2E {
         guard matches.count == 1, let button = matches.first else {
             return nil
         }
+        let buttonCenter = NSPoint(
+            x: button.bounds.midX,
+            y: button.bounds.midY
+        )
+        guard button.visibleRect.contains(buttonCenter) else {
+            return nil
+        }
         let point = button.convert(
-            NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+            buttonCenter,
             to: nil as NSView?
         )
         let rootPoint = root.convert(point, from: nil)
-        guard let hitView = root.hitTest(rootPoint),
-              hitView === button || hitView.isDescendant(of: button)
+        guard let documentView = anchor.enclosingScrollView?.documentView,
+              let hitView = root.hitTest(rootPoint),
+              hitView === documentView || hitView.isDescendant(of: documentView)
         else {
             return nil
         }
@@ -420,6 +430,58 @@ enum AppViewTreeE2E {
             window: window,
             windowPoint: point
         )
+    }
+
+    static func checkboxInteractionTargetDiagnostics(
+        overlapping anchor: NSView
+    ) -> String {
+        guard let window = anchor.window,
+              let root = window.contentView?.superview ?? window.contentView
+        else {
+            return "anchor_window=missing"
+        }
+        let anchorFrame = frameInWindow(for: anchor)
+        let candidates = allViews(from: root).compactMap { view -> NSButton? in
+            guard let button = view as? NSButton,
+                  button.window === window
+            else {
+                return nil
+            }
+            return button
+        }
+        let matching = candidates.filter { button in
+            let frame = frameInWindow(for: button)
+            return anchorFrame.contains(
+                NSPoint(x: frame.midX, y: frame.midY)
+            )
+        }
+        let candidateFacts = matching.map { button in
+            let frame = frameInWindow(for: button)
+            let point = button.convert(
+                NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+                to: nil as NSView?
+            )
+            let rootPoint = root.convert(point, from: nil)
+            let hitView = root.hitTest(rootPoint)
+            let buttonHitView = button.hitTest(
+                NSPoint(x: button.bounds.midX, y: button.bounds.midY)
+            )
+            return "type=\(String(describing: type(of: button)))"
+                + ",visible=\(isVisible(button, in: [window]))"
+                + ",frame=\(NSStringFromRect(frame))"
+                + ",visibleRect=\(NSStringFromRect(button.visibleRect))"
+                + ",hit=\(hitView.map { String(describing: type(of: $0)) } ?? "nil")"
+                + ",hitIsButton=\(hitView === button)"
+                + ",hitIsDescendant=\(hitView?.isDescendant(of: button) ?? false)"
+                + ",buttonHit=\(buttonHitView.map { String(describing: type(of: $0)) } ?? "nil")"
+                + ",buttonHitIsButton=\(buttonHitView === button)"
+                + ",buttonHitIsDescendant=\(buttonHitView?.isDescendant(of: button) ?? false)"
+        }
+        return "anchorVisible=\(isVisible(anchor, in: [window]))"
+            + ",anchorFrame=\(NSStringFromRect(anchorFrame))"
+            + ",anchorVisibleRect=\(NSStringFromRect(anchor.visibleRect))"
+            + ",matchingButtons=\(matching.count)"
+            + ",[\(candidateFacts.joined(separator: ";"))]"
     }
 
     static func textField(overlapping anchor: NSView) -> NSTextField? {

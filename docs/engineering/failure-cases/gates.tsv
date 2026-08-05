@@ -103,3 +103,5 @@ FAIL-2026-08-04-21	fast	scripts/test-notes-ui-contract	scripts/check	Demo 保存
 FAIL-2026-08-04-21	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo 必须完成飞光保存、正文恢复和后续 WindowServer 交互并产出 ready manifest
 FAIL-2026-08-04-24	fast	scripts/test-completed-hierarchy-parent-selection-contract	scripts/check	拒绝 task-cycle E2E 点击会与 disclosure 重叠的整行父任务锚点
 FAIL-2026-08-04-24	symptom	scripts/test-e2e	scripts/test-all	真实完成页点击进行中父任务必须打开该父任务的分类编辑器，并完成 task-cycle 持久化与重启对账
+FAIL-2026-08-04-25	fast	scripts/test-global-panel-focus-restoration-contract	scripts/check	全局 Quick Entry 与飞光面板关闭后必须强制复原先前前台应用
+FAIL-2026-08-04-25	symptom	scripts/test-e2e	scripts/test-all	真实全局 Quick Entry 必须在提交后恢复 Finder 焦点并完成任务持久化

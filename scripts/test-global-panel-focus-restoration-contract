@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+for controller in \
+  App/NoonmarkMacApp/NoonmarkQuickEntryWindowController.swift \
+  App/NoonmarkMacApp/NoonmarkIdeaCaptureWindowController.swift; do
+  rg -F 'NSApp.yieldActivation(to: previousApplication)' "$controller" >/dev/null
+  rg -U 'DispatchQueue\.main\.async \{\s+previousApplication\.activate\(from: \.current, options: \[\]\)' "$controller" >/dev/null
+done
+
+echo "Global panel focus restoration contract passed"

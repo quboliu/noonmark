@@ -77,7 +77,11 @@ final class NoonmarkIdeaCaptureWindowController: NSWindowController, NSWindowDel
         present(
             onSubmit: onSubmit,
             onDismiss: {
-                previousApplication?.activate(options: [])
+                guard let previousApplication else { return }
+                NSApp.yieldActivation(to: previousApplication)
+                DispatchQueue.main.async {
+                    previousApplication.activate(from: .current, options: [])
+                }
             }
         )
     }

@@ -74,7 +74,11 @@ final class NoonmarkQuickEntryWindowController: NSWindowController, NSWindowDele
         present(
             onSubmit: onSubmit,
             onDismiss: {
-                previousApplication?.activate(options: [])
+                guard let previousApplication else { return }
+                NSApp.yieldActivation(to: previousApplication)
+                DispatchQueue.main.async {
+                    previousApplication.activate(from: .current, options: [])
+                }
             }
         )
     }

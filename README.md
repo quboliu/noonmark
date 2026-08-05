@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/brand/noonmark-logo-reference.png" width="128" alt="晷迹 Noonmark 墨迹日晷图标">
+  <img src="docs/assets/brand/noonmark-logo.png" width="128" alt="晷迹 Noonmark 墨迹日晷图标">
 </p>
 
 <h1 align="center">晷迹 · Noonmark</h1>
@@ -22,6 +22,7 @@
   <img alt="Swift Tools 6.0" src="https://img.shields.io/badge/Swift_Tools-6.0-F05138?logo=swift&logoColor=white">
   <img alt="AppKit + SwiftUI" src="https://img.shields.io/badge/UI-AppKit_%2B_SwiftUI-2563EB">
   <img alt="Local-first" src="https://img.shields.io/badge/Architecture-local--first-0F766E">
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-blue"></a>
 </p>
 
 ## 晷迹解决什么问题
@@ -260,6 +261,10 @@ make run-demo-app
 | Live Cloud | `make test-cloudkit-sync-live` | 需要签名、entitlement 与隔离环境；缺依赖时 fail-closed |
 
 `make check`、E2E、DMG 和安装验证都会留下带 source／binary identity 的运行证据，避免把旧日志或另一份二进制的结果归到当前提交。
+
+## 开源协议
+
+晷迹以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）开源。你可以自由使用、修改和再分发本仓库的代码，但衍生作品——包括基于本代码提供的网络服务——必须以相同协议开源。版权持有者保留另行提供商业授权的权利。
 
 ---
 

@@ -370,6 +370,58 @@ enum AppViewTreeE2E {
         return nil
     }
 
+    /// Resolves the native hit target for a SwiftUI checkbox semantic anchor.
+    ///
+    /// A checkbox's accessibility frame includes its label, but AppKit only
+    /// guarantees the small `NSButton` square is an actionable target. The
+    /// real control's centre must be inside the anchor. A native focus ring
+    /// may extend beyond the rendered checkbox glyph, so area containment
+    /// would wrongly reject the same control the user can click.
+    static func checkboxInteractionTarget(
+        overlapping anchor: NSView
+    ) -> ButtonInteractionTarget? {
+        guard isVisible(anchor),
+              let window = anchor.window,
+              let root = window.contentView?.superview ?? window.contentView
+        else {
+            return nil
+        }
+        let anchorFrame = frameInWindow(for: anchor)
+        guard anchorFrame.width > 0, anchorFrame.height > 0 else {
+            return nil
+        }
+        let matches = allViews(from: root).compactMap { view -> NSButton? in
+            guard let button = view as? NSButton,
+                  button.window === window,
+                  isVisible(button, in: [window])
+            else {
+                return nil
+            }
+            let buttonFrame = frameInWindow(for: button)
+            return anchorFrame.contains(
+                NSPoint(x: buttonFrame.midX, y: buttonFrame.midY)
+            ) ? button : nil
+        }
+        guard matches.count == 1, let button = matches.first else {
+            return nil
+        }
+        let point = button.convert(
+            NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+            to: nil as NSView?
+        )
+        let rootPoint = root.convert(point, from: nil)
+        guard let hitView = root.hitTest(rootPoint),
+              hitView === button || hitView.isDescendant(of: button)
+        else {
+            return nil
+        }
+        return ButtonInteractionTarget(
+            coordinateView: button,
+            window: window,
+            windowPoint: point
+        )
+    }
+
     static func textField(overlapping anchor: NSView) -> NSTextField? {
         let anchorFrame = frameInWindow(for: anchor)
         let anchorArea = anchorFrame.width * anchorFrame.height

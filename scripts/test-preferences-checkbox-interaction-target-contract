@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+tree_source="App/NoonmarkMacApp/AppViewTreeE2E.swift"
+settings_source="App/NoonmarkMacApp/SettingsPaneContent.swift"
+automation_source="App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift"
+
+rg -F 'static func checkboxInteractionTarget(' "$tree_source" >/dev/null
+rg -F 'anchorFrame.contains(' "$tree_source" >/dev/null
+rg -F 'root.hitTest(rootPoint)' "$tree_source" >/dev/null
+rg -F 'AppE2EViewAnchor(' "$settings_source" >/dev/null
+rg -F 'identifier: "settings.preferences.poem.enabled"' "$settings_source" >/dev/null
+rg -F 'try await clickCheckbox(' "$automation_source" >/dev/null
+rg -F 'AppViewTreeE2E.attachedView(identifier: identifier)' "$automation_source" >/dev/null
+rg -F 'anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))' "$automation_source" >/dev/null
+rg -F 'checkbox hit target was not visible after scrolling' "$automation_source" >/dev/null
+rg -F 'AppViewTreeE2E.checkboxInteractionTarget(' "$automation_source" >/dev/null
+rg -F 'checkbox interaction target changed before mouseDown' "$automation_source" >/dev/null
+
+echo "Preferences checkbox interaction target contract passed"

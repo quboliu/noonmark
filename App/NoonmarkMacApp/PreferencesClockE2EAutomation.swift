@@ -435,7 +435,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 + "after=\(exactBits(languageEnvelope.updatedAt))"
         )
 
-        try await clickElement(
+        try await clickCheckbox(
             identifier: Self.poemIdentifier,
             expectedWindow: settingsWindow,
             input: input,
@@ -1855,6 +1855,91 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private func clickCheckbox(
+        identifier: String,
+        expectedWindow: NSWindow,
+        input: WindowServerInputDriver,
+        beforeClock: Date
+    ) async throws {
+        _ = try await accessibilityTarget(identifier: identifier)
+        try await revealCheckbox(
+            identifier: identifier,
+            in: expectedWindow
+        )
+        let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.keyWindow === expectedWindow,
+                  let anchor = AppViewTreeE2E.view(
+                      identifier: identifier,
+                      in: expectedWindow
+                  ),
+                  let target = AppViewTreeE2E.checkboxInteractionTarget(
+                      overlapping: anchor
+                  ),
+                  target.window === expectedWindow
+            else {
+                throw Failure.failed(
+                    "checkbox interaction target changed before mouseDown: "
+                        + identifier
+                )
+            }
+            return try input.pointerCoordinate(
+                windowPoint: target.windowPoint,
+                in: expectedWindow
+            )
+        }
+        let coordinate = try resolveTarget()
+        try appendTrace(
+            "click checkbox=\(identifier) point=\(coordinate.appKitScreenPoint) "
+                + "before=\(exactBits(beforeClock)) "
+                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
+        )
+        do {
+            try await input.postClick(
+                at: coordinate,
+                modifiers: [],
+                resolveTarget: resolveTarget
+            )
+        } catch {
+            throw Failure.failed(
+                "WindowServer checkbox click failed for \(identifier): "
+                    + error.localizedDescription
+            )
+        }
+    }
+
+    private func revealCheckbox(
+        identifier: String,
+        in expectedWindow: NSWindow
+    ) async throws {
+        guard let anchor = AppViewTreeE2E.attachedView(identifier: identifier),
+              anchor.window === expectedWindow
+        else {
+            throw Failure.failed(
+                "checkbox anchor was not attached for scrolling: \(identifier)"
+            )
+        }
+        // `scrollToVisible(anchor.bounds)` permits the anchor to rest on the
+        // clipping edge. The native checkbox focus ring extends beyond that
+        // SwiftUI anchor, so reveal a small vertical margin before resolving
+        // the actual WindowServer hit target.
+        anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))
+        expectedWindow.contentView?.layoutSubtreeIfNeeded()
+        expectedWindow.displayIfNeeded()
+        try await waitUntil(
+            "checkbox hit target was not visible after scrolling: \(identifier)"
+        ) {
+            guard let visibleAnchor = AppViewTreeE2E.view(
+                identifier: identifier,
+                in: expectedWindow
+            ) else {
+                return false
+            }
+            return AppViewTreeE2E.checkboxInteractionTarget(
+                overlapping: visibleAnchor
+            ) != nil
+        }
+    }
+
     private func clickElement(
         identifier: String,
         expectedWindow: NSWindow,
@@ -1886,21 +1971,19 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                         "accessibility target changed before mouseDown: \(identifier)"
                     )
                 }
-                let currentPoint = CGPoint(
-                    x: currentFrame.midX,
-                    y: currentFrame.midY
-                )
                 return try input.pointerCoordinate(
-                    quartzPoint: currentPoint,
+                    quartzPoint: CGPoint(
+                        x: currentFrame.midX,
+                        y: currentFrame.midY
+                    ),
                     in: expectedWindow
                 )
             }
-            let coordinate = try input.pointerCoordinate(
-                quartzPoint: point,
-                in: expectedWindow
-            )
             try await input.postClick(
-                at: coordinate,
+                at: try input.pointerCoordinate(
+                    quartzPoint: point,
+                    in: expectedWindow
+                ),
                 modifiers: [],
                 resolveTarget: resolveTarget
             )

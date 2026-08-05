@@ -148,6 +148,14 @@ struct SettingsPreferenceCard: View {
                             .accessibilityIdentifier(
                                 "settings.preferences.poem.enabled"
                             )
+                            .background {
+                                AppE2EViewAnchor(
+                                    identifier: "settings.preferences.poem.enabled",
+                                    verificationText: poemEnabledBinding.wrappedValue
+                                        ? "enabled"
+                                        : "disabled"
+                                )
+                            }
                         HStack(spacing: 8) {
                             Text(store.copy.settingsPoemEditorTitle)
                                 .font(.noonmarkSystem(size: 11, weight: .semibold))

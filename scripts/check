@@ -104,6 +104,9 @@ run_check_suite() {
   echo "==> Idea capture interaction target contract"
   bash scripts/test-idea-capture-interaction-target-contract
 
+  echo "==> Preferences checkbox interaction target contract"
+  bash scripts/test-preferences-checkbox-interaction-target-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

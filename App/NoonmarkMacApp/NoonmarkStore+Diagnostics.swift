@@ -184,9 +184,7 @@ extension NoonmarkStore {
                     ),
                     operationID: operationID ?? activeDiagnosticOperationID,
                     incidentID: incidentID,
-                    failure: error is EnginePersistenceCommitError
-                        ? diagnosticFailure(for: error)
-                        : nil
+                    failure: diagnosticFailure(for: error)
                 )
             )
         }

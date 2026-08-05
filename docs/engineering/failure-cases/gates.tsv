@@ -107,3 +107,5 @@ FAIL-2026-08-04-25	fast	scripts/test-global-panel-focus-restoration-contract	scr
 FAIL-2026-08-04-25	symptom	scripts/test-e2e	scripts/test-all	真实全局 Quick Entry 必须在提交后恢复 Finder 焦点并完成任务持久化
 FAIL-2026-08-04-26	fast	scripts/test-selection-focus-activation-contract	scripts/check	Day Todo 指针选择前必须连续确认主窗口仍为 active、main 与 key
 FAIL-2026-08-04-26	symptom	scripts/test-e2e	scripts/test-all	真实 WindowServer 指针点击 Day Todo 后必须保留前台身份并选中目标行
+FAIL-2026-08-04-27	fast	scripts/test-mutation-rejection-diagnostic-failure-contract	scripts/check	修改拒绝必须保留既有 mapper 生成的白名单 typed failure，不能只保留持久化错误
+FAIL-2026-08-04-27	symptom	scripts/test-e2e	scripts/test-all	真实飞光未解析分类必须保留草稿、拒绝写入并持久记录 domainValidation/821

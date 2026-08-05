@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source_file="App/NoonmarkMacApp/NoonmarkStore+Diagnostics.swift"
+
+rg -U 'failure: diagnosticFailure\(for: error\),\s+\)' "$source_file" >/dev/null
+if rg -F 'failure: error is EnginePersistenceCommitError' "$source_file" >/dev/null; then
+  echo "mutation rejection still drops typed non-persistence failures" >&2
+  exit 1
+fi
+
+echo "Mutation rejection diagnostic failure contract passed"

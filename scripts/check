@@ -98,6 +98,9 @@ run_check_suite() {
   echo "==> Selection focus activation contract"
   bash scripts/test-selection-focus-activation-contract
 
+  echo "==> Mutation rejection diagnostic failure contract"
+  bash scripts/test-mutation-rejection-diagnostic-failure-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

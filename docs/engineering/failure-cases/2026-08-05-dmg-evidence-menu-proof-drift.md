@@ -1,13 +1,13 @@
 # FAIL-2026-08-05-03：发行证据验证器与 harness 菜单证据串漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-05（0.2.2 (8) 候选发行链 dmg-install 证据对账判红）
 - 影响版本／构建：0.2.2 (8) 候选；不涉及已交付的 0.2.1 (6) DMG 本身
 - 引入提交：`70d46e3` fix(e2e): tighten the physical diagnostics menu selection protocol（2026-08-02）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（历史已统一改写为该身份）
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`37d627007ecbc9efc96c7909d9d6e7a5b9cb3d36` fix(release): align the DMG evidence verifier with the harness menu proofs
 
 ## 用户症状与影响
 
@@ -43,8 +43,8 @@
 
 ## 验证结果
 
-- `scripts/test-dmg-evidence-contract`、`test-dmg-harness-evidence-contract`、`test-dmg-install-observer`：待回填。
-- 完整发行链重跑：待回填。
+- `scripts/test-dmg-evidence-contract`、`test-dmg-harness-evidence-contract`、`test-dmg-install-observer`：全部通过。
+- 完整发行链重跑（2026-08-05，run id `release-v0.2.2-b8-20260805T184618Z`）：make check、完整 E2E、writer-lease、DMG 打包与静态验证、dmg-validation 受控安装/退出/重启、诊断导出对账全部通过，`Private DMG package and complete same-run validation evidence passed`。0.2.2 (8) 已交付。
 
 ## 永久门禁
 

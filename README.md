@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>把任务的今天、来路与去向都留下来。</strong><br>
-  面向 macOS 的原生、local-first 日任务系统，围绕 Day Todo、任务轨迹、每日复盘和可解释 AI 协作设计。
+  面向 macOS 的原生、local-first 日任务系统，围绕 Day Todo、任务轨迹、飞光速记、每日复盘和可解释 AI 协作设计。
 </p>
 
 <p align="center">
@@ -50,7 +50,7 @@
 
 以下画面全部来自同一个真实 `NoonmarkDemo.app`：固定一年用户故事通过正式领域接口重放，再由 SQLite 与加密烛龙 sidecar 回读对账。它们不是 HTML 原型，也不是为 README 手工拼出的静态 mock。
 
-主工作区的八个一级界面、快速记录和四个不包含宿主机身份信息的设置界面均在下方逐一完整展示。同步与 Provider 设置可能包含本机路径或 Provider 身份，因此不生成可复用文档截图，继续由专用真实 App E2E 验证。
+主工作区的十个一级界面——计划（Day Todo、任务池、未来计划、重复计划）、轨迹（未完成、已完成、日历、烛龙）、札记（Sticky Note、飞光）——以及快速记录和四个不包含宿主机身份信息的设置界面均在下方逐一完整展示。同步与 Provider 设置可能包含本机路径或 Provider 身份，因此不生成可复用文档截图，继续由专用真实 App E2E 验证。
 
 ### 计划与执行
 
@@ -100,6 +100,26 @@
 
 ![晷迹日历：2026 年 7 月的普通任务轨迹、状态点和选中日期](docs/assets/screenshots/readme/calendar.png)
 
+### 札记：飞光与 Sticky Note
+
+#### 飞光：先记下来，再决定它要去哪里
+
+飞光是 note-first 的来源库，承载尚未决定是否或如何执行的灵感、提醒与零散记录。页面顶部速记框支持 Markdown 多行输入与 `#标签`、`@分组` 分类，草稿跨关闭与重启自动保留；时间线按创建时间倒序、按自然日分组，双击旧条目即可原位编辑。搜索、分组／标签过滤与「回看」是互斥主集合，不堆叠多段列表。飞光不进入任何任务状态机，也不依赖 AI Provider。
+
+![晷迹飞光：Markdown 速记、按自然日分组的时间线和共享右侧详情栏](docs/assets/screenshots/readme/flylight.png)
+
+双击任意旧飞光即可在原位修改正文，保存与取消都在条目所在位置完成，不跳出时间线上下文。
+
+![晷迹飞光原位编辑：在时间线内直接修改既有条目](docs/assets/screenshots/readme/flylight-inline-edit.png)
+
+#### Sticky Note：把值得反复看见的飞光钉住
+
+Sticky Note 是飞光条目的精选投影，不是副本：加入不复制正文、不改创建时间，编辑源飞光后所有视图立即同步，删除源飞光后自动退出精选。页面提供便签墙与清单流两种展示视图，视图选择是不进入数据包与同步的本机偏好。
+
+![晷迹 Sticky Note 便签墙：暖色多列便签投影](docs/assets/screenshots/readme/sticky-notes-wall.png)
+
+![晷迹 Sticky Note 清单流：单列可扫读的正文优先布局](docs/assets/screenshots/readme/sticky-notes-stream.png)
+
 ### 可解释 AI 协作
 
 #### 烛龙：会对话，但不绕过任务边界
@@ -118,6 +138,12 @@
 
 <p align="center">
   <img src="docs/assets/screenshots/readme/quick-entry.png" width="520" alt="晷迹全局快速记录面板：今日任务输入框和添加操作">
+</p>
+
+飞光有独立的全局速记浮窗（默认 `⌃⇧I`，可在设置改键），与飞光页面顶部速记框共享同一个持久化 composer session：`Enter` 换行、`⌘Enter` 保存、`Esc` 关闭，关闭与重启都不丢草稿。
+
+<p align="center">
+  <img src="docs/assets/screenshots/readme/flylight-quick-capture.png" width="520" alt="晷迹全局飞光速记浮窗：Markdown 输入、分类建议与保存操作">
 </p>
 
 #### 偏好与全局快捷键
@@ -153,9 +179,12 @@
 | 未来计划 | 普通任务改期、按日期聚合、重复实例 7／15／30 天可见范围 |
 | 重复计划 | 四态生命周期、有限结束条件、向前修订、停止、跳过、完整逐日轨迹 |
 | 历史池 | 未完成按任务链聚合；已完成保留时刻、轨迹和父子层级 |
+| 飞光 | Markdown 速记、多行持久草稿、双击原位编辑、搜索、分组／标签过滤、回看、隐藏墓碑 |
+| Sticky Note | 飞光精选投影、清单流与便签墙双视图、编辑即时同步、删除自动退出 |
 | 分类 | 一个主分组、多标签、历史快照；任何任务状态都可整理当前分类 |
-| 捕获与导航 | 应用内 `⌘N`、全局快捷键、原生菜单、搜索、日期键盘导航与滑动 |
+| 捕获与导航 | 应用内 `⌘N`、全局任务速记 `⌃⇧N`、全局飞光速记 `⌃⇧I`、原生菜单、搜索、日期键盘导航与滑动 |
 | 数据 | SQLite、canonical JSON 数据包、写后回读、事务性导入与失败回滚 |
+| 诊断 | 有界本机诊断（4 MiB／7 天）、MetricKit 摘要、隐私过滤、用户主动导出 `.noonmarkdiagnostics`（单个导出包硬上限 8 MiB） |
 | 同步 | 显式启用的 iCloud Drive／本地文件夹逐记录同步、冲突与等待状态、真实任务变化计数、最近同步与最近有效同步时间 |
 | AI | OpenAI-compatible／本地／自定义 HTTP Provider seam、连接测试、流式会话、结构化产物、授权与回执 |
 | 国际化与外观 | 中文／English、冷灰／微暖纸感、macOS 原生亮色界面 |
@@ -169,6 +198,7 @@
 | 核心 Todo 事实 | 本机 SQLite | local-first 主事实源；不依赖 Provider |
 | Provider API Key | macOS Keychain | 不进入 SQLite、数据包或同步记录 |
 | 烛龙会话与产物 | 独立 AES-GCM 加密 sidecar | 普通 Todo 数据包与同步不包含 sidecar |
+| 本机诊断 | 有界强类型记录，4 MiB／7 天硬上限 | 不记录任务正文、路径、端点、prompt／response 或凭证；导出由用户主动发起 |
 | 数据包 | canonical JSON + SHA-256 回读校验 | 文件本身不加密；导入时事务性替换并保持同步关闭 |
 | 同步仓库 | 逐条 canonical `SyncRecord` | 不复制 SQLite／WAL／SHM；合并前按不可信输入校验 |
 | Provider 请求 | 用户授权的最小 scope | 不发送数据库文件、内部 ID、Keychain 值或同步端点配置 |

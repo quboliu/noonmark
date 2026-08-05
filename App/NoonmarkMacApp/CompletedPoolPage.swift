@@ -30,7 +30,7 @@ struct CompletedPoolPage: View {
     }
 
     var hierarchies: [CompletedTaskHierarchy] {
-        store.engine.completedTaskHierarchies()
+        store.completedTaskHierarchies()
     }
 
     private var hierarchiesByID: [String: CompletedTaskHierarchy] {

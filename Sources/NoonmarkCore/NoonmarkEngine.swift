@@ -1566,7 +1566,16 @@ public final class NoonmarkEngine {
     }
 
     public func completedPool() -> [CompletedPoolItem] {
-        traces.values
+        let historyTracesByChain = Dictionary(
+            grouping: traces.values.filter { $0.formsDayHistory },
+            by: \.chainID
+        ).mapValues { $0.sorted(by: traceChronology) }
+        let presentableSubtasksByTraceID = Dictionary(
+            grouping: subtasks.values.filter { $0.isUserPresentable },
+            by: \.traceID
+        )
+
+        return traces.values
             .filter {
                 $0.status == .completed
                     && isRecurringTaskChain($0.chainID) == false
@@ -1576,7 +1585,11 @@ public final class NoonmarkEngine {
                 return CompletedPoolItem(
                     trace: trace,
                     definition: definition,
-                    trajectory: completedTrajectory(for: trace)
+                    trajectory: completedTrajectory(
+                        for: trace,
+                        chainTraces: historyTracesByChain[trace.chainID] ?? [],
+                        presentableSubtasksByTraceID: presentableSubtasksByTraceID
+                    )
                 )
             }
             .sorted {
@@ -3760,14 +3773,12 @@ private extension NoonmarkEngine {
             .max() ?? 0
     }
 
-    func completedTrajectory(for completedTrace: DayTrace) -> CompletedTaskTrajectory {
-        let chainTraces = traces.values
-            .filter {
-                $0.chainID == completedTrace.chainID && $0.formsDayHistory
-            }
-            .sorted(by: traceChronology)
-
-        return CompletedTaskTrajectory(
+    func completedTrajectory(
+        for completedTrace: DayTrace,
+        chainTraces: [DayTrace],
+        presentableSubtasksByTraceID: [DayTraceID: [Subtask]]
+    ) -> CompletedTaskTrajectory {
+        CompletedTaskTrajectory(
             startDate: chainTraces.first?.date ?? completedTrace.date,
             continuedDates: uniqueDates(
                 chainTraces
@@ -3776,16 +3787,23 @@ private extension NoonmarkEngine {
             ),
             completedDate: completedTrace.date,
             traces: chainTraces,
-            subtaskTrajectories: completedSubtaskTrajectories(for: chainTraces)
+            subtaskTrajectories: completedSubtaskTrajectories(
+                for: chainTraces,
+                presentableSubtasksByTraceID: presentableSubtasksByTraceID
+            )
         )
     }
 
-    func completedSubtaskTrajectories(for chainTraces: [DayTrace]) -> [SubtaskTrajectory] {
+    func completedSubtaskTrajectories(
+        for chainTraces: [DayTrace],
+        presentableSubtasksByTraceID: [DayTraceID: [Subtask]]
+    ) -> [SubtaskTrajectory] {
         let traceByID = Dictionary(uniqueKeysWithValues: chainTraces.map { ($0.id, $0) })
-        let traceIDs = Set(traceByID.keys)
-        let groupedSubtasks = Dictionary(grouping: subtasks.values.filter {
-            traceIDs.contains($0.traceID) && $0.isUserPresentable
-        }) {
+        let groupedSubtasks = Dictionary(
+            grouping: chainTraces.flatMap {
+                presentableSubtasksByTraceID[$0.id] ?? []
+            }
+        ) {
             $0.lineageID
         }
 

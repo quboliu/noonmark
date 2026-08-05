@@ -80,7 +80,7 @@ extension NoonmarkStore {
 
     var selectedCompletedItem: CompletedPoolItem? {
         guard let selectedCompletedTraceID else { return nil }
-        return engine.completedPool().first { $0.trace.id == selectedCompletedTraceID }
+        return completedPool().first { $0.trace.id == selectedCompletedTraceID }
     }
 
     var selectedCompletedSubtaskRecord: CompletedSubtaskRecord? {
@@ -90,7 +90,7 @@ extension NoonmarkStore {
 
     var selectedUnfinishedItem: UnfinishedPoolItem? {
         guard let selectedUnfinishedChainID else { return nil }
-        return engine.unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
+        return unfinishedPool().first { $0.chain.id == selectedUnfinishedChainID }
     }
 
     var zhulongFeatureAvailability: ZhulongFeatureAvailability {

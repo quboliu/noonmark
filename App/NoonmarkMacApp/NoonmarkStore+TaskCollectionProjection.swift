@@ -45,7 +45,7 @@ extension NoonmarkStore {
         }) {
             return .poolTask(hierarchy.chain.id)
         }
-        if engine.unfinishedPool().contains(where: {
+        if unfinishedPool().contains(where: {
             $0.chain.id == hierarchy.chain.id
         }) {
             return .unfinishedTask(hierarchy.chain.id)

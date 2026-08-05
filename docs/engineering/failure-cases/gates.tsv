@@ -115,3 +115,5 @@ FAIL-2026-08-04-29	fast	scripts/test-preferences-checkbox-interaction-target-con
 FAIL-2026-08-04-29	symptom	scripts/test-e2e	scripts/test-all	真实设置页诗文复选框经 WindowServer 关闭后，必须保留本机偏好并完成同步、重启回读
 FAIL-2026-08-04-30	fast	scripts/test-idea-capture-interaction-target-contract	scripts/check	全局飞光候选必须按具体原生按钮的稳定分类身份命中，不能点击列表容器
 FAIL-2026-08-04-30	symptom	scripts/test-e2e	scripts/test-all	真实全局飞光面板必须物理选择候选、发布、重启并回读分类
+FAIL-2026-08-05-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 的 testCompletedTaskHierarchiesStaysNearLinearAtAnnualScale 以 1200→2400 链耗时比 2.7 与绝对上限捕获已完成池投影的平方级回退
+FAIL-2026-08-05-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 已完成页与未完成页切换渲染路径；年度规模耗时由 demo 基线 sample 对账（修复前 1857/12219 采样在投影栈内）

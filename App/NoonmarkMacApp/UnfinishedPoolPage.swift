@@ -30,7 +30,7 @@ struct UnfinishedPoolPage: View {
     }
 
     var items: [UnfinishedPoolItem] {
-        store.engine.unfinishedPool()
+        store.unfinishedPool()
     }
 
     private var itemsByID: [String: UnfinishedPoolItem] {

@@ -420,11 +420,11 @@ extension NoonmarkStore {
             return engine.taskCycleTracks(today: today)
                 .map { .taskCycleSeries($0.id) }
         case .unfinished:
-            return engine.unfinishedPool().map {
+            return unfinishedPool().map {
                 .unfinishedTask($0.chain.id)
             }
         case .completed:
-            return engine.completedTaskHierarchies()
+            return completedTaskHierarchies()
                 .flatMap { hierarchy in
                 let parent = completedHierarchyParentSelection(
                     hierarchy
@@ -546,13 +546,13 @@ extension NoonmarkStore {
     }
 
     private func selectLaunchUnfinishedItem() {
-        if let item = engine.unfinishedPool().first {
+        if let item = unfinishedPool().first {
             selectUnfinished(item.chain.id)
         }
     }
 
     private func selectLaunchCompletedItem() {
-        if let item = engine.completedPool().first {
+        if let item = completedPool().first {
             selectCompleted(item.trace.id)
         }
     }

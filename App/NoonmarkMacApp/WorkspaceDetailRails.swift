@@ -568,7 +568,7 @@ struct SidebarAnalysisModel {
                 zhulongScopes: [.taskPool, .unfinishedPool]
             )
         case .unfinished:
-            let items = store.engine.unfinishedPool()
+            let items = store.unfinishedPool()
             let missed = items.reduce(0) { $0 + $1.unfinishedTraces.count }
             let active = items.filter { $0.activeTrace != nil }.count
             let repeatedItems = items.filter { $0.unfinishedTraces.count >= 2 }
@@ -615,7 +615,7 @@ struct SidebarAnalysisModel {
                 zhulongScopes: [.unfinishedPool]
             )
         case .completed:
-            let completed = store.engine.completedPool()
+            let completed = store.completedPool()
             let subtaskRecords = store.engine.completedSubtaskRecords()
             let dates = Set(completed.map(\.trace.date) + subtaskRecords.map(\.date))
             let continuedCompletions = completed.filter { $0.trace.continuationSeq > 0 }.count

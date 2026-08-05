@@ -669,6 +669,50 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
+    private var completedPoolMemo: (
+        revision: UInt64,
+        items: [CompletedPoolItem]
+    )?
+    private var completedTaskHierarchiesMemo: (
+        revision: UInt64,
+        hierarchies: [CompletedTaskHierarchy]
+    )?
+    private var unfinishedPoolMemo: (
+        revision: UInt64,
+        items: [UnfinishedPoolItem]
+    )?
+
+    /// 按 engineRevision 备忘的池化派生数据：同一数据版本只计算一次，
+    /// 供页面 body 与侧栏在单次渲染内多次读取而不重复全量投影。
+    func completedPool() -> [CompletedPoolItem] {
+        if let memo = completedPoolMemo, memo.revision == engineRevision {
+            return memo.items
+        }
+        let items = engine.completedPool()
+        completedPoolMemo = (engineRevision, items)
+        return items
+    }
+
+    func completedTaskHierarchies() -> [CompletedTaskHierarchy] {
+        if let memo = completedTaskHierarchiesMemo,
+           memo.revision == engineRevision
+        {
+            return memo.hierarchies
+        }
+        let hierarchies = engine.completedTaskHierarchies()
+        completedTaskHierarchiesMemo = (engineRevision, hierarchies)
+        return hierarchies
+    }
+
+    func unfinishedPool() -> [UnfinishedPoolItem] {
+        if let memo = unfinishedPoolMemo, memo.revision == engineRevision {
+            return memo.items
+        }
+        let items = engine.unfinishedPool()
+        unfinishedPoolMemo = (engineRevision, items)
+        return items
+    }
+
     @Published var page: Page = .day {
         didSet {
             if page == .zhulong, zhulongFeaturePreferences.pageEnabled == false {

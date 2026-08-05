@@ -3911,4 +3911,98 @@ final class NoonmarkEngineTests: XCTestCase {
         XCTAssertEqual(engine.traces[continuedID]?.date, day2)
         XCTAssertEqual(engine.traces[continuedID]?.status, .pending)
     }
+
+    /// FAIL-2026-08-05-01 门禁：completedTaskHierarchies 必须保持近线性。
+    /// 修复前每个完成链都全表扫描 traces 与 subtasks（O(链数 × trace 总数)），
+    /// 规模翻倍耗时约 4 倍；修复后共享一次预分组。用 200→400 链的耗时比
+    /// 抓复杂度回退，比绝对阈值更抗机器差异。
+    func testCompletedTaskHierarchiesStaysNearLinearAtAnnualScale() throws {
+        func buildEngine(chainCount: Int) throws -> NoonmarkEngine {
+            let engine = NoonmarkEngine()
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            let base = calendar.date(
+                from: DateComponents(year: 2026, month: 1, day: 1)
+            )!
+            func day(_ offset: Int) -> LocalDate {
+                let date = calendar.date(
+                    byAdding: .day,
+                    value: offset,
+                    to: base
+                )!
+                let parts = calendar.dateComponents(
+                    [.year, .month, .day],
+                    from: date
+                )
+                return LocalDate(
+                    year: parts.year!,
+                    month: parts.month!,
+                    day: parts.day!
+                )
+            }
+            var clock = 0.0
+            func nextNow() -> Date {
+                clock += 1
+                return Date(timeIntervalSince1970: 1_800_000_000 + clock)
+            }
+            for chainIndex in 0 ..< chainCount {
+                let chainID = try engine.createPoolTask(
+                    title: "年度完成链 \(chainIndex)",
+                    now: nextNow()
+                )
+                // 单日完成即可触发旧实现的全表扫描路径；不引入跨日
+                // settle，避免夹具构建自身退化成按天逐日扫描。
+                let traceDay = day(chainIndex)
+                let traceID = try engine.scheduleFromPool(
+                    chainID: chainID,
+                    date: traceDay,
+                    today: traceDay,
+                    now: nextNow()
+                )
+                let subtaskID = try engine.addSubtask(
+                    traceID: traceID,
+                    title: "子任务 \(chainIndex)",
+                    now: nextNow()
+                )
+                try engine.completeSubtask(
+                    subtaskID,
+                    today: traceDay,
+                    now: nextNow()
+                )
+                try engine.markCompleted(
+                    traceID: traceID,
+                    today: traceDay,
+                    now: nextNow()
+                )
+            }
+            return engine
+        }
+        func hierarchiesElapsed(
+            chainCount: Int
+        ) throws -> (elapsed: TimeInterval, count: Int) {
+            let engine = try buildEngine(chainCount: chainCount)
+            let start = Date()
+            let hierarchies = engine.completedTaskHierarchies()
+            return (Date().timeIntervalSince(start), hierarchies.count)
+        }
+
+        let small = try hierarchiesElapsed(chainCount: 1200)
+        let large = try hierarchiesElapsed(chainCount: 2400)
+
+        XCTAssertEqual(small.count, 1200)
+        XCTAssertEqual(large.count, 2400)
+        // 实测基线（2026-08-05, M 系 Mac, debug）：近线性实现 1200→2400 链
+        // 耗时比约 2.1；O(链数×trace 总数) 实现约 3.2。阈值 2.7 在两侧
+        // 都留出余量；绝对上限防止整体量级回退。
+        XCTAssertLessThan(
+            large.elapsed / small.elapsed,
+            2.7,
+            "1200→2400 链耗时比 \(large.elapsed / small.elapsed)（\(small.elapsed)s → \(large.elapsed)s），疑似回退到 O(n²)"
+        )
+        XCTAssertLessThan(
+            large.elapsed,
+            2.0,
+            "2400 链规模耗时 \(large.elapsed)s，超出绝对上限"
+        )
+    }
 }

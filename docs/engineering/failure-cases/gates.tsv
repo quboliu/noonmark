@@ -113,3 +113,5 @@ FAIL-2026-08-04-28	fast	scripts/test-idea-capture-interaction-target-contract	sc
 FAIL-2026-08-04-28	symptom	scripts/test-e2e	scripts/test-all	真实飞光筛选与回看刷新必须通过 WindowServer 点击、焦点、持久化与重启路径
 FAIL-2026-08-04-29	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	设置页复选框必须命中可见原生 NSButton，而不是宽标签语义容器中心
 FAIL-2026-08-04-29	symptom	scripts/test-e2e	scripts/test-all	真实设置页诗文复选框经 WindowServer 关闭后，必须保留本机偏好并完成同步、重启回读
+FAIL-2026-08-04-30	fast	scripts/test-idea-capture-interaction-target-contract	scripts/check	全局飞光候选必须按具体原生按钮的稳定分类身份命中，不能点击列表容器
+FAIL-2026-08-04-30	symptom	scripts/test-e2e	scripts/test-all	真实全局飞光面板必须物理选择候选、发布、重启并回读分类

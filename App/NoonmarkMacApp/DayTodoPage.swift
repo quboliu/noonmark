@@ -494,6 +494,12 @@ struct NewTaskClassificationSuggestionList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .background {
+                    AppE2EViewAnchor(
+                        identifier: "\(accessibilityIdentifier).item.\(suggestion.id)",
+                        verificationText: "\(String(tokenKind.marker))\(suggestion.name)"
+                    )
+                }
             }
         }
         .padding(.vertical, 4)

@@ -2109,16 +2109,23 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         }
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(Self.gammaSuggestionDraft)
+        guard let suggestedCategory = store.ideaClassificationSuggestions(
+            for: Self.gammaSuggestionDraft
+        ).first, suggestedCategory.name == "工程" else {
+            throw Failure.failed("global Flylight did not derive the expected category suggestion")
+        }
+        let suggestedCategoryIdentifier =
+            "idea-capture.field.suggestions.item.\(suggestedCategory.id)"
         try await waitUntil("global Flylight did not expose category suggestions") {
             editor?.string == Self.gammaSuggestionDraft
                 && store.ideaText == Self.gammaSuggestionDraft
                 && AppViewTreeE2E.view(
-                    identifier: "idea-capture.field.suggestions",
+                    identifier: suggestedCategoryIdentifier,
                     in: panel
                 ) != nil
         }
         try await click(
-            "idea-capture.field.suggestions",
+            suggestedCategoryIdentifier,
             in: panel,
             input: input
         )

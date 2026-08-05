@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+version_file="$repo_root/release/VERSION"
+
+fail() {
+  echo "release version: $*" >&2
+  exit 1
+}
+
+if [[ -n "${NOONMARK_MARKETING_VERSION:-}" ||
+  -n "${NOONMARK_BUILD_NUMBER:-}" ]]; then
+  fail "version environment overrides are not permitted; update release/VERSION in a committed release change"
+fi
+[[ -f "$version_file" ]] || fail "missing tracked version source: release/VERSION"
+
+version_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  version_lines+=("$line")
+done <"$version_file"
+[[ "${#version_lines[@]}" -eq 2 ]] ||
+  fail "release/VERSION must contain exactly marketing_version and build_number"
+[[ "${version_lines[0]}" =~ ^marketing_version=([0-9]+\.[0-9]+\.[0-9]+)$ ]] ||
+  fail "marketing_version must contain three numeric components"
+marketing_version="${BASH_REMATCH[1]}"
+[[ "${version_lines[1]}" =~ ^build_number=([1-9][0-9]*)$ ]] ||
+  fail "build_number must be a positive integer"
+build_number="${BASH_REMATCH[1]}"
+
+case "${1:-}" in
+  marketing-version)
+    echo "$marketing_version"
+    ;;
+  build-number)
+    echo "$build_number"
+    ;;
+  *)
+    echo "usage: scripts/release-version <marketing-version|build-number>" >&2
+    exit 64
+    ;;
+esac

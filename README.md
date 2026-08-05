@@ -255,7 +255,7 @@ make run-demo-app
 | Tencent IME contract | `make test-tencent-ime-input-contract` | 53 个输入面清单、性能阈值与回归组件静态门禁 |
 | Tencent IME real App | `make test-tencent-ime-input-matrix` + `make test-tencent-ime-termination-persistence` | 真实腾讯拼音、年度负载、回显延迟、组合态、持久化与立即退出重启回读 |
 | Real App E2E | `make test-e2e` | WindowServer 输入、原生窗口、用户交互、重启、SQLite 与日志 |
-| DMG | `make package-dmg` + `make test-dmg-install` | 签名、checksum、挂载、复制安装、启动、输入、持久化与重启 |
+| DMG | `make package-dmg` | 完整私有发行链：签名、checksum、挂载、受控安装、启动、输入、持久化与重启 |
 | Live Provider | `make test-ai-provider-live` | 显式凭证下的真实 Provider smoke；不进入默认门禁 |
 | Live Cloud | `make test-cloudkit-sync-live` | 需要签名、entitlement 与隔离环境；缺依赖时 fail-closed |
 

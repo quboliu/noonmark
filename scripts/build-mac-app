@@ -10,17 +10,17 @@ source scripts/evidence-common
 configuration="${1:-debug}"
 profile="${2:-}"
 product="NoonmarkMacApp"
-marketing_version="${NOONMARK_MARKETING_VERSION:-0.2.1}"
-build_number="${NOONMARK_BUILD_NUMBER:-6}"
+marketing_version="$(scripts/release-version marketing-version)"
+build_number="$(scripts/release-version build-number)"
 minimum_os_version="14.0"
 runtime_description="Swift-native"
 
 if [[ ! "$marketing_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "NOONMARK_MARKETING_VERSION must contain three numeric components" >&2
+  echo "release/VERSION marketing_version must contain three numeric components" >&2
   exit 1
 fi
-if [[ ! "$build_number" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
-  echo "NOONMARK_BUILD_NUMBER must contain one to three numeric components" >&2
+if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
+  echo "release/VERSION build_number must be a positive integer" >&2
   exit 1
 fi
 

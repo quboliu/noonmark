@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release version contract: $*" >&2
+  exit 1
+}
+
+version_file="release/VERSION"
+[[ -f "$version_file" ]] || fail "missing tracked version source"
+
+version_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  version_lines+=("$line")
+done <"$version_file"
+[[ "${#version_lines[@]}" -eq 2 ]] ||
+  fail "version source must contain exactly two lines"
+[[ "${version_lines[0]}" =~ ^marketing_version=[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "marketing version is not semantic"
+[[ "${version_lines[1]}" =~ ^build_number=[1-9][0-9]*$ ]] ||
+  fail "build number is not a positive integer"
+
+marketing_version="${version_lines[0]#marketing_version=}"
+build_number="${version_lines[1]#build_number=}"
+[[ "$(scripts/release-version marketing-version)" == "$marketing_version" ]] ||
+  fail "release-version did not read the tracked marketing version"
+[[ "$(scripts/release-version build-number)" == "$build_number" ]] ||
+  fail "release-version did not read the tracked build number"
+if NOONMARK_MARKETING_VERSION=9.9.9 scripts/release-version marketing-version \
+  >/dev/null 2>&1; then
+  fail "marketing version can still be overridden through the environment"
+fi
+if scripts/release-version unsupported >/dev/null 2>&1; then
+  fail "release-version accepted an unknown query"
+fi
+
+ledger_file="release/BUILD-LEDGER.tsv"
+[[ -f "$ledger_file" ]] || fail "missing build ledger"
+IFS=$'\t' read -r ledger_header <"$ledger_file"
+[[ "$ledger_header" == $'marketing_version\tbuild_number\tstate' ]] ||
+  fail "build ledger header is invalid"
+previous_build=0
+current_matches=0
+while IFS=$'\t' read -r ledger_version ledger_build ledger_state ledger_extra ||
+  [[ -n "${ledger_version:-}" ]]; do
+  [[ -z "${ledger_extra:-}" && "$ledger_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ &&
+    "$ledger_build" =~ ^[1-9][0-9]*$ ]] ||
+    fail "build ledger entry is malformed"
+  [[ "$ledger_state" == "candidate" || "$ledger_state" == "released" ||
+    "$ledger_state" == "retired" ]] || fail "build ledger state is invalid"
+  ((ledger_build > previous_build)) ||
+    fail "build ledger numbers are not strictly increasing"
+  previous_build="$ledger_build"
+  if [[ "$ledger_version" == "$marketing_version" &&
+    "$ledger_build" == "$build_number" ]]; then
+    [[ "$ledger_state" != "retired" ]] ||
+      fail "current version points to a retired build"
+    ((current_matches += 1))
+  fi
+done < <(tail -n +2 "$ledger_file")
+[[ "$current_matches" -eq 1 ]] ||
+  fail "current version must have exactly one active build ledger entry"
+
+rg -F 'scripts/release-version marketing-version' scripts/build-mac-app >/dev/null ||
+  fail "App build does not read the tracked marketing version"
+rg -F 'scripts/release-version build-number' scripts/build-mac-app >/dev/null ||
+  fail "App build does not read the tracked build number"
+if rg -F 'NOONMARK_MARKETING_VERSION' scripts/build-mac-app >/dev/null ||
+  rg -F 'NOONMARK_BUILD_NUMBER' scripts/build-mac-app >/dev/null; then
+  fail "App build still accepts environment version overrides"
+fi
+release_script="scripts/release-private-dmg"
+rg -F 'scripts/verify-release-version-tag' "$release_script" >/dev/null ||
+  fail "private release entry does not require the exact version tag"
+rg -F 'fetch-depth: 0' .github/workflows/release.yml >/dev/null ||
+  fail "release workflow does not fetch the annotated version tag"
+rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||
+  fail "release version tag verifier does not require an annotated tag"
+rg -F 'release/BUILD-LEDGER.tsv' docs/engineering/versioning-and-private-release.md >/dev/null ||
+  fail "version governance does not document the build ledger"
+
+echo "Release version contract passed: $marketing_version ($build_number)"

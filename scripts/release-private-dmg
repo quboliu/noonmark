@@ -26,6 +26,7 @@ fi
 
 # The already-completed non-App gate and existing runtime manifests must be
 # valid before the first release-targeted real App gate is allowed to start.
+scripts/verify-release-version-tag
 scripts/verify-release-static-preflight
 scripts/verify-development-validation-evidence --scope runtime
 scripts/test-release-diagnostic-closure

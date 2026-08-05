@@ -28,7 +28,7 @@ test-demo-fixture:
 	scripts/test-interactive-demo-fixture
 
 package-dmg:
-	scripts/package-dmg
+	scripts/release-private-dmg
 
 verify-dmg:
 	scripts/verify-dmg

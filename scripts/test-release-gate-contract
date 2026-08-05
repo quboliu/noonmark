@@ -35,6 +35,10 @@ ime_release_smoke="scripts/test-tencent-ime-release-smoke"
   fail "Tencent IME release smoke is missing or not executable"
 require_order \
   "$release_script" \
+  "scripts/verify-release-version-tag" \
+  "scripts/verify-release-static-preflight"
+require_order \
+  "$release_script" \
   "scripts/verify-release-static-preflight" \
   "scripts/verify-development-validation-evidence --scope runtime"
 require_order \

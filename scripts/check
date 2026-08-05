@@ -134,6 +134,9 @@ run_check_suite() {
   echo "==> Release gate aggregation contract"
   scripts/test-release-gate-contract
 
+  echo "==> Release version contract"
+  scripts/test-release-version-contract
+
   echo "==> DMG window identity contract"
   scripts/test-dmg-window-identity-contract
 

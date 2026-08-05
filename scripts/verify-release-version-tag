@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+marketing_version="$(scripts/release-version marketing-version)"
+expected_tag="v${marketing_version}"
+if ! git show-ref --verify --quiet "refs/tags/${expected_tag}"; then
+  echo "release requires exact tag ${expected_tag} on the candidate commit" >&2
+  exit 1
+fi
+if [[ "$(git cat-file -t "refs/tags/${expected_tag}")" != "tag" ]]; then
+  echo "release tag ${expected_tag} must be annotated" >&2
+  exit 1
+fi
+
+tag_commit="$(git rev-parse "${expected_tag}^{}")"
+head_commit="$(git rev-parse HEAD)"
+if [[ "$tag_commit" != "$head_commit" ]]; then
+  echo "release tag ${expected_tag} points to ${tag_commit}, not current ${head_commit}" >&2
+  exit 1
+fi
+
+echo "Release version tag verified: ${expected_tag} -> ${head_commit}"

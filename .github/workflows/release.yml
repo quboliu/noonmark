@@ -21,6 +21,8 @@ jobs:
       NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify protected signing identity
         run: |
           if [[ -z "${NOONMARK_CODESIGN_IDENTITY:-}" ||

@@ -117,3 +117,5 @@ FAIL-2026-08-04-30	fast	scripts/test-idea-capture-interaction-target-contract	sc
 FAIL-2026-08-04-30	symptom	scripts/test-e2e	scripts/test-all	真实全局飞光面板必须物理选择候选、发布、重启并回读分类
 FAIL-2026-08-05-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 的 testCompletedTaskHierarchiesStaysNearLinearAtAnnualScale 以 1200→2400 链耗时比 2.7 与绝对上限捕获已完成池投影的平方级回退
 FAIL-2026-08-05-01	symptom	scripts/test-e2e	scripts/test-all	真实 App 已完成页与未完成页切换渲染路径；年度规模耗时由 demo 基线 sample 对账（修复前 1857/12219 采样在投影栈内）
+FAIL-2026-08-05-02	fast	scripts/test-unit	scripts/check	RevisionMemoTests 固定投影备忘的同版本单次计算与版本失效语义，NoonmarkCoreTests 引擎缩放测试继续承担引擎层
+FAIL-2026-08-05-02	symptom	scripts/test-page-switch-latency	scripts/test-interactive-demo-fixture	真实 App 年度基线十个一级页面「page 赋值 → 就绪锚点出现」墙钟耗时：每页 <1500ms、TOTAL <6000ms，报告缺失或缺页即判红

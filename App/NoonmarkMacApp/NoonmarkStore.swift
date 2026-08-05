@@ -669,48 +669,241 @@ final class NoonmarkStore: ObservableObject {
         }
     }
 
-    private var completedPoolMemo: (
-        revision: UInt64,
-        items: [CompletedPoolItem]
-    )?
-    private var completedTaskHierarchiesMemo: (
-        revision: UInt64,
-        hierarchies: [CompletedTaskHierarchy]
-    )?
-    private var unfinishedPoolMemo: (
-        revision: UInt64,
-        items: [UnfinishedPoolItem]
-    )?
+    private struct NavigationCountsMemoKey: Equatable {
+        var engineRevision: UInt64
+        var today: LocalDate
+        var recurringVisibilityDays: Int
+    }
 
-    /// 按 engineRevision 备忘的池化派生数据：同一数据版本只计算一次，
+    private struct FuturePlansMemoKey: Equatable {
+        var engineRevision: UInt64
+        var today: LocalDate
+        var recurringVisibilityDays: Int
+    }
+
+    private struct TaskCycleTracksMemoKey: Equatable {
+        var engineRevision: UInt64
+        var today: LocalDate
+    }
+
+    private var completedPoolMemo =
+        RevisionMemo<UInt64, [CompletedPoolItem]>()
+    private var completedTaskHierarchiesMemo =
+        RevisionMemo<UInt64, [CompletedTaskHierarchy]>()
+    private var unfinishedPoolMemo =
+        RevisionMemo<UInt64, [UnfinishedPoolItem]>()
+    private var taskPoolMemo = RevisionMemo<UInt64, [PoolTask]>()
+    private var taskPoolStatisticsMemo =
+        RevisionMemo<UInt64, TaskPoolStatisticsSnapshot>()
+    private var dailyReviewStatsMemo =
+        KeyedRevisionMemo<UInt64, LocalDate, DailyReviewStats>()
+    private var dayTodoViewMemo =
+        KeyedRevisionMemo<UInt64, LocalDate, DayTodoView>()
+    private var presentableSubtasksMemo =
+        RevisionMemo<UInt64, [DayTraceID: [Subtask]]>()
+    private var changedSourceTraceIndexMemo =
+        RevisionMemo<UInt64, [DayTraceID: DayTraceID]>()
+    private var traceProgressMemo =
+        KeyedRevisionMemo<UInt64, DayTraceID, TraceProgress>()
+    private var taskClassificationMemo =
+        KeyedRevisionMemo<UInt64, TaskChainID, TaskClassificationProjection?>()
+    private var navigationCountsMemo =
+        RevisionMemo<NavigationCountsMemoKey, [Page: Int]>()
+    private var futurePlansMemo =
+        RevisionMemo<FuturePlansMemoKey, [FuturePlanItem]>()
+    private var taskCycleTracksMemo =
+        RevisionMemo<TaskCycleTracksMemoKey, [TaskCycleTrack]>()
+    private var calendarTracesMemo =
+        KeyedRevisionMemo<UInt64, LocalDate, [DayTrace]>()
+    private var calendarSummaryMemo =
+        KeyedRevisionMemo<UInt64, LocalDate, CalendarDaySummary>()
+    private var calendarReviewStatsMemo =
+        KeyedRevisionMemo<UInt64, LocalDate, DailyReviewStats>()
+
+    /// 按 engineRevision 备忘的投影层：同一数据版本只计算一次，
     /// 供页面 body 与侧栏在单次渲染内多次读取而不重复全量投影。
+    /// engineRevision 在 engine didSet 里递增；依赖 today 或
+    /// recurringFuturePlanVisibility 的投影把二者纳入备忘 key，
+    /// 跨天或可见性偏好变化时即使引擎未变也会失效重算。
     func completedPool() -> [CompletedPoolItem] {
-        if let memo = completedPoolMemo, memo.revision == engineRevision {
-            return memo.items
+        completedPoolMemo.value(at: engineRevision) {
+            engine.completedPool()
         }
-        let items = engine.completedPool()
-        completedPoolMemo = (engineRevision, items)
-        return items
     }
 
     func completedTaskHierarchies() -> [CompletedTaskHierarchy] {
-        if let memo = completedTaskHierarchiesMemo,
-           memo.revision == engineRevision
-        {
-            return memo.hierarchies
+        completedTaskHierarchiesMemo.value(at: engineRevision) {
+            engine.completedTaskHierarchies()
         }
-        let hierarchies = engine.completedTaskHierarchies()
-        completedTaskHierarchiesMemo = (engineRevision, hierarchies)
-        return hierarchies
     }
 
     func unfinishedPool() -> [UnfinishedPoolItem] {
-        if let memo = unfinishedPoolMemo, memo.revision == engineRevision {
-            return memo.items
+        unfinishedPoolMemo.value(at: engineRevision) {
+            engine.unfinishedPool()
         }
-        let items = engine.unfinishedPool()
-        unfinishedPoolMemo = (engineRevision, items)
-        return items
+    }
+
+    func taskPool() -> [PoolTask] {
+        taskPoolMemo.value(at: engineRevision) {
+            engine.taskPool()
+        }
+    }
+
+    /// 任务池右栏统计：每条链的分类与回池轨迹只在同一数据版本内计算一次。
+    func taskPoolStatistics() -> TaskPoolStatisticsSnapshot {
+        taskPoolStatisticsMemo.value(at: engineRevision) {
+            TaskPoolStatisticsSnapshot(
+                items: taskPool().map { task in
+                    let classification = currentClassification(
+                        for: task.chain.id
+                    )
+                    let hasReturnedToPool = (
+                        try? engine.taskTrail(chainID: task.chain.id)
+                    )?.contains { $0.kind == .returnedToPool } ?? false
+                    return TaskPoolStatisticsItem(
+                        categoryID: classification?.category?.id,
+                        labelIDs: Set(
+                            classification?.labels.map(\.id) ?? []
+                        ),
+                        hasContext:
+                        (task.definition.descriptionText ?? "").isEmpty
+                            == false
+                            || task.chain.activeNoteEntries.isEmpty == false,
+                        hasPlannedSubtasks:
+                        task.definition.plannedSubtasks.isEmpty == false,
+                        hasReturnedToPool: hasReturnedToPool
+                    )
+                }
+            )
+        }
+    }
+
+    /// 每日复盘统计：同一数据版本内按日期惰性备忘，
+    /// ReviewRail 与近七天趋势共享同一组计算结果。
+    func dailyReviewStats(for date: LocalDate) -> DailyReviewStats {
+        dailyReviewStatsMemo.value(for: date, at: engineRevision) { date in
+            engine.dailyReviewStats(date: date)
+        }
+    }
+
+    func dayTraces(for date: LocalDate) -> [DayTrace] {
+        dayTodoViewMemo.value(for: date, at: engineRevision) { date in
+            engine.getDayTodo(date: date)
+        }.traces
+    }
+
+    func presentableSubtasksByTraceID() -> [DayTraceID: [Subtask]] {
+        presentableSubtasksMemo.value(at: engineRevision) {
+            Dictionary(
+                grouping: engine.subtasks.values.filter {
+                    $0.isUserPresentable
+                },
+                by: \.traceID
+            ).mapValues {
+                $0.sorted { $0.position < $1.position }
+            }
+        }
+    }
+
+    func changedSourceTraceIDs() -> [DayTraceID: DayTraceID] {
+        changedSourceTraceIndexMemo.value(at: engineRevision) {
+            var index: [DayTraceID: DayTraceID] = [:]
+            for trace in engine.traces.values {
+                guard let targetID = trace.changedToTraceID,
+                      index[targetID] == nil
+                else {
+                    continue
+                }
+                index[targetID] = trace.id
+            }
+            return index
+        }
+    }
+
+    func traceProgress(for traceID: DayTraceID) -> TraceProgress {
+        traceProgressMemo.value(for: traceID, at: engineRevision) { traceID in
+            engine.traceProgress(for: traceID)
+        }
+    }
+
+    func taskClassificationProjection(
+        for chainID: TaskChainID
+    ) -> TaskClassificationProjection? {
+        taskClassificationMemo.value(for: chainID, at: engineRevision) { chainID in
+            guard case let .task(projection) =
+                try? engine.classification(.task(chainID))
+            else {
+                return nil
+            }
+            return projection
+        }
+    }
+
+    func navigationCounts() -> [Page: Int] {
+        let key = NavigationCountsMemoKey(
+            engineRevision: engineRevision,
+            today: today,
+            recurringVisibilityDays: recurringFuturePlanVisibility.dayCount
+        )
+        return navigationCountsMemo.value(at: key) {
+            [
+                .day: dayTraces(for: key.today)
+                    .filter { $0.status == .pending }.count,
+                .pool: engine.taskPoolCount(),
+                .future: futurePlanItems(
+                    today: key.today,
+                    recurringVisibilityDays: key.recurringVisibilityDays
+                ).count,
+                .recurring: engine.taskCycleSeries.count,
+                .unfinished: engine.unfinishedPoolCount(),
+                .completed: engine.completedTaskHierarchyCount()
+            ]
+        }
+    }
+
+    func futurePlanItems(
+        today: LocalDate,
+        recurringVisibilityDays: Int
+    ) -> [FuturePlanItem] {
+        let key = FuturePlansMemoKey(
+            engineRevision: engineRevision,
+            today: today,
+            recurringVisibilityDays: recurringVisibilityDays
+        )
+        return futurePlansMemo.value(at: key) {
+            engine.visibleFuturePlans(
+                today: today,
+                recurringVisibilityDays: recurringVisibilityDays
+            )
+        }
+    }
+
+    func taskCycleTracks() -> [TaskCycleTrack] {
+        let key = TaskCycleTracksMemoKey(
+            engineRevision: engineRevision,
+            today: today
+        )
+        return taskCycleTracksMemo.value(at: key) {
+            engine.taskCycleTracks(today: key.today)
+        }
+    }
+
+    func calendarTraces(for date: LocalDate) -> [DayTrace] {
+        calendarTracesMemo.value(for: date, at: engineRevision) { date in
+            engine.calendarTraces(for: date)
+        }
+    }
+
+    func calendarSummary(for date: LocalDate) -> CalendarDaySummary {
+        calendarSummaryMemo.value(for: date, at: engineRevision) { date in
+            engine.calendarSummary(for: date)
+        }
+    }
+
+    func calendarReviewStats(date: LocalDate) -> DailyReviewStats {
+        calendarReviewStatsMemo.value(for: date, at: engineRevision) { date in
+            engine.calendarReviewStats(date: date)
+        }
     }
 
     @Published var page: Page = .day {

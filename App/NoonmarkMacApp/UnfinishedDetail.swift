@@ -68,7 +68,7 @@ struct UnfinishedDetail: View {
 
                 DetailProgressSection(
                     traceID: trace.id,
-                    progress: store.engine.traceProgress(for: trace.id),
+                    progress: store.traceProgress(for: trace.id),
                     editable: false
                 )
 

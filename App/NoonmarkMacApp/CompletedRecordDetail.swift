@@ -47,7 +47,7 @@ struct CompletedRecordDetail: View {
 
             DetailProgressSection(
                 traceID: item.trace.id,
-                progress: store.engine.traceProgress(for: item.trace.id),
+                progress: store.traceProgress(for: item.trace.id),
                 editable: false
             )
 

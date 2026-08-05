@@ -76,10 +76,9 @@ extension NoonmarkStore {
     }
 
     func changedSource(for trace: DayTrace) -> (trace: DayTrace, definition: TaskDefinition)? {
-        guard let sourceTrace = engine.traces.values.first(where: {
-            $0.changedToTraceID == trace.id
-        }),
-        let sourceDefinition = engine.definitions[sourceTrace.definitionID]
+        guard let sourceTraceID = changedSourceTraceIDs()[trace.id],
+              let sourceTrace = engine.traces[sourceTraceID],
+              let sourceDefinition = engine.definitions[sourceTrace.definitionID]
         else {
             return nil
         }
@@ -411,13 +410,13 @@ extension NoonmarkStore {
                 tracesByDescription[$0.id].map(WorkspaceSelectionItem.dayTrace)
             }
         case .pool:
-            return engine.taskPool().map { .poolTask($0.chain.id) }
+            return taskPool().map { .poolTask($0.chain.id) }
         case .future:
             return visibleFuturePlanItems().map {
                 .futureTrace($0.trace.id)
             }
         case .recurring:
-            return engine.taskCycleTracks(today: today)
+            return taskCycleTracks()
                 .map { .taskCycleSeries($0.id) }
         case .unfinished:
             return unfinishedPool().map {
@@ -499,7 +498,7 @@ extension NoonmarkStore {
         case .future:
             selectLaunchFutureItem()
         case .recurring:
-            if let seriesID = engine.taskCycleTracks(today: today).first?.id {
+            if let seriesID = taskCycleTracks().first?.id {
                 selectTaskCycleSeries(seriesID)
             }
         case .pool:
@@ -524,7 +523,7 @@ extension NoonmarkStore {
             return
         }
 
-        let traces = engine.getDayTodo(date: selectedDate).traces
+        let traces = dayTraces(for: selectedDate)
         let trace = selectionName == "manual"
             ? traces.first { subtasks(for: $0.id).isEmpty && $0.status == .pending }
             : traces.first
@@ -540,7 +539,7 @@ extension NoonmarkStore {
     }
 
     private func selectLaunchPoolItem() {
-        if let task = engine.taskPool().first {
+        if let task = taskPool().first {
             selectPool(task.chain.id)
         }
     }

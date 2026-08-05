@@ -193,9 +193,9 @@ struct CalendarCell: View {
     let height: CGFloat
     let onSelect: () -> Void
 
-    var summary: CalendarDaySummary { store.engine.calendarSummary(for: date) }
+    var summary: CalendarDaySummary { store.calendarSummary(for: date) }
     var traces: [DayTrace] {
-        store.engine.calendarTraces(for: date)
+        store.calendarTraces(for: date)
     }
 
     var selected: Bool { store.selectedCalendarDate == date }
@@ -389,8 +389,8 @@ struct CalendarDayInsight {
 
     @MainActor
     static func make(for date: LocalDate, store: NoonmarkStore) -> CalendarDayInsight {
-        let traces = store.engine.calendarTraces(for: date)
-        let stats = store.engine.calendarReviewStats(date: date)
+        let traces = store.calendarTraces(for: date)
+        let stats = store.calendarReviewStats(date: date)
         let completionRate = stats.total == 0 ? 0 : Int((Double(stats.completed) / Double(stats.total) * 100).rounded())
         let continuationCount = traces.filter {
             store.engine.carryoverKind(for: $0.id) == .continuation
@@ -446,7 +446,7 @@ struct CalendarDayInsightPanel: View {
     private var trendPoints: [RailTrendPoint] {
         (0 ..< 7).reversed().map { daysBack in
             let date = NoonmarkStore.offset(store.selectedCalendarDate, by: -daysBack)
-            let dayStats = store.engine.calendarReviewStats(date: date)
+            let dayStats = store.calendarReviewStats(date: date)
             return RailTrendPoint(
                 axisLabel: store.weekdayNarrow(date),
                 ratio: dayStats.total == 0
@@ -560,7 +560,7 @@ struct CalendarInsightRow: View {
 struct CalendarDetailPanel: View {
     @EnvironmentObject private var store: NoonmarkStore
     var traces: [DayTrace] {
-        store.engine.calendarTraces(for: store.selectedCalendarDate)
+        store.calendarTraces(for: store.selectedCalendarDate)
     }
 
     var insight: CalendarDayInsight {

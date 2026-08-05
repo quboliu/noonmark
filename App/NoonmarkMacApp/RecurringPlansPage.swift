@@ -17,9 +17,7 @@ struct RecurringPlansPage: View {
     }
 
     var body: some View {
-        let tracks = store.engine.taskCycleTracks(
-            today: store.today
-        )
+        let tracks = store.taskCycleTracks()
 
         VStack(alignment: .leading, spacing: 0) {
             WorkspacePageHeader(

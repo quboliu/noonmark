@@ -18,7 +18,7 @@ struct ReviewRail: View {
     @EnvironmentObject private var store: NoonmarkStore
 
     var day: Day? { store.engine.days[store.selectedDate] }
-    var stats: DailyReviewStats { store.engine.dailyReviewStats(date: store.selectedDate) }
+    var stats: DailyReviewStats { store.dailyReviewStats(for: store.selectedDate) }
     var noReview: Bool { store.isFuture }
 
     private var completionRate: Int {
@@ -41,7 +41,7 @@ struct ReviewRail: View {
     private var trendPoints: [RailTrendPoint] {
         (0 ..< 7).reversed().map { daysBack in
             let date = NoonmarkStore.offset(store.selectedDate, by: -daysBack)
-            let dayStats = store.engine.dailyReviewStats(date: date)
+            let dayStats = store.dailyReviewStats(for: date)
             return RailTrendPoint(
                 axisLabel: store.weekdayNarrow(date),
                 ratio: dayStats.total == 0
@@ -65,7 +65,7 @@ struct ReviewRail: View {
         }
         if store.selectedDate == store.today {
             let tomorrow = NoonmarkStore.offset(store.today, by: 1)
-            let tomorrowCount = store.engine.getDayTodo(date: tomorrow).traces.count
+            let tomorrowCount = store.dayTraces(for: tomorrow).count
             if tomorrowCount > 0 {
                 items.append(
                     RailSignal(

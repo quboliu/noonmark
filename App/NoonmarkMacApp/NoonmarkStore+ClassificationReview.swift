@@ -307,10 +307,7 @@ extension NoonmarkStore {
     }
 
     func currentClassification(for chainID: TaskChainID) -> TaskClassificationProjection? {
-        guard case let .task(projection) = try? engine.classification(.task(chainID)) else {
-            return nil
-        }
-        return projection
+        taskClassificationProjection(for: chainID)
     }
 
     func displayableClassification(

@@ -93,6 +93,12 @@ struct UnfinishedPoolPage: View {
         .onChange(of: presentationPreference) { _, preference in
             presentationRepository.save(preference, for: .unfinished)
         }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "unfinished.page",
+                verificationText: store.copy.navUnfinished
+            )
+        }
     }
 }
 

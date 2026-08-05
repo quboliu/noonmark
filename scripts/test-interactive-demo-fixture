@@ -243,6 +243,8 @@ for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCRE
   fi
 done
 
+scripts/test-page-switch-latency "$test_root/page-switch-latency.tsv"
+
 if [[ ! -s "$database_path" ]]; then
   echo "demo fixture SQLite database was not persisted" >&2
   exit 1

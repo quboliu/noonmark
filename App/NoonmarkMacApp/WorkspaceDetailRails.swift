@@ -29,27 +29,7 @@ struct TaskPoolHomeRailModel {
 
     @MainActor
     static func make(store: NoonmarkStore) -> TaskPoolHomeRailModel {
-        let pool = store.engine.taskPool()
-        let items = pool.map { task in
-            let classification = store.currentClassification(
-                for: task.chain.id
-            )
-            let hasReturnedToPool = (
-                try? store.engine.taskTrail(chainID: task.chain.id)
-            )?.contains { $0.kind == .returnedToPool } ?? false
-            return TaskPoolStatisticsItem(
-                categoryID: classification?.category?.id,
-                labelIDs: Set(
-                    classification?.labels.map(\.id) ?? []
-                ),
-                hasContext:
-                (task.definition.descriptionText ?? "").isEmpty == false
-                    || task.chain.activeNoteEntries.isEmpty == false,
-                hasPlannedSubtasks:
-                task.definition.plannedSubtasks.isEmpty == false,
-                hasReturnedToPool: hasReturnedToPool
-            )
-        }
+        let statistics = store.taskPoolStatistics()
         let availability = TaskPoolAnalysisAvailability(
             providerConfigurationIsReady:
             store.isZhulongProviderReady
@@ -61,7 +41,7 @@ struct TaskPoolHomeRailModel {
             session: session
         )
         return TaskPoolHomeRailModel(
-            statistics: TaskPoolStatisticsSnapshot(items: items),
+            statistics: statistics,
             analysisState: TaskPoolAnalysisProjection.state(
                 availability: availability,
                 run: run,
@@ -172,7 +152,7 @@ struct TaskPoolHomeRail: View {
     }
 
     private var oldestPoolTask: (title: String, chainID: TaskChainID, days: Int)? {
-        guard let oldest = store.engine.taskPool().min(by: {
+        guard let oldest = store.taskPool().min(by: {
             $0.chain.createdAt < $1.chain.createdAt
         }) else {
             return nil

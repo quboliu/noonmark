@@ -3,7 +3,7 @@ import NoonmarkMacRuntime
 
 extension NoonmarkStore {
     func visibleFuturePlanItems() -> [FuturePlanItem] {
-        engine.visibleFuturePlans(
+        futurePlanItems(
             today: today,
             recurringVisibilityDays:
             recurringFuturePlanVisibility.dayCount
@@ -40,7 +40,7 @@ extension NoonmarkStore {
                 ? .futureTrace(currentTrace.id)
                 : .dayTrace(currentTrace.id)
         }
-        if engine.taskPool().contains(where: {
+        if taskPool().contains(where: {
             $0.chain.id == hierarchy.chain.id
         }) {
             return .poolTask(hierarchy.chain.id)

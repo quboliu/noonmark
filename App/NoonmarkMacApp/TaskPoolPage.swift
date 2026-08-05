@@ -70,7 +70,7 @@ struct TaskPoolPage: View {
     }
 
     var tasks: [PoolTask] {
-        store.engine.taskPool()
+        store.taskPool()
     }
 
     private var tasksByID: [String: PoolTask] {
@@ -152,6 +152,12 @@ struct TaskPoolPage: View {
         .taskCollectionCategoryVisibility(presentationPreference)
         .onChange(of: presentationPreference) { _, preference in
             presentationRepository.save(preference, for: .taskPool)
+        }
+        .background {
+            AppE2EViewAnchor(
+                identifier: "pool.page",
+                verificationText: store.copy.navPool
+            )
         }
     }
 }

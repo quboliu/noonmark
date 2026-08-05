@@ -69,7 +69,7 @@ extension NoonmarkStore {
 
     var selectedPoolTask: PoolTask? {
         guard let selectedPoolChainID else { return nil }
-        return engine.taskPool().first { $0.chain.id == selectedPoolChainID }
+        return taskPool().first { $0.chain.id == selectedPoolChainID }
     }
 
     func currentDefinition(for chainID: TaskChainID) -> TaskDefinition? {
@@ -323,22 +323,7 @@ extension NoonmarkStore {
     }
 
     func navigationCount(for page: Page) -> Int {
-        switch page {
-        case .day:
-            return engine.getDayTodo(date: today).traces.filter { $0.status == .pending }.count
-        case .pool:
-            return engine.taskPoolCount()
-        case .future:
-            return visibleFuturePlanItems().count
-        case .recurring:
-            return engine.taskCycleSeries.count
-        case .unfinished:
-            return engine.unfinishedPoolCount()
-        case .completed:
-            return engine.completedTaskHierarchyCount()
-        case .calendar, .zhulong, .settings, .stickyNotes, .ideas:
-            return 0
-        }
+        navigationCounts()[page] ?? 0
     }
 
     func definition(for trace: DayTrace) -> TaskDefinition? {
@@ -346,18 +331,14 @@ extension NoonmarkStore {
     }
 
     func subtasks(for traceID: DayTraceID) -> [Subtask] {
-        engine.subtasks.values
-            .filter {
-                $0.traceID == traceID && $0.isUserPresentable
-            }
-            .sorted { $0.position < $1.position }
+        presentableSubtasksByTraceID()[traceID] ?? []
     }
 
     func dayTodoPresentationSections(
         date: LocalDate,
         preference: TaskCollectionPresentationPreference
     ) -> [TaskCollectionPresentationSection] {
-        let items = engine.getDayTodo(date: date).traces.map { trace in
+        let items = dayTraces(for: date).map { trace in
             TaskCollectionPresentationItem(
                 id: trace.id.description,
                 title: copy.displayTaskTitle(definition(for: trace)?.title),

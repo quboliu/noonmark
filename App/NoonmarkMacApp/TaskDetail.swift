@@ -19,7 +19,7 @@ struct TaskDetail: View {
     let trace: DayTrace
     let definition: TaskDefinition
 
-    var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
+    var progress: TraceProgress { store.traceProgress(for: trace.id) }
     var subtasks: [Subtask] { store.subtasks(for: trace.id) }
     var canEditText: Bool { trace.status == .pending && trace.date >= store.today }
     var canRenameTitle: Bool { trace.status == .pending && trace.date >= store.today }

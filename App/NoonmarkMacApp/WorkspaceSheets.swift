@@ -96,7 +96,7 @@ struct FromPoolSheet: View {
     }
 
     private var tasks: [PoolTask] {
-        store.engine.taskPool()
+        store.taskPool()
     }
 
     var body: some View {

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# 页面切换渲染耗时门禁（FAIL-2026-08-05-02 symptom gate）。
+#
+# 只校验报告，不驱动 App：报告由年度 demo fixture 自动化
+# （App/NoonmarkMacApp/InteractiveDemoFixtureAutomation.swift）在验收收尾
+# 阶段真实测量生成——逐页记录「store.page 赋值 → 页面就绪锚点首次出现」
+# 的墙钟耗时，25ms 轮询（读数含最多一个轮询间隔的量化误差），单页 10 秒
+# 未就绪即判 fixture 失败。本脚本 fail-closed 校验报告齐全且未回退：
+# 每页 < 1500ms、TOTAL < 6000ms（旧实现已完成页单页 5-6 秒，阈值留足
+# 机器差异余量但能抓住回退）。
+#
+# 用法：scripts/test-page-switch-latency [报告路径]
+# 默认报告路径是 make run-demo-app 的 demo 根；
+# scripts/test-interactive-demo-fixture 显式传入本轮隔离报告路径。
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+report_path="${1:-artifacts/interactive-demo/page-switch-latency.tsv}"
+page_budget_ms=1500
+total_budget_ms=6000
+expected_pages=(
+  day
+  pool
+  future
+  recurring
+  unfinished
+  completed
+  calendar
+  zhulong
+  stickyNotes
+  ideas
+)
+
+fail() {
+  echo "page-switch-latency gate: $*" >&2
+  if [[ -f "${report_path:-}" ]]; then
+    cat "$report_path" >&2
+  fi
+  exit 1
+}
+
+[[ -f "$report_path" ]] || fail "missing report: $report_path"
+[[ -s "$report_path" ]] || fail "empty report: $report_path"
+
+header="$(sed -n '1p' "$report_path")"
+[[ "$header" == $'page\telapsed_ms' ]] ||
+  fail "invalid report header: $header"
+
+data_rows="$(sed -n '2,$p' "$report_path")"
+[[ -n "$data_rows" ]] || fail "report has no data rows"
+
+row_count=0
+total_row_count=0
+total_from_pages=0
+total_reported=""
+while IFS=$'\t' read -r page elapsed_ms extra; do
+  [[ -n "$page" ]] || fail "report contains an empty page row"
+  [[ -z "${extra:-}" ]] ||
+    fail "report row must contain exactly two columns: $page"
+  if [[ "$page" == "TOTAL" ]]; then
+    total_row_count=$((total_row_count + 1))
+    total_reported="$elapsed_ms"
+    continue
+  fi
+  match=0
+  for expected in "${expected_pages[@]}"; do
+    if [[ "$page" == "$expected" ]]; then
+      match=1
+      break
+    fi
+  done
+  [[ "$match" == "1" ]] || fail "unexpected page row: $page"
+  [[ "$elapsed_ms" =~ ^[0-9]+$ ]] ||
+    fail "elapsed_ms is not a non-negative integer for $page: $elapsed_ms"
+  row_count=$((row_count + 1))
+  total_from_pages=$((total_from_pages + elapsed_ms))
+  if [[ "$elapsed_ms" -ge "$page_budget_ms" ]]; then
+    fail "page $page took ${elapsed_ms}ms, budget is ${page_budget_ms}ms"
+  fi
+done <<<"$data_rows"
+
+[[ "$row_count" == "${#expected_pages[@]}" ]] ||
+  fail "report covers $row_count pages, expected ${#expected_pages[@]}"
+
+for expected in "${expected_pages[@]}"; do
+  grep -Eq "^${expected}"$'\t' <<<"$data_rows" ||
+    fail "report is missing page row: $expected"
+done
+
+[[ "$total_row_count" == "1" ]] ||
+  fail "report must contain exactly one TOTAL row"
+[[ "$total_reported" =~ ^[0-9]+$ ]] ||
+  fail "TOTAL elapsed_ms is not a non-negative integer: $total_reported"
+[[ "$total_reported" == "$total_from_pages" ]] ||
+  fail "TOTAL ($total_reported) does not match the sum of pages ($total_from_pages)"
+if [[ "$total_reported" -ge "$total_budget_ms" ]]; then
+  fail "TOTAL took ${total_reported}ms, budget is ${total_budget_ms}ms"
+fi
+
+echo "page-switch-latency: ok (TOTAL ${total_reported}ms," \
+  "per-page budget ${page_budget_ms}ms," \
+  "total budget ${total_budget_ms}ms)"

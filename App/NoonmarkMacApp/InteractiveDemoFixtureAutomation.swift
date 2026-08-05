@@ -2336,7 +2336,158 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             }
             return
         }
+        beginPageSwitchLatencyMeasurement(context: context)
+    }
+
+    private var pageSwitchLatencyReportURL: URL {
+        resultURL.deletingLastPathComponent()
+            .appendingPathComponent("page-switch-latency.tsv")
+    }
+
+    /// 页面切换耗时测量覆盖全部一级页面。fixture 验收收尾时当前页固定为
+    /// day，因此序列从 ideas 开始、以 day 结束：每次赋值都是真实换页，
+    /// 且测量结束后恢复 manifest 对账要求的 day 页面不变量。
+    /// 每页的就绪锚点复用该页已有的稳定 E2E 锚点。
+    private var pageSwitchLatencyCases: [PageSwitchLatencyCase] {
+        [
+            PageSwitchLatencyCase(
+                page: .ideas,
+                readyAnchor: "ideas.page"
+            ),
+            PageSwitchLatencyCase(
+                page: .stickyNotes,
+                readyAnchor: "sticky-notes.page"
+            ),
+            PageSwitchLatencyCase(
+                page: .pool,
+                readyAnchor: "pool.page"
+            ),
+            PageSwitchLatencyCase(
+                page: .future,
+                readyAnchor: "future.recurring-visibility"
+            ),
+            PageSwitchLatencyCase(
+                page: .recurring,
+                readyAnchor: "recurring-plans.list"
+            ),
+            PageSwitchLatencyCase(
+                page: .unfinished,
+                readyAnchor: "unfinished.page"
+            ),
+            PageSwitchLatencyCase(
+                page: .completed,
+                readyAnchor: "completed.hierarchy-projection"
+            ),
+            PageSwitchLatencyCase(
+                page: .calendar,
+                readyAnchor: "calendar.header.month"
+            ),
+            PageSwitchLatencyCase(
+                page: .zhulong,
+                readyAnchor: "zhulong.session.title"
+            ),
+            PageSwitchLatencyCase(
+                page: .day,
+                readyAnchor: "day.header.date"
+            )
+        ]
+    }
+
+    @MainActor
+    private func beginPageSwitchLatencyMeasurement(
+        context: DemoCycleCheckContext
+    ) {
+        // 报告必须由本轮运行全新生成：先删除上一轮遗留文件。
+        try? FileManager.default.removeItem(at: pageSwitchLatencyReportURL)
+        measurePageSwitchLatencyStep(
+            context: context,
+            index: 0,
+            results: []
+        )
+    }
+
+    @MainActor
+    private func measurePageSwitchLatencyStep(
+        context: DemoCycleCheckContext,
+        index: Int,
+        results: [PageSwitchLatencyResult]
+    ) {
+        guard pageSwitchLatencyCases.indices.contains(index) else {
+            finishPageSwitchLatencyMeasurement(
+                context: context,
+                results: results
+            )
+            return
+        }
+        let measurementCase = pageSwitchLatencyCases[index]
+        let switchStart = Date()
+        context.store.page = measurementCase.page
+        pollPageSwitchLatencyAnchor(
+            context: context,
+            index: index,
+            results: results,
+            switchStart: switchStart,
+            deadline: switchStart.addingTimeInterval(10)
+        )
+    }
+
+    /// 每 25ms 轮询一次页面就绪锚点；记录值含最多一个轮询间隔的量化
+    /// 误差。锚点 10 秒内未出现即判失败，与页面卡顿症状同义。
+    @MainActor
+    private func pollPageSwitchLatencyAnchor(
+        context: DemoCycleCheckContext,
+        index: Int,
+        results: [PageSwitchLatencyResult],
+        switchStart: Date,
+        deadline: Date
+    ) {
+        let measurementCase = pageSwitchLatencyCases[index]
+        if AppViewTreeE2E.view(
+            identifier: measurementCase.readyAnchor
+        ) != nil {
+            let elapsedMilliseconds = Int(
+                (Date().timeIntervalSince(switchStart) * 1000).rounded()
+            )
+            measurePageSwitchLatencyStep(
+                context: context,
+                index: index + 1,
+                results: results + [
+                    PageSwitchLatencyResult(
+                        page: measurementCase.page,
+                        elapsedMilliseconds: elapsedMilliseconds
+                    )
+                ]
+            )
+            return
+        }
+        guard Date() < deadline else {
+            AppViewTreeE2E.writeDump(beside: resultURL)
+            finishWithFailure(
+                InteractiveDemoFixtureError.pageSwitchLatencyTimeout(
+                    measurementCase.page.rawValue
+                ),
+                on: context.store
+            )
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) {
+            pollPageSwitchLatencyAnchor(
+                context: context,
+                index: index,
+                results: results,
+                switchStart: switchStart,
+                deadline: deadline
+            )
+        }
+    }
+
+    @MainActor
+    private func finishPageSwitchLatencyMeasurement(
+        context: DemoCycleCheckContext,
+        results: [PageSwitchLatencyResult]
+    ) {
         do {
+            try writePageSwitchLatencyReport(results)
             let result = try manifest(
                 fixture: context.fixture,
                 engine: context.engine,
@@ -2350,6 +2501,28 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         } catch {
             finishWithFailure(error, on: context.store)
         }
+    }
+
+    private func writePageSwitchLatencyReport(
+        _ results: [PageSwitchLatencyResult]
+    ) throws {
+        let header = ["page", "elapsed_ms"].joined(separator: "\t")
+        let totalMilliseconds = results.reduce(0) {
+            $0 + $1.elapsedMilliseconds
+        }
+        let rows = results.map {
+            [$0.page.rawValue, String($0.elapsedMilliseconds)]
+                .joined(separator: "\t")
+        } + [["TOTAL", String(totalMilliseconds)].joined(separator: "\t")]
+        try FileManager.default.createDirectory(
+            at: pageSwitchLatencyReportURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try ([header] + rows).joined(separator: "\n").write(
+            to: pageSwitchLatencyReportURL,
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     @MainActor
@@ -3769,6 +3942,16 @@ private struct DemoCollectionCheckCase {
     }
 }
 
+private struct PageSwitchLatencyCase {
+    let page: NoonmarkStore.Page
+    let readyAnchor: String
+}
+
+private struct PageSwitchLatencyResult {
+    let page: NoonmarkStore.Page
+    let elapsedMilliseconds: Int
+}
+
 private struct DemoCycleCheckContext {
     let fixture: NoonmarkDemoFixture
     let engine: NoonmarkEngine
@@ -3890,6 +4073,7 @@ private enum InteractiveDemoFixtureError: LocalizedError {
     case taskCollectionPresentationFailed(String)
     case taskCycleDetailPresentationFailed(String)
     case documentationCaptureFailed(String)
+    case pageSwitchLatencyTimeout(String)
 
     var errorDescription: String? {
         switch self {
@@ -3913,6 +4097,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
             "重复任务实例详情未满足分类与生命周期摘要契约：\(diagnostic)"
         case let .documentationCaptureFailed(diagnostic):
             "演示 App 文档截图失败：\(diagnostic)"
+        case let .pageSwitchLatencyTimeout(page):
+            "页面切换耗时测量超时：\(page) 页就绪锚点未在 10 秒内出现。"
         }
     }
 }

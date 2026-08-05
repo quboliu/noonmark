@@ -41,8 +41,8 @@ extension AppCopy {
 
     var ideaComposerPlaceholder: String {
         language == .chinese
-            ? "记录一条飞光，支持 Markdown、#标签与 @分组；⌘回车保存，草稿自动保留"
-            : "Capture a Flylight with Markdown, #labels, or @group; ⌘Return saves and drafts persist"
+            ? "你在想什么？支持 Markdown、#标签与 @分组；⌘回车保存，草稿自动保留"
+            : "What's on your mind? Markdown, #labels, or @group; ⌘Return saves and drafts persist"
     }
 
     var ideaBodyAccessibilityLabel: String {
@@ -326,8 +326,8 @@ extension AppCopy {
 
     var ideaCapturePanelPlaceholder: String {
         language == .chinese
-            ? "记录一条飞光，支持 Markdown、#标签与 @分组"
-            : "Capture a Flylight with Markdown, #labels, and @group"
+            ? "你想记什么？支持 Markdown、#标签与 @分组"
+            : "What's on your mind? Markdown, #labels, and @group"
     }
 
     var globalIdeaCaptureShortcutTitle: String {

@@ -31,7 +31,7 @@ struct DayTodoPage: View {
     }
 
     var traces: [DayTrace] {
-        store.engine.getDayTodo(date: store.selectedDate).traces
+        store.dayTraces(for: store.selectedDate)
     }
 
     private var tracesByID: [String: DayTrace] {
@@ -535,7 +535,7 @@ struct DateStrip: View {
                 ForEach(dates, id: \.self) { date in
                     let selected = date == store.selectedDate
                     let today = date == store.today
-                    let traces = store.engine.getDayTodo(date: date).traces
+                    let traces = store.dayTraces(for: date)
                     let count = traces.count
                     let pendingCount = traces.count(where: { $0.status == .pending })
                     Button {
@@ -650,7 +650,7 @@ struct TaskRow: View {
     let trace: DayTrace
 
     var definition: TaskDefinition? { store.definition(for: trace) }
-    var progress: TraceProgress { store.engine.traceProgress(for: trace.id) }
+    var progress: TraceProgress { store.traceProgress(for: trace.id) }
     var subtasks: [Subtask] { store.subtasks(for: trace.id) }
     var taskCycleSeries: TaskCycleSeries? {
         guard let seriesID = store.engine.chains[

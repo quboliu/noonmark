@@ -5,5 +5,6 @@ scripts/reset-dev-data audit
 swift test --filter NoonmarkCoreTests
 swift test --filter IdeaCaptureSessionTests
 swift test --filter NewTaskDraftParserTests
+swift test --filter RevisionMemoTests
 swift test --filter NoonmarkAITests
 swift test --filter NoonmarkMacUIContractTests

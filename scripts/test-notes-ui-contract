@@ -14,6 +14,7 @@ native_workspace="App/NoonmarkMacApp/NativeWorkspaceSplitView.swift"
 presentation="App/NoonmarkMacApp/NoonmarkStore+PresentationUndo.swift"
 ui_contract="Sources/NoonmarkMacUIContract/MacUIDesignContract.swift"
 notes_copy="App/NoonmarkMacApp/AppCopy+Ideas.swift"
+app_copy="App/NoonmarkMacApp/AppCopy.swift"
 store="App/NoonmarkMacApp/NoonmarkStore.swift"
 store_ideas="App/NoonmarkMacApp/NoonmarkStore+Ideas.swift"
 sidebar="App/NoonmarkMacApp/WorkspaceShellViews.swift"
@@ -269,6 +270,10 @@ require_literal \
   'NavGroupTitle(store.copy.notesGroup)' \
   "$sidebar" \
   'Notes navigation group disappeared'
+require_literal \
+  'var notesGroup: String { language == .chinese ? "札记" : "Memo" }' \
+  "$app_copy" \
+  'Notes navigation English display name drifted from Memo'
 require_literal \
   'MarkdownText(' \
   "$flylight_page" \

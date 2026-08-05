@@ -1866,6 +1866,11 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             identifier: identifier,
             in: expectedWindow
         )
+        try appendTrace(
+            "click identifier=\(identifier) target=scroll-document checkbox=true "
+                + "before=\(exactBits(beforeClock)) "
+                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
+        )
         let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
             guard NSApp.keyWindow === expectedWindow,
                   let anchor = AppViewTreeE2E.view(

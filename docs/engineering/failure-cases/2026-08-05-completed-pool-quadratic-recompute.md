@@ -1,13 +1,13 @@
 # FAIL-2026-08-05-01：已完成池投影 O(n²) 全表扫描叠加视图重复计算导致页面切换卡顿
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-05（用户在年度演示基线交互验收中报告）
 - 影响版本／构建：0.2.1 (6) 及之前全部包含已完成池轨迹投影的构建
 - 引入提交：`30fb2adee836909f71cfce7b6afd6b28bb9592f6` feat(core): Complete task trajectories in the completed pool（2026-07-05）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（历史已统一改写为该身份）
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`874980047b45da44e0f3e5b9910cf71ff91b8824` fix(core): make the completed pool projection near-linear
 
 ## 用户症状与影响
 

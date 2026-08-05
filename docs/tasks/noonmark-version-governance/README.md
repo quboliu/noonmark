@@ -2,7 +2,7 @@
 
 - Task-ID：`noonmark-version-governance`
 - 风险等级：P
-- 状态：实施与完整门禁已完成，待双轴审查、提交、推送与建立历史基线 tag。
+- 状态：已完成；待推送 `main` 与历史基线 tag。
 
 ## 目标
 
@@ -13,7 +13,7 @@
 - `release/VERSION` 成为唯一版本来源。
 - 构建拒绝版本环境覆写；私有发行要求精确 `v<marketing_version>` tag。
 - 版本、兼容、风险、回滚、灰度和监控规则见 `docs/engineering/versioning-and-private-release.md`。
-- 已为 `0.2.1 (6)` 补私有发行记录，待建立 `v0.2.1` 历史基线 tag。
+- 已为 `0.2.1 (6)` 补私有发行记录；注释 tag `v0.2.1` 已精确指向实际发行提交 `5f4d6cdcf0d39e38a47ee128a9e6102e13b58d80`。
 
 ## 验证
 
@@ -24,4 +24,3 @@
 ## 边界
 
 不改变既有 SQLite v15 → v17 升级与 JSON v6 → v7 导入支持范围。任何后续兼容范围变化必须在版本设计阶段由用户明确审核。
-

@@ -23,27 +23,34 @@ public final class NoonmarkEngine {
     public private(set) var days: [LocalDate: Day] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var taskCycleSeries: [
         TaskCycleSeriesID: TaskCycleSeries
     ] { didSet { mutationEpoch &+= 1 } }
     public private(set) var chains: [TaskChainID: TaskChain] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var definitions: [TaskDefinitionID: TaskDefinition] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var traces: [DayTraceID: DayTrace] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var subtasks: [SubtaskID: Subtask] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var ideas: [IdeaID: IdeaEntry] {
         didSet { mutationEpoch &+= 1 }
     }
+
     public private(set) var preferences: AppPreferences {
         didSet { mutationEpoch &+= 1 }
     }
+
     var classificationState: TaskClassificationState {
         didSet { mutationEpoch &+= 1 }
     }

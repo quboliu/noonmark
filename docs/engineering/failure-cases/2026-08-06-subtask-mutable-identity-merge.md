@@ -7,7 +7,7 @@
 - 引入提交：`cd7f29f935e0d931139d6df9d130530b7537976d` fix(task): Unify task draft and transition semantics
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>（author 与 committer 相同）
 - 实际修改者：未知（仓库证据只能确认 Git identity，无法确认实际操作者）
-- 修复提交：2bba944798e0c922bfa6af7e039a9866164be825 fix(sync): merge mutable subtask fields as content instead of identity
+- 修复提交：`4d2530ae0369454f9e01a537a516e50b9b7f9dbe` fix(sync): merge mutable subtask fields as content instead of identity
 
 ## 用户症状与影响
 

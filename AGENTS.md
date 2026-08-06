@@ -95,7 +95,7 @@
 - 诊断 schema 不得记录任务正文、标签名、文件路径、同步端点字符串、iCloud／同步 payload、AI prompt／response、API Key、邮箱、IP、URL 或长 Base64；不得保存原始 `Error`、`localizedDescription`、`userInfo` 或自由文本业务日志。任何隐私哨兵命中均阻断发行。
 - 真实 App 故障闭环必须在 `e2e` profile 走完“同步失败／停滞 → transport lock wait → 任务修改被拒绝 → 非正常终止 → 重启 → Help 菜单导出”，并对账 operation／incident、previous-session interruption、持久化失败、4 MiB／8 MiB 容量和隐私哨兵。该闭环证明证据可采集，不等于已经定位或修复最初的同步故障。
 - production DMG 只做 checksum、只读挂载、strict code-sign、版本身份、Mach-O UUID、dSYM、binary SHA 与 source-linked SHA 静态门禁，并固定证明 `production_app_executed=false`。需要对该 package 做 WindowServer、SQLite、重启或 DiagnosticReports 动态验收时，只能运行从精确 production package 受控派生并重新签名的 `dmg-validation` App；诊断故障导出闭环则固定运行 `e2e` profile。
-- 发行物为稳定 Apple Development 签名的 DMG，由用户自行下载、安装和启动。发版唯一入口是 tag 触发的 `.github/workflows/release-publish.yml`：推送 `vX.Y.Z` tag 后在常驻 self-hosted runner 跑完整验证链，从干净 checkout 构建并发布公开 GitHub Release，CI 产物为分发正本（操作见 `.github/RELEASING.md`）。产物只有 Apple Development 签名：不得宣称 Developer ID、notarization、staple 或 Gatekeeper 分发已经完成。
+- 发行物为稳定 Apple Development 签名的 DMG，由用户自行下载、安装和启动。本地开发机是质量门禁：打 tag 前必须本地跑通完整验证链（`make check`、真实 E2E、`scripts/release-private-dmg`）。发版唯一入口是 tag 触发的 `.github/workflows/release-publish.yml`：在 GitHub-hosted runner 复跑 `scripts/check`、打包签名并发布公开 GitHub Release，CI 产物为分发正本（操作见 `.github/RELEASING.md`）。产物只有 Apple Development 签名：不得宣称 Developer ID、notarization、staple 或 Gatekeeper 分发已经完成。
 
 ## Agent skills
 

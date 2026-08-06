@@ -1,11 +1,12 @@
 name: Release
 
-# Tag-triggered private-channel release pipeline — the canonical way to cut a
-# Noonmark release. Pushing a version tag (vX.Y.Z) runs the complete same-run
-# validation chain on the persistent self-hosted Mac runner, packages and
-# signs the production DMG with the runner's stable Apple Development
-# identity, and publishes it as a public GitHub Release. The CI-built DMG is
-# the canonical distribution artifact; see .github/RELEASING.md.
+# Simplified tag-triggered release pipeline. The full validation chain
+# (make check, real App E2E, writer lease, release-private-dmg) runs LOCALLY
+# before tagging — that is the quality gate. This workflow runs on a
+# GitHub-hosted runner and only re-verifies what works there
+# (scripts/check), then packages, signs, and publishes the DMG as a public
+# GitHub Release. The CI-built DMG is the canonical distribution artifact;
+# see .github/RELEASING.md.
 #
 #   git tag v0.2.4 && git push origin v0.2.4
 #
@@ -28,12 +29,10 @@ permissions:
 
 jobs:
   publish:
-    name: Validate · Package · GitHub Release
-    runs-on: [self-hosted, macOS, noonmark-ui-e2e]
-    timeout-minutes: 360
+    name: Check · Package · GitHub Release
+    runs-on: macos-15
+    timeout-minutes: 90
     env:
-      NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
-      NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
       NOONMARK_EVIDENCE_RUN_ID: github-release-${{ github.run_id }}-${{ github.run_attempt }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -60,31 +59,44 @@ jobs:
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG} (build ${BUILD})"
 
-      - name: Verify protected signing identity
-        run: |
-          if [[ -z "${NOONMARK_CODESIGN_IDENTITY:-}" ||
-                "${NOONMARK_CODESIGN_IDENTITY}" == "-" ]]; then
-            echo "NOONMARK_UI_CODESIGN_IDENTITY must explicitly name the runner signing identity" >&2
-            exit 1
-          fi
-
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
           brew install swiftlint swiftformat
 
+      - name: Import Apple Development signing identity
+        env:
+          APPLE_DEV_CERT_P12_BASE64: ${{ secrets.APPLE_DEV_CERT_P12_BASE64 }}
+          APPLE_DEV_CERT_PASSWORD: ${{ secrets.APPLE_DEV_CERT_PASSWORD }}
+          APPLE_DEV_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_DEV_KEYCHAIN_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_DEV_CERT_P12_BASE64:-}" ||
+                -z "${APPLE_DEV_CERT_PASSWORD:-}" ||
+                -z "${APPLE_DEV_KEYCHAIN_PASSWORD:-}" ]]; then
+            echo "::error::missing signing secrets (APPLE_DEV_CERT_P12_BASE64 / APPLE_DEV_CERT_PASSWORD / APPLE_DEV_KEYCHAIN_PASSWORD) — export guide: .github/RELEASING.md"
+            exit 1
+          fi
+          echo "$APPLE_DEV_CERT_P12_BASE64" | base64 -d > /tmp/noonmark-cert.p12
+          security create-keychain -p "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
+          security set-keychain-settings -lut 21600 noonmark-ci.keychain
+          security unlock-keychain -p "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
+          security import /tmp/noonmark-cert.p12 -k noonmark-ci.keychain \
+            -P "$APPLE_DEV_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
+          security list-keychains -d user -s noonmark-ci.keychain login.keychain
+          rm -f /tmp/noonmark-cert.p12
+          security find-identity -v -p codesigning noonmark-ci.keychain
+
       - name: Verify (build · lint · UT · IT · ST · DST)
         run: scripts/check
 
-      - name: Data-root writer lease E2E
-        run: scripts/test-data-root-process-lease-e2e
+      - name: Package production DMG
+        run: scripts/package-dmg release
 
-      - name: Full App E2E
-        run: scripts/test-e2e
-
-      - name: Package production DMG (full release chain)
-        run: scripts/release-private-dmg
+      - name: Verify DMG (static, read-only)
+        run: scripts/verify-dmg dist/Noonmark.dmg
 
       - name: Checksum and release notes
         run: |
@@ -137,19 +149,3 @@ jobs:
           done
           echo "::error::GitHub Release asset is not publicly downloadable: ${PUBLIC_URL}"
           exit 1
-
-      - name: Upload release evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ steps.ver.outputs.tag }}-evidence
-          path: |
-            dist/Noonmark.dmg.manifest
-            dist/Noonmark.dmg.inventory.sha256
-            dist/Noonmark.app.dSYM
-            artifacts/audit-final
-            artifacts/e2e*
-            artifacts/dmg-install*
-            artifacts/release-diagnostic-closure-gate
-          if-no-files-found: error
-          retention-days: 30

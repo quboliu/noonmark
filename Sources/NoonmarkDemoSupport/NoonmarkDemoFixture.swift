@@ -8,8 +8,10 @@ public struct NoonmarkDemoFixture {
     public let report: NoonmarkDemoCoverageReport
 
     public static func make(
-        anchorDate: LocalDate
+        anchorDate: LocalDate,
+        language: AppLanguage = .chinese
     ) throws -> NoonmarkDemoFixture {
+        let text = DemoStoryText.forLanguage(language)
         let storyDates = try DemoCalendar.storyDates(
             endingAt: anchorDate,
             count: 365
@@ -22,12 +24,14 @@ public struct NoonmarkDemoFixture {
             engine: engine,
             dates: Array(storyDates.dropLast(10)),
             foregroundStartDate: foregroundStartDate,
-            anchorDate: anchorDate
+            anchorDate: anchorDate,
+            text: text
         )
         let historyResult = try history.replay()
         var story = DemoStory(
             engine: engine,
-            dates: Array(storyDates.suffix(10))
+            dates: Array(storyDates.suffix(10)),
+            text: text
         )
         let ideaStoryFacts = try story.replay()
         let report = NoonmarkDemoCoverageReport(
@@ -676,6 +680,7 @@ private struct AnnualDemoHistory {
     let dates: [LocalDate]
     let foregroundStartDate: LocalDate
     let anchorDate: LocalDate
+    let text: DemoStoryText
     private let clock = DemoClock()
     private var counts = NoonmarkDemoRepeatedFeatureCounts()
 
@@ -683,12 +688,14 @@ private struct AnnualDemoHistory {
         engine: NoonmarkEngine,
         dates: [LocalDate],
         foregroundStartDate: LocalDate,
-        anchorDate: LocalDate
+        anchorDate: LocalDate,
+        text: DemoStoryText
     ) {
         self.engine = engine
         self.dates = dates
         self.foregroundStartDate = foregroundStartDate
         self.anchorDate = anchorDate
+        self.text = text
     }
 
     mutating func replay() throws -> AnnualDemoHistoryResult {
@@ -738,13 +745,13 @@ private struct AnnualDemoHistory {
         let startDate = dates[0]
         let annualEnd: TaskCycleEndCondition = .durationDays(366)
         let plannedSubtask = PlannedSubtask(
-            title: "记录本次执行结果",
+            title: text.annual.cyclePlannedSubtaskTitle,
             position: 1,
             now: event(on: startDate, hour: 5)
         )
         let activeWeekdays = try engine.createTaskCycleSeries(
-            title: "年度工作日整理",
-            descriptionText: "跨越一整年的工作日重复计划。",
+            title: text.annual.annualWeekdaysTitle,
+            descriptionText: text.annual.annualWeekdaysDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .weekdays,
@@ -753,8 +760,8 @@ private struct AnnualDemoHistory {
             now: event(on: startDate, hour: 5, minute: 1)
         )
         let activeWeekly = try engine.createTaskCycleSeries(
-            title: "年度每周回顾",
-            descriptionText: "跨越一整年的每周重复计划。",
+            title: text.annual.annualWeeklyTitle,
+            descriptionText: text.annual.annualWeeklyDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .everyDays(7),
@@ -772,8 +779,8 @@ private struct AnnualDemoHistory {
             by: 25
         )
         _ = try engine.createTaskCycleSeries(
-            title: "下月工作日复盘",
-            descriptionText: "尚未开始的工作日重复计划。",
+            title: text.annual.upcomingWeekdaysTitle,
+            descriptionText: text.annual.upcomingWeekdaysDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: upcomingStartOne,
             schedule: .weekdays,
@@ -782,8 +789,8 @@ private struct AnnualDemoHistory {
             now: event(on: startDate, hour: 5, minute: 3)
         )
         _ = try engine.createTaskCycleSeries(
-            title: "下月隔日训练",
-            descriptionText: "尚未开始的隔日重复计划。",
+            title: text.annual.upcomingAlternateDayTitle,
+            descriptionText: text.annual.upcomingAlternateDayDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: upcomingStartTwo,
             schedule: .everyDays(2),
@@ -799,8 +806,8 @@ private struct AnnualDemoHistory {
         )
 
         _ = try engine.createTaskCycleSeries(
-            title: "首月每日整理",
-            descriptionText: "已经自然结束的每日重复计划。",
+            title: text.annual.endedDailyTitle,
+            descriptionText: text.annual.endedDailyDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .daily,
@@ -809,8 +816,8 @@ private struct AnnualDemoHistory {
             now: event(on: startDate, hour: 5, minute: 5)
         )
         _ = try engine.createTaskCycleSeries(
-            title: "首月每周盘点",
-            descriptionText: "已经自然结束的每周重复计划。",
+            title: text.annual.endedWeeklyTitle,
+            descriptionText: text.annual.endedWeeklyDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .everyDays(7),
@@ -822,8 +829,8 @@ private struct AnnualDemoHistory {
         )
 
         let stoppedWeekdays = try engine.createTaskCycleSeries(
-            title: "停止年度工作日记录",
-            descriptionText: "提前停止并保留历史的工作日计划。",
+            title: text.annual.stoppedWeekdaysTitle,
+            descriptionText: text.annual.stoppedWeekdaysDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .weekdays,
@@ -832,8 +839,8 @@ private struct AnnualDemoHistory {
             now: event(on: startDate, hour: 5, minute: 7)
         )
         let stoppedWeekly = try engine.createTaskCycleSeries(
-            title: "停止年度周报",
-            descriptionText: "提前停止并保留历史的每周计划。",
+            title: text.annual.stoppedWeeklyTitle,
+            descriptionText: text.annual.stoppedWeeklyDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: startDate,
             schedule: .everyDays(7),
@@ -952,43 +959,43 @@ private struct AnnualDemoHistory {
         )
 
         let poolDraft = try createTask(
-            "年度第 \(number) 轮：整理月度输入",
+            text.annual.monthlyOrganizeInputsTitle(number),
             number: number
         )
         let completedTask = try createTask(
-            "年度第 \(number) 轮：完成重点事项",
+            text.annual.monthlyCompletePrioritiesTitle(number),
             number: number
         )
         let unfinishedTask = try createTask(
-            "年度第 \(number) 轮：延续未完成事项",
+            text.annual.monthlyCarryOverTitle(number),
             number: number
         )
         let changedTask = try createTask(
-            "年度第 \(number) 轮：收窄任务范围",
+            text.annual.monthlyNarrowScopeTitle(number),
             number: number
         )
         let deferredTask = try createTask(
-            "年度第 \(number) 轮：延期依赖事项",
+            text.annual.monthlyDeferDependenciesTitle(number),
             number: number
         )
         let returnedTask = try createTask(
-            "年度第 \(number) 轮：重新整理排期",
+            text.annual.monthlyReworkScheduleTitle(number),
             number: number
         )
         let abandonedTask = try createTask(
-            "年度第 \(number) 轮：停止失效尝试",
+            text.annual.monthlyStopStaleTitle(number),
             number: number
         )
         let reactivatedTask = try createTask(
-            "年度第 \(number) 轮：恢复有效计划",
+            text.annual.monthlyResumePlanTitle(number),
             number: number
         )
         let subtaskTask = try createTask(
-            "年度第 \(number) 轮：拆解交付步骤",
+            text.annual.monthlyBreakDownStepsTitle(number),
             number: number
         )
         let futureTask = try createTask(
-            "年度第 \(number) 轮：调整未来计划",
+            text.annual.monthlyAdjustFuturePlansTitle(number),
             number: number
         )
 
@@ -1010,14 +1017,14 @@ private struct AnnualDemoHistory {
         )
         try engine.saveTaskTitleInput(
             chainID: completedTask,
-            title: "年度第 \(number) 轮：交付重点事项",
+            title: text.annual.monthlyDeliverPrioritiesTitle(number),
             today: day0,
             now: event(on: day0, hour: 8, minute: 1)
         )
         counts.taskTitleEditing += 1
         try engine.updateTraceText(
             traceID: completedTrace,
-            descriptionText: "第 \(number) 轮在一年负载下保存的任务说明。",
+            descriptionText: text.annual.monthlySavedDescription(number),
             today: day0,
             now: event(on: day0, hour: 8, minute: 2)
         )
@@ -1066,8 +1073,8 @@ private struct AnnualDemoHistory {
         counts.priorityReordering += 1
         let changedReplacement = try engine.changeTrace(
             traceID: changedTrace,
-            newTitle: "年度第 \(number) 轮：交付收窄后的结果",
-            newDescriptionText: "保留旧任务轨迹，并完成范围明确的新任务。",
+            newTitle: text.annual.monthlyDeliverNarrowedTitle(number),
+            newDescriptionText: text.annual.monthlyDeliverNarrowedDescription,
             today: day0,
             now: event(on: day0, hour: 9)
         )
@@ -1288,8 +1295,8 @@ private struct AnnualDemoHistory {
     ) throws -> TaskChainID {
         let chainID = try engine.createPoolTask(
             title: title,
-            descriptionText: "一年演示第 \(number) 轮的真实任务说明。",
-            initialNoteBody: "第 \(number) 轮初始附言。",
+            descriptionText: text.annual.monthlyTaskDescription(number),
+            initialNoteBody: text.annual.monthlyInitialNote(number),
             now: event(on: dates[(number - 1) * 29], hour: 6)
         )
         counts.poolTaskCreation += 1
@@ -1303,21 +1310,21 @@ private struct AnnualDemoHistory {
     ) throws {
         try engine.updatePoolTask(
             chainID: chainID,
-            title: "年度第 \(number) 轮：整理完整月度输入",
-            descriptionText: "修改后的任务池说明覆盖标题与说明保存。",
+            title: text.annual.poolEditFullTitle(number),
+            descriptionText: text.annual.poolEditDescription,
             now: event(on: date, hour: 6, minute: 10)
         )
         counts.poolTaskTextEditing += 1
 
         let noteID = try engine.appendPoolNote(
             chainID: chainID,
-            body: "待编辑的月度附言。",
+            body: text.annual.poolNoteDraft,
             now: event(on: date, hour: 6, minute: 11)
         )
         try engine.editPoolNote(
             chainID: chainID,
             noteID: noteID,
-            body: "已经编辑的月度附言。",
+            body: text.annual.poolNoteEdited,
             now: event(on: date, hour: 6, minute: 12)
         )
         try engine.deletePoolNote(
@@ -1329,18 +1336,18 @@ private struct AnnualDemoHistory {
 
         let retained = try engine.addPlannedSubtask(
             chainID: chainID,
-            title: "整理本月输入",
+            title: text.annual.poolPlannedOrganizeTitle,
             now: event(on: date, hour: 6, minute: 14)
         )
         let removable = try engine.addPlannedSubtask(
             chainID: chainID,
-            title: "移除重复步骤",
+            title: text.annual.poolPlannedRemoveDuplicatesTitle,
             now: event(on: date, hour: 6, minute: 15)
         )
         try engine.updatePlannedSubtaskTitle(
             chainID: chainID,
             plannedSubtaskID: retained,
-            title: "整理并核对本月输入",
+            title: text.annual.poolPlannedOrganizeReviewedTitle,
             now: event(on: date, hour: 6, minute: 16)
         )
         try engine.updatePlannedSubtaskDifficulty(
@@ -1364,14 +1371,14 @@ private struct AnnualDemoHistory {
     ) throws {
         let noteID = try engine.appendTraceNote(
             traceID: traceID,
-            body: "第 \(number) 轮待编辑的执行附言。",
+            body: text.annual.traceNoteDraft(number),
             today: date,
             now: event(on: date, hour: 8, minute: 3)
         )
         try engine.editTraceNote(
             traceID: traceID,
             noteID: noteID,
-            body: "第 \(number) 轮已经编辑的执行附言。",
+            body: text.annual.traceNoteEdited(number),
             today: date,
             now: event(on: date, hour: 8, minute: 4)
         )
@@ -1391,29 +1398,29 @@ private struct AnnualDemoHistory {
     ) throws {
         let completed = try engine.addSubtask(
             traceID: traceID,
-            title: "第 \(number) 轮完成步骤",
+            title: text.annual.subtaskCompletionTitle(number),
             now: event(on: date, hour: 10)
         )
         let abandoned = try engine.addSubtask(
             traceID: traceID,
-            title: "第 \(number) 轮调整步骤",
+            title: text.annual.subtaskAdjustmentTitle(number),
             now: event(on: date, hour: 10, minute: 1)
         )
         let deleted = try engine.addSubtask(
             traceID: traceID,
-            title: "第 \(number) 轮删除步骤",
+            title: text.annual.subtaskDeletionTitle(number),
             now: event(on: date, hour: 10, minute: 2)
         )
         _ = try engine.addSubtask(
             traceID: traceID,
-            title: "第 \(number) 轮跨日步骤",
+            title: text.annual.subtaskCrossDayTitle(number),
             now: event(on: date, hour: 10, minute: 3)
         )
         counts.subtaskCreation += 4
 
         try engine.updateSubtaskTitle(
             abandoned,
-            title: "第 \(number) 轮已经调整的步骤",
+            title: text.annual.subtaskAdjustedTitle(number),
             today: date,
             now: event(on: date, hour: 10, minute: 4)
         )
@@ -1494,16 +1501,16 @@ private struct AnnualDemoHistory {
         date: LocalDate
     ) throws {
         let categories = [
-            ("研究", "#7C5CFF"),
-            ("产品", "#2A6FDB"),
-            ("工程", "#0E9488"),
-            ("协作", "#E0851B")
+            (text.categories.research, "#7C5CFF"),
+            (text.categories.product, "#2A6FDB"),
+            (text.categories.engineering, "#0E9488"),
+            (text.categories.collaboration, "#E0851B")
         ]
         let labels = [
-            ("洞察", "#0E9488"),
-            ("发布", "#E0851B"),
-            ("体验", "#7C5CFF"),
-            ("交接", "#2A6FDB")
+            (text.labels.insight, "#0E9488"),
+            (text.labels.release, "#E0851B"),
+            (text.labels.experience, "#7C5CFF"),
+            (text.labels.handoff, "#2A6FDB")
         ]
         let category = categories[(number - 1) % categories.count]
         let label = labels[(number - 1) % labels.count]
@@ -1553,9 +1560,9 @@ private struct AnnualDemoHistory {
         date: LocalDate
     ) throws {
         let chainID = try engine.createPoolTask(
-            title: "年度第 \(index + 1) 天：完成日常推进",
-            descriptionText: "连续一年中第 \(index + 1) 天的真实任务记录。",
-            initialNoteBody: "当天先完成首要事项。",
+            title: text.annual.dailyTaskTitle(index + 1),
+            descriptionText: text.annual.dailyTaskDescription(index + 1),
+            initialNoteBody: text.annual.dailyInitialNote,
             now: event(on: date, hour: 7)
         )
         counts.poolTaskCreation += 1
@@ -1579,11 +1586,11 @@ private struct AnnualDemoHistory {
         )
         engine.updateDailyReview(
             date: date,
-            summary: "年度第 \(index + 1) 天：完成了一项可核对的推进。",
+            summary: text.annual.dailyReviewSummary(index + 1),
             unfinishedReason: index.isMultiple(of: 3)
-                ? "依赖确认压缩了原定时间。"
-                : "为更重要的交付主动调整了顺序。",
-            tomorrowNote: "明天先完成首要任务，再处理新增输入。",
+                ? text.annual.dailyUnfinishedDependencyReason
+                : text.annual.dailyUnfinishedPriorityReason,
+            tomorrowNote: text.annual.dailyTomorrowNote,
             now: event(on: date, hour: 22)
         )
     }
@@ -1594,9 +1601,9 @@ private struct AnnualDemoHistory {
         let tomorrow = try DemoCalendar.offset(anchorDate, by: 1)
         for number in 1 ... 12 {
             let chainID = try engine.createPoolTask(
-                title: "年度撤回延期样例 \(number)",
-                descriptionText: "在今天撤回一次延期并继续保留为待办。",
-                initialNoteBody: "用于验证撤回延期不会丢失内容。",
+                title: text.annual.deferralWithdrawalTitle(number),
+                descriptionText: text.annual.deferralWithdrawalDescription,
+                initialNoteBody: text.annual.deferralWithdrawalNote,
                 now: event(on: anchorDate, hour: 6, minute: number)
             )
             counts.poolTaskCreation += 1
@@ -1607,7 +1614,7 @@ private struct AnnualDemoHistory {
             )
             _ = try engine.addSubtask(
                 traceID: traceID,
-                title: "撤回延期后继续处理的步骤 \(number)",
+                title: text.annual.deferralWithdrawalSubtaskTitle(number),
                 now: event(
                     on: anchorDate,
                     hour: 6,
@@ -1657,11 +1664,13 @@ private struct AnnualDemoHistory {
 private struct DemoStory {
     let engine: NoonmarkEngine
     let dates: [LocalDate]
+    let text: DemoStoryText
     private let clock: DemoClock
 
-    init(engine: NoonmarkEngine, dates: [LocalDate]) {
+    init(engine: NoonmarkEngine, dates: [LocalDate], text: DemoStoryText) {
         self.engine = engine
         self.dates = dates
+        self.text = text
         clock = DemoClock()
     }
 
@@ -1699,13 +1708,13 @@ private struct DemoStory {
 
     private func createCycleSeries() throws -> DemoCycleSeriesIDs {
         let plannedSubtask = PlannedSubtask(
-            title: "记录完成、遗漏与下一步",
+            title: text.story.cyclePlannedSubtaskTitle,
             position: 1,
             now: time(on: dates[0], hour: 6, minute: 44)
         )
         let seriesID = try engine.createTaskCycleSeries(
-            title: "每日产品复盘",
-            descriptionText: "每天用十分钟记录完成、遗漏与下一步。",
+            title: text.story.dailyReviewSeriesTitle,
+            descriptionText: text.story.dailyReviewSeriesDescription,
             plannedSubtasks: [plannedSubtask],
             startDate: dates[0],
             endDate: try DemoCalendar.offset(dates[9], by: 3),
@@ -1761,8 +1770,8 @@ private struct DemoStory {
         )
         try classify(
             anchorChainID,
-            category: ("复盘", "#E0851B"),
-            labels: [("发布", "#E0851B")],
+            category: (text.categories.review, "#E0851B"),
+            labels: [(text.labels.release, "#E0851B")],
             at: classificationTime
         )
         guard let classification = engine.snapshot().classifications
@@ -1804,8 +1813,8 @@ private struct DemoStory {
             minute: 51
         )
         let seriesID = try engine.createTaskCycleSeries(
-            title: "完成首次晨间回顾",
-            descriptionText: "已按计划完成的一次性重复计划，用于查看历史终态。",
+            title: text.story.morningReviewSeriesTitle,
+            descriptionText: text.story.morningReviewSeriesDescription,
             startDate: dates[0],
             endDate: dates[0],
             schedule: .daily,
@@ -1831,8 +1840,8 @@ private struct DemoStory {
 
     private func createStoppableCycleSeries() throws -> TaskCycleSeriesID {
         try engine.createTaskCycleSeries(
-            title: "暂停周报打磨",
-            descriptionText: "提前停止但保留历史与当天事实的重复计划。",
+            title: text.story.pausedWeeklySeriesTitle,
+            descriptionText: text.story.pausedWeeklySeriesDescription,
             startDate: dates[0],
             endDate: try DemoCalendar.offset(dates[9], by: 3),
             schedule: .daily,
@@ -1852,11 +1861,11 @@ private struct DemoStory {
             minute: 50
         )
         let seriesID = try engine.createTaskCycleSeries(
-            title: "准备下周工作回顾",
-            descriptionText: "尚未开始，可在父任务详情中调整开始日期。",
+            title: text.story.upcomingReviewSeriesTitle,
+            descriptionText: text.story.upcomingReviewSeriesDescription,
             plannedSubtasks: [
                 PlannedSubtask(
-                    title: "整理本周输入",
+                    title: text.story.upcomingReviewPlannedSubtaskTitle,
                     position: 1,
                     now: createdAt
                 )
@@ -1928,184 +1937,124 @@ private struct DemoStory {
     private mutating func createTaskPool() throws -> DemoTaskIDs {
         let createdAt = time(on: dates[0], hour: 6)
         func create(
-            _ title: String,
-            description: String,
-            note: String? = nil
+            _ copy: DemoStoryTaskCopy
         ) throws -> TaskChainID {
             try engine.createPoolTask(
-                title: title,
-                descriptionText: description,
-                initialNoteBody: note,
+                title: copy.title,
+                descriptionText: copy.taskDescription,
+                initialNoteBody: copy.note,
                 now: clock.next(from: createdAt)
             )
         }
 
         let taskIDs = try DemoTaskIDs(
-            researchBrief: create(
-                "整理用户研究简报",
-                description: "把十次访谈洞察整理成可讨论的研究简报。",
-                note: "先写结论，再补证据。"
-            ),
-            interviewFollowUp: create(
-                "跟进访谈行动项",
-                description: "逐项确认访谈后的负责人和截止日期。"
-            ),
-            onboardingDraft: create(
-                "重写 onboarding 引导",
-                description: "将宽泛目标改成可以当天交付的文案稿。"
-            ),
-            expense: create(
-                "整理差旅报销",
-                description: "核对票据并补齐报销说明。"
-            ),
-            deprecatedExperiment: create(
-                "验证旧版增长实验",
-                description: "这项实验已被新方向取代。"
-            ),
-            restoredPlan: create(
-                "恢复发布前检查清单",
-                description: "演示废弃后重新启用的任务链。"
-            ),
-            deferredDelivery: create(
-                "交付首页交互稿",
-                description: "完成首页交互稿并同步设计说明。",
-                note: "交付前用真实窗口尺寸走查。"
-            ),
-            subtaskStudy: create(
-                "完成可用性走查",
-                description: "按完整用户路径记录问题和改进项。"
-            ),
-            unfinishedHandoff: create(
-                "整理跨团队交接材料",
-                description: "汇总仍待确认的接口和负责人。"
-            ),
-            pinnedFocus: create(
-                "修复登录阻断问题",
-                description: "今天的第一优先级，完成后才能继续验收。"
-            ),
-            pinnedReview: create(
-                "审阅发布说明",
-                description: "今天的第二优先级，确认范围与已知限制。"
-            ),
-            todayDeferral: create(
-                "等待法务确认隐私文案",
-                description: "今天主动延期到明天，仍允许撤回。"
-            ),
-            todayCompleted: create(
-                "完成晨间同步",
-                description: "记录当天目标和风险。"
-            ),
-            todayActive: create(
-                "完善设置页交互",
-                description: "检查滑动方向、分组视图和空标题表现。",
-                note: "验证触控板和键盘两条路径。"
-            ),
-            plannedPool: create(
-                "规划发布后复盘",
-                description: "尚未排期，先在任务池拆解复盘步骤。",
-                note: "收齐数据后再排进 Day Todo。"
-            ),
-            emptyTitlePool: create(
-                "临时标题",
-                description: "空标题任务用于体验 No title 占位。"
-            ),
-            futureWorkshop: create(
-                "主持路线图工作坊",
-                description: "准备两小时路线图工作坊。"
-            ),
-            rescheduledFuture: create(
-                "提交采购申请",
-                description: "未来计划改期样例。"
-            ),
-            futureReturned: create(
-                "预订季度会议室",
-                description: "先排到未来，再主动回到任务池。"
-            )
+            researchBrief: create(text.story.researchBrief),
+            interviewFollowUp: create(text.story.interviewFollowUp),
+            onboardingDraft: create(text.story.onboardingDraft),
+            expense: create(text.story.expense),
+            deprecatedExperiment: create(text.story.deprecatedExperiment),
+            restoredPlan: create(text.story.restoredPlan),
+            deferredDelivery: create(text.story.deferredDelivery),
+            subtaskStudy: create(text.story.subtaskStudy),
+            unfinishedHandoff: create(text.story.unfinishedHandoff),
+            pinnedFocus: create(text.story.pinnedFocus),
+            pinnedReview: create(text.story.pinnedReview),
+            todayDeferral: create(text.story.todayDeferral),
+            todayCompleted: create(text.story.todayCompleted),
+            todayActive: create(text.story.todayActive),
+            plannedPool: create(text.story.plannedPool),
+            emptyTitlePool: create(text.story.emptyTitlePool),
+            futureWorkshop: create(text.story.futureWorkshop),
+            rescheduledFuture: create(text.story.rescheduledFuture),
+            futureReturned: create(text.story.futureReturned)
         )
 
         try classify(
             taskIDs.researchBrief,
-            category: ("研究", "#7C5CFF"),
-            labels: [("访谈", "#2A6FDB"), ("洞察", "#0E9488")]
+            category: (text.categories.research, "#7C5CFF"),
+            labels: [
+                (text.labels.interview, "#2A6FDB"),
+                (text.labels.insight, "#0E9488")
+            ]
         )
         try classify(
             taskIDs.interviewFollowUp,
-            category: ("研究", "#7C5CFF"),
-            labels: [("访谈", "#2A6FDB")]
+            category: (text.categories.research, "#7C5CFF"),
+            labels: [(text.labels.interview, "#2A6FDB")]
         )
         try classify(
             taskIDs.onboardingDraft,
-            category: ("产品", "#2A6FDB"),
-            labels: [("文案", "#D1477A")]
+            category: (text.categories.product, "#2A6FDB"),
+            labels: [(text.labels.copy, "#D1477A")]
         )
         try classify(
             taskIDs.deferredDelivery,
-            category: ("设计", "#D1477A"),
-            labels: [("交付", "#E0851B")]
+            category: (text.categories.design, "#D1477A"),
+            labels: [(text.labels.delivery, "#E0851B")]
         )
         try classify(
             taskIDs.subtaskStudy,
-            category: ("研究", "#7C5CFF"),
-            labels: [("走查", "#0E9488")]
+            category: (text.categories.research, "#7C5CFF"),
+            labels: [(text.labels.walkthrough, "#0E9488")]
         )
         try classify(
             taskIDs.pinnedFocus,
-            category: ("工程", "#0E9488"),
-            labels: [("阻断", "#D1477A")]
+            category: (text.categories.engineering, "#0E9488"),
+            labels: [(text.labels.blocker, "#D1477A")]
         )
         try classify(
             taskIDs.pinnedReview,
-            category: ("产品", "#2A6FDB"),
-            labels: [("发布", "#E0851B")]
+            category: (text.categories.product, "#2A6FDB"),
+            labels: [(text.labels.release, "#E0851B")]
         )
         try classify(
             taskIDs.todayActive,
-            category: ("工程", "#0E9488"),
-            labels: [("体验", "#7C5CFF")]
+            category: (text.categories.engineering, "#0E9488"),
+            labels: [(text.labels.experience, "#7C5CFF")]
         )
         try classify(
             taskIDs.todayCompleted,
-            category: ("工程", "#0E9488"),
-            labels: [("同步", "#2A6FDB")]
+            category: (text.categories.engineering, "#0E9488"),
+            labels: [(text.labels.sync, "#2A6FDB")]
         )
         try classify(
             taskIDs.unfinishedHandoff,
-            category: ("协作", "#E0851B"),
-            labels: [("交接", "#2A6FDB")]
+            category: (text.categories.collaboration, "#E0851B"),
+            labels: [(text.labels.handoff, "#2A6FDB")]
         )
         try classify(
             taskIDs.plannedPool,
-            category: ("复盘", "#E0851B"),
-            labels: [("发布", "#E0851B")]
+            category: (text.categories.review, "#E0851B"),
+            labels: [(text.labels.release, "#E0851B")]
         )
         try classify(
             taskIDs.futureWorkshop,
-            category: ("产品", "#2A6FDB"),
-            labels: [("路线图", "#7C5CFF")]
+            category: (text.categories.product, "#2A6FDB"),
+            labels: [(text.labels.roadmap, "#7C5CFF")]
         )
 
         try engine.addPlannedSubtask(
             chainID: taskIDs.plannedPool,
-            title: "汇总十天任务轨迹",
+            title: text.story.plannedPoolSubtaskSummarize,
             difficulty: .simple,
             now: clock.next(from: createdAt)
         )
         try engine.addPlannedSubtask(
             chainID: taskIDs.plannedPool,
-            title: "归纳延期与未完成原因",
+            title: text.story.plannedPoolSubtaskGroupReasons,
             difficulty: .medium,
             now: clock.next(from: createdAt)
         )
         try engine.addPlannedSubtask(
             chainID: taskIDs.plannedPool,
-            title: "形成下一轮改进计划",
+            title: text.story.plannedPoolSubtaskImprovementPlan,
             difficulty: .hard,
             now: clock.next(from: createdAt)
         )
         try engine.updatePoolTask(
             chainID: taskIDs.emptyTitlePool,
             title: "",
-            descriptionText: "空标题任务用于体验 No title 占位。",
+            descriptionText: text.story.emptyTitlePool.taskDescription,
             now: clock.next(from: createdAt)
         )
         return taskIDs
@@ -2165,8 +2114,8 @@ private struct DemoStory {
         )
         let rewritten = try engine.changeTrace(
             traceID: onboarding,
-            newTitle: "交付 onboarding 三屏文案",
-            newDescriptionText: "产出可直接评审的三屏文案。",
+            newTitle: text.story.onboardingRewrittenTitle,
+            newDescriptionText: text.story.onboardingRewrittenDescription,
             today: dates[2],
             now: time(on: dates[2], hour: 10)
         )
@@ -2259,19 +2208,19 @@ private struct DemoStory {
         )
         let reproduce = try engine.addSubtask(
             traceID: study,
-            title: "复现关键路径",
+            title: text.story.studySubtaskReproduce,
             difficulty: .simple,
             now: time(on: dates[6], hour: 9)
         )
         _ = try engine.addSubtask(
             traceID: study,
-            title: "记录交互问题",
+            title: text.story.studySubtaskRecordIssues,
             difficulty: .medium,
             now: time(on: dates[6], hour: 9, minute: 1)
         )
         let obsolete = try engine.addSubtask(
             traceID: study,
-            title: "检查已移除入口",
+            title: text.story.studySubtaskRemovedEntry,
             difficulty: .hard,
             now: time(on: dates[6], hour: 9, minute: 2)
         )
@@ -2377,17 +2326,17 @@ private struct DemoStory {
         let completedChildren = try [
             engine.addSubtask(
                 traceID: completed,
-                title: "同步当天目标",
+                title: text.story.syncSubtaskGoals,
                 now: time(on: dates[9], hour: 7, minute: 1)
             ),
             engine.addSubtask(
                 traceID: completed,
-                title: "确认关键风险",
+                title: text.story.syncSubtaskRisks,
                 now: time(on: dates[9], hour: 7, minute: 2)
             ),
             engine.addSubtask(
                 traceID: completed,
-                title: "记录下一步",
+                title: text.story.syncSubtaskNextSteps,
                 now: time(on: dates[9], hour: 7, minute: 3)
             )
         ]
@@ -2415,19 +2364,19 @@ private struct DemoStory {
         )
         let cursor = try engine.addSubtask(
             traceID: active,
-            title: "检查全局输入光标",
+            title: text.story.activeSubtaskCursor,
             difficulty: .simple,
             now: time(on: dates[9], hour: 10, minute: 1)
         )
         _ = try engine.addSubtask(
             traceID: active,
-            title: "验证左右滑动方向",
+            title: text.story.activeSubtaskSwipe,
             difficulty: .medium,
             now: time(on: dates[9], hour: 10, minute: 2)
         )
         _ = try engine.addSubtask(
             traceID: active,
-            title: "检查分组颜色与置顶排序",
+            title: text.story.activeSubtaskGroupColors,
             difficulty: .hard,
             now: time(on: dates[9], hour: 10, minute: 3)
         )
@@ -2470,30 +2419,30 @@ private struct DemoStory {
 
     private func addIdeaCapture() throws -> DemoStoryIdeaFacts {
         let researchClassification = try ideaClassificationIDs(
-            categoryName: "研究",
-            labelNames: ["访谈", "洞察"]
+            categoryName: text.categories.research,
+            labelNames: [text.labels.interview, text.labels.insight]
         )
         let releaseIdea = try engine.appendIdea(
-            body: "访谈里好几个人提到 onboarding 第一屏不知道先点哪里，先记下来，走查时验证。",
+            body: text.story.ideaOnboardingConfusion,
             categoryID: researchClassification.categoryID,
             labelIDs: researchClassification.labelIDs,
             now: time(on: dates[0], hour: 21, minute: 5)
         )
         let expenseIdea = try engine.appendIdea(
-            body: "差旅报销能不能攒到月底批量处理？每次都打断半个下午。",
+            body: text.story.ideaExpenseBatching,
             now: time(on: dates[1], hour: 12, minute: 40)
         )
         let hoverIdea = try engine.appendIdea(
-            body: "首页交互稿的悬停反馈有点保守，交付前再想想。",
+            body: text.story.ideaHoverFeedback,
             now: time(on: dates[3], hour: 16, minute: 20)
         )
         try engine.editIdea(
             id: hoverIdea.id,
-            body: "首页交互稿的悬停反馈有点保守；和设计对齐后决定保留大字号方案，交付稿里注明。",
+            body: text.story.ideaHoverFeedbackEdited,
             now: time(on: dates[5], hour: 9, minute: 15)
         )
         let staleExperimentIdea = try engine.appendIdea(
-            body: "旧增长实验的原始数据要不要归档？明天问数据组。",
+            body: text.story.ideaStaleExperiment,
             now: time(on: dates[5], hour: 22, minute: 10)
         )
         try engine.deleteIdea(
@@ -2501,24 +2450,24 @@ private struct DemoStory {
             now: time(on: dates[6], hour: 8, minute: 30)
         )
         let walkthroughClassification = try ideaClassificationIDs(
-            labelNames: ["走查"]
+            labelNames: [text.labels.walkthrough]
         )
         _ = try engine.appendIdea(
-            body: "可用性走查的意外发现：空标题占位比想象中更容易误触，值得单独跟进。",
+            body: text.story.ideaWalkthroughSurprise,
             labelIDs: walkthroughClassification.labelIDs,
             now: time(on: dates[6], hour: 19, minute: 45)
         )
         let dataCaliberIdea = try engine.appendIdea(
-            body: "周报数据口径的注释要不要单独维护？下周对齐前别再改模板。",
+            body: text.story.ideaDataCaliber,
             now: time(on: dates[7], hour: 18, minute: 5)
         )
         let handoffIdea = try engine.appendIdea(
-            body: "交接材料里的接口清单可以抽成模板，下个项目直接复用。",
+            body: text.story.ideaHandoffTemplate,
             now: time(on: dates[8], hour: 13, minute: 30)
         )
         let handoffClassification = try ideaClassificationIDs(
-            categoryName: "协作",
-            labelNames: ["交接"]
+            categoryName: text.categories.collaboration,
+            labelNames: [text.labels.handoff]
         )
         try engine.setIdeaClassification(
             id: handoffIdea.id,
@@ -2531,15 +2480,15 @@ private struct DemoStory {
             now: time(on: dates[9], hour: 8, minute: 45)
         )
         let releaseClassification = try ideaClassificationIDs(
-            labelNames: ["发布"]
+            labelNames: [text.labels.release]
         )
         _ = try engine.appendIdea(
-            body: "审阅发布说明时想到：已知限制应该附上临时绕过方法，减少支持成本。",
+            body: text.story.ideaReleaseWorkarounds,
             labelIDs: releaseClassification.labelIDs,
             now: time(on: dates[9], hour: 9, minute: 20)
         )
         let attentionIdea = try engine.appendIdea(
-            body: "连续用了十天，Sticky Note 比长清单更能压住注意力，写进复盘。",
+            body: text.story.ideaStickyAttention,
             now: time(on: dates[9], hour: 15, minute: 10)
         )
         try engine.pinIdea(
@@ -2557,7 +2506,7 @@ private struct DemoStory {
         _ = releaseIdea
         try engine.restoreIdea(
             id: dataCaliberIdea.id,
-            body: "数据口径注释确认由周报模板统一维护，恢复这条留作月底跟进提醒。",
+            body: text.story.ideaDataCaliberRestored,
             now: time(on: dates[9], hour: 15, minute: 25)
         )
         return DemoStoryIdeaFacts(restoredIdeaCount: 1)
@@ -2596,19 +2545,19 @@ private struct DemoStory {
         for (index, date) in dates.dropLast().enumerated() {
             engine.updateDailyReview(
                 date: date,
-                summary: "第 \(index + 1) 天：完成了计划中的关键推进，并保留真实任务轨迹。",
+                summary: text.story.reviewSummary(index + 1),
                 unfinishedReason: index.isMultiple(of: 2)
-                    ? "临时沟通压缩了深度工作时间。"
-                    : "依赖信息到达较晚。",
-                tomorrowNote: "明天先处理最重要的一项，再打开消息。",
+                    ? text.story.reviewUnfinishedMeetingReason
+                    : text.story.reviewUnfinishedDependencyReason,
+                tomorrowNote: text.story.reviewTomorrowNote,
                 now: time(on: dates[9], hour: 14, minute: index)
             )
         }
         engine.updateDailyReview(
             date: dates[9],
-            summary: "今天仍在进行：置顶任务、主动延期和未来排期都可继续体验。",
+            summary: text.story.finalReviewSummary,
             unfinishedReason: "",
-            tomorrowNote: "体验烛龙规划与日终复盘。",
+            tomorrowNote: text.story.finalReviewTomorrowNote,
             now: time(on: dates[9], hour: 15)
         )
     }

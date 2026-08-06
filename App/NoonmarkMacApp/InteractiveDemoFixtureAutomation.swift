@@ -11,6 +11,8 @@ import NoonmarkZhulong
 
 struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
     let resultURL: URL
+    let storyLanguage: AppLanguage
+    let invalidStoryLanguageArgument: String?
 
     @MainActor
     static func fromCommandLine() -> Self? {
@@ -21,16 +23,40 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         else {
             return nil
         }
+        var storyLanguage: AppLanguage = .chinese
+        var invalidStoryLanguageArgument: String?
+        if let rawStoryLanguage = AppLaunchArguments.value(
+            after: "--interactive-demo-story-language"
+        ) {
+            if let parsed = AppLanguage(rawValue: rawStoryLanguage) {
+                storyLanguage = parsed
+            } else {
+                invalidStoryLanguageArgument = rawStoryLanguage
+            }
+        }
         return Self(
-            resultURL: URL(fileURLWithPath: resultPath)
+            resultURL: URL(fileURLWithPath: resultPath),
+            storyLanguage: storyLanguage,
+            invalidStoryLanguageArgument: invalidStoryLanguageArgument
         )
     }
 
     @MainActor
     func run(on store: NoonmarkStore) {
+        if let invalidStoryLanguageArgument {
+            let error = InteractiveDemoFixtureError
+                .unsupportedStoryLanguage(invalidStoryLanguageArgument)
+            writeFailure(error)
+            store.showOperationFailure(
+                .persistence,
+                error: error
+            )
+            return
+        }
         do {
             let fixture = try NoonmarkDemoFixture.make(
-                anchorDate: store.today
+                anchorDate: store.today,
+                language: storyLanguage
             )
             var candidate = try NoonmarkEngine(
                 snapshot: fixture.engine.snapshot()
@@ -47,6 +73,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 fixture: fixture,
                 on: store
             )
+            if storyLanguage == .english {
+                store.onLanguageChange?()
+            }
             verifyScopeAuthorizationPresentation(
                 fixture: fixture,
                 engine: candidate,
@@ -725,6 +754,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let input = try WindowServerInputDriver(
             requestEventAccessIfNeeded: true
         )
+        let interactionCopy = DemoFlylightInteractionCopy
+            .forLanguage(storyLanguage)
         let original = idea
 
         guard let composerEditor = AppViewTreeE2E.view(
@@ -733,7 +764,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         ) as? NSTextView else {
             throw InteractiveDemoFixtureError.presentationContractFailed
         }
-        let collapsedDraft = "演示中暂时收起、稍后继续的飞光草稿 @工"
+        let collapsedDraft = interactionCopy.collapsedDraft
         try await demoClick(
             "ideas.composer.input",
             in: mainWindow,
@@ -827,7 +858,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             context.store.editingIdeaID == idea.id
                 && mainWindow.firstResponder is NSTextView
         }
-        let editedBody = "演示验收\n\(originalEditableText)"
+        let editedBody =
+            "\(interactionCopy.editPrefix)\n\(originalEditableText)"
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.typeUnicode(editedBody)
         try await waitForFlylightDemo("飞光保存验收文本没有进入编辑器") {
@@ -846,11 +878,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         try await waitForFlylightDemo("飞光保存动作没有写入正文") {
             context.store.editingIdeaID == nil
                 && context.store.engine.ideas[idea.id]?.body
-                == "演示验收\n\(original.body)"
+                == "\(interactionCopy.editPrefix)\n\(original.body)"
         }
         try await waitForFlylightCardBody(
             ideaID: idea.id,
-            body: "演示验收\n\(original.body)",
+            body: "\(interactionCopy.editPrefix)\n\(original.body)",
             in: mainWindow
         )
 
@@ -900,13 +932,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         else {
             throw InteractiveDemoFixtureError.presentationContractFailed
         }
-        try input.typeUnicode("@工")
+        try input.typeUnicode(interactionCopy.suggestionQuery)
         try await waitForFlylightDemo("全局飞光速记没有显示工程分组候选") {
-            panelEditor.string == "@工"
+            panelEditor.string == interactionCopy.suggestionQuery
                 && AppViewTreeE2E.view(
                     identifier: "idea-capture.field.suggestions",
                     in: panel
-                ).flatMap(AppViewTreeE2E.verificationText)?.contains("工程")
+                ).flatMap(AppViewTreeE2E.verificationText)?
+                .contains(interactionCopy.suggestionCategoryName)
                 == true
         }
         try captureDemoScreenshot(
@@ -919,8 +952,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             input: input
         )
         try await waitForFlylightDemo("全局飞光分组候选没有完成 token") {
-            panelEditor.string == "@工程 "
-                && context.store.ideaText == "@工程 "
+            panelEditor.string == interactionCopy.suggestionCompletedToken
+                && context.store.ideaText
+                == interactionCopy.suggestionCompletedToken
         }
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.postKey(keyCode: 51)
@@ -1731,17 +1765,19 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         )
         let presentationExpectations =
             taskCyclePresentationExpectations(context: context)
+        let story = DemoStoryText.forLanguage(storyLanguage).story
         guard context.store.page == .recurring,
               tracks.map(\.title)
               == presentationExpectations.map(\.title),
               let track = tracks.first(where: {
                   $0.title
                       == DemoCycleDetailVerificationStage.active
-                      .trackTitle
+                      .trackTitle(story: story)
               }),
               let detailTrack = tracks.first(where: {
                   $0.title
-                      == context.detailVerificationStage.trackTitle
+                      == context.detailVerificationStage
+                      .trackTitle(story: story)
               }),
               let detailExpectation =
               presentationExpectations.first(where: {
@@ -2946,6 +2982,20 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             throw InteractiveDemoFixtureError
                 .unsafeLaunchConfiguration
         }
+        // 英文故事变体在写快照前把 UI 语言落库为 english，保证
+        // app_preferences.language 与故事文案同语言；默认中文路径保持
+        // 引擎快照逐字不变。
+        if storyLanguage == .english {
+            try engine.updateLanguage(
+                .english,
+                writerID: AppPreferences.defaultLocalThemeLanguageWriterID,
+                now: DemoFixtureClock.timestamp(
+                    fixture.anchorDate,
+                    hour: 17,
+                    minute: 0
+                )
+            )
+        }
         try engineRepository.save(engine)
         let sessionRepository =
             EncryptedFileZhulongSessionRepository(
@@ -3070,6 +3120,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         sessionDate: LocalDate,
         providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage)
+            .poolAnalysis
         let start = DemoFixtureClock.timestamp(
             sessionDate,
             hour: 16,
@@ -3094,11 +3146,11 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let evidenceTitle = guardrail.taskPoolEvidenceTitle(
             evidenceTask.definition.title
         )
-        let evidenceReference = evidenceTitle ?? "该任务"
+        let evidenceReference = evidenceTitle
+            ?? text.evidenceFallbackReference
         let finding = try ZhulongTaskPoolAnalysisFinding(
             kind: .clarity,
-            conclusion:
-            "「\(evidenceReference)」的完成边界仍可更具体。",
+            conclusion: text.findingConclusion(evidenceReference),
             evidence: [
                 try ZhulongTaskPoolAnalysisEvidence(
                     taskID: evidenceTask.chain.id.description,
@@ -3106,8 +3158,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 )
             ],
             confidence: .medium,
-            uncertainty: "当前判断只依据任务池里已有的标题、说明、附言与计划子任务。",
-            recommendation: "补充可观察的交付物或完成标准，再决定是否安排日期。"
+            uncertainty: text.findingUncertainty,
+            recommendation: text.findingRecommendation
         )
         let report = try ZhulongTaskPoolAnalysisReport(
             findings: [finding]
@@ -3121,7 +3173,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             )
         }
         var session = try ZhulongSession(
-            primaryIntent: "分析当前任务池，找出需要澄清或安排的任务。",
+            primaryIntent: text.primaryIntent,
             purpose: .taskPoolAnalysis,
             proposedScopes: [.taskPool],
             now: start
@@ -3136,7 +3188,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             .joined()
         let providerRun = try session.beginProviderRun(
             payload: try ZhulongProviderPayload(
-                systemPrompt: "这是晷迹交互式演示中的任务池分析。",
+                systemPrompt: text.systemPrompt,
                 userPrompt: session.primaryIntent,
                 contextVersion: "sha256:\(digest)",
                 scopeContent: [.taskPool: requestContent],
@@ -3149,7 +3201,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         )
         try session.recordProviderResponse(
             ZhulongProviderResponse(
-                content: "我找到一项值得先明确完成边界的任务。",
+                content: text.responseContent,
                 artifacts: [.taskPoolAnalysis(report)]
             ),
             runID: providerRun.runID,
@@ -3164,6 +3216,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         sessionDate: LocalDate,
         providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage)
+            .submittedPlanning
         let start = DemoFixtureClock.timestamp(
             sessionDate,
             hour: 13,
@@ -3174,7 +3228,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             .taskPool
         ]
         var session = try ZhulongSession(
-            primaryIntent: "帮我规划发布演示，并把结果安排进今天、任务池和未来计划。",
+            primaryIntent: text.primaryIntent,
             purpose: .taskShaping,
             proposedScopes: scopes,
             now: start
@@ -3187,35 +3241,35 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let plan = try ZhulongConversationTaskPlan(
             tasks: [
                 try ZhulongConversationTaskDraft(
-                    title: "准备发布演示",
-                    descriptionText: "按真实用户路径完成一次发布前演示。",
-                    initialNoteBody: "先验证任务状态，再演示烛龙。",
+                    title: text.prepareDemoTitle,
+                    descriptionText: text.prepareDemoDescription,
+                    initialNoteBody: text.prepareDemoNote,
                     destination: .today,
                     subtasks: [
                         try ZhulongPlannedSubtaskDraft(
-                            title: "检查 Day Todo 状态",
+                            title: text.subtaskDayTodoStatus,
                             difficulty: .simple
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "检查未来计划与回池",
+                            title: text.subtaskFutureAndPool,
                             difficulty: .medium
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "记录演示反馈",
+                            title: text.subtaskRecordFeedback,
                             difficulty: .hard
                         )
                     ]
                 ),
                 try ZhulongConversationTaskDraft(
-                    title: "整理演示反馈问题",
-                    descriptionText: "收集体验过程中发现的细节问题。",
+                    title: text.feedbackTitle,
+                    descriptionText: text.feedbackDescription,
                     initialNoteBody: nil,
                     destination: .taskPool,
                     subtasks: []
                 ),
                 try ZhulongConversationTaskDraft(
-                    title: "安排发布后复盘会议",
-                    descriptionText: "在演示完成两天后集中复盘。",
+                    title: text.retrospectiveTitle,
+                    descriptionText: text.retrospectiveDescription,
                     initialNoteBody: nil,
                     destination: .date(
                         DemoFixtureClock.offset(today, by: 2)
@@ -3227,14 +3281,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let request = try session.beginProviderRun(
             payload: try providerPayload(
                 scopes: scopes,
-                prompt: "形成可编辑的发布演示任务计划。"
+                prompt: text.prompt
             ),
             providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
             ZhulongProviderResponse(
-                content: "我先整理成三个去向明确的任务，你可以继续编辑。",
+                content: text.responseContent,
                 draftVersion: 1,
                 artifacts: [.taskPlan(plan)]
             ),
@@ -3268,7 +3322,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         revisedItems[0] = ZhulongTodoDiffItem(
             id: revisedItems[0].id,
             operation: .createTask(
-                title: "\(title)（已确认范围）",
+                title: "\(title)\(text.confirmedScopeSuffix)",
                 descriptionText: descriptionText,
                 initialNoteBody: initialNoteBody,
                 plannedSubtasks: subtasks,
@@ -3303,6 +3357,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         sessionDate: LocalDate,
         providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage)
+            .activePlanning
         let start = DemoFixtureClock.timestamp(
             sessionDate,
             hour: 17,
@@ -3313,7 +3369,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             .taskPool
         ]
         var session = try ZhulongSession(
-            primaryIntent: "我想深入学习 PostgreSQL 的索引，我们一起规划一下。",
+            primaryIntent: text.primaryIntent,
             purpose: .taskShaping,
             proposedScopes: scopes,
             now: start
@@ -3326,29 +3382,29 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let plan = try ZhulongConversationTaskPlan(
             tasks: [
                 try ZhulongConversationTaskDraft(
-                    title: "理解 PostgreSQL 索引策略",
-                    descriptionText: "从最左前缀、覆盖索引到 EXPLAIN/ANALYZE。",
-                    initialNoteBody: "完成后用一个真实查询验证。",
+                    title: text.title,
+                    descriptionText: text.taskDescription,
+                    initialNoteBody: text.note,
                     destination: .taskPool,
                     subtasks: [
                         try ZhulongPlannedSubtaskDraft(
-                            title: "理解复合索引的最左前缀原则",
+                            title: text.subtaskLeftmostPrefix,
                             difficulty: .medium
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "练习覆盖索引与 INCLUDE 列",
+                            title: text.subtaskCovering,
                             difficulty: .medium
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "验证 ORDER BY 与 NULLS 排序",
+                            title: text.subtaskOrdering,
                             difficulty: .medium
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "检查联合查询与子查询的索引使用",
+                            title: text.subtaskJoins,
                             difficulty: .hard
                         ),
                         try ZhulongPlannedSubtaskDraft(
-                            title: "用 EXPLAIN / ANALYZE 判断索引失效",
+                            title: text.subtaskExplain,
                             difficulty: .hard
                         )
                     ]
@@ -3358,14 +3414,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let request = try session.beginProviderRun(
             payload: try providerPayload(
                 scopes: scopes,
-                prompt: "把 PostgreSQL 索引学习目标拆成可编辑任务。"
+                prompt: text.prompt
             ),
             providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
             ZhulongProviderResponse(
-                content: "我拆成一个主任务和五个循序渐进的子任务，提交前都可以修改。",
+                content: text.responseContent,
                 draftVersion: 1,
                 artifacts: [.taskPlan(plan)]
             ),
@@ -3391,6 +3447,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         sessionDate: LocalDate,
         providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage).insight
         let start = DemoFixtureClock.timestamp(
             DemoFixtureClock.offset(sessionDate, by: -2),
             hour: 18,
@@ -3401,7 +3458,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             .unfinishedPool
         ]
         var session = try ZhulongSession(
-            primaryIntent: "复盘一下最近任务经常延期的模式。",
+            primaryIntent: text.primaryIntent,
             purpose: .habitInsight,
             proposedScopes: scopes,
             now: start
@@ -3414,14 +3471,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         let request = try session.beginProviderRun(
             payload: try providerPayload(
                 scopes: scopes,
-                prompt: "根据轨迹总结延期模式，不创建任务。"
+                prompt: text.prompt
             ),
             providerIdentity: providerIdentity,
             now: start.addingTimeInterval(2)
         )
         try session.recordProviderResponse(
             ZhulongProviderResponse(
-                content: "最近的延期主要发生在依赖未确认和任务范围过大的场景。建议把等待依赖与可独立推进的部分分开。",
+                content: text.responseContent,
                 draftVersion: 1
             ),
             runID: request.runID,
@@ -3436,13 +3493,15 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         sessionDate: LocalDate,
         providerIdentity: ZhulongProviderConfigurationIdentity
     ) throws -> ZhulongSession {
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage)
+            .dailyReview
         let start = DemoFixtureClock.timestamp(
             sessionDate,
             hour: 16,
             minute: 0
         )
         var session = try ZhulongSession(
-            primaryIntent: "根据今天的真实任务轨迹做一次日终复盘。",
+            primaryIntent: text.primaryIntent,
             purpose: .dailyClose,
             proposedScopes: [.currentDayTodo],
             now: start
@@ -3455,7 +3514,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         _ = try session.appendEntry(
             author: .zhulong,
             kind: .statement,
-            content: "今天已经完成演示准备；置顶任务、主动延期和进行中任务仍保留，明天先确认法务依赖。",
+            content: text.statementContent,
             now: start.addingTimeInterval(0.5)
         )
         let snapshot = try session.captureDailyClose(
@@ -3465,8 +3524,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         )
         let draft = try session.publishDailyReviewDraft(
             dailyCloseID: snapshot.id,
-            summary: "今天完成了演示准备，并保留置顶、延期和进行中任务供继续体验。",
-            tomorrowNote: "明天先确认法务依赖，再处理发布后的复盘安排。",
+            summary: text.summary,
+            tomorrowNote: text.tomorrowNote,
             causeResolutionIDs: [],
             now: start.addingTimeInterval(2)
         )
@@ -3487,13 +3546,14 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         scopes: Set<ZhulongDataScope>,
         prompt: String
     ) throws -> ZhulongProviderPayload {
-        try ZhulongProviderPayload(
-            systemPrompt: "这是晷迹交互式演示中的历史烛龙会话。",
+        let text = DemoStoryZhulongText.forLanguage(storyLanguage).payload
+        return try ZhulongProviderPayload(
+            systemPrompt: text.systemPrompt,
             userPrompt: prompt,
             contextVersion: "interactive-demo-v1",
             scopeContent: Dictionary(
                 uniqueKeysWithValues: scopes.map {
-                    ($0, "演示范围 \($0.rawValue) 已授权")
+                    ($0, text.scopeContent($0.rawValue))
                 }
             )
         )
@@ -3684,6 +3744,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         return InteractiveDemoManifest(
             status: "ready",
             anchorDate: fixture.anchorDate.description,
+            storyLanguage: storyLanguage.rawValue,
             generatedAt: DemoFixtureClock.timestamp(
                 fixture.anchorDate,
                 hour: 17,
@@ -3952,6 +4013,40 @@ private struct PageSwitchLatencyResult {
     let elapsedMilliseconds: Int
 }
 
+/// 飞光交互验收真实键入 UI 的文案，按故事语言切换；建议候选分组名直接
+/// 取自 `DemoStoryText`，避免与年度故事数据漂移。
+private struct DemoFlylightInteractionCopy {
+    let collapsedDraft: String
+    let editPrefix: String
+    let suggestionQuery: String
+    let suggestionCategoryName: String
+
+    var suggestionCompletedToken: String {
+        "@\(suggestionCategoryName) "
+    }
+
+    static func forLanguage(_ language: AppLanguage) -> Self {
+        let categoryName = DemoStoryText.forLanguage(language)
+            .categories.engineering
+        switch language {
+        case .chinese:
+            return Self(
+                collapsedDraft: "演示中暂时收起、稍后继续的飞光草稿 @工",
+                editPrefix: "演示验收",
+                suggestionQuery: "@工",
+                suggestionCategoryName: categoryName
+            )
+        case .english:
+            return Self(
+                collapsedDraft: "A flylight draft collapsed mid-demo and resumed later @En",
+                editPrefix: "Demo acceptance",
+                suggestionQuery: "@En",
+                suggestionCategoryName: categoryName
+            )
+        }
+    }
+}
+
 private struct DemoCycleCheckContext {
     let fixture: NoonmarkDemoFixture
     let engine: NoonmarkEngine
@@ -3990,16 +4085,16 @@ private enum DemoCycleDetailVerificationStage {
     case upcoming
     case active
 
-    var trackTitle: String {
+    func trackTitle(story: DemoStoryCopy) -> String {
         switch self {
         case .ended:
-            "完成首次晨间回顾"
+            story.morningReviewSeriesTitle
         case .stopped:
-            "暂停周报打磨"
+            story.pausedWeeklySeriesTitle
         case .upcoming:
-            "准备下周工作回顾"
+            story.upcomingReviewSeriesTitle
         case .active:
-            "每日产品复盘"
+            story.dailyReviewSeriesTitle
         }
     }
 
@@ -4026,6 +4121,7 @@ private enum RecurringPlanDetailPreparation {
 private struct InteractiveDemoManifest: Codable {
     let status: String
     let anchorDate: String
+    let storyLanguage: String
     let generatedAt: Date
     let core: NoonmarkDemoCoverageReport
     let zhulongSessionCount: Int
@@ -4064,6 +4160,7 @@ private struct InteractiveDemoFailureManifest: Codable {
 
 private enum InteractiveDemoFixtureError: LocalizedError {
     case unsafeLaunchConfiguration
+    case unsupportedStoryLanguage(String)
     case persistenceVerificationFailed
     case invalidZhulongFixture
     case incompleteZhulongCoverage
@@ -4079,6 +4176,8 @@ private enum InteractiveDemoFixtureError: LocalizedError {
         switch self {
         case .unsafeLaunchConfiguration:
             "演示 fixture 只能写入显式隔离数据根。"
+        case let .unsupportedStoryLanguage(value):
+            "演示 fixture 不支持的故事语言：\(value)。"
         case .persistenceVerificationFailed:
             "演示 fixture 的 SQLite 或烛龙 sidecar 持久化对账失败。"
         case .invalidZhulongFixture:

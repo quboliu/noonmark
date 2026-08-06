@@ -207,7 +207,8 @@ Nightly：
 
 私有 Apple Development DMG 发行验收：
 
-- 只允许在 `main` ref 手动触发 `.github/workflows/release.yml`；它没有 GitHub Release 写权限，也不接受 tag 自动触发。
+- `.github/workflows/release.yml` 只做 main 上的发行链健康校验：手动触发，没有 GitHub Release 写权限，不接受 tag 自动触发，产物标记不可分发。
+- 正式发版由 tag 触发的 `.github/workflows/release-publish.yml` 承担：同一 runner 跑 `scripts/check`、writer lease、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg` 后创建公开 GitHub Release 并上传 DMG 与 SHA-256（见 `.github/RELEASING.md`）。
 - 重新跑 `scripts/check`。
 - 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e` 与腾讯拼音 release smoke，确认真实 Mac app 的组合输入、即时退出与持久化重启仍可用。完整性能与覆盖矩阵由独立 quality workflow 报告，不阻断本次私有 DMG。
 - 用 release 优化配置打包 `.app` 与 DMG；产物只面向指定用户私下自行下载和安装，不代表可公开分发。

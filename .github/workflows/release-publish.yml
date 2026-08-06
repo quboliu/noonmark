@@ -1,0 +1,155 @@
+name: Release
+
+# Tag-triggered private-channel release pipeline — the canonical way to cut a
+# Noonmark release. Pushing a version tag (vX.Y.Z) runs the complete same-run
+# validation chain on the persistent self-hosted Mac runner, packages and
+# signs the production DMG with the runner's stable Apple Development
+# identity, and publishes it as a public GitHub Release. The CI-built DMG is
+# the canonical distribution artifact; see .github/RELEASING.md.
+#
+#   git tag v0.2.4 && git push origin v0.2.4
+#
+# The distributed binary is Apple Development signed only: not notarized, not
+# stapled. Users install it manually.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # manual re-run; releases the release/VERSION at this ref
+
+# Never cancel a release mid-flight (a half-published version is worse than a
+# queued one).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create/update the GitHub Release
+
+jobs:
+  publish:
+    name: Validate · Package · GitHub Release
+    runs-on: [self-hosted, macOS, noonmark-ui-e2e]
+    timeout-minutes: 360
+    env:
+      NOONMARK_CODESIGN_IDENTITY: ${{ vars.NOONMARK_UI_CODESIGN_IDENTITY }}
+      NOONMARK_REQUIRE_STABLE_UI_SIGNING: "1"
+      NOONMARK_EVIDENCE_RUN_ID: github-release-${{ github.run_id }}-${{ github.run_attempt }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version and assert tag binding
+        id: ver
+        run: |
+          MARKETING="$(scripts/release-version marketing-version)"
+          BUILD="$(scripts/release-version build-number)"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v${MARKETING}"
+          fi
+          if [[ "$TAG" != "v${MARKETING}" ]]; then
+            echo "::error::tag ${TAG} does not match release/VERSION marketing_version v${MARKETING}"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${MARKETING}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} (build ${BUILD})"
+
+      - name: Verify protected signing identity
+        run: |
+          if [[ -z "${NOONMARK_CODESIGN_IDENTITY:-}" ||
+                "${NOONMARK_CODESIGN_IDENTITY}" == "-" ]]; then
+            echo "NOONMARK_UI_CODESIGN_IDENTITY must explicitly name the runner signing identity" >&2
+            exit 1
+          fi
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          brew install swiftlint swiftformat
+
+      - name: Verify (build · lint · UT · IT · ST · DST)
+        run: scripts/check
+
+      - name: Data-root writer lease E2E
+        run: scripts/test-data-root-process-lease-e2e
+
+      - name: Full App E2E
+        run: scripts/test-e2e
+
+      - name: Package production DMG (full release chain)
+        run: scripts/release-private-dmg
+
+      - name: Checksum and release notes
+        run: |
+          shasum -a 256 dist/Noonmark.dmg > dist/Noonmark.dmg.sha256
+          shasum -a 256 -c dist/Noonmark.dmg.sha256
+          awk '
+            /^## 用户可见变化/ { grab=1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' "docs/releases/v${{ steps.ver.outputs.version }}.md" > RELEASE_NOTES.md
+          if [[ ! -s RELEASE_NOTES.md ]]; then
+            echo "Noonmark ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.build }})" \
+              > RELEASE_NOTES.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo "- Build: ${{ steps.ver.outputs.build }} · Commit: ${GITHUB_SHA}"
+            echo "- Apple Development signed; not notarized. Install manually."
+            echo "- SHA-256: see Noonmark.dmg.sha256"
+          } >> RELEASE_NOTES.md
+          echo "---- release notes ----"; cat RELEASE_NOTES.md
+
+      - name: Create / update GitHub Release
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          TITLE="Noonmark ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.build }})"
+          git fetch --force --tags origin "$TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md --verify-tag
+          fi
+          gh release upload "$TAG" dist/Noonmark.dmg dist/Noonmark.dmg.sha256 \
+            --clobber
+          gh release edit "$TAG" --draft=false --latest
+          ACTUAL_TAG="$(gh release view "$TAG" --json tagName --jq '.tagName')"
+          if [[ "$ACTUAL_TAG" != "$TAG" ]]; then
+            echo "::error::GitHub Release tag mismatch: expected ${TAG}, got ${ACTUAL_TAG}"
+            exit 1
+          fi
+          gh release view "$TAG" --json assets --jq ".assets[].name" \
+            | grep -qxF "Noonmark.dmg" \
+            || { echo "::error::GitHub Release missing asset Noonmark.dmg"; exit 1; }
+          PUBLIC_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Noonmark.dmg"
+          for _ in 1 2 3 4 5 6; do
+            curl -fsIL "$PUBLIC_URL" >/dev/null && exit 0
+            sleep 5
+          done
+          echo "::error::GitHub Release asset is not publicly downloadable: ${PUBLIC_URL}"
+          exit 1
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.ver.outputs.tag }}-evidence
+          path: |
+            dist/Noonmark.dmg.manifest
+            dist/Noonmark.dmg.inventory.sha256
+            dist/Noonmark.app.dSYM
+            artifacts/audit-final
+            artifacts/e2e*
+            artifacts/dmg-install*
+            artifacts/release-diagnostic-closure-gate
+          if-no-files-found: error
+          retention-days: 30

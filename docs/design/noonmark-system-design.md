@@ -1718,6 +1718,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 | `ci.yml` E2E | 仅 main push 或显式 main dispatch；持久 self-hosted Mac | 在 hosted check 成功后验证签名身份、writer lease、完整真实 App E2E 与 runtime evidence |
 | `nightly-deterministic-sim.yml` | 每日或手动；hosted `macos-15` | 固定 seed 默认运行 512 次深度确定性仿真 |
 | `release.yml` | 仅手动 main；self-hosted Mac | 全量 check、E2E、DMG 安装和证据归档；产物明确标记不可公开分发 |
+| `release-publish.yml` | 版本 tag 推送或手动；同一 self-hosted Mac | 完整发行链后创建公开 GitHub Release 并上传签名 DMG 与 SHA-256；CI 产物为分发正本 |
 
 最重要的供应链安全选择是：pull request 的可变代码绝不运行在持有 UI signing identity 和预授权 TCC 的 persistent runner。PR 只运行 hosted check；合并到 main 后，才由受保护的 runner 执行真实 GUI 门禁。
 

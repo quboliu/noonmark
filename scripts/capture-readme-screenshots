@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Capture the README documentation screenshots from the verified annual demo
+# fixture, in Chinese or English, and promote them into docs/assets.
+#
+# Usage: scripts/capture-readme-screenshots zh|en
+#
+# zh refreshes docs/assets/screenshots/readme/ (Chinese UI + Chinese story).
+# en runs the fixture with --interactive-demo-story-language english and an
+# English locale, refreshes docs/assets/screenshots/readme-en/, and rejects
+# any capture that still contains recognized Han text.
+set -euo pipefail
+
+export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
+
+source scripts/interactive-demo-screenshot-contract
+
+language="${1:-}"
+case "$language" in
+  zh)
+    fixed_locale="zh_Hans_SG"
+    story_language_args=()
+    expected_story_language="chinese"
+    target_dir="docs/assets/screenshots/readme"
+    ;;
+  en)
+    fixed_locale="en_SG"
+    story_language_args=(--interactive-demo-story-language english)
+    expected_story_language="english"
+    target_dir="docs/assets/screenshots/readme-en"
+    ;;
+  *)
+    echo "usage: scripts/capture-readme-screenshots zh|en" >&2
+    exit 1
+    ;;
+esac
+
+configuration="debug"
+app_path="dist/NoonmarkDemo.app"
+app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
+capture_root="$PWD/artifacts/readme-screenshots-$language"
+database_path="$capture_root/Noonmark.sqlite"
+result_path="$capture_root/fixture-manifest.json"
+bootstrap_log="$capture_root/provider-bootstrap.log"
+readiness_result="$capture_root/provider-readiness.txt"
+fixture_log="$capture_root/fixture-install.log"
+fixture_pid=""
+
+cleanup_failed_capture() {
+  local command_exit=$?
+  if [[ "$command_exit" -ne 0 ]]; then
+    if [[ -n "$fixture_pid" ]] \
+        && kill -0 "$fixture_pid" >/dev/null 2>&1; then
+      kill -TERM "$fixture_pid" >/dev/null 2>&1 || true
+      wait "$fixture_pid" 2>/dev/null || true
+    fi
+  fi
+}
+trap cleanup_failed_capture EXIT
+
+case "$capture_root" in
+  "$PWD"/artifacts/readme-screenshots-zh | "$PWD"/artifacts/readme-screenshots-en) ;;
+  *)
+    echo "unsafe README screenshot capture root: $capture_root" >&2
+    exit 1
+    ;;
+esac
+
+source scripts/load-ai-provider-config
+noonmark_load_ai_provider_config
+scripts/reset-dev-data demo
+scripts/build-mac-app "$configuration" demo >/dev/null
+
+if [[ ! -x "$app_executable" ]]; then
+  echo "missing built demo app executable: $app_executable" >&2
+  exit 1
+fi
+
+rm -rf "$capture_root"
+mkdir -p "$capture_root"
+
+NOONMARK_BOOTSTRAP_PROVIDER=1 \
+NOONMARK_BOOTSTRAP_PROVIDER_ONLY=1 \
+NOONMARK_AI_BASE_URL="$NOONMARK_AI_BASE_URL" \
+NOONMARK_AI_MODEL="$NOONMARK_AI_MODEL" \
+NOONMARK_AI_API_KEY="$NOONMARK_AI_API_KEY" \
+"$app_executable" \
+  --data-url "$database_path" \
+  >"$bootstrap_log" 2>&1
+
+NOONMARK_PROVIDER_READINESS_RESULT_PATH="$readiness_result" \
+  "$app_executable" \
+  --data-url "$database_path" \
+  >>"$bootstrap_log" 2>&1
+
+if [[ ! -f "$readiness_result" \
+      || "$(<"$readiness_result")" != "ready" ]]; then
+  echo "Provider bootstrap did not leave a ready demo configuration" >&2
+  exit 1
+fi
+
+"$app_executable" \
+  --data-url "$database_path" \
+  --e2e-fixed-instant 2026-07-24T22:00:00Z \
+  --e2e-fixed-time-zone America/New_York \
+  --e2e-fixed-locale "$fixed_locale" \
+  --e2e-zhulong-sidecar-key \
+  --interactive-demo-fixture \
+  --interactive-demo-result-url "$result_path" \
+  "${story_language_args[@]}" \
+  --page day \
+  >"$fixture_log" 2>&1 &
+fixture_pid=$!
+
+for ((attempt = 0; attempt < NOONMARK_INTERACTIVE_DEMO_READY_POLL_LIMIT; attempt += 1)); do
+  if [[ -f "$result_path" ]]; then
+    break
+  fi
+  if ! kill -0 "$fixture_pid" >/dev/null 2>&1; then
+    wait "$fixture_pid" || true
+    echo "interactive demo installer exited before fixture became ready" >&2
+    sed -n '1,160p' "$fixture_log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if [[ ! -f "$result_path" ]] \
+  || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' \
+    "$result_path"; then
+  echo "interactive demo fixture did not become ready" >&2
+  [[ ! -f "$result_path" ]] || sed -n '1,120p' "$result_path" >&2
+  exit 1
+fi
+if [[ "$(plutil -extract core.fixtureProfile raw -o - "$result_path")" \
+      != "annual-v1" \
+      || "$(plutil -extract core.storyDayCount raw -o - "$result_path")" \
+      != "365" \
+      || "$(plutil -extract core.storyDateGapCount raw -o - "$result_path")" \
+      != "0" \
+      || "$(plutil -extract zhulongSessionCount raw -o - "$result_path")" \
+      != "20" ]]; then
+  echo "interactive demo fixture is not the complete annual profile" >&2
+  sed -n '1,160p' "$result_path" >&2
+  exit 1
+fi
+if [[ "$(plutil -extract storyLanguage raw -o - "$result_path")" \
+      != "$expected_story_language" ]]; then
+  echo "interactive demo fixture ran the wrong story language" >&2
+  sed -n '1,160p' "$result_path" >&2
+  exit 1
+fi
+
+for page in "${NOONMARK_INTERACTIVE_DEMO_TASK_COLLECTION_SCREENSHOTS[@]}"; do
+  screenshot="$capture_root/task-collection-$page.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "interactive demo task collection screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$capture_root/$screenshot_name.png"
+  if [[ ! -s "$screenshot" ]]; then
+    echo "interactive demo documentation screenshot is missing: $screenshot" >&2
+    exit 1
+  fi
+done
+
+for screenshot_name in "${NOONMARK_INTERACTIVE_DEMO_FORBIDDEN_DOCUMENTATION_SCREENSHOTS[@]}"; do
+  screenshot="$capture_root/$screenshot_name.png"
+  if [[ -e "$screenshot" ]]; then
+    echo "interactive demo produced a sensitive documentation screenshot: $screenshot" >&2
+    exit 1
+  fi
+done
+
+kill -TERM "$fixture_pid" >/dev/null 2>&1 || true
+wait "$fixture_pid" 2>/dev/null || true
+fixture_pid=""
+
+# Promote the documentation set into the README asset directory. The mapping
+# is the contract between the fixture capture names and the README file names.
+declare -a readme_screenshots=(
+  "task-collection-day.png=day-todo.png"
+  "task-collection-pool.png=task-pool.png"
+  "task-collection-future.png=future-plans.png"
+  "task-collection-recurring.png=recurring-plans.png"
+  "task-collection-unfinished.png=unfinished.png"
+  "task-collection-completed.png=completed.png"
+  "task-collection-calendar.png=calendar.png"
+  "task-collection-ideas.png=flylight.png"
+  "task-collection-ideas-inline-edit.png=flylight-inline-edit.png"
+  "task-collection-stickyNotes-wall.png=sticky-notes-wall.png"
+  "task-collection-stickyNotes-stream.png=sticky-notes-stream.png"
+  "task-collection-zhulong.png=zhulong.png"
+  "quick-entry.png=quick-entry.png"
+  "idea-capture-suggestions.png=flylight-quick-capture.png"
+  "settings-general.png=settings-general.png"
+  "settings-groups.png=settings-groups.png"
+  "settings-data.png=settings-data.png"
+  "settings-privacy.png=settings-privacy.png"
+)
+
+mkdir -p "$target_dir"
+declare -a english_verify_pairs=()
+for mapping in "${readme_screenshots[@]}"; do
+  source_name="${mapping%%=*}"
+  target_name="${mapping##*=}"
+  cp "$capture_root/$source_name" "$target_dir/$target_name"
+  english_verify_pairs+=("english-demo" "$PWD/$target_dir/$target_name")
+done
+
+if [[ "$language" == "en" ]]; then
+  /usr/bin/xcrun swift \
+    scripts/verify-english-screenshot-content.swift \
+    "${english_verify_pairs[@]}"
+fi
+
+echo "captured ${#readme_screenshots[@]} README screenshots ($language) into $target_dir"

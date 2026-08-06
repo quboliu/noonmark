@@ -102,6 +102,8 @@ manifest 记录语义计数而非随机 UUID，因此相同锚点可以跨运行
 ## 维护规则
 
 - `NoonmarkDemoSupport` 是任务领域 fixture 的唯一事实源。不得在启动 shell、截图脚本或 UI 组件里另造一套任务数据。
+- 演示故事的用户可见文案由 `DemoStoryText`／`DemoStoryZhulongText` 按 `AppLanguage` 参数化，中文是默认基线。`--interactive-demo-story-language english` 运行英文故事变体：安装前把 `app_preferences.language` 落库为 `english`，manifest 记录 `storyLanguage`，实体计数与结构必须与中文基线一致。英文飞光正文必须保持单行卡片长度（由 `NoonmarkDemoEnglishStoryTests` 门禁），否则折行加高卡片会把最旧的置顶卡片挤出可视区，时间线验收失败。
+- README 截图再生入口是 `scripts/capture-readme-screenshots zh|en`：zh 刷新 `docs/assets/screenshots/readme/`，en 刷新 `docs/assets/screenshots/readme-en/` 并对每张图执行无汉字 Vision 门禁（`scripts/verify-english-screenshot-content.swift` 的 `english-demo` 场景）。该脚本不进入 `make check`；中文基线仍由 `make test-demo-fixture` 守护。
 - 新功能若需要用户状态才能体验，必须在同一变更中更新用户故事、覆盖报告和测试断言。
 - 不追求把每个 destructive／管理员入口都塞入日常演示；“使用到每一个功能”在这里指普通用户可见的任务生命周期、页面投影、编辑能力和烛龙产物。导入、同步、故障注入等专用能力继续由各自固定非生产 profile 的 E2E／live 入口覆盖，任何入口都不得借用或探测 production 数据范围。
 - `--ephemeral` 仍服务旧截图与局部 E2E，不得替代本基线。

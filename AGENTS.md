@@ -200,13 +200,14 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 
 ## Git 与文档语言
 
-- commit 正文一律使用中文；`type(scope):` 前缀保留英文。
+- commit message 一律使用英文（含正文）；`type(scope):` 前缀保持英文小写。
 - 技术名词不硬翻译。
 - task-id 必须在三处一致：目录名、task-id、commit footer。
 - worktree 建在仓库父目录。
 - rebase 优先。
 - 禁止裸 `force push`。
 - 所有落盘文档使用新加坡中文。
+- 例外：根目录 README 中英双语。`README.md` 是默认英文版，`README.zh-CN.md` 是中文版，两文件顶部互相放仓库内相对链接切换语言。README 截图分目录维护：中文在 `docs/assets/screenshots/readme/`，英文在 `docs/assets/screenshots/readme-en/`，统一由 `scripts/capture-readme-screenshots zh|en` 再生（英文逐张过无汉字门禁），不得手工拼装或跨语言复用。
 
 ## Docker 与部署
 

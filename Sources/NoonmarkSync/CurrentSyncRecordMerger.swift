@@ -1168,12 +1168,15 @@ struct CurrentSyncRecordMerger {
         let incomingSubtask = try mapper.decodeSubtask(incoming)
         try existingSubtask.validateIntegrity()
         try incomingSubtask.validateIntegrity()
+        // Only lineage and creation are immutable identity. Title, position,
+        // trace membership and carry provenance are legitimate content:
+        // updateSubtaskTitle renames, withdrawDeferral rewrites trace
+        // membership and position, and recurring template propagation rewrites
+        // titles — all through ordinary domain operations that advance the
+        // mutation clock. Treating them as identity rejects the next upload
+        // against the previously synced version and poisons the queue
+        // (FAIL-2026-08-06-18A651A2).
         guard existingSubtask.lineageID == incomingSubtask.lineageID,
-              existingSubtask.traceID == incomingSubtask.traceID,
-              existingSubtask.title == incomingSubtask.title,
-              existingSubtask.position == incomingSubtask.position,
-              existingSubtask.carriedFromSubtaskID
-              == incomingSubtask.carriedFromSubtaskID,
               existingSubtask.createdAt == incomingSubtask.createdAt
         else {
             throw CurrentSyncRecordMergeError.invalidContentClock

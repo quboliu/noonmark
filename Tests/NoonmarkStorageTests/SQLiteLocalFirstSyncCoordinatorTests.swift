@@ -92,6 +92,82 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    func testSubtaskRenameSurvivesUploadAfterInitialSync() async throws {
+        // FAIL-2026-08-06-01：production 症状级复现。子任务首版上传后再改名，
+        // 修复前下一轮上传 preflight 必抛 invalidCurrentRecordMerge（251），
+        // 失败条目被反复重选，形成确定性毒记录循环。
+        let databaseURL = makeDatabaseURL("subtask-rename-upload")
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(
+            databaseURL: databaseURL
+        )
+        let transport = InMemorySyncTransport()
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let deviceID = SyncDeviceID("subtask-rename-device")
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "同步改名 fixture",
+            now: now
+        )
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "同步前标题",
+            now: now.addingTimeInterval(2)
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now.addingTimeInterval(2)
+        )
+        _ = try await coordinator.sync(now: now.addingTimeInterval(3))
+
+        try engine.updateSubtaskTitle(
+            subtaskID,
+            title: "同步后标题",
+            today: today,
+            now: now.addingTimeInterval(4)
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now.addingTimeInterval(4)
+        )
+
+        _ = try await coordinator.sync(now: now.addingTimeInterval(5))
+
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .pendingUpload).isEmpty
+        )
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .failed).isEmpty
+        )
+        let remoteRecords = try await transport.fetchAll()
+        let remoteSubtask = try XCTUnwrap(
+            remoteRecords.first {
+                $0.entityType == .subtask
+                    && $0.entityID == subtaskID.rawValue.uuidString
+            }
+        )
+        XCTAssertEqual(
+            try SyncRecordMapper().decodeSubtask(remoteSubtask).title,
+            "同步后标题"
+        )
+
+        // 毒记录循环已终止：后续例行检查同步不再失败。
+        _ = try await coordinator.sync(now: now.addingTimeInterval(6))
+    }
+
     func testSyncDrainsLocalMutationCreatedWhileDownloadIsInFlight()
         async throws
     {

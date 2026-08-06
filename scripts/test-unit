@@ -3,6 +3,7 @@ set -euo pipefail
 
 scripts/reset-dev-data audit
 swift test --filter NoonmarkCoreTests
+swift test --filter NoonmarkSyncTests
 swift test --filter IdeaCaptureSessionTests
 swift test --filter NewTaskDraftParserTests
 swift test --filter RevisionMemoTests

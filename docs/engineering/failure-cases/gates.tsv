@@ -122,3 +122,5 @@ FAIL-2026-08-05-02	symptom	scripts/test-page-switch-latency	scripts/test-interac
 FAIL-2026-08-05-03	fast	scripts/test-dmg-evidence-contract	scripts/check	dmg 证据契约 fixture 与真实 harness 菜单强证据串对齐，验证器期望回退到短串即判红
 FAIL-2026-08-05-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 路径保持可运行；菜单强证据串对账由 release 层承担
 FAIL-2026-08-05-03	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 dmg-validation 安装/退出/重启的菜单强证据串对账
+FAIL-2026-08-06-01	fast	scripts/test-unit	scripts/check	CurrentSyncRecordMergerTests 固定子任务改名／撤回改写按 LWW 合并，lineage／createdAt 身份冲突继续 fail-closed，可变字段被重新身份化即判红
+FAIL-2026-08-06-01	symptom	scripts/test-integration	scripts/check	SQLiteLocalFirstSyncCoordinatorTests 真实协调器走首版上传→改名→再上传→远端收敛→journal 清空，修复前确定性 251 毒记录循环

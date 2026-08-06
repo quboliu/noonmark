@@ -984,6 +984,171 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         }
     }
 
+    func testTransportBatchMergesSubtaskTitleEditAsContent() throws {
+        // FAIL-2026-08-06-18A651A2：production 同步毒记录循环。
+        // 子任务改名是合法领域操作（updateSubtaskTitle，cd7f29f），但
+        // mergeSubtask 把 title 当不可变身份（3d5cc9e 引入 guard 时改名尚
+        // 不存在），改名后的上传 preflight 与远端旧版记录比较时必抛
+        // invalidContentClock，形成确定性 251 失败循环。
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "子任务改名同步", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "原始标题",
+            now: now.addingTimeInterval(2)
+        )
+        let uploaded = try mapper.record(
+            for: XCTUnwrap(
+                engine.snapshot().subtasks.first { $0.id == subtaskID }
+            ),
+            modifiedBy: SyncDeviceID("mac-subtask-rename")
+        )
+        try engine.updateSubtaskTitle(
+            subtaskID,
+            title: "改名后的标题",
+            today: today,
+            now: now.addingTimeInterval(3)
+        )
+        let renamed = try mapper.record(
+            for: XCTUnwrap(
+                engine.snapshot().subtasks.first { $0.id == subtaskID }
+            ),
+            modifiedBy: SyncDeviceID("mac-subtask-rename")
+        )
+
+        let batch = try CurrentSyncRecordMerger().prepareTransportBatch(
+            existingRecords: [uploaded],
+            incomingRecords: [renamed]
+        )
+
+        let merged = try XCTUnwrap(batch.records.first)
+        XCTAssertEqual(
+            try mapper.decodeSubtask(merged).title,
+            "改名后的标题"
+        )
+    }
+
+    func testTransportBatchMergesSubtaskCarryRewriteAsContent() throws {
+        // 撤回延期会同时改写子任务的 title/position/traceID/
+        // carriedFromSubtaskID（NoonmarkEngine.withdrawDeferral）；这些字段
+        // 与标题一样属于内容，合并必须按 LWW 收敛。
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "子任务撤回同步", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "撤回前的标题",
+            now: now.addingTimeInterval(2)
+        )
+        let synced = try XCTUnwrap(
+            engine.snapshot().subtasks.first { $0.id == subtaskID }
+        )
+        let uploaded = try mapper.record(
+            for: synced,
+            modifiedBy: SyncDeviceID("mac-subtask-carry")
+        )
+        var rewritten = synced
+        rewritten.title = "撤回后的标题"
+        rewritten.position = synced.position + 1
+        rewritten.traceID = DayTraceID()
+        rewritten.carriedFromSubtaskID = SubtaskID()
+        rewritten.updatedAt = now.addingTimeInterval(3)
+        let incoming = try mapper.record(
+            for: rewritten,
+            modifiedBy: SyncDeviceID("mac-subtask-carry")
+        )
+
+        // 上传 preflight：远端旧版 + 本机改写版不得再抛 invalidContentClock。
+        let batch = try CurrentSyncRecordMerger().prepareTransportBatch(
+            existingRecords: [uploaded],
+            incomingRecords: [incoming]
+        )
+        XCTAssertEqual(
+            try mapper.decodeSubtask(XCTUnwrap(batch.records.first)).title,
+            "撤回后的标题"
+        )
+
+        // 合并本身双向收敛到 LWW 较新版本。
+        let merger = CurrentSyncRecordMerger()
+        for (existing, candidate) in [(uploaded, incoming), (incoming, uploaded)] {
+            let merged = try mapper.decodeSubtask(
+                merger.merge(existing: existing, incoming: candidate)
+            )
+            XCTAssertEqual(merged.title, "撤回后的标题")
+            XCTAssertEqual(merged.traceID, rewritten.traceID)
+            XCTAssertEqual(merged.carriedFromSubtaskID, rewritten.carriedFromSubtaskID)
+        }
+    }
+
+    func testTransportBatchRejectsSubtaskLineageOrCreationCollision() throws {
+        // lineageID 与 createdAt 仍是不可变身份：同记录 id 撞身份必须继续
+        // fail-closed。
+        let mapper = SyncRecordMapper()
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(title: "子任务身份边界", now: now)
+        let traceID = try engine.scheduleFromPool(
+            chainID: chainID,
+            date: today,
+            today: today,
+            now: now.addingTimeInterval(1)
+        )
+        let subtaskID = try engine.addSubtask(
+            traceID: traceID,
+            title: "身份边界",
+            now: now.addingTimeInterval(2)
+        )
+        let synced = try XCTUnwrap(
+            engine.snapshot().subtasks.first { $0.id == subtaskID }
+        )
+        let uploaded = try mapper.record(
+            for: synced,
+            modifiedBy: SyncDeviceID("mac-subtask-identity")
+        )
+        for mutate in [
+            { (subtask: inout Subtask) in
+                subtask.lineageID = SubtaskLineageID()
+            },
+            { (subtask: inout Subtask) in
+                subtask.createdAt = synced.createdAt.addingTimeInterval(1)
+            }
+        ] {
+            var colliding = synced
+            mutate(&colliding)
+            colliding.updatedAt = now.addingTimeInterval(3)
+            let record = try mapper.record(
+                for: colliding,
+                modifiedBy: SyncDeviceID("mac-subtask-identity")
+            )
+            XCTAssertThrowsError(
+                try CurrentSyncRecordMerger().prepareTransportBatch(
+                    existingRecords: [uploaded],
+                    incomingRecords: [record]
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SyncRecordTransportError,
+                    .invalidCurrentRecordMerge(
+                        recordID: record.id,
+                        reason: .invalidContentClock
+                    )
+                )
+            }
+        }
+    }
+
     private func makeValidNonTaskChainRecords(
         mapper: SyncRecordMapper
     ) throws -> [SyncRecord] {

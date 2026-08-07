@@ -184,7 +184,7 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
         XCTAssertEqual(manager.removeCount, 1)
     }
 
-    func testImplementsMetricKitCallbackSelectorsAvailableInCurrentSDK() throws {
+    func testImplementsBothMetricKitCallbackSelectors() throws {
         let subscriber = MetricKitDiagnosticSubscriber(
             recorder: try makeRecorder(
                 named: "selectors",
@@ -193,19 +193,11 @@ final class MetricKitDiagnosticSubscriberTests: XCTestCase {
             manager: MetricKitManagerSpy()
         )
 
-        #if compiler(>=6.2)
         XCTAssertTrue(
             subscriber.responds(
                 to: NSSelectorFromString("didReceiveMetricPayloads:")
             )
         )
-        #else
-        XCTAssertFalse(
-            subscriber.responds(
-                to: NSSelectorFromString("didReceiveMetricPayloads:")
-            )
-        )
-        #endif
         XCTAssertTrue(
             subscriber.responds(
                 to: NSSelectorFromString("didReceiveDiagnosticPayloads:")

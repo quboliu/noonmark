@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "Hosted Xcode toolchain contract: $*" >&2
+  exit 1
+}
+
+for workflow in \
+  .github/workflows/ci.yml \
+  .github/workflows/release-publish.yml; do
+  [[ "$(grep -Fc 'runs-on: macos-15' "$workflow")" -ge 1 ]] ||
+    fail "$workflow no longer uses the expected hosted macOS image"
+  [[ "$(grep -Fc 'DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer' "$workflow")" -eq 1 ]] ||
+    fail "$workflow does not bind exactly one Xcode 26.2 developer directory"
+  [[ "$(grep -Fc '[[ "$(xcodebuild -version | sed -n '\''1p'\'')" == "Xcode 26.2" ]]' "$workflow")" -eq 1 ]] ||
+    fail "$workflow does not fail closed on the selected Xcode version"
+done
+
+rg -F 'NOONMARK_EVIDENCE_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}' \
+  .github/workflows/ci.yml >/dev/null ||
+  fail "hosted check and real App E2E do not share one source-bound run ID"
+
+echo "Hosted Xcode toolchain contract passed"

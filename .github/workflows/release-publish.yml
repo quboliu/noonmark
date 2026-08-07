@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 90
     environment: release
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
       NOONMARK_EVIDENCE_RUN_ID: github-release-${{ github.run_id }}-${{ github.run_attempt }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -82,6 +83,7 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+          [[ "$(xcodebuild -version | sed -n '1p')" == "Xcode 26.2" ]]
           brew install actionlint swiftlint swiftformat
 
       - name: Verify (build · lint · UT · IT · ST · DST)

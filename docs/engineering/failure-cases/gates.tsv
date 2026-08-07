@@ -140,6 +140,6 @@ FAIL-2026-08-07-03	release	scripts/verify-github-release-readiness	scripts/push-
 FAIL-2026-08-07-04	fast	scripts/test-github-actions-workflows	scripts/check	actionlint 必须拒绝 job 级 runner.temp 等非法 context、无效表达式、YAML 与内嵌 shell
 FAIL-2026-08-07-04	symptom	scripts/verify-github-release-publication	scripts/push-release-tag	精确 tag run 若在未建立任何 job 时完成，必须立即判红并保留失败 build
 FAIL-2026-08-07-04	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 tag run 必须成功并建立唯一 DMG 与 checksum 公开资产
-FAIL-2026-08-07-05	fast	scripts/test-metrickit-sdk-compatibility-contract	scripts/check	MXMetricPayload callback 与 selector test 必须保留 Xcode 16／26 编译器边界
-FAIL-2026-08-07-05	symptom	scripts/test-unit	scripts/check	hosted Xcode 16.4 必须真实编译 NoonmarkDiagnostics 并验证当前 SDK 的 subscriber selector
+FAIL-2026-08-07-05	fast	scripts/test-hosted-xcode-toolchain-contract	scripts/check	普通 CI 与 canonical Release 必须精确选择并 fail-closed 验证 Xcode 26.2
+FAIL-2026-08-07-05	symptom	scripts/test-unit	scripts/check	hosted Xcode 26.2 必须真实编译 NoonmarkDiagnostics 并验证两个 MetricKit subscriber selector
 FAIL-2026-08-07-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	hosted check 与打包必须成功并建立 canonical DMG 与 checksum

@@ -118,8 +118,8 @@ run_check_suite() {
   echo "==> GitHub Actions workflow syntax"
   scripts/test-github-actions-workflows
 
-  echo "==> MetricKit SDK compatibility contract"
-  scripts/test-metrickit-sdk-compatibility-contract
+  echo "==> Hosted Xcode toolchain contract"
+  scripts/test-hosted-xcode-toolchain-contract
 
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates

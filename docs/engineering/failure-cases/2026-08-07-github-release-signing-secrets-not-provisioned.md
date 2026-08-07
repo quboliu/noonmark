@@ -1,13 +1,13 @@
 # FAIL-2026-08-07-03：GitHub 发行签名环境未就绪
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T09:56:37Z
 - 影响版本／构建：v0.2.4 build 10，source commit `c2fbfc0ee2c894f008458be28cc0dad0c09cb741`
 - 引入提交：`b1f609c1e5d7403a3bc44c4fe735430e94dc406c`（`ci(release): simplify publishing to hosted runners with local gates`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`2f06f7d310fba59bd6a2c2bc743cac67d0d9f99c`（`fix(release): require tag-triggered publication`）
 
 ## 用户症状与影响
 
@@ -18,6 +18,8 @@
 - 2026-08-07T09:56:37Z：workflow run `31167996734` 的签名导入 step 检测到三个必要 secret 都为空并退出。
 - 随后两次只读 metadata 对账都确认 `release` Environment 没有 Actions secret；部署 policy 则精确为 tag `v*`。
 - 确认 v0.2.4 没有 GitHub Release 后，build 10 按发行纪律退役，build 11 作为新候选。
+- 旧的未交付 v0.2.4 annotated tag object `e7aad9dd04757545ab56c0cd61c3669274deae12`（peeled commit `c2fbfc0ee2c894f008458be28cc0dad0c09cb741`）经再次确认没有 Release 后，从远端与本机删除。
+- 本机唯一有效 Apple Development 身份以随机 P12 密码导出，在隔离临时 keychain 完成 exact identity、证书有效期与一次性文件签名／验证，再通过 stdin 写入三个 `release` Environment secret；临时 P12、probe、keychain 与目录全部清理，未打印 secret 值。
 
 ## 复现与证据
 
@@ -36,11 +38,16 @@ hosted-runner 发行路径在 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 引入�
 
 ## 根因修复
 
-新增 live GitHub readiness verifier，并强制本地发行入口与唯一 tag 推送入口调用；新增 fixture contract 捕获缺 secret、错误 branch policy 与过宽 tag policy。canonical workflow 固定 checkout commit、关闭凭证留存，把签名导入移至仓库检查后，签名材料只写入 `RUNNER_TEMP`，要求恰好一个有效 Apple Development 身份，并以一次性 probe 实际签名／验证；成功与失败路径都清除 p12、probe 与临时 keychain。发行说明改为 Environment-scoped secret 和受保护 tag 推送路径。
+新增 live GitHub readiness verifier，并强制本地发行入口与唯一 tag 推送入口调用；新增 fixture contract 捕获缺 secret、额外 secret、错误 branch policy 与过宽 tag policy。guarded publisher 还必须消费同一 run 的 make check、writer-lease、完整 E2E、诊断闭环、腾讯输入 source／run 绑定 evidence 与完整 DMG evidence。canonical workflow 固定 checkout commit、关闭凭证留存，把签名导入移至仓库检查后，签名材料只写入 `RUNNER_TEMP`，要求恰好一个有效 Apple Development 身份，并以一次性 probe 实际签名／验证；成功与失败路径都清除 p12、probe 与临时 keychain。Release 与 asset 只能建立一次，不准 edit、clobber 或重复 run；经用户明确批准后移除 `workflow_dispatch`，发行只接受 tag push。发行说明改为 Environment-scoped secret、真实本地 tag 验证顺序和受保护 tag 推送路径。
 
 ## 验证结果
 
-待 build 11 的 fixture red／green、live readiness、本地完整发行链与 tag workflow 实际签名／公开资产 checksum 对账完成后回填。
+- Red：没有配置 secret 时，`scripts/verify-github-release-readiness` exit 1，并精确报告缺少 `APPLE_DEV_CERT_P12_BASE64`；旧门禁仍绿，证明原始覆盖空洞。
+- Green：配置完成后，同一 live verifier exit 0，精确确认 `quboliu/noonmark` 的 `release` Environment；secret 列表恰有三个预期名称，部署 policy 恰为 tag `v*`。
+- 本机签名验证：导出的 P12 在隔离 keychain 中只有一个有效 Apple Development identity，证书未过期，一次性 probe 的 `codesign --verify --strict` 通过，清理后临时目录计数为零。
+- Fast gates：`scripts/test-github-release-readiness-contract`、`scripts/test-failure-case-gates`、`scripts/test-release-gate-contract` 与 `scripts/test-release-version-contract` 全绿，覆盖额外 secret、policy、workflow pin／cleanup／不可覆盖、完整 evidence 与 build 11。
+- Review：以 `c2fbfc0ee2c894f008458be28cc0dad0c09cb741...HEAD` 为边界的 Standards 与 Spec 双轴复核最终均零 finding。
+- Build 11 的最终完整本地发行链、tag workflow 实际签名与公开资产 checksum 将作为发行处置证据在交付后追加，不改变本案例已经由红转绿的原始 readiness 症状。
 
 ## 永久门禁
 

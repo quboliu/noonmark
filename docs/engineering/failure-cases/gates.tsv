@@ -156,5 +156,5 @@ FAIL-2026-08-07-09	fast	scripts/test-hosted-check-budget-contract	scripts/check	
 FAIL-2026-08-07-09	symptom	scripts/test-dmg-evidence-contract	scripts/check	完整 DMG evidence matrix 必须由聚合 check 执行完毕，不得被旧 hosted 外层预算截断
 FAIL-2026-08-07-09	release	scripts/verify-github-release-publication	scripts/push-release-tag	Release 未验证精确 hosted CI、签名、DMG 与 checksum 时不得发布
 FAIL-2026-08-07-10	fast	scripts/test-github-hosted-workflow-boundary	scripts/check	拒绝任何 self-hosted workflow、重复 CI job、tag 重跑 scripts/check 或 tag publisher 消费本地 evidence
-FAIL-2026-08-07-10	symptom	scripts/verify-github-hosted-ci	scripts/push-release-tag	精确 commit 只接受单一 main push、首次成功且唯一 macos-15 job 的 hosted CI
+FAIL-2026-08-07-10	symptom	scripts/verify-github-hosted-ci	scripts/push-release-tag	精确 commit 在所有 event 只接受单一 CI run，必须为 main push、首次成功且唯一 macos-15 job
 FAIL-2026-08-07-10	release	scripts/verify-github-release-publication	scripts/push-release-tag	tag run 只接受唯一 macos-15 package job 与唯一 DMG／checksum asset

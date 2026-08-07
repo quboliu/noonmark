@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-03：GitHub 发行签名环境未就绪
 
-- 状态：已修复
+- 状态：处理中
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T09:56:37Z
 - 影响版本／构建：v0.2.4 build 10，source commit `c2fbfc0ee2c894f008458be28cc0dad0c09cb741`
@@ -46,8 +46,8 @@ hosted-runner 发行路径在 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 引入�
 - Green：配置完成后，同一 live verifier exit 0，精确确认 `quboliu/noonmark` 的 `release` Environment；secret 列表恰有三个预期名称，部署 policy 恰为 tag `v*`。
 - 本机签名验证：导出的 P12 在隔离 keychain 中只有一个有效 Apple Development identity，证书未过期，一次性 probe 的 `codesign --verify --strict` 通过，清理后临时目录计数为零。
 - Fast gates：`scripts/test-github-release-readiness-contract`、`scripts/test-failure-case-gates`、`scripts/test-release-gate-contract` 与 `scripts/test-release-version-contract` 全绿，覆盖额外 secret、policy、workflow pin／cleanup／不可覆盖、完整 evidence 与 build 11。
-- Review：以 `c2fbfc0ee2c894f008458be28cc0dad0c09cb741...HEAD` 为边界的 Standards 与 Spec 双轴复核最终均零 finding。
-- Build 11 的最终完整本地发行链、tag workflow 实际签名与公开资产 checksum 将作为发行处置证据在交付后追加，不改变本案例已经由红转绿的原始 readiness 症状。
+- Pre-release review：以 `c2fbfc0ee2c894f008458be28cc0dad0c09cb741...HEAD` 为边界的实现 Standards 与 Spec 双轴复核在进入真实发行 gate 前零 finding。
+- 本案例保持「处理中」，直到 build 11 的最终完整本地发行链、tag workflow 实际签名与公开资产 checksum 全绿；只有原始 hosted victim path 由红转绿并完成最终复核后才改为「已修复」。
 
 ## 永久门禁
 

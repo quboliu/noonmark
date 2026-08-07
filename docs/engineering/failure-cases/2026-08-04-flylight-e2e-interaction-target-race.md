@@ -7,7 +7,7 @@
 - 引入提交：`249e11d9504169254b1d419d813644c95bee90d8`（`feat(ideas): native idea capture with pinning, trash, and tag filtering`）；`4244ae89b6981fde76055a0c1190f9d0d032db65` 只完成局部修复，遗留本次协议缺口
 - Git author／committer：上述两项提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`ff62a33938e15d8ecdce827e7f3ae82ddc666ca9`
 
 ## 用户症状与影响
 
@@ -81,7 +81,7 @@ idea capture target has no clickable visible area
 
 - Red：更新后的 `scripts/test-idea-capture-interaction-target-contract` 在旧实现上 exit 1；phase retry 单元测试在 contract 实现前编译判红。
 - 中间修复证据：早期 repair tree 的 fast contract 与 release build 编译通过，并连续五轮跑绿聚焦真实飞光 E2E；后续又加入窗口可见性与 post-`mouseDown` phase 守卫，因此这五轮只证明原始失败位置曾转绿，不作为当前候选的最终症状证据。
-- 当前 Green：phase retry 单元测试、收紧到精确函数范围的 fast contract 与 failure-case gate 已通过。
+- 当前 Green：phase retry 单元测试、收紧到精确函数范围的 fast contract 与 failure-case gate 已通过；提交前的最终 implementation tree 也已跑绿聚焦真实飞光 E2E，并完成分类候选、回看刷新、SQLite 与重启对账。
 - 待完成：在最终精确 commit 重新运行聚焦与完整 E2E、`make check` 及 build 12 发行链；完成前案例保持「处理中」。
 
 ## 永久门禁

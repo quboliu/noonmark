@@ -1,13 +1,13 @@
 # FAIL-2026-08-07-01：DMG 运行身份验证器依赖非保证的 LaunchServices 事件
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T05:44:22Z（0.2.4 (10) 候选发行链最终证据对账判红）
 - 影响版本／构建：0.2.4 (10) 候选，source commit `aef55124f5d3e3ee2f03af6b1de521731db54101`；不影响已交付版本
 - 引入提交：`3d5cc9e80915cd9c8f37a907e84cd3248692e9ae` feat(app): Complete the native experience and consistency acceptance upgrade
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`403110f0784a9a1ed89a3c9ffa5bafe1955cd2ff` fix(release): verify cached LaunchServices app identity
 
 ## 用户症状与影响
 
@@ -46,7 +46,8 @@
 ## 验证结果
 
 - `scripts/test-dmg-evidence-contract`：通过；覆盖缺席事件的红转绿复现，以及混入伪造 cached-info 的拒绝。
-- 完整真实 DMG symptom／release gate：待修复 commit 后以新 evidence run 重跑并回填。
+- `fix-fail-2026-08-07-01-20260807T061539Z`：从修复 commit 重建 release DMG，`scripts/verify-dmg` 与 `scripts/test-dmg-install` 全部通过；production App 未执行，受控派生 App 完成真实窗口、设置、Quick Entry、退出、重启、SQLite 恒等与诊断导出。
+- 该真实运行的 exercise／restart／diagnostic-export 分别归档 11／13／15 条 PID-bound LaunchServices cached-info；每条 executable path、bundle identifier 与 bundle path 均通过全集一致性检查。
 
 ## 永久门禁
 

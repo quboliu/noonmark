@@ -7,7 +7,7 @@
 - 引入提交：`3d5cc9e80915cd9c8f37a907e84cd3248692e9ae`（`feat(app): Complete the native experience and consistency acceptance upgrade`）把 `scripts/check-ui-localization` 纳入 hosted check，但必需工具清单与 workflow 安装清单没有加入 `rg`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`091928fdc23fb691112e3986db7149456c4f72d4`（`fix(ci): declare the hosted ripgrep dependency`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,8 @@ scripts/check-ui-localization: line 122: rg: command not found
 
 - Red（原始受害路径）：run `31194101256` 的 clean build与全部测试通过后，UI localization guard 因 `rg` 缺失判红。
 - Red（fast）：更新后的 hosted toolchain contract 在旧 workflow 上立即判红，精确识别缺少 `ripgrep`。
-- 待 Green：修复后 fast contract、failure-case registry 与 release version contract 必须通过；build 14 hosted check 必须越过 UI localization guard 并完成全部后续门禁。
+- Green（fast）：hosted toolchain contract、5 份 workflow 的 `actionlint`、failure-case registry、release readiness／aggregation 与 build 14 version contract 全绿。
+- 待 Green（受害路径）：build 14 hosted check 必须越过 UI localization guard 并完成全部后续门禁。
 
 ## 永久门禁
 

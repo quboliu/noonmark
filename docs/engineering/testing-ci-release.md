@@ -261,4 +261,4 @@ Nightly：
 - E2E 已覆盖主要页面、关键详情栏选中态、默认汇总侧栏、日历本地分析、正常模式持久化、快速新增、任务池排期、延续、复盘编辑与自动保存反馈、Day Todo 复盘区烛龙分析入口、右键菜单动作矩阵、有限撤销、父／子任务 completion control、任务池与 Day Todo 多行子任务的自适应行高及 frame 不相交、当天子任务完成撤回和难度修改、日期 strip 选中映射、方向键日期导航、变更、回池、废弃、事务性导入／导出、失败导入退出、原生 Help、辅助窗口最小尺寸、divider 恢复、严格 WindowServer 输入、全局 Quick Entry 改键和跨 App 前台恢复、烛龙导航 gating、烛龙草稿确认与 Provider 配置 round-trip；DMG 动态启动只由 `dmg-validation` 派生 App 覆盖。
 - 当前私有 DMG 使用的 iCloud Drive 路径仍需由用户真实使用继续观察；已有 live 证据只覆盖隔离 E2E App 到 Apple CloudDocs 服务的上传与同仓库合并，不是两台物理设备证据。CloudKit Production entitlement／provisioning profile 与双设备验收不在本轮私有 DMG 范围内，未来若启用该能力必须另立门禁。
 - DST 需要逐步引入虚拟 clock、故障注入和事件日志重放，目前第一版先覆盖 Core 状态机不变量。
-- 原同步故障仍缺少真实现场证据；下一次异常必须由用户主动提交不超过 8 MiB 的诊断包、完整版本信息、诊断编号和发生时间，才能进入根因判断。公开分发不是当前缺口或本轮目标，不得以此扩大私有 DMG 的发行授权。
+- 原同步故障仍缺少真实现场证据；下一次异常必须由用户主动提交不超过 8 MiB 的诊断包、完整版本信息、诊断编号和发生时间，才能进入根因判断。当前公开 GitHub Release 只分发 Apple Development 签名、需用户手动安装的 DMG；Developer ID、notarization、staple、自动更新或更广的分发授权仍是未完成边界，不得从当前 Release 路径推导为已承诺。

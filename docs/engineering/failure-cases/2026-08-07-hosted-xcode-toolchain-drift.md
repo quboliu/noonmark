@@ -7,7 +7,7 @@
 - 引入提交：`545c743ab67254d623ca9df5260508518d1fcd05` 引入需要当前项目 SDK surface 的 MetricKit callback；`57423085d5ab1f0c739dc96db9d5e78ec10d582d` 与 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 分别让普通 CI 与 Release 使用 `macos-15` 默认 Xcode 而没有绑定项目工具链
 - Git author／committer：三项提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`b57dbda6af360b3041e55ab8f9f24653a29ce581`（`fix(ci): bind the hosted Xcode baseline`）
 
 ## 用户症状与影响
 

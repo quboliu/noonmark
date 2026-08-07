@@ -2,8 +2,8 @@ name: Release
 
 # Simplified tag-triggered release pipeline. The full validation chain
 # (make check, real App E2E, writer lease, release-private-dmg) runs LOCALLY
-# before tagging — that is the quality gate. This workflow runs on a
-# GitHub-hosted runner and only re-verifies what works there
+# before pushing the locally verified tag — that is the quality gate. This
+# workflow runs on a GitHub-hosted runner and only re-verifies what works there
 # (scripts/check), then packages, signs, and publishes the DMG as a public
 # GitHub Release. The CI-built DMG is the canonical distribution artifact;
 # see .github/RELEASING.md.

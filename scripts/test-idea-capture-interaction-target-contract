@@ -5,13 +5,215 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 source_file="App/NoonmarkMacApp/IdeaCaptureE2EAutomation.swift"
+tree_source="App/NoonmarkMacApp/AppViewTreeE2E.swift"
+driver_source="App/NoonmarkMacApp/WindowServerInputDriver.swift"
+retry_contract_source="Sources/NoonmarkMacE2ESupport/WindowServerClickRetryContract.swift"
+retry_contract_tests="Tests/NoonmarkMacE2ESupportTests/WindowServerClickRetryContractTests.swift"
 suggestion_source="App/NoonmarkMacApp/DayTodoPage.swift"
+
+window_root_scope="$(
+    sed -n \
+        '/^    private static func visibleWindowRoot(/,/^    static func button(overlapping anchor: NSView)/p' \
+        "$tree_source"
+)"
+button_overlap_scope="$(
+    sed -n \
+        '/^    static func button(overlapping anchor: NSView)/,/^    \/\/\/ Resolves the pointer geometry/p' \
+        "$tree_source"
+)"
+button_target_scope="$(
+    sed -n \
+        '/^    static func buttonInteractionTarget(/,/^    static func checkboxInteractionTarget(/p' \
+        "$tree_source"
+)"
+click_scope="$(
+    sed -n \
+        '/^    private func click($/,/^    \/\/\/ SwiftUI may publish model state/p' \
+        "$source_file"
+)"
+post_click_scope="$(
+    sed -n \
+        '/^    private func postClickGesture(/,/^    func prepareMenuKeyboardSelection()/p' \
+        "$driver_source"
+)"
+driver_phase_scope="$(
+    sed -n \
+        '/^        var clickFailurePhase: WindowServerClickFailurePhase/,/^    private static var nextGestureNumber/p' \
+        "$driver_source"
+)"
+presentation_failure_scope="$(
+    sed -n \
+        '/^    private enum InteractionTargetResolutionFailure:/,/^    private enum Failure:/p' \
+        "$source_file"
+)"
+
+require_in_scope() {
+    local scope="$1"
+    local expected="$2"
+    local label="$3"
+    if ! grep -Fq "$expected" <<<"$scope"; then
+        echo "missing $label: $expected" >&2
+        exit 1
+    fi
+}
+
+reject_in_scope() {
+    local scope="$1"
+    local forbidden="$2"
+    local label="$3"
+    if grep -Fq "$forbidden" <<<"$scope"; then
+        echo "forbidden $label: $forbidden" >&2
+        exit 1
+    fi
+}
+
+if [[ -z "$window_root_scope" || -z "$button_overlap_scope" \
+    || -z "$button_target_scope" || -z "$click_scope" \
+    || -z "$post_click_scope" || -z "$driver_phase_scope" \
+    || -z "$presentation_failure_scope" ]]
+then
+    echo "interaction target contract could not isolate every required function" >&2
+    exit 1
+fi
+
+if [[ "$(wc -l <<<"$button_target_scope" | tr -d ' ')" -gt 120 ]]; then
+    echo "button interaction target contract scope crossed its function boundary" >&2
+    exit 1
+fi
 
 rg -F 'currentView is NSTextView' "$source_file" >/dev/null
 rg -F 'currentView is NSTextField' "$source_file" >/dev/null
 rg -F 'AppViewTreeE2E.buttonInteractionTarget(' "$source_file" >/dev/null
 rg -F 'isTargetPresentationTransition(error)' "$source_file" >/dev/null
 rg -F 'idea capture target changed before mouseDown' "$source_file" >/dev/null
+rg -F 'waitForStableInteractionTarget(' "$source_file" >/dev/null
+rg -F 'targetsShareStablePointerCoordinate(' "$source_file" >/dev/null
+rg -F 'case noClickableVisibleArea(String)' "$source_file" >/dev/null
+rg -F 'case physicalInteractionTargetUnavailable(String)' "$source_file" >/dev/null
+rg -F 'error is InteractionTargetResolutionFailure' "$source_file" >/dev/null
+require_in_scope \
+    "$window_root_scope" \
+    'window.isVisible' \
+    'shared exact-window visibility'
+require_in_scope \
+    "$window_root_scope" \
+    'window.isMiniaturized == false' \
+    'shared exact-window miniaturization state'
+require_in_scope \
+    "$window_root_scope" \
+    'window.alphaValue > 0' \
+    'shared exact-window opacity'
+require_in_scope \
+    "$window_root_scope" \
+    'let root = window.contentView?.superview ?? window.contentView' \
+    'shared exact-window root'
+require_in_scope \
+    "$button_overlap_scope" \
+    'guard let windowRoot = visibleWindowRoot(for: anchor)' \
+    'button overlap shared exact-window root'
+require_in_scope \
+    "$button_overlap_scope" \
+    'allViews(from: windowRoot.root).compactMap' \
+    'button overlap exact-window enumeration'
+require_in_scope \
+    "$button_overlap_scope" \
+    'button.window === windowRoot.window' \
+    'button overlap exact-window identity'
+require_in_scope \
+    "$button_overlap_scope" \
+    'isVisible(button, in: [windowRoot.window])' \
+    'button overlap exact-window visibility'
+reject_in_scope \
+    "$button_overlap_scope" \
+    'currentVisibleViews().compactMap' \
+    'button overlap main-window enumeration'
+require_in_scope \
+    "$button_target_scope" \
+    'guard let windowRoot = visibleWindowRoot(for: anchor)' \
+    'button target shared exact-window root'
+require_in_scope \
+    "$button_target_scope" \
+    'isVisible(anchor, in: [windowRoot.window])' \
+    'button target exact-window visibility'
+require_in_scope \
+    "$button_target_scope" \
+    'window: windowRoot.window' \
+    'button target exact-window identity'
+require_in_scope \
+    "$click_scope" \
+    'guard let buttonTarget = AppViewTreeE2E.buttonInteractionTarget(' \
+    'click physical target requirement'
+require_in_scope \
+    "$click_scope" \
+    '.physicalInteractionTargetUnavailable(' \
+    'click typed physical-target transition'
+require_in_scope \
+    "$click_scope" \
+    'WindowServerClickRetryContract.shouldRetry(' \
+    'click phase-aware retry policy'
+require_in_scope \
+    "$click_scope" \
+    'failurePhase: WindowServerClickRetryContract.failurePhase(' \
+    'click explicit failure phase'
+reject_in_scope \
+    "$click_scope" \
+    'clickableFrame' \
+    'passive anchor geometry fallback'
+require_in_scope \
+    "$post_click_scope" \
+    'mouseDownWasPosted = true' \
+    'driver post-mouseDown phase boundary'
+require_in_scope \
+    "$post_click_scope" \
+    'throw Failure.clickGestureFailed(' \
+    'driver typed click failure'
+require_in_scope \
+    "$post_click_scope" \
+    'phase: .afterMouseDown' \
+    'driver typed post-mouseDown failure phase'
+if [[ "$(grep -Fc 'phase: .afterMouseDown' <<<"$post_click_scope")" -ne 2 ]]; then
+    echo "every post-mouseDown failure branch must preserve its phase" >&2
+    exit 1
+fi
+rg -F 'WindowServerClickPhasedFailure' "$driver_source" >/dev/null
+require_in_scope \
+    "$driver_phase_scope" \
+    'case let .clickGestureFailed(phase, _),' \
+    'driver click failure phase passthrough'
+require_in_scope \
+    "$driver_phase_scope" \
+    'let .releaseCleanupFailed(phase, _, _):' \
+    'driver cleanup failure phase passthrough'
+if [[ "$(grep -Ec '^[[:space:]]+phase$' <<<"$driver_phase_scope")" -ne 1 ]]; then
+    echo "driver phased failures must return their associated phase exactly once" >&2
+    exit 1
+fi
+reject_in_scope \
+    "$driver_phase_scope" \
+    'default:' \
+    'driver failure phase default'
+require_in_scope \
+    "$presentation_failure_scope" \
+    'WindowServerClickPhasedFailure' \
+    'presentation failure phased conformance'
+require_in_scope \
+    "$presentation_failure_scope" \
+    'var clickFailurePhase: WindowServerClickFailurePhase' \
+    'presentation failure phase property'
+require_in_scope \
+    "$presentation_failure_scope" \
+    '.beforeMouseDown' \
+    'presentation failure explicit pre-mouseDown phase'
+rg -F 'any WindowServerClickPhasedFailure' "$retry_contract_source" >/dev/null
+rg -F '?? .unknown' "$retry_contract_source" >/dev/null
+rg -F 'failurePhase == .beforeMouseDown' "$retry_contract_source" >/dev/null
+rg -F 'testPostMouseDownActivationFailureCannotPostASecondMouseDown' \
+    "$retry_contract_tests" >/dev/null
+rg -F 'testTypedCleanupFailurePreservesPostMouseDownPhase' \
+    "$retry_contract_tests" >/dev/null
+rg -F 'testUnphasedFailureIsUnknownAndCannotRetry' \
+    "$retry_contract_tests" >/dev/null
+rg -F 'XCTAssertEqual(mouseDownCount, 1)' "$retry_contract_tests" >/dev/null
 rg -F 'suggestedCategoryIdentifier' "$source_file" >/dev/null
 rg -F 'idea-capture.field.suggestions.item.' "$source_file" >/dev/null
 rg -F 'identifier: "\(accessibilityIdentifier).item.\(suggestion.id)"' "$suggestion_source" >/dev/null

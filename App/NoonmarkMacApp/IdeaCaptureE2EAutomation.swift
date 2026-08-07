@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import NoonmarkCore
 import NoonmarkDiagnostics
+import NoonmarkMacE2ESupport
 import NoonmarkMacRuntime
 import NoonmarkStorage
 import SQLite3
@@ -2417,8 +2418,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 currentView.window === expectedWindow,
                 currentView.isHiddenOrHasHiddenAncestor == false
             else {
-                throw Failure.failed(
-                    "idea capture target changed before mouseDown: \(identifier)"
+                throw InteractionTargetResolutionFailure.targetChanged(
+                    identifier
                 )
             }
             let isDirectTextInput = currentView is NSTextView
@@ -2427,9 +2428,8 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                 guard currentView.window === expectedWindow,
                       currentView.isHiddenOrHasHiddenAncestor == false
                 else {
-                    throw Failure.failed(
-                        "idea capture text input changed before mouseDown: "
-                            + identifier
+                    throw InteractionTargetResolutionFailure.textInputChanged(
+                        identifier
                     )
                 }
                 let textInputFrame = AppViewTreeE2E.frameInWindow(
@@ -2458,46 +2458,51 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                     in: expectedWindow
                 )
             }
-            if let buttonTarget = AppViewTreeE2E.buttonInteractionTarget(
-                overlapping: currentView
-            ), buttonTarget.window === expectedWindow {
-                return try input.pointerCoordinate(
-                    windowPoint: buttonTarget.windowPoint,
-                    in: expectedWindow
+            let visibleBounds = currentView.bounds.intersection(
+                currentView.visibleRect
+            )
+            guard visibleBounds.isNull == false,
+                  visibleBounds.width >= 2,
+                  visibleBounds.height >= 2
+            else {
+                throw InteractionTargetResolutionFailure.noClickableVisibleArea(
+                    identifier
                 )
             }
-            let frame = AppViewTreeE2E.frameInWindow(for: currentView)
-            let visibleFrame = currentView.convert(
-                currentView.visibleRect,
-                to: nil
-            )
-            let clickableFrame = frame.intersection(visibleFrame)
-            guard clickableFrame.isNull == false,
-                  clickableFrame.isEmpty == false
-            else {
-                throw Failure.failed(
-                    "idea capture target has no clickable visible area: \(identifier)"
-                )
+            guard let buttonTarget = AppViewTreeE2E.buttonInteractionTarget(
+                overlapping: currentView
+            ), buttonTarget.window === expectedWindow else {
+                throw InteractionTargetResolutionFailure
+                    .physicalInteractionTargetUnavailable(
+                        identifier
+                    )
             }
             return try input.pointerCoordinate(
-                windowPoint: NSPoint(
-                    x: clickableFrame.midX,
-                    y: clickableFrame.midY
-                ),
+                windowPoint: buttonTarget.windowPoint,
                 in: expectedWindow
             )
         }
         for attempt in 0 ..< 3 {
             try await activate(expectedWindow)
             do {
+                let stableTarget = try await waitForStableInteractionTarget(
+                    identifier,
+                    resolveTarget: resolveTarget
+                )
                 try await input.postClick(
-                    at: try resolveTarget(),
+                    at: stableTarget,
                     modifiers: [],
                     resolveTarget: resolveTarget
                 )
                 return
             } catch {
-                guard attempt < 2,
+                guard WindowServerClickRetryContract.shouldRetry(
+                    failurePhase: WindowServerClickRetryContract.failurePhase(
+                        for: error
+                    ),
+                    attemptIndex: attempt,
+                    maximumAttempts: 3
+                ),
                       isActivationInterruption(error)
                         || isTargetPresentationTransition(error)
                 else {
@@ -2515,9 +2520,68 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
                             + ",target={\(targetReport)},frontmost={\(frontmostReport)}"
                     )
                 }
-                await Task.yield()
             }
         }
+    }
+
+    /// SwiftUI may publish model state before the corresponding AppKit-backed
+    /// view tree has reached a clickable presentation. Resolve the exact target
+    /// across consecutive main-run-loop samples and proceed only after its
+    /// window identity and pointer coordinate have stabilised.
+    private func waitForStableInteractionTarget(
+        _ identifier: String,
+        resolveTarget:
+        @MainActor @Sendable () throws
+            -> WindowServerInputDriver.PointerCoordinate
+    ) async throws -> WindowServerInputDriver.PointerCoordinate {
+        var previousTarget: WindowServerInputDriver.PointerCoordinate?
+        var stableSampleCount = 0
+        var lastTransition: Error?
+
+        for _ in 0 ..< 120 {
+            do {
+                let currentTarget = try resolveTarget()
+                if let previousTarget,
+                   targetsShareStablePointerCoordinate(
+                       previousTarget,
+                       currentTarget
+                   )
+                {
+                    stableSampleCount += 1
+                } else {
+                    stableSampleCount = 1
+                }
+                previousTarget = currentTarget
+                if stableSampleCount >= 3 {
+                    return currentTarget
+                }
+            } catch {
+                guard isTargetPresentationTransition(error) else {
+                    throw error
+                }
+                previousTarget = nil
+                stableSampleCount = 0
+                lastTransition = error
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        throw Failure.failed(
+            "idea capture target did not reach a stable clickable presentation: "
+                + "\(identifier),last={"
+                + (lastTransition?.localizedDescription ?? "coordinate drift")
+                + "}"
+        )
+    }
+
+    private func targetsShareStablePointerCoordinate(
+        _ lhs: WindowServerInputDriver.PointerCoordinate,
+        _ rhs: WindowServerInputDriver.PointerCoordinate
+    ) -> Bool {
+        lhs.window === rhs.window
+            && lhs.windowNumber == rhs.windowNumber
+            && abs(lhs.quartzPoint.x - rhs.quartzPoint.x) <= 2
+            && abs(lhs.quartzPoint.y - rhs.quartzPoint.y) <= 2
     }
 
     private func doubleClick(
@@ -2578,19 +2642,12 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             && (report.appActive == false || report.expectedWindowIsKey == false)
     }
 
-    /// A passive SwiftUI E2E anchor can be replaced while the WindowServer
-    /// driver settles its pointer. Retry only this proven presentation
-    /// transition; all visibility, focus, and behavioural failures remain
-    /// fail-closed.
+    /// Recover only typed pre-mouseDown presentation transitions. A missing
+    /// anchor and an anchor whose visible hit area collapsed between samples
+    /// both represent an unsettled SwiftUI presentation; all focus, topology,
+    /// hit-test, pointer, mouseDown, and behavioural failures remain fail-closed.
     private func isTargetPresentationTransition(_ error: Error) -> Bool {
-        guard case let .failed(message) = error as? Failure else {
-            return false
-        }
-        return message.hasPrefix(
-            "idea capture target changed before mouseDown:"
-        ) || message.hasPrefix(
-            "idea capture text input changed before mouseDown:"
-        )
+        error is InteractionTargetResolutionFailure
     }
 
     private func finderApplication() throws -> NSRunningApplication {
@@ -2721,6 +2778,33 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             guard let database else { return }
             sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
             sqlite3_close(database)
+        }
+    }
+
+    private enum InteractionTargetResolutionFailure:
+        LocalizedError,
+        WindowServerClickPhasedFailure
+    {
+        case targetChanged(String)
+        case textInputChanged(String)
+        case noClickableVisibleArea(String)
+        case physicalInteractionTargetUnavailable(String)
+
+        var clickFailurePhase: WindowServerClickFailurePhase {
+            .beforeMouseDown
+        }
+
+        var errorDescription: String? {
+            switch self {
+            case let .targetChanged(identifier):
+                "idea capture target changed before mouseDown: \(identifier)"
+            case let .textInputChanged(identifier):
+                "idea capture text input changed before mouseDown: \(identifier)"
+            case let .noClickableVisibleArea(identifier):
+                "idea capture target has no clickable visible area: \(identifier)"
+            case let .physicalInteractionTargetUnavailable(identifier):
+                "idea capture physical interaction target unavailable: \(identifier)"
+            }
         }
     }
 

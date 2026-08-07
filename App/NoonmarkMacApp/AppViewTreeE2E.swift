@@ -276,12 +276,37 @@ enum AppViewTreeE2E {
         return matches[0]
     }
 
+    private struct VisibleWindowRoot {
+        let window: NSWindow
+        let root: NSView
+    }
+
+    private static func visibleWindowRoot(
+        for view: NSView
+    ) -> VisibleWindowRoot? {
+        guard let window = view.window,
+              window.isVisible,
+              window.isMiniaturized == false,
+              window.alphaValue > 0,
+              let root = window.contentView?.superview ?? window.contentView
+        else {
+            return nil
+        }
+        return VisibleWindowRoot(window: window, root: root)
+    }
+
     static func button(overlapping anchor: NSView) -> NSButton? {
+        guard let windowRoot = visibleWindowRoot(for: anchor) else { return nil }
         let anchorFrame = frameInWindow(for: anchor)
         let anchorArea = anchorFrame.width * anchorFrame.height
         guard anchorArea > 0 else { return nil }
-        let matches = currentVisibleViews().compactMap { view -> NSButton? in
-            guard let button = view as? NSButton else { return nil }
+        let matches = allViews(from: windowRoot.root).compactMap { view -> NSButton? in
+            guard let button = view as? NSButton,
+                  button.window === windowRoot.window,
+                  isVisible(button, in: [windowRoot.window])
+            else {
+                return nil
+            }
             let intersection = anchorFrame.intersection(frameInWindow(for: button))
             let intersectionArea = intersection.width * intersection.height
             return intersectionArea >= anchorArea * 0.8 ? button : nil
@@ -301,12 +326,13 @@ enum AppViewTreeE2E {
     static func buttonInteractionTarget(
         overlapping anchor: NSView
     ) -> ButtonInteractionTarget? {
-        let nativeButton = button(overlapping: anchor)
-        guard nativeButton != nil || anchor is AppE2EAnchorView,
-              isVisible(anchor),
-              let window = anchor.window,
-              let root = window.contentView?.superview ?? window.contentView
+        guard let windowRoot = visibleWindowRoot(for: anchor),
+              isVisible(anchor, in: [windowRoot.window])
         else {
+            return nil
+        }
+        let nativeButton = button(overlapping: anchor)
+        guard nativeButton != nil || anchor is AppE2EAnchorView else {
             return nil
         }
         let visibleBounds = anchor.bounds.intersection(anchor.visibleRect)
@@ -338,11 +364,11 @@ enum AppViewTreeE2E {
                 ),
                 to: nil
             )
-            let rootPoint = root.convert(point, from: nil)
-            guard let hitView = root.hitTest(rootPoint),
+            let rootPoint = windowRoot.root.convert(point, from: nil)
+            guard let hitView = windowRoot.root.hitTest(rootPoint),
                   hitView !== anchor,
                   hitView.isDescendant(of: anchor) == false,
-                  isVisible(hitView, in: [window])
+                  isVisible(hitView, in: [windowRoot.window])
             else {
                 continue
             }
@@ -354,7 +380,7 @@ enum AppViewTreeE2E {
                 }
                 return ButtonInteractionTarget(
                     coordinateView: nativeButton,
-                    window: window,
+                    window: windowRoot.window,
                     windowPoint: point
                 )
             }
@@ -381,7 +407,7 @@ enum AppViewTreeE2E {
             }
             return ButtonInteractionTarget(
                 coordinateView: anchor,
-                window: window,
+                window: windowRoot.window,
                 windowPoint: point
             )
         }

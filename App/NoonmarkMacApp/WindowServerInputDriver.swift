@@ -107,7 +107,7 @@ final class WindowServerInputDriver {
         }
     }
 
-    enum Failure: LocalizedError {
+    enum Failure: LocalizedError, WindowServerClickPhasedFailure {
         case eventAccessUnavailable
         case eventSourceUnavailable
         case eventConstructionFailed(String)
@@ -116,7 +116,15 @@ final class WindowServerInputDriver {
         case targetBecameUnavailable(point: CGPoint, InputContextReport)
         case pointerDidNotSettle(PointerSettlementReport)
         case buttonStateDidNotChange(expectedDown: Bool)
-        case releaseCleanupFailed(original: String, cleanup: String)
+        case clickGestureFailed(
+            phase: WindowServerClickFailurePhase,
+            original: String
+        )
+        case releaseCleanupFailed(
+            phase: WindowServerClickFailurePhase,
+            original: String,
+            cleanup: String
+        )
         case menuBarTargetUnavailable(expected: CGPoint, actual: CGPoint?)
         case menuBarInputContextUnavailable(appActive: Bool, leftButtonDown: Bool)
 
@@ -141,7 +149,9 @@ final class WindowServerInputDriver {
             case let .buttonStateDidNotChange(expectedDown):
                 return "WindowServer left button did not become "
                     + (expectedDown ? "down" : "up")
-            case let .releaseCleanupFailed(original, cleanup):
+            case let .clickGestureFailed(phase, original):
+                return "WindowServer click gesture failed in \(phase): \(original)"
+            case let .releaseCleanupFailed(_, original, cleanup):
                 return "WindowServer click failed (\(original)); left-button cleanup "
                     + "also failed (\(cleanup))"
             case let .menuBarTargetUnavailable(expected, actual):
@@ -150,6 +160,25 @@ final class WindowServerInputDriver {
             case let .menuBarInputContextUnavailable(appActive, leftButtonDown):
                 return "WindowServer menu-bar input context unavailable: "
                     + "appActive=\(appActive),leftButtonDown=\(leftButtonDown)"
+            }
+        }
+
+        var clickFailurePhase: WindowServerClickFailurePhase {
+            switch self {
+            case let .clickGestureFailed(phase, _),
+                 let .releaseCleanupFailed(phase, _, _):
+                phase
+            case .eventAccessUnavailable,
+                 .eventSourceUnavailable,
+                 .eventConstructionFailed,
+                 .coordinateRoundTripFailed,
+                 .inputContextUnavailable,
+                 .targetBecameUnavailable,
+                 .pointerDidNotSettle,
+                 .buttonStateDidNotChange,
+                 .menuBarTargetUnavailable,
+                 .menuBarInputContextUnavailable:
+                .beforeMouseDown
             }
         }
     }
@@ -489,11 +518,15 @@ final class WindowServerInputDriver {
                 )
             } catch {
                 throw Failure.releaseCleanupFailed(
+                    phase: .afterMouseDown,
                     original: originalError.localizedDescription,
                     cleanup: error.localizedDescription
                 )
             }
-            throw originalError
+            throw Failure.clickGestureFailed(
+                phase: .afterMouseDown,
+                original: originalError.localizedDescription
+            )
         }
     }
 

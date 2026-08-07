@@ -137,3 +137,9 @@ FAIL-2026-08-07-02	release	scripts/verify-development-validation-evidence	script
 FAIL-2026-08-07-03	fast	scripts/test-github-release-readiness-contract	scripts/check	缺失 Environment secret、branch policy、过宽 tag policy 或 canonical workflow 私钥边界任一回退即判红
 FAIL-2026-08-07-03	symptom	scripts/verify-github-release-readiness	scripts/release-private-dmg	任何真实 App／DMG 发行门禁前必须确认三个 release Environment secret 名称与精确 v* tag policy
 FAIL-2026-08-07-03	release	scripts/verify-github-release-readiness	scripts/push-release-tag	远端 tag 副作用前必须 live 对账签名 Environment readiness，缺失或过宽即判红
+FAIL-2026-08-07-04	fast	scripts/test-github-actions-workflows	scripts/check	actionlint 必须拒绝 job 级 runner.temp 等非法 context、无效表达式、YAML 与内嵌 shell
+FAIL-2026-08-07-04	symptom	scripts/verify-github-release-publication	scripts/push-release-tag	精确 tag run 若在未建立任何 job 时完成，必须立即判红并保留失败 build
+FAIL-2026-08-07-04	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 tag run 必须成功并建立唯一 DMG 与 checksum 公开资产
+FAIL-2026-08-07-05	fast	scripts/test-metrickit-sdk-compatibility-contract	scripts/check	MXMetricPayload callback 与 selector test 必须保留 Xcode 16／26 编译器边界
+FAIL-2026-08-07-05	symptom	scripts/test-unit	scripts/check	hosted Xcode 16.4 必须真实编译 NoonmarkDiagnostics 并验证当前 SDK 的 subscriber selector
+FAIL-2026-08-07-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	hosted check 与打包必须成功并建立 canonical DMG 与 checksum

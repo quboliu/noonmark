@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+repo="quboliu/noonmark"
+
+fail() {
+  echo "GitHub release publication: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 3 ]]; then
+  echo "usage: scripts/verify-github-release-publication <tag> <commit> <prior-run-ids-file>" >&2
+  exit 64
+fi
+
+tag="$1"
+commit="$2"
+prior_run_ids="$3"
+
+[[ "$tag" == v* ]] || fail "tag must start with v"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "commit must be a full SHA"
+[[ -r "$prior_run_ids" ]] || fail "prior run ID file is unreadable"
+command -v gh >/dev/null 2>&1 || fail "GitHub CLI is unavailable"
+
+run_id=""
+registration_deadline=$((SECONDS + 180))
+while [[ -z "$run_id" && "$SECONDS" -lt "$registration_deadline" ]]; do
+  while IFS=$'\t' read -r candidate_id candidate_event candidate_sha; do
+    [[ "$candidate_event" == "push" && "$candidate_sha" == "$commit" ]] ||
+      continue
+    if ! grep -Fqx "$candidate_id" "$prior_run_ids"; then
+      run_id="$candidate_id"
+      break
+    fi
+  done < <(
+    gh api --method GET \
+      "repos/${repo}/actions/workflows/release-publish.yml/runs" \
+      -f head_sha="$commit" \
+      -F per_page=100 \
+      --jq '.workflow_runs[] | [.id, .event, .head_sha] | @tsv'
+  )
+  [[ -n "$run_id" ]] || sleep 3
+done
+[[ -n "$run_id" ]] ||
+  fail "no new tag-triggered release workflow appeared for ${commit}"
+
+job_count=0
+job_deadline=$((SECONDS + 180))
+while [[ "$job_count" -eq 0 && "$SECONDS" -lt "$job_deadline" ]]; do
+  job_count="$(
+    gh api "repos/${repo}/actions/runs/${run_id}/jobs" \
+      --jq '.total_count'
+  )"
+  [[ "$job_count" =~ ^[0-9]+$ ]] || fail "run ${run_id} returned invalid job count"
+  if [[ "$job_count" -eq 0 ]]; then
+    run_state="$(
+      gh api "repos/${repo}/actions/runs/${run_id}" \
+        --jq '[.status, (.conclusion // "")] | @tsv'
+    )"
+    if [[ "$run_state" == completed$'\t'* ]]; then
+      fail "run ${run_id} completed without creating a job"
+    fi
+    sleep 3
+  fi
+done
+[[ "$job_count" -gt 0 ]] || fail "run ${run_id} did not create a job"
+
+gh run watch "$run_id" --repo "$repo" --exit-status --interval 10 ||
+  fail "run ${run_id} did not complete successfully"
+
+run_result="$(
+  gh api "repos/${repo}/actions/runs/${run_id}" \
+    --jq '[.status, (.conclusion // ""), .head_sha, .event] | @tsv'
+)"
+[[ "$run_result" == $'completed\tsuccess\t'"${commit}"$'\tpush' ]] ||
+  fail "run ${run_id} final identity or conclusion is invalid: ${run_result}"
+
+actual_tag="$(
+  gh release view "$tag" --repo "$repo" --json tagName --jq '.tagName'
+)"
+[[ "$actual_tag" == "$tag" ]] || fail "Release tag does not match ${tag}"
+
+asset_names="$(
+  gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name'
+)"
+for required_asset in Noonmark.dmg Noonmark.dmg.sha256; do
+  [[ "$(grep -Fxc "$required_asset" <<<"$asset_names")" -eq 1 ]] ||
+    fail "Release must contain exactly one ${required_asset}"
+done
+
+release_url="$(
+  gh release view "$tag" --repo "$repo" --json url --jq '.url'
+)"
+echo "GitHub release publication verified: run=${run_id} url=${release_url}"

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+command -v actionlint >/dev/null 2>&1 || {
+  echo "GitHub Actions workflow gate: actionlint is unavailable" >&2
+  exit 1
+}
+
+shopt -s nullglob
+workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+[[ "${#workflows[@]}" -gt 0 ]] || {
+  echo "GitHub Actions workflow gate: no workflow files found" >&2
+  exit 1
+}
+
+actionlint "${workflows[@]}"
+echo "GitHub Actions workflow syntax passed (${#workflows[@]} workflows)"

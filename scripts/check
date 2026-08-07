@@ -27,7 +27,9 @@ evidence_begin_manifest \
 evidence_append_snapshot "$check_manifest" "$source_start_fragment"
 
 run_check_suite() {
-  local required_tools=(swift xcodebuild xcrun swiftlint swiftformat sips iconutil)
+  local required_tools=(
+    swift xcodebuild xcrun actionlint swiftlint swiftformat sips iconutil
+  )
 
   for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -112,6 +114,12 @@ run_check_suite() {
 
   echo "==> GitHub release readiness contract"
   scripts/test-github-release-readiness-contract
+
+  echo "==> GitHub Actions workflow syntax"
+  scripts/test-github-actions-workflows
+
+  echo "==> MetricKit SDK compatibility contract"
+  scripts/test-metrickit-sdk-compatibility-contract
 
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates

@@ -54,8 +54,11 @@ if [[ -n "$(
 fi
 
 release_error="$(mktemp "${TMPDIR:-/tmp}/noonmark-release-view.XXXXXX")"
+prior_release_runs="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-prior-release-runs.XXXXXX"
+)"
 cleanup() {
-  rm -f "$release_error"
+  rm -f "$release_error" "$prior_release_runs"
 }
 trap cleanup EXIT
 if gh release view "$tag" --repo "$repo" >/dev/null 2>"$release_error"; then
@@ -65,6 +68,11 @@ elif ! rg -qi 'release not found|HTTP 404' "$release_error"; then
 fi
 
 scripts/verify-github-release-readiness
+gh api --method GET \
+  "repos/${repo}/actions/workflows/release-publish.yml/runs" \
+  -f head_sha="$head_commit" \
+  -F per_page=100 \
+  --jq '.workflow_runs[].id' >"$prior_release_runs"
 git push origin "refs/tags/${tag}:refs/tags/${tag}"
 
 remote_tag_rows="$(
@@ -81,5 +89,10 @@ remote_tag_commit="$(
   fail "remote tag object does not match local annotated tag"
 [[ "$remote_tag_commit" == "$head_commit" ]] ||
   fail "remote tag commit does not match HEAD"
+
+scripts/verify-github-release-publication \
+  "$tag" \
+  "$head_commit" \
+  "$prior_release_runs"
 
 echo "Release tag pushed and verified: ${tag} -> ${head_commit}"

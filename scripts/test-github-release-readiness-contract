@@ -133,9 +133,10 @@ rg -F 'persist-credentials: false' "$workflow" >/dev/null ||
   fail "release workflow leaves checkout credentials available"
 for required_path in \
   'NOONMARK_CI_CERT_P12: ${{ runner.temp }}/' \
-  'NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/'; do
-  rg -F "$required_path" "$workflow" >/dev/null ||
-    fail "release workflow does not keep signing material in RUNNER_TEMP"
+  'NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/' \
+  'NOONMARK_CI_SIGNING_PROBE: ${{ runner.temp }}/'; do
+  [[ "$(grep -Fc "$required_path" "$workflow")" -eq 2 ]] ||
+    fail "release workflow does not bind signing material to import and cleanup steps"
 done
 rg -F "printf '%s' \"\$APPLE_DEV_CERT_P12_BASE64\"" "$workflow" >/dev/null ||
   fail "release workflow does not stream the P12 secret without echo"
@@ -176,6 +177,10 @@ require_order \
   "$tag_publisher" \
   'scripts/verify-github-release-readiness' \
   'git push origin'
+require_order \
+  "$tag_publisher" \
+  'git push origin' \
+  'scripts/verify-github-release-publication'
 rg -F 'scripts/verify-release-static-preflight' "$tag_publisher" >/dev/null ||
   fail "tag publisher does not consume the final make-check evidence"
 if rg -F -- '--clobber' "$workflow" >/dev/null ||

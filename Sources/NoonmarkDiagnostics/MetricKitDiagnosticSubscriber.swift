@@ -102,6 +102,7 @@ public final class MetricKitDiagnosticSubscriber: NSObject, MXMetricManagerSubsc
         stateLock.unlock()
     }
 
+    #if compiler(>=6.2)
     public func didReceive(_ payloads: [MXMetricPayload]) {
         let receivedAt = now()
         for payload in payloads {
@@ -113,6 +114,7 @@ public final class MetricKitDiagnosticSubscriber: NSObject, MXMetricManagerSubsc
             )
         }
     }
+    #endif
 
     public func didReceive(_ payloads: [MXDiagnosticPayload]) {
         let receivedAt = now()

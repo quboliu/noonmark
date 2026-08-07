@@ -35,9 +35,6 @@ jobs:
     environment: release
     env:
       NOONMARK_EVIDENCE_RUN_ID: github-release-${{ github.run_id }}-${{ github.run_attempt }}
-      NOONMARK_CI_CERT_P12: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.p12
-      NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
-      NOONMARK_CI_SIGNING_PROBE: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}-signing-probe
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -74,16 +71,18 @@ jobs:
             echo "::error::tag ${TAG} does not match release/VERSION marketing_version v${MARKETING}"
             exit 1
           fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${MARKETING}" >> "$GITHUB_OUTPUT"
-          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=${TAG}"
+            echo "version=${MARKETING}"
+            echo "build=${BUILD}"
+          } >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG} (build ${BUILD})"
 
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
-          brew install swiftlint swiftformat
+          brew install actionlint swiftlint swiftformat
 
       - name: Verify (build · lint · UT · IT · ST · DST)
         run: scripts/check
@@ -93,6 +92,9 @@ jobs:
           APPLE_DEV_CERT_P12_BASE64: ${{ secrets.APPLE_DEV_CERT_P12_BASE64 }}
           APPLE_DEV_CERT_PASSWORD: ${{ secrets.APPLE_DEV_CERT_PASSWORD }}
           APPLE_DEV_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_DEV_KEYCHAIN_PASSWORD }}
+          NOONMARK_CI_CERT_P12: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.p12
+          NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
+          NOONMARK_CI_SIGNING_PROBE: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}-signing-probe
         run: |
           umask 077
           if [[ -z "${APPLE_DEV_CERT_P12_BASE64:-}" ||
@@ -156,6 +158,10 @@ jobs:
 
       - name: Remove signing material
         if: always()
+        env:
+          NOONMARK_CI_CERT_P12: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.p12
+          NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
+          NOONMARK_CI_SIGNING_PROBE: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}-signing-probe
         run: |
           cleanup_status=0
           rm -f "$NOONMARK_CI_CERT_P12" "$NOONMARK_CI_SIGNING_PROBE" || cleanup_status=1

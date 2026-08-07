@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "MetricKit SDK compatibility contract: $*" >&2
+  exit 1
+}
+
+source_path="Sources/NoonmarkDiagnostics/MetricKitDiagnosticSubscriber.swift"
+test_path="Tests/NoonmarkDiagnosticsTests/MetricKitDiagnosticSubscriberTests.swift"
+
+guard_line="$(rg -n -F '#if compiler(>=6.2)' "$source_path" | cut -d: -f1)"
+metric_callback_line="$({
+  rg -n -F 'public func didReceive(_ payloads: [MXMetricPayload])' \
+    "$source_path" || true
+} | cut -d: -f1)"
+diagnostic_callback_line="$(
+  rg -n -F 'public func didReceive(_ payloads: [MXDiagnosticPayload])' \
+    "$source_path" | cut -d: -f1
+)"
+
+[[ "$guard_line" =~ ^[0-9]+$ && "$metric_callback_line" =~ ^[0-9]+$ &&
+  "$diagnostic_callback_line" =~ ^[0-9]+$ ]] ||
+  fail "callback or compiler guard is missing"
+[[ "$guard_line" -lt "$metric_callback_line" &&
+  "$metric_callback_line" -lt "$diagnostic_callback_line" ]] ||
+  fail "MXMetricPayload callback is not guarded before the macOS diagnostic callback"
+
+rg -F 'func testImplementsMetricKitCallbackSelectorsAvailableInCurrentSDK()' \
+  "$test_path" >/dev/null || fail "SDK-aware selector regression test is missing"
+[[ "$(grep -Fc '#if compiler(>=6.2)' "$test_path")" -eq 1 ]] ||
+  fail "selector regression test does not mirror the compiler boundary"
+rg -F 'NSSelectorFromString("didReceiveDiagnosticPayloads:")' \
+  "$test_path" >/dev/null || fail "macOS diagnostic selector assertion is missing"
+
+echo "MetricKit SDK compatibility contract passed"

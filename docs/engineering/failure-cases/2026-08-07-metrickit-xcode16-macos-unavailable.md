@@ -7,7 +7,7 @@
 - 引入提交：`545c743ab67254d623ca9df5260508518d1fcd05`（`feat(diagnostics): Integrate bounded MetricKit diagnostics`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`84b6127983f3a07bf28d153aec0be3752e542bc2`（`fix(release): validate hosted publication boundaries`）
 
 ## 用户症状与影响
 
@@ -43,7 +43,7 @@ macOS 14 Swift Package 同时需要在 canonical hosted Xcode 16.4 与本机 Xco
 ## 验证结果
 
 - Red：Xcode 16.4 hosted clean build 对旧实现稳定报出 unavailable 与 cannot override。
-- Green（本机新 SDK）：修复前的 Xcode 26.2 隔离 target build已通过，作为保留新 SDK 能力的基线；修复后须继续通过 target build与 SDK-aware selector test。
+- Green（本机新 SDK）：修复前的 Xcode 26.2 隔离 target build 已通过，作为保留新 SDK 能力的基线；修复后 8 个 `MetricKitDiagnosticSubscriberTests` 全绿，确认新 SDK 的 metric 与 diagnostic selector 都继续存在。
 - 待 Green（受害路径）：build 13 的 Xcode 16.4 hosted `scripts/check` 必须完成编译与测试；tag workflow 必须用同一 hosted toolchain 打出 canonical DMG。
 
 ## 永久门禁

@@ -7,7 +7,7 @@
 - 引入提交：`885d0843be615bcab4357848e90a8851f00f71ed`（`fix(release): harden GitHub signing readiness`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`84b6127983f3a07bf28d153aec0be3752e542bc2`（`fix(release): validate hosted publication boundaries`）
 
 ## 用户症状与影响
 
@@ -47,7 +47,8 @@ actionlint .github/workflows/release-publish.yml
 ## 验证结果
 
 - Red：旧 workflow 的 `actionlint` 稳定输出三项 `runner` context error。
-- 待 Green：修复后的全部 workflow 必须通过 `actionlint`；build 13 的普通 CI 与 tag workflow 必须建立真实 job 并成功完成。
+- Green（fast）：修复提交上的 5 份 workflow 已通过 `actionlint`；release readiness、release aggregation 与 failure-case registry contract 同时通过。
+- 待 Green（受害路径）：build 13 的普通 CI 与 tag workflow 必须建立真实 job 并成功完成。
 - 本案例在公开 Release、两个 canonical 资产与 checksum 尚未完成前保持「处理中」。
 
 ## 永久门禁

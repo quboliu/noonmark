@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-04：GitHub Release workflow 在 job 建立前失效
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T15:22:40Z
 - 影响版本／构建：v0.2.4 build 12，source commit `895caff49b7f1ecc975d5eb6cdba8303dca9e117`
@@ -48,7 +48,7 @@ actionlint .github/workflows/release-publish.yml
 
 - Red：旧 workflow 的 `actionlint` 稳定输出三项 `runner` context error。
 - Green（fast）：修复提交上的 5 份 workflow 已通过 `actionlint`；release readiness、release aggregation 与 failure-case registry contract 同时通过。
-- 待 Green（受害路径）：build 13 至 build 16 的普通 CI 均建立真实 job，但分别因独立的工具、测试同步、localization oracle 与 hosted 预算故障退役；build 17 的 tag workflow 必须建立真实 job 并成功完成。
+- Green（受害路径）：build 21 Release run `31213156156` 建立唯一真实 job `92980469095`，全部步骤成功并发布唯一 DMG 与 checksum。
 - 本案例在公开 Release、两个 canonical 资产与 checksum 尚未完成前保持「处理中」。
 
 ## 永久门禁

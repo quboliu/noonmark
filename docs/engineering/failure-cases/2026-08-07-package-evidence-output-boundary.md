@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-13：Clean checkout 缺少 DMG evidence output boundary
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T18:55:19Z
 - 影响版本／构建：v0.2.4 build 20，source commit `86b8ea0bf955162950e31676eb50d77002773316`
@@ -45,9 +45,9 @@ build 20 的唯一 GitHub-hosted CI 已成功，但 tag 触发的唯一 Release 
 
 - Red（真实 hosted）：Release run `31209112249` 在 clean checkout 的首份 package manifest 写入失败。
 - Red（本机最小症状）：缺少目标父目录时退出 1；预建同一父目录后退出 0。
-- 待 Green（fast）：release gate contract 必须验证 output boundary 建立早于 `evidence_begin_manifest`。
-- 待 Green（symptom）：完整 DMG evidence fixture 必须从不存在 `dist/` 的状态成功打包，再验证 stale-output replacement。
-- 待 Green（release）：build 21 的唯一 tag job 必须发布唯一 DMG 与 checksum。
+- Green（fast）：release gate contract 在独立 worktree 验证 output boundary 建立早于 `evidence_begin_manifest`。
+- Green（symptom）：完整 DMG evidence fixture 从不存在 `dist/` 的状态成功打包，随后第二轮 stale-output replacement 与全部 mutation case 通过。
+- Green（release）：build 21 的唯一 tag job `92980469095` 从 clean checkout 完成 package、只读静态验证与 immutable Release，发布唯一 DMG 与 checksum。
 
 ## 永久门禁
 

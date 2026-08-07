@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-03：GitHub 发行签名环境未就绪
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T09:56:37Z
 - 影响版本／构建：v0.2.4 build 10，source commit `c2fbfc0ee2c894f008458be28cc0dad0c09cb741`
@@ -50,6 +50,7 @@ hosted-runner 发行路径在 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 引入�
 
 - Red：没有配置 secret 时，`scripts/verify-github-release-readiness` exit 1，并精确报告缺少 `APPLE_DEV_CERT_P12_BASE64`；旧门禁仍绿，证明原始覆盖空洞。
 - Green：配置完成后，同一 live verifier exit 0，精确确认 `quboliu/noonmark` 的 `release` Environment；secret 列表恰有三个预期名称，部署 policy 恰为 tag `v*`。
+- Green（release）：run `31213156156` 从 `release` Environment 成功导入并证明 Apple Development 身份，随后发布唯一 DMG 与 checksum。
 - 本机签名验证：导出的 P12 在隔离 keychain 中只有一个有效 Apple Development identity，证书未过期，一次性 probe 的 `codesign --verify --strict` 通过，清理后临时目录计数为零。
 - Fast gates：`scripts/test-github-release-readiness-contract`、`scripts/test-failure-case-gates`、`scripts/test-release-gate-contract` 与 `scripts/test-release-version-contract` 在 build 12 全绿，覆盖额外 secret、policy、workflow pin／cleanup／不可覆盖与完整 evidence；build 13 另以 `actionlint` 修补 workflow 语义覆盖空洞。
 - Pre-release review：以 `c2fbfc0ee2c894f008458be28cc0dad0c09cb741...HEAD` 为边界的实现 Standards 与 Spec 双轴复核在进入真实发行 gate 前零 finding。

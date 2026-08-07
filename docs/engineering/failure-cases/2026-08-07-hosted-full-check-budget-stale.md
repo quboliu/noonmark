@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-09：hosted 完整 check 仍使用初始 25 分钟预算
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T16:48:25Z
 - 影响版本／构建：v0.2.4 build 16，source commit `c81b4a3b3d8e2b077f8064267764b95fdd572026`
@@ -43,6 +43,7 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 
 - Red（原始 hosted 症状）：run `31197305770` 在 DMG contract 中被 25 分钟外层预算取消。
 - Green（fast）：hosted budget contract 固定 ordinary CI 的 90 分钟预算；tag Release 不重跑 `scripts/check` 的单一 owner 收敛到 `FAIL-2026-08-07-10` 的 hosted workflow boundary。
+- Green（hosted／release）：build 21 的唯一 CI job 在 35 分 12 秒内完成完整 hosted 子集；唯一 Release job 不重跑子集，并成功发布 DMG 与 checksum。
 - build 18 run `31203389558` 已越过旧 25 分钟边界，并在 32 分 17 秒进入最终 SwiftFormat；因此 90 分钟预算根修已由运行产物证明。该候选随后因独立 formatter 版本漂移判红。
 
 ## 永久门禁

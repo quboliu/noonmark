@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-08：UI localization 的 Han 判定跨运行时漂移
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T16:18:27Z
 - 影响版本／构建：v0.2.4 build 15，source commit `697023c0cad0bff49a856a8b14eca0dea8c34b9b`
@@ -44,6 +44,7 @@ scanner 改用明确的 CJK Unified／Compatibility Ideograph scalar 范围，�
 - Green（fast）：新增 Han contract 与 scanner self-test 全绿，两个中点负例不进入 inventory，四种中文正例仍被捕获。
 - Green（本机 symptom）：真实 production inventory 精确保持已审核的 7 条中文 literal，baseline guard 全绿。
 - Green（hosted 受害路径）：build 16 run `31197305770` 在相同 macOS hosted image 输出 `UI localization literal guard: ok (7 known literals)`；后续 check 因独立的 `FAIL-2026-08-07-09` 外层预算耗尽而取消，真实 App E2E 顺延至 build 17。
+- Green（最终 hosted／release）：build 21 CI run `31210493224` 完整成功，随后 Release run `31213156156` 发布唯一 DMG 与 checksum；Han scanner 跨运行时漂移没有复发。
 
 ## 永久门禁
 

@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-11：SwiftFormat 浮动版本令本机与 hosted 结果分裂
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T18:12:43Z
 - 影响版本／构建：v0.2.4 build 18，source commit `fd10cc95bdeae0cdeb6cd1db6719dd001e1f1ab6`
@@ -46,7 +46,7 @@
 - Green（fast）：固定工具链 contract、首次下载 checksum 校验、缓存后二次版本校验均通过。
 - Green（本机 symptom）：固定 `0.62.1` 的 `scripts/format --lint` 报告 `0/472`；72 个 Swift 文件的无空白 token 序列没有增删。
 - Green（hosted 工具身份与 build）：build 19 run `31206472761` 的 Toolchain 真实输出 `0.62.1`，随后 Swift build 完整成功；该 run 之后因独立 Notes UI 静态扫描器与合法换行耦合而判红。
-- 待 Green（hosted symptom／release）：build 20 的唯一 main hosted job 必须完整成功，tag job 必须只打包并建立唯一 DMG 与 checksum。
+- Green（hosted symptom／release）：build 21 CI run `31210493224` 的唯一 job 完整成功；tag run `31213156156` 只打包并建立唯一 DMG 与 checksum。
 
 ## 永久门禁
 

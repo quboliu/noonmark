@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-05：hosted workflow 未绑定项目 Xcode 26.2 基线
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T15:24:00Z
 - 影响版本／构建：v0.2.4 build 12，source commit `895caff49b7f1ecc975d5eb6cdba8303dca9e117`
@@ -48,6 +48,7 @@ GitHub run `31192298891` 的 Toolchain step 明确输出 Xcode 16.4、Swift 6.1.
 - Green（既有基线）：本机 Xcode 26.2 隔离 target build 与 8 个 MetricKit subscriber test 全绿。
 - Green（原始 hosted 受害路径）：build 13 run `31194101256` 的 Toolchain step 精确选择 Xcode 26.2，随后完成干净编译、1527 个 XCTest、demo story test 与确定性仿真；原始 MetricKit unavailable 症状没有复现。
 - Green（单一 hosted check 工具链）：build 18 run `31203389558` 的唯一 job 精确使用 Xcode 26.2，并完成 build 与测试；随后因独立 SwiftFormat 版本漂移判红。tag package job 仍须以同一 Xcode 打包 canonical DMG。
+- Green（release）：build 21 CI run `31210493224` 与 Release run `31213156156` 均精确使用 Xcode 26.2；唯一 package job 成功建立 canonical DMG 与 checksum。
 
 ## 永久门禁
 

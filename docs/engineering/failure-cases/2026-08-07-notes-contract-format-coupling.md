@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-12：Notes UI 静态门禁错误绑定源码换行
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T18:22:24Z
 - 影响版本／构建：v0.2.4 build 19，source commit `64742657c713f329d60c0ab8d5047cab88ade31e`
@@ -46,7 +46,7 @@ build 19 的唯一 GitHub-hosted job 已通过固定 SwiftFormat Toolchain 并�
 - Red（fast）：新 matcher gate 在旧扫描器上报告没有格式无关 matcher。
 - Green（fast）：单行与多行结构均通过，`return false` 负例稳定失败。
 - Green（本机 symptom）：真实 `scripts/test-notes-ui-contract` 完整通过。
-- 待 Green（hosted／release）：build 20 必须由唯一 hosted job 完整执行同一 contract 与其余子集，tag job 再建立唯一 DMG 与 checksum。
+- Green（hosted／release）：build 21 CI run `31210493224` 的唯一 job 完整执行格式无关 Notes contract 并成功；tag run `31213156156` 发布唯一 DMG 与 checksum。
 
 ## 永久门禁
 

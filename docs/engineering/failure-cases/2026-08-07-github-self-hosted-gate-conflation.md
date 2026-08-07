@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-10：GitHub CI 与本地全集自测边界混同
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T17:13:00Z
 - 影响版本／构建：v0.2.4 build 17，source commit `92c92fdc0415ff3780cb1e9fc0812122bb0908e7`
@@ -43,7 +43,7 @@ source commit `92c92fdc` 的 `.github/workflows/ci.yml` 明确声明 `runs-on: [
 - Red：run `31199688018` 建立了 hosted check 与 self-hosted E2E 两个 job；后者在执行 step 前被取消。
 - Green（fast）：3 份 workflow 的 actionlint、hosted-only／单 job 边界、live CI 正反 fixture、90 分钟 hosted budget、Xcode 26.2、release readiness、build version contract、failure-case registry、修改脚本的 Bash syntax 与 warning-level ShellCheck 全绿。没有重跑本地产品全集或 DMG 大矩阵。
 - Green（job 边界）：build 18 run `31203389558` 只建立一个 `macos-15` CI job，没有建立 self-hosted job；该 job 后续因独立 formatter 版本漂移判红。
-- 待 Green（release）：tag workflow 必须消费上述精确 CI 结果，只建立一个 hosted package job，并发布 DMG 与 checksum。
+- Green（release）：build 21 tag workflow 消费精确 CI run `31210493224`，只建立一个 `macos-15` package job `92980469095`，并发布唯一 DMG 与 checksum。
 
 ## 永久门禁
 

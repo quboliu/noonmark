@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-06：hosted check 未声明 ripgrep 依赖
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T15:50:32Z
 - 影响版本／构建：v0.2.4 build 13，source commit `8af18a2ccfb75d4854d17cc8d1d381e57100643d`
@@ -51,6 +51,7 @@ scripts/check-ui-localization: line 122: rg: command not found
 - Red（fast）：更新后的 hosted toolchain contract 在旧 workflow 上立即判红，精确识别缺少 `ripgrep`。
 - Green（fast）：hosted toolchain contract、5 份 workflow 的 `actionlint`、failure-case registry、release readiness／aggregation 与 build 14 version contract 全绿；build 14 Toolchain step 也已真实安装 `ripgrep`。
 - Green（原始受害路径）：build 15 与 build 16 都真实调用 ripgrep 15.2.0 并到达 UI localization guard；`rg: command not found` 没有复发，build 16 还完成 7 条 baseline 对账。后续因独立 hosted 预算故障取消，build 17 继续完整链。
+- Green（最终 hosted／release）：build 21 的唯一 CI job 完整成功，Release job 随后发布唯一 DMG 与 checksum；缺失 `rg` 症状没有复发。
 
 ## 永久门禁
 

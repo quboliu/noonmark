@@ -1,6 +1,6 @@
 # FAIL-2026-08-07-07：飞光成功过渡测试依赖 wall-clock 顺序
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T16:00:29Z
 - 影响版本／构建：v0.2.4 build 14，source commit `ab66173a3dced744f54a2f8644acbadfc3d55a9a`
@@ -45,6 +45,7 @@ run `31194926190`／job `92920698454` 的同步断言先证明持久化闭包收
 - Red（fast 结构）：旧代码没有 retained transition task，两个测试均含固定 `Task.sleep`，不满足新增 contract。
 - Green（fast）：`scripts/test-idea-success-transition-contract`、failure-case registry、build 15 version contract、ShellCheck、SwiftFormat 与 `git diff --check` 全绿；没有重跑本地完整测试链。
 - Green（原始 hosted 受害路径）：build 15 与 build 16 均以 Xcode 26.2 完成同一 1527 项聚合测试，2 项既有 skip、0 failure；原失败测试与同型 composer 测试都通过。后续 check 因独立 localization 与 hosted 预算故障停止，真实 App E2E 顺延至 build 17。
+- Green（最终 hosted／release）：build 21 的唯一 CI job 完整执行并成功，随后唯一 Release job 发布 DMG 与 checksum；原始 transition race 没有复发。
 
 ## 永久门禁
 

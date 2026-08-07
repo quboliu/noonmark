@@ -7,7 +7,7 @@
 - 引入提交：`57423085d5ab1f0c739dc96db9d5e78ec10d582d`（`test(ci): Add layered testing and release automation`）首次让 hosted CI 直接安装 Homebrew 浮动 SwiftFormat
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`440484c23c0d75f0c5235ac35e56081817cb65de`（`fix(ci): pin the SwiftFormat toolchain`）
 
 ## 用户症状与影响
 

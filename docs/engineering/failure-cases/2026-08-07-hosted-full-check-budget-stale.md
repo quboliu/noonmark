@@ -42,12 +42,12 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 ## 验证结果
 
 - Red（原始 hosted 症状）：run `31197305770` 在 DMG contract 中被 25 分钟外层预算取消。
-- Green（fast）：hosted budget contract 固定 ordinary CI 的 90 分钟预算，并拒绝 tag Release 重跑 `scripts/check`。
+- Green（fast）：hosted budget contract 固定 ordinary CI 的 90 分钟预算；tag Release 不重跑 `scripts/check` 的单一 owner 收敛到 `FAIL-2026-08-07-10` 的 hosted workflow boundary。
 - 待 Green（原始 hosted 受害路径）：build 18 的单一 GitHub-hosted `scripts/check` job 必须完整返回成功；不再调度本机 E2E。
 
 ## 永久门禁
 
-- fast：`scripts/test-hosted-check-budget-contract`，由 `scripts/check` 强制调用；从 job scope 解析并固定 ordinary hosted check 的 90 分钟有界预算，同时拒绝 tag Release 重跑子集。
+- fast：`scripts/test-hosted-check-budget-contract`，由 `scripts/check` 强制调用；从 check job scope 解析并固定 ordinary hosted check 的 90 分钟有界预算。
 - symptom：`scripts/test-dmg-evidence-contract`，由 `scripts/check` 强制调用；完整 DMG evidence matrix 必须真实执行完毕，任一篡改案例失败仍 fail-closed。
 - release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；Release workflow 未验证精确 hosted CI、完成签名、DMG 与 checksum 时不得发布。
 

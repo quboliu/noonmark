@@ -216,9 +216,9 @@ Nightly：
 
 当前发行范围：
 
-- 当前唯一交付物是稳定 Apple Development 签名的私有 DMG，由用户明确下载、安装和启动；开发／测试不替用户启动 production App。
-- 本项目当前不做公开分发，不创建 GitHub Release，不提供公开下载页、tag 自动发布、App Store、Sparkle 或其他自动更新渠道，也不把 Developer ID、notarization、staple 或 Gatekeeper 验收列为本轮交付承诺。
-- 不得把 `development-signed-not-for-distribution` artifact 改名后冒充公开发行物；如果未来范围改变，必须另立需求、风险评估和发行设计，不能沿用本轮授权。
+- 当前唯一交付物是稳定 Apple Development 签名的 DMG，由 tag workflow 建立公开 GitHub Release asset，供指定用户明确下载、安装和启动；开发／测试不替用户启动 production App。
+- 本项目当前不提供 App Store、Sparkle 或其他自动更新渠道，也不把 Developer ID、notarization、staple 或 Gatekeeper 验收列为本轮交付承诺。
+- 只有 GitHub-hosted tag workflow 签名、静态验证并上传的 DMG 是分发正本；不得把本地自测产物或普通 Actions artifact 改名后冒充发行物。
 
 ## 当前本地取证
 

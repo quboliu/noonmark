@@ -185,10 +185,11 @@ fi
 rg -F 'GitHub Release already exists; refusing to overwrite this build' \
   "$workflow" >/dev/null ||
   fail "release workflow does not reject an existing release"
-rg -F 'workflow_dispatch:' "$workflow" >/dev/null ||
-  fail "release workflow lost its explicit manual tag entry"
+if rg -F 'workflow_dispatch:' "$workflow" >/dev/null; then
+  fail "release workflow exposes an unauthorized manual publication entry"
+fi
 rg -F 'release workflow requires an existing v* tag ref' "$workflow" >/dev/null ||
-  fail "manual release entry is not restricted to an existing v* tag ref"
+  fail "release workflow is not restricted to a v* tag ref"
 rg -F 'actions: read' "$workflow" >/dev/null ||
   fail "release workflow cannot inspect prior candidate runs"
 rg -F 'release workflow reruns are forbidden' "$workflow" >/dev/null ||

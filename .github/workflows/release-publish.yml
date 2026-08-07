@@ -16,7 +16,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: # manual entry; the selected ref must be an existing v* tag
 
 # Never cancel a release mid-flight (a half-published version is worse than a
 # queued one).

@@ -7,7 +7,7 @@
 - 引入提交：`d39944f42ee20d50ad5dad7abf004b46d6396bbb`（`test(ui): Strengthen real App and release gates`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`e18bb36c3f8e4363610b2047dfaefb5ac60094ee`（`fix(ci): stabilize Han localization scanning`）
 
 ## 用户症状与影响
 

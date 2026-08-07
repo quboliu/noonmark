@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+session_source="Sources/NoonmarkMacRuntime/IdeaCaptureSessions.swift"
+test_source="Tests/NoonmarkMacRuntimeTests/IdeaCaptureSessionTests.swift"
+
+fail() {
+  echo "Idea success transition contract: $*" >&2
+  exit 1
+}
+
+[[ "$(grep -Fc 'private var pendingSuccessTransition: Task<Void, Never>?' "$session_source")" -eq 2 ]] ||
+  fail "both shared sessions must retain the exact delayed transition task"
+[[ "$(grep -Fc 'pendingSuccessTransition = Task { @MainActor [weak self] in' "$session_source")" -eq 2 ]] ||
+  fail "both shared sessions must bind their delayed transition to the retained task"
+[[ "$(grep -Fc 'func waitForPendingSuccessTransition() async' "$session_source")" -eq 2 ]] ||
+  fail "both shared sessions must expose the internal deterministic wait boundary"
+[[ "$(grep -Fc 'await pendingSuccessTransition.value' "$session_source")" -eq 2 ]] ||
+  fail "the deterministic wait boundary must await the retained transition itself"
+
+if rg -n 'Task\.sleep' "$test_source" >/dev/null; then
+  fail "session unit tests must not guess transition completion from wall-clock sleep"
+fi
+[[ "$(grep -Fc 'await session.waitForPendingSuccessTransition()' "$test_source")" -eq 2 ]] ||
+  fail "composer and inline-editor tests must await their actual transition tasks"
+
+echo "Idea success transition contract passed"

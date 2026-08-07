@@ -23,6 +23,7 @@
 - build 11 的本地完整 E2E 在 `mouseDown` 前捕获 `FAIL-2026-08-04-28` 的飞光 presentation settlement 复发；该 build 按纪律退役，build 12 成为新候选。
 - build 12 的完整本地发行链通过，但 tag workflow 因 `FAIL-2026-08-07-04` 在 job 建立前失效；普通 CI 同时暴露 `FAIL-2026-08-07-05`。该 build 没有 Release，已退役并删除未交付 tag；hosted signing 修复改由 build 13 的首次 tag run 证明。
 - build 13 已修正 workflow 与 Xcode 基线，但普通 hosted check 在完成全部 build／test 后暴露 `FAIL-2026-08-07-06` 的缺失 `rg` 依赖；该 build 未建立 tag 或 Release，并已退役，最终 hosted signing 证明顺延至 build 14。
+- build 14 已安装 `rg` 并完成产品编译，但全量测试暴露 `FAIL-2026-08-07-07` 的飞光成功过渡 wall-clock 竞态；该 build 未建立 tag 或 Release，并已退役，最终 hosted signing 证明顺延至 build 15。
 
 ## 复现与证据
 
@@ -50,7 +51,7 @@ hosted-runner 发行路径在 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 引入�
 - 本机签名验证：导出的 P12 在隔离 keychain 中只有一个有效 Apple Development identity，证书未过期，一次性 probe 的 `codesign --verify --strict` 通过，清理后临时目录计数为零。
 - Fast gates：`scripts/test-github-release-readiness-contract`、`scripts/test-failure-case-gates`、`scripts/test-release-gate-contract` 与 `scripts/test-release-version-contract` 在 build 12 全绿，覆盖额外 secret、policy、workflow pin／cleanup／不可覆盖与完整 evidence；build 13 另以 `actionlint` 修补 workflow 语义覆盖空洞。
 - Pre-release review：以 `c2fbfc0ee2c894f008458be28cc0dad0c09cb741...HEAD` 为边界的实现 Standards 与 Spec 双轴复核在进入真实发行 gate 前零 finding。
-- 本案例保持「处理中」，直到 build 14 的 tag workflow 实际签名与公开资产 checksum 全绿；只有原始 hosted victim path 由红转绿并完成最终复核后才改为「已修复」。
+- 本案例保持「处理中」，直到 build 15 的 tag workflow 实际签名与公开资产 checksum 全绿；只有原始 hosted victim path 由红转绿并完成最终复核后才改为「已修复」。
 
 ## 永久门禁
 
@@ -60,7 +61,7 @@ hosted-runner 发行路径在 `b1f609c1e5d7403a3bc44c4fe735430e94dc406c` 引入�
 
 ## 发行与回滚
 
-build 10、build 11、build 12 与 build 13 永久标记 `retired`。未交付的 v0.2.4 tag 只有在再次确认不存在 GitHub Release 后才可删除；build 14 只在针对性门禁与普通 hosted CI 全绿后重建 tag。若 secret 配置异常，删除三个 Environment secret；若私钥疑似泄露，必须在 Apple 侧撤销证书并换证，不能只删 GitHub secret。workflow 与门禁可用普通 revert 回滚，但不得移动已经交付的 tag 或复用已退役 build。
+build 10、build 11、build 12、build 13 与 build 14 永久标记 `retired`。未交付的 v0.2.4 tag 只有在再次确认不存在 GitHub Release 后才可删除；build 15 只在针对性门禁与普通 hosted CI 全绿后重建 tag。若 secret 配置异常，删除三个 Environment secret；若私钥疑似泄露，必须在 Apple 侧撤销证书并换证，不能只删 GitHub secret。workflow 与门禁可用普通 revert 回滚，但不得移动已经交付的 tag 或复用已退役 build。
 
 ## 教训与永久约束
 

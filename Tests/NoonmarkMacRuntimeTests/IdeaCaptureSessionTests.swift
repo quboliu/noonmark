@@ -29,7 +29,7 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertEqual(repository.load(), "")
         XCTAssertEqual(session.submissionState, .saving)
 
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        await session.waitForPendingSuccessTransition()
 
         XCTAssertEqual(session.text, "")
         XCTAssertEqual(session.submissionState, .succeeded)
@@ -91,7 +91,7 @@ final class IdeaCaptureSessionTests: XCTestCase {
         XCTAssertEqual(session.draftText, "  修改后的想法\n")
         XCTAssertEqual(session.saveState, .saving)
 
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        await session.waitForPendingSuccessTransition()
 
         XCTAssertNil(session.ideaID)
         XCTAssertEqual(session.draftText, "")

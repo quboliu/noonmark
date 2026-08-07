@@ -78,6 +78,7 @@ public final class IdeaComposerSession: ObservableObject {
     private let repository: any IdeaComposerDraftStoring
     private let successTransitionNanoseconds: UInt64
     private var successGeneration: UInt64 = 0
+    private var pendingSuccessTransition: Task<Void, Never>?
 
     public init(
         repository: any IdeaComposerDraftStoring,
@@ -121,7 +122,7 @@ public final class IdeaComposerSession: ObservableObject {
         // observable saving transition so SwiftUI can paint truthful feedback.
         repository.save("")
         let generation = beginSuccessTransition()
-        Task { @MainActor [weak self] in
+        pendingSuccessTransition = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(
                 nanoseconds: successTransitionNanoseconds
@@ -134,6 +135,14 @@ public final class IdeaComposerSession: ObservableObject {
             presentSuccess()
         }
         return true
+    }
+
+    /// Waits for the exact delayed transition started by the latest successful
+    /// submission. This internal boundary keeps tests synchronized to the real
+    /// state-machine task instead of guessing at hosted-runner wall-clock time.
+    func waitForPendingSuccessTransition() async {
+        guard let pendingSuccessTransition else { return }
+        await pendingSuccessTransition.value
     }
 
     public func dismiss() {
@@ -204,6 +213,7 @@ public final class IdeaInlineEditorSession: ObservableObject {
     public private(set) var saveGeneration: UInt64 = 0
     private var successGeneration: UInt64 = 0
     private let successTransitionNanoseconds: UInt64
+    private var pendingSuccessTransition: Task<Void, Never>?
 
     public init(
         successTransitionNanoseconds: UInt64 = defaultSuccessTransitionNanoseconds
@@ -283,7 +293,7 @@ public final class IdeaInlineEditorSession: ObservableObject {
         }
 
         let generation = beginSuccessTransition()
-        Task { @MainActor [weak self] in
+        pendingSuccessTransition = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(
                 nanoseconds: successTransitionNanoseconds
@@ -296,6 +306,13 @@ public final class IdeaInlineEditorSession: ObservableObject {
             presentSuccess(for: ideaID)
         }
         return true
+    }
+
+    /// Waits for the exact delayed transition started by the latest explicit
+    /// save so callers observing the state machine never rely on a timeout.
+    func waitForPendingSuccessTransition() async {
+        guard let pendingSuccessTransition else { return }
+        await pendingSuccessTransition.value
     }
 
     public func cancel() {

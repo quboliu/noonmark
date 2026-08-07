@@ -7,7 +7,7 @@
 - 引入提交：`d0c3f5285812d12d0b95b02788c230496cf73541`（`fix(ui): Close the loop on the Mac native release review`）把 main E2E 改为 GitHub `self-hosted` runner；后续提交又把腾讯输入法与发行 evidence 持续挂到该 job
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`1c4d48fbb6ab2326f7f76697120609f3beddf18a`（`fix(ci): separate hosted release from local self-tests`）
 
 ## 用户症状与影响
 

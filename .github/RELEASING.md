@@ -35,7 +35,7 @@ CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `
 
 任何一步判红：删除未交付的候选 tag，修复后用**新 build 号**重开；不得移动已交付 tag，不得复用 build 号。
 
-发行 workflow 不提供手动 rerun 入口；任何判红候选都按新 build 号重新开始，避免覆盖或重签既有产物。
+若 tag push 没有建立 run，可在 Actions → Release → Run workflow 手动选择已经存在的 `v*` tag；branch ref 会被 fail-closed 拒绝。已经判红的 run 不得 rerun，必须按新 build 号重新开始；既有 Release 与 asset 也始终拒绝覆盖或重签。
 
 ## 边界
 

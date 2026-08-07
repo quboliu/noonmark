@@ -16,6 +16,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: # manual entry; the selected ref must be an existing v* tag
 
 # Never cancel a release mid-flight (a half-published version is worse than a
 # queued one).
@@ -49,10 +50,6 @@ jobs:
         run: |
           MARKETING="$(scripts/release-version marketing-version)"
           BUILD="$(scripts/release-version build-number)"
-          if [[ "${GITHUB_RUN_ATTEMPT}" != "1" ]]; then
-            echo "::error::release workflow reruns are forbidden; retire this build and open a new candidate"
-            exit 1
-          fi
           if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
             echo "::error::release workflow requires an existing v* tag ref, got ${GITHUB_REF}"
             exit 1

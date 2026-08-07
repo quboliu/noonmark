@@ -7,7 +7,7 @@
 - 引入提交：`6104a58e47c5c39471e9d62ae343241ccc6acd25`（`feat(flylight): refactor the Feiguang input and editing experience`）加入要求单行 `if state == .failed { return true }` 的 literal 门禁
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`00503772e19fcb95a7a824ae2888465ad562df9c`（`fix(test): decouple the notes contract from formatting`）
 
 ## 用户症状与影响
 

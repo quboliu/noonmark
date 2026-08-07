@@ -7,7 +7,7 @@
 - 引入提交：`3d5cc9e80915cd9c8f37a907e84cd3248692e9ae`（`feat(app): Complete the native experience and consistency acceptance upgrade`）把 DMG evidence contract 纳入 `scripts/check`，但没有同步 25 分钟 hosted job 预算
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`3492ccfe920ba5bc79c9a4a01363793d62ef3738`（`fix(ci): align the full hosted check budget`）
 
 ## 用户症状与影响
 
@@ -42,7 +42,7 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 ## 验证结果
 
 - Red（原始 hosted 症状）：run `31197305770` 在 DMG contract 中被 25 分钟外层预算取消。
-- Green（fast）：待 build 17 提交前回填；budget contract 必须证明 ordinary CI 与 canonical Release 均为同一 90 分钟预算。
+- Green（fast）：hosted budget contract、5 份 workflow 的 actionlint、62 个 failure-case registry、build 17 version contract、ShellCheck 与 `git diff --check` 全绿；ordinary CI 与 canonical Release 均精确使用同一 90 分钟预算。
 - 待 Green（原始 hosted 受害路径）：build 17 必须让同一 `scripts/check` 完整返回成功，随后自动启动真实 App E2E。
 
 ## 永久门禁

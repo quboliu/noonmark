@@ -128,3 +128,6 @@ FAIL-2026-08-06-02	fast	scripts/test-subtask-difficulty-ui-contract	scripts/chec
 FAIL-2026-08-06-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以三档截图像素、精确布局和 WindowServer 菜单选择验证难度圆点、标题宽度、SQLite 与重启难度回读
 FAIL-2026-08-06-03	fast	scripts/test-notes-ui-contract	scripts/check	固定 Sticky Note 中英文 slogan，拒绝飞光模块名的量词化／复数化／单条化残留，并要求页头与记录正文证据锚点
 FAIL-2026-08-06-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理打开 Sticky Note 后必须显示语义正确的 slogan，年度 Demo 对账同一共享文案
+FAIL-2026-08-07-01	fast	scripts/test-dmg-evidence-contract	scripts/check	LaunchServices appInfo 缺席时只接受同一 PID 的全集一致 cached-info，伪造或矛盾身份继续判红
+FAIL-2026-08-07-01	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实受控派生 App 多阶段启动并归档 PID-bound LaunchServices 身份证据
+FAIL-2026-08-07-01	release	scripts/test-dmg-install	scripts/release-private-dmg	同一发行 run 的真实 DMG 安装证据与最终跨清单身份对账必须全绿

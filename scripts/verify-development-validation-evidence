@@ -435,6 +435,9 @@ require_install_process_log() {
   local identity_rows
   local identity_count
   local identity_row
+  local cached_identity_rows
+  local cached_identity_count
+  local cached_identity_row
   local audit_token
   local audit_pid_hex
   local audit_pid
@@ -476,28 +479,56 @@ require_install_process_log() {
     awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
       <<<"$identity_rows"
   )"
-  if [[ "$identity_count" != "1" ]]; then
-    echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
-    return 1
-  fi
-  identity_row="$identity_rows"
-  if [[ "$identity_row" != \
-      *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] ||
-    [[ "$identity_row" != \
-      *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]] ||
-    [[ "$identity_row" != *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]] ||
-    [[ ! "$identity_row" =~ LSAuditToken\"=\$([0-9A-F]{64}) ]]; then
-    echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
-    return 1
-  fi
-  audit_token="${BASH_REMATCH[1]}"
-  audit_pid_hex="${audit_token:40:8}"
-  audit_pid="$(
-    printf '%d' "$((16#${audit_pid_hex:6:2}${audit_pid_hex:4:2}${audit_pid_hex:2:2}${audit_pid_hex:0:2}))"
+  cached_identity_rows="$(
+    grep -E \
+      "^[0-9]{4}-[0-9]{2}-[0-9]{2} .* NoonmarkMacAppDMGValidation\\[$expected_pid:[^]]+\\] \\[com[.]apple[.]launchservices:cas\\] information in shared memory .*cached info \\{" \
+      "$path" || true
   )"
-  if [[ "$audit_pid" != "$expected_pid" ]]; then
-    echo "DMG install $mode visible PID disagrees with its kernel audit token" >&2
+  cached_identity_count="$(
+    awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+      <<<"$cached_identity_rows"
+  )"
+  if ((identity_count > 1)); then
+    echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
     return 1
+  fi
+  if [[ "$identity_count" == "0" && "$cached_identity_count" == "0" ]]; then
+    echo "DMG install $mode system runtime log lacks PID-bound App identity" >&2
+    return 1
+  fi
+  if [[ "$identity_count" == "1" ]]; then
+    identity_row="$identity_rows"
+    if [[ "$identity_row" != \
+        *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] ||
+      [[ "$identity_row" != \
+        *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]] ||
+      [[ "$identity_row" != *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]] ||
+      [[ ! "$identity_row" =~ LSAuditToken\"=\$([0-9A-F]{64}) ]]; then
+      echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
+      return 1
+    fi
+    audit_token="${BASH_REMATCH[1]}"
+    audit_pid_hex="${audit_token:40:8}"
+    audit_pid="$(
+      printf '%d' "$((16#${audit_pid_hex:6:2}${audit_pid_hex:4:2}${audit_pid_hex:2:2}${audit_pid_hex:0:2}))"
+    )"
+    if [[ "$audit_pid" != "$expected_pid" ]]; then
+      echo "DMG install $mode visible PID disagrees with its kernel audit token" >&2
+      return 1
+    fi
+  fi
+  if ((cached_identity_count > 0)); then
+    while IFS= read -r cached_identity_row; do
+      if [[ "$cached_identity_row" != \
+          *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] ||
+        [[ "$cached_identity_row" != \
+          *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]] ||
+        [[ "$cached_identity_row" != \
+          *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]]; then
+        echo "DMG install $mode system runtime log has contradictory PID-bound App identity" >&2
+        return 1
+      fi
+    done <<<"$cached_identity_rows"
   fi
   process_days="$(
     sed -nE \

@@ -2712,6 +2712,44 @@ cp "$exercise_window" "$exercise_window_pristine"
 cp "$restart_window" "$restart_window_pristine"
 cp "$exercise_console" "$exercise_console_pristine"
 cp "$restart_console" "$restart_console_pristine"
+
+sed -i '' '/pid=201 appInfo=/d' "$exercise_console"
+printf '%s\n' \
+  "$fixture_process_timestamp.250 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSBundlePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/cross-validator-pid-bound-cached-identity.stdout" \
+  2>"$fixture_root/cross-validator-pid-bound-cached-identity.stderr"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  contradictory-pid-bound-cached-identity \
+  "DMG install exercise system runtime log has contradictory PID-bound App identity"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  contradictory-cached-identity-beside-app-info \
+  "DMG install exercise system runtime log has contradictory PID-bound App identity"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
 sed -i '' '/\tsettings-window\t/d' "$exercise_ledger"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-ledger.tsv"
 expect_install_semantic_mutation_rejected \

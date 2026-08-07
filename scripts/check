@@ -130,6 +130,12 @@ run_check_suite() {
   echo "==> Hosted full-check budget contract"
   scripts/test-hosted-check-budget-contract
 
+  echo "==> GitHub-hosted workflow boundary"
+  scripts/test-github-hosted-workflow-boundary
+
+  echo "==> GitHub-hosted CI verification contract"
+  scripts/test-github-hosted-ci-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

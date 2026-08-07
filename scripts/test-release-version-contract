@@ -75,7 +75,7 @@ fi
 release_script="scripts/release-private-dmg"
 rg -F 'scripts/verify-release-version-tag' "$release_script" >/dev/null ||
   fail "private release entry does not require the exact version tag"
-rg -F 'fetch-depth: 0' .github/workflows/release.yml >/dev/null ||
+rg -F 'fetch-depth: 0' .github/workflows/release-publish.yml >/dev/null ||
   fail "release workflow does not fetch the annotated version tag"
 rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||
   fail "release version tag verifier does not require an annotated tag"

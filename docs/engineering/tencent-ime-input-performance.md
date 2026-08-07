@@ -107,7 +107,7 @@ NOONMARK_E2E_SUBTASK_LAYOUT_ONLY=1 \
   scripts/test-e2e
 ```
 
-真实矩阵需要稳定 Apple Development 签名、已授权 Input Monitoring 的交互式 WindowServer，以及已安装并可选中的腾讯拼音。缺少任何依赖都 fail-closed。`make check` 只包含快速 contract；main 分支 self-hosted E2E 与私有 DMG 发行运行 Day Todo 输入、即时退出和重启 smoke。完整 53 面性能矩阵与 24 面退出矩阵在 `.github/workflows/tencent-ime-quality.yml` 的 scheduled／manual quality job 运行，不阻断 DMG 发行。
+真实矩阵需要稳定 Apple Development 签名、已授权 Input Monitoring 的交互式 WindowServer，以及已安装并可选中的腾讯拼音。缺少任何依赖都 fail-closed。`make check` 只包含快速 contract；Day Todo 输入、即时退出、重启 smoke、53 面性能矩阵与 24 面退出矩阵都保留为 push 前本地全集自测入口。GitHub workflow 不调度本机，也不伪造腾讯拼音通过结论。
 
 结果保存在：
 

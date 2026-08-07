@@ -4,8 +4,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-source scripts/evidence-common
-
 repo="quboliu/noonmark"
 
 fail() {
@@ -24,19 +22,6 @@ scripts/verify-release-version-tag
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   fail "source worktree must be clean"
 fi
-
-e2e_manifest="artifacts/e2e-runtime/manifest.txt"
-lease_manifest="artifacts/e2e-data-root-process-lease/manifest.txt"
-if ! release_run_id="$(evidence_read "$e2e_manifest" evidence_run_id)" ||
-  [[ "$(evidence_read "$lease_manifest" evidence_run_id)" != \
-    "$release_run_id" ]]; then
-  fail "tag push requires same-run full E2E and writer-lease evidence"
-fi
-NOONMARK_EVIDENCE_RUN_ID="$release_run_id"
-export NOONMARK_EVIDENCE_RUN_ID
-scripts/verify-release-static-preflight
-scripts/verify-development-validation-evidence --scope full
-scripts/verify-tencent-ime-release-smoke-evidence
 
 tag="v$(scripts/release-version marketing-version)"
 head_commit="$(git rev-parse HEAD)"
@@ -68,6 +53,7 @@ elif ! rg -qi 'release not found|HTTP 404' "$release_error"; then
 fi
 
 scripts/verify-github-release-readiness
+scripts/verify-github-hosted-ci "$head_commit"
 gh api --method GET \
   "repos/${repo}/actions/workflows/release-publish.yml/runs" \
   -f head_sha="$head_commit" \

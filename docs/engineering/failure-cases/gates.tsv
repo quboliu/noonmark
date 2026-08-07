@@ -152,6 +152,9 @@ FAIL-2026-08-07-07	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-08	fast	scripts/test-ui-localization-han-contract	scripts/check	localization scanner 必须使用明确 Han scalar，并以中点负例与中文正例拒绝跨运行时漂移
 FAIL-2026-08-07-08	symptom	scripts/check-ui-localization	scripts/check	真实 production UI inventory 必须在 hosted 与本机精确保持同一审核 baseline
 FAIL-2026-08-07-08	release	scripts/verify-github-release-publication	scripts/push-release-tag	canonical hosted check 未越过 localization guard 时不得发布 DMG 与 checksum
-FAIL-2026-08-07-09	fast	scripts/test-hosted-check-budget-contract	scripts/check	普通 CI 与 canonical Release 对完整 scripts/check 必须保持相同 90 分钟有界预算
+FAIL-2026-08-07-09	fast	scripts/test-hosted-check-budget-contract	scripts/check	普通 CI 对完整 scripts/check 必须保持 90 分钟有界预算，tag Release 不得重跑子集
 FAIL-2026-08-07-09	symptom	scripts/test-dmg-evidence-contract	scripts/check	完整 DMG evidence matrix 必须由聚合 check 执行完毕，不得被旧 hosted 外层预算截断
-FAIL-2026-08-07-09	release	scripts/verify-github-release-publication	scripts/push-release-tag	Release hosted check、签名、DMG 与 checksum 未全部完成时不得发布
+FAIL-2026-08-07-09	release	scripts/verify-github-release-publication	scripts/push-release-tag	Release 未验证精确 hosted CI、签名、DMG 与 checksum 时不得发布
+FAIL-2026-08-07-10	fast	scripts/test-github-hosted-workflow-boundary	scripts/check	拒绝任何 self-hosted workflow、重复 CI job、tag 重跑 scripts/check 或 tag publisher 消费本地 evidence
+FAIL-2026-08-07-10	symptom	scripts/verify-github-hosted-ci	scripts/push-release-tag	精确 commit 只接受单一 main push、首次成功且唯一 macos-15 job 的 hosted CI
+FAIL-2026-08-07-10	release	scripts/verify-github-release-publication	scripts/push-release-tag	tag run 只接受唯一 macos-15 package job 与唯一 DMG／checksum asset

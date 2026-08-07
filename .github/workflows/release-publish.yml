@@ -1,12 +1,10 @@
 name: Release
 
-# Simplified tag-triggered release pipeline. The full validation chain
-# (make check, real App E2E, writer lease, release-private-dmg) runs LOCALLY
-# before pushing the locally verified tag — that is the quality gate. This
-# workflow runs on a GitHub-hosted runner and only re-verifies what works there
-# (scripts/check), then packages, signs, and publishes the DMG as a public
-# GitHub Release. The CI-built DMG is the canonical distribution artifact;
-# see .github/RELEASING.md.
+# Tag-triggered release pipeline. Local full validation is a pre-push self-test
+# and is not an input to publication. This GitHub-hosted workflow owns the
+# online release gate: it verifies the exact commit's prior hosted CI result,
+# then packages, signs, and publishes the canonical DMG without repeating it.
+# See .github/RELEASING.md.
 #
 #   scripts/push-release-tag
 #
@@ -29,7 +27,7 @@ permissions:
 
 jobs:
   publish:
-    name: Check · Package · GitHub Release
+    name: Package · GitHub Release
     runs-on: macos-15
     timeout-minutes: 90
     environment: release
@@ -79,15 +77,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG} (build ${BUILD})"
 
-      - name: Toolchain
+      - name: Verify prior GitHub-hosted CI
+        run: scripts/verify-github-hosted-ci "$GITHUB_SHA"
+
+      - name: Package toolchain
         run: |
           xcodebuild -version
           swift --version
           [[ "$(xcodebuild -version | sed -n '1p')" == "Xcode 26.2" ]]
-          brew install actionlint ripgrep swiftlint swiftformat
-
-      - name: Verify (build · lint · UT · IT · ST · DST)
-        run: scripts/check
+          brew install ripgrep
 
       - name: Import and prove Apple Development signing identity
         env:

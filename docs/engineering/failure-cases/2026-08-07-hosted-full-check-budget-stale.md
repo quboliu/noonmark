@@ -33,27 +33,27 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 
 ## 根因与破坏机制
 
-普通 CI 的 25 分钟上限是项目初始测试规模的静态常数。`scripts/check` 后来成为完整 UT／IT／ST／DST、证据、DMG 与发行 contract 的聚合入口，但预算没有随责任边界更新。结果是所有断言都可能正确，GitHub 仍在后半段以基础设施取消覆盖测试结论；普通 CI 与执行同一入口的 canonical Release 也形成 25／90 分钟漂移。
+普通 CI 的 25 分钟上限是项目初始测试规模的静态常数。`scripts/check` 后来成为完整 UT／IT／ST／DST、证据、DMG 与发行 contract 的聚合入口，但预算没有随责任边界更新。结果是所有断言都可能正确，GitHub 仍在后半段以基础设施取消覆盖测试结论。后续审计又确认 tag Release 重跑同一子集属于重复编排，应消费精确 main CI 结果。
 
 ## 根因修复
 
-普通 CI check job 与 canonical Release 对同一 `scripts/check` 统一使用 90 分钟硬上限。新增 hosted check budget contract，从各自 job scope 读取 timeout，要求两者都恰为 90 且相等；不能靠另一 job 的 timeout 或简单 grep 冒充。内部 helper、observer 与 fixture 的短 fail-closed deadline 保持不变，测试矩阵不删、不 skip、不降级。
+普通 CI check job 对完整 `scripts/check` 使用 90 分钟硬上限。tag Release 不再重跑该子集，而是 fail-closed 验证精确 commit 的单一 main hosted CI 已成功。内部 helper、observer 与 fixture 的短 fail-closed deadline 保持不变，测试矩阵不删、不 skip、不降级。
 
 ## 验证结果
 
 - Red（原始 hosted 症状）：run `31197305770` 在 DMG contract 中被 25 分钟外层预算取消。
-- Green（fast）：hosted budget contract、5 份 workflow 的 actionlint、62 个 failure-case registry、build 17 version contract、ShellCheck 与 `git diff --check` 全绿；ordinary CI 与 canonical Release 均精确使用同一 90 分钟预算。
-- 待 Green（原始 hosted 受害路径）：build 17 必须让同一 `scripts/check` 完整返回成功，随后自动启动真实 App E2E。
+- Green（fast）：hosted budget contract 固定 ordinary CI 的 90 分钟预算，并拒绝 tag Release 重跑 `scripts/check`。
+- 待 Green（原始 hosted 受害路径）：build 18 的单一 GitHub-hosted `scripts/check` job 必须完整返回成功；不再调度本机 E2E。
 
 ## 永久门禁
 
-- fast：`scripts/test-hosted-check-budget-contract`，由 `scripts/check` 强制调用；从 job scope 解析并固定两条 canonical hosted 路径的相同有界预算。
+- fast：`scripts/test-hosted-check-budget-contract`，由 `scripts/check` 强制调用；从 job scope 解析并固定 ordinary hosted check 的 90 分钟有界预算，同时拒绝 tag Release 重跑子集。
 - symptom：`scripts/test-dmg-evidence-contract`，由 `scripts/check` 强制调用；完整 DMG evidence matrix 必须真实执行完毕，任一篡改案例失败仍 fail-closed。
-- release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；Release workflow 未完成 check、签名、DMG 与 checksum 时不得发布。
+- release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；Release workflow 未验证精确 hosted CI、完成签名、DMG 与 checksum 时不得发布。
 
 ## 发行与回滚
 
-build 16 已永久标记 `retired`，不得 rerun、复用或 tag；build 17 先经新的 `main` CI 完整验证，再允许进入 tag。若真实 contract 出现死锁，90 分钟外层仍会终止并退役候选，随后必须修复具体子进程生命周期；不得继续加大预算。回滚可恢复 workflow 与 contract，但不得删除既有测试、移动 tag 或复用失败 build。
+build 16 与已取消的 build 17 均永久标记 `retired`，不得 rerun、复用或 tag；build 18 只经新的单一 `main` hosted CI 完整验证，再允许进入 tag。若真实 contract 出现死锁，90 分钟外层仍会终止并退役候选，随后必须修复具体子进程生命周期；不得继续加大预算。
 
 ## 教训与永久约束
 

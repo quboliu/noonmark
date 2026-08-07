@@ -1710,19 +1710,17 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 ### 16.5 GitHub Actions
 
-仓库有三条 CI／交付 workflow：
+仓库只保留三条职责单一的 GitHub-hosted workflow，每条只有一个 job：
 
 | Workflow | 触发与 runner | 作用 |
 |---|---|---|
 | `ci.yml` check | PR、main push、手动；GitHub hosted `macos-15` | 执行 `scripts/check`，无论成功失败上传 check evidence，保留 14 天 |
-| `ci.yml` E2E | 仅 main push 或显式 main dispatch；持久 self-hosted Mac | 在 hosted check 成功后验证签名身份、writer lease、完整真实 App E2E 与 runtime evidence |
 | `nightly-deterministic-sim.yml` | 每日或手动；hosted `macos-15` | 固定 seed 默认运行 512 次深度确定性仿真 |
-| `release.yml` | 仅手动 main；self-hosted Mac | 全量 check、E2E、DMG 安装和证据归档；产物明确标记不可公开分发 |
-| `release-publish.yml` | 版本 tag 推送或手动；hosted `macos-15` | `scripts/check` + 打包签名 + DMG 静态验证后创建公开 GitHub Release；完整 GUI 验证链在 tag 前本地执行，CI 产物为分发正本 |
+| `release-publish.yml` | 仅版本 tag 推送；hosted `macos-15` | 验证精确 commit 的 `ci.yml` 已成功，不重跑 `scripts/check`；然后打包签名、静态验证 DMG 并创建公开 GitHub Release |
 
-最重要的供应链安全选择是：pull request 的可变代码绝不运行在持有 UI signing identity 和预授权 TCC 的 persistent runner。PR 只运行 hosted check；合并到 main 后，才由受保护的 runner 执行真实 GUI 门禁。
+供应链边界是 GitHub workflow 绝不调度仓库自有 Mac，因此不接触本机 signing identity、预授权 TCC 或用户环境。真实 GUI、腾讯输入法和安装重启只属于 push 前的本地全集自测，不被线上 tag publisher 消费。
 
-当前 release workflow 使用 Apple Development identity，产物会生成 `NOT-FOR-DISTRIBUTION.txt`，不冒充 Developer ID notarized release。
+当前 release workflow 使用 Apple Development identity，不冒充 Developer ID notarized release。
 
 ### 16.6 开发数据 clean cut
 
@@ -2162,9 +2160,9 @@ pending application 同时保存 before／after Engine 与 Session。启动时�
 
 任务内容按不可信输入处理。scope 限制发送范围，输出必须通过 schema 和 typed evidence，Todo diff 仍需用户确认；这限制写入后果，但不保证模型文字完全不受注入影响。自动分类还必须通过固定 schema 和 stale fences。
 
-#### 为什么 PR 不能跑 self-hosted UI E2E？
+#### 为什么 GitHub 不跑真实 UI E2E？
 
-持久 runner 拥有 signing identity 和预授权 TCC。运行未审阅 PR 代码会把这些能力交给不可信代码，因此 PR 只跑 hosted check；合并到 main 后，受保护 runner 才执行真实 GUI 门禁。
+GitHub 只执行 GitHub-hosted 环境能稳定完成的子集，不调度本机。真实 UI E2E 依赖 WindowServer、稳定签名、TCC 与腾讯输入法，因此只在 push 前本地全集自测中执行；它不是 tag 发布的线上证据输入。
 
 #### 如果现在做 Windows 版，能复用什么？
 
@@ -2357,7 +2355,7 @@ Windows 客户端应该按平台原生重写 UI 和 persistence adapter。
 - `scripts/test-dmg-install`
 - `.github/workflows/ci.yml`
 - `.github/workflows/nightly-deterministic-sim.yml`
-- `.github/workflows/release.yml`
+- `.github/workflows/release-publish.yml`
 - `Sources/NoonmarkDemoSupport/NoonmarkDemoFixture.swift`
 - `Tools/NoonmarkDMGInstallHarness`
 - `Tools/NoonmarkWindowProbe`

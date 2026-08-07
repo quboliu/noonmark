@@ -43,7 +43,7 @@ scripts/check-ui-localization: line 122: rg: command not found
 
 ## 根因修复
 
-把 `rg` 纳入 `scripts/check` 的启动前 `required_tools`，缺失时在任何 build 或测试前直接报告 `missing required tool: rg`。普通 CI 与 canonical Release 的 Toolchain step 都明确通过 Homebrew 安装 `ripgrep`。既有 hosted toolchain contract 同时约束两份 workflow 的完整工具集合和 check 的 fail-fast 声明。
+把 `rg` 纳入 `scripts/check` 的启动前 `required_tools`，缺失时在任何 build 或测试前直接报告 `missing required tool: rg`。普通 CI 安装完整 check 工具集；canonical Release 不重跑 check，只安装 package 仍需的 `ripgrep`。hosted toolchain contract 分别约束两份 workflow 的最小必需集合。
 
 ## 验证结果
 
@@ -54,13 +54,13 @@ scripts/check-ui-localization: line 122: rg: command not found
 
 ## 永久门禁
 
-- fast：`scripts/test-hosted-xcode-toolchain-contract`，由 `scripts/check` 强制调用，要求两条 hosted workflow 安装完整工具集，并要求 check 在套件开始前验证 `rg`。
+- fast：`scripts/test-hosted-xcode-toolchain-contract`，由 `scripts/check` 强制调用，要求 ordinary CI 安装完整 check 工具集、Release 只安装 package 必需的 `ripgrep`，并要求 check 在套件开始前验证 `rg`。
 - symptom：`scripts/check-ui-localization`，由 `scripts/check` 强制调用，真实使用 ripgrep 扫描 production UI 文案并与审核 baseline 对账。
 - release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；canonical hosted check、打包与两个公开资产都必须成功。
 
 ## 发行与回滚
 
-build 13 至 build 16 的 hosted CI 已判红或取消，永久标记 `retired`，不得复用或 tag。build 16 已证明 Toolchain step 安装的 ripgrep 能执行完整 localization baseline 对账，独立 hosted 预算故障阻断后续路径；build 17 继续验证完整链。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
+build 13 至 build 17 均已退役。build 18 继续验证单一 hosted check 与 package 路径。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
 
 ## 教训与永久约束
 

@@ -36,18 +36,18 @@ GitHub run `31192298891` 的 Toolchain step 明确输出 Xcode 16.4、Swift 6.1.
 
 ## 根因与破坏机制
 
-项目运行基线、开发机和本地发行证据都使用 Xcode 26.2，但两个 hosted job 只指定 OS image，依赖 image 的可变默认 Xcode。默认值当时是 Xcode 16.4，导致 canonical hosted path 与本地实际产品工具链不是同一个编译边界。既有门禁只打印版本，没有对版本 fail-closed，也没有把普通 CI 与真实 App E2E evidence 绑定到同一个 run ID。
+项目运行基线、开发机和本地发行证据都使用 Xcode 26.2，但两个 hosted job 只指定 OS image，依赖 image 的可变默认 Xcode。默认值当时是 Xcode 16.4，导致 canonical hosted path 与本地实际产品工具链不是同一个编译边界。既有门禁只打印版本，没有对版本 fail-closed。
 
 ## 根因修复
 
-普通 CI check job 与 canonical Release job 都以 job 级 `DEVELOPER_DIR` 精确选择 `/Applications/Xcode_26.2.app/Contents/Developer`，Toolchain step 继续打印版本并明确断言第一行为 `Xcode 26.2`。普通 hosted check 与后续真实 App E2E 使用同一个 source-bound evidence run ID。新增静态 contract 同时约束两份 workflow；MetricKit 产品源码和原有双 selector 测试恢复原状。
+普通 CI check job 与 canonical Release package job 都以 job 级 `DEVELOPER_DIR` 精确选择 `/Applications/Xcode_26.2.app/Contents/Developer`，Toolchain step 继续打印版本并明确断言第一行为 `Xcode 26.2`。GitHub 不再调度真实 App E2E；tag package job 消费精确 main hosted CI 成功结果。新增静态 contract 同时约束两份 workflow；MetricKit 产品源码和原有双 selector 测试恢复原状。
 
 ## 验证结果
 
 - Red：旧 hosted job 实际输出 Xcode 16.4，并在真实 clean build 对 MetricKit callback 稳定判红。
 - Green（既有基线）：本机 Xcode 26.2 隔离 target build 与 8 个 MetricKit subscriber test 全绿。
 - Green（原始 hosted 受害路径）：build 13 run `31194101256` 的 Toolchain step 精确选择 Xcode 26.2，随后完成干净编译、1527 个 XCTest、demo story test 与确定性仿真；原始 MetricKit unavailable 症状没有复现。
-- 待完成：后续候选依次暴露独立的缺少 `rg`、测试同步、localization oracle 与 hosted 预算故障；build 16 已用 Xcode 26.2 完成 1527 项 XCTest、14 项 Demo、确定性仿真与 localization 对账，build 17 必须完成剩余 hosted check、真实 App E2E 与 canonical DMG。
+- 待完成：build 18 必须以 Xcode 26.2 完成单一 hosted check，tag package job 再以同一工具链打包 canonical DMG；GitHub 不再调度本地 App E2E。
 
 ## 永久门禁
 
@@ -57,7 +57,7 @@ GitHub run `31192298891` 的 Toolchain step 明确输出 Xcode 16.4、Swift 6.1.
 
 ## 发行与回滚
 
-build 12 至 build 16 均因本故障后续暴露的独立发行门禁问题退役。build 16 已再次完成 Xcode 26.2 编译与全部 XCTest；build 17 必须完成普通 CI 再建立 tag。若 GitHub image 不再提供固定路径，workflow 必须 fail-closed 并退役该 build，再由人工评估新的项目工具链；不得静默回到 image 默认值、删除产品能力或跳过 hosted build。
+build 12 至 build 17 均已退役。build 18 必须完成普通 CI 再建立 tag。若 GitHub image 不再提供固定路径，workflow 必须 fail-closed 并退役该 build，再由人工评估新的项目工具链；不得静默回到 image 默认值、删除产品能力或跳过 hosted build。
 
 ## 教训与永久约束
 

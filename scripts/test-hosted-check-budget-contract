@@ -25,12 +25,14 @@ job_timeout() {
 }
 
 ci_timeout="$(job_timeout .github/workflows/ci.yml check)"
-release_timeout="$(job_timeout .github/workflows/release-publish.yml publish)"
 [[ "$ci_timeout" == "90" ]] ||
   fail "ordinary hosted check must retain the 90-minute full-suite budget"
-[[ "$release_timeout" == "90" ]] ||
-  fail "canonical hosted release must retain the 90-minute full-suite budget"
-[[ "$ci_timeout" == "$release_timeout" ]] ||
-  fail "ordinary and canonical hosted scripts/check budgets diverged"
+if rg -F 'run: scripts/check' \
+  .github/workflows/release-publish.yml >/dev/null; then
+  fail "canonical release repeats the already successful hosted check"
+fi
+rg -F 'scripts/verify-github-hosted-ci "$GITHUB_SHA"' \
+  .github/workflows/release-publish.yml >/dev/null ||
+  fail "canonical release does not require the exact hosted check result"
 
 echo "Hosted check budget contract passed (${ci_timeout} minutes)"

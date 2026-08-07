@@ -35,7 +35,7 @@ Neon 的可借鉴点：
   截图场景以 `scripts/test-e2e` 内的 `scenarios` 清单为唯一事实源，覆盖所有顶层页面、主要详情态、分类管理与任务详情分类编辑展开态、烛龙工作流和设置分区；其中 `pool-detail-classification-edit` 验证标签输入只在请求后展开。完整 E2E 还包含默认汇总侧栏 / 日历分析、当天子任务完成撤回和难度修改、附言逐条编辑 / 删除后重启、SQLite JSON 墓碑对账、废弃任务链留在未完成池、重新启用只取消废弃标记、烛龙导航随设置隐藏 / 显示，以及从 Finder 使用用户改写后的全局快捷键唤起 Quick Entry、保留草稿、提交入库和恢复前台 App 等真实 App 探针。UI 调试时可用 `NOONMARK_E2E_SCENARIOS="day completed"` 只刷新指定截图；若同时设置 `NOONMARK_E2E_SCREENSHOTS_ONLY=1`，脚本只运行首段真实窗口截图，未知场景必须失败。截图-only 入口不能替代完整 `scripts/test-e2e`。测试副本固定为当前唯一的 `NoonmarkMacAppE2E` 身份，不接受 executable 或 bundle ID override。
 - UI 视觉证据：当前只以真实 `.app` 的 E2E 截图、交互断言、Accessibility 标识、日志和持久化探针作为自动化证据。归档 HTML 原型已经不代表当前产品，不得作为视觉 oracle，也不得通过上调阈值吸收结构差异。`scripts/test-visual-regression` 只提供显式的两图比较能力；只有用户确认过的真实 App 截图才能传入 `NOONMARK_VISUAL_REFERENCE` 建立 reference，当前尚未固化默认 reference，因此该入口不进入 CI 或 release 门禁。
 - 交互式演示 fixture：功能快速迭代的默认人工入口为 `make run-demo-app`，自动探针为 `make test-demo-fixture`。它与局部截图 seed 分离，通过真实领域接口重放固定一年用户故事，并对 SQLite、二十份加密烛龙 sidecar、已提交／未提交任务产物和复盘回执 fail-closed 对账。覆盖契约与维护规则见 `docs/engineering/interactive-demo-fixture.md`。
-- 腾讯输入法专项：`make test-tencent-ime-input-contract` 是可在 hosted runner 执行的快速门禁，只校验共享 catalog、真实输入源与生命周期能力等稳定语义，不冻结输入面数量或具体 UI 实现。`make test-tencent-ime-release-smoke` 是发行及 main self-hosted E2E 的真实门禁：Day Todo 标题必须在腾讯拼音组合态下精确提交、自动保存仍 pending 时立即退出，并在重启后由 App 与 SQLite 精确回读。`make test-tencent-ime-input-matrix` 和 `make test-tencent-ime-termination-persistence` 保留为 full quality matrix，必须在安装并选中腾讯拼音、具有稳定签名和 Input Monitoring 权限的真实 WindowServer runner 执行；它们由 scheduled／manual quality workflow 运行，不成为每次 DMG 发行的硬前置。完整 E2E 的子任务原生编辑器探针另固定生成十键 `ascii-latency.tsv`，分离 WindowServer event delivery、编辑器 `keyDown`、AppKit 文本处理与 native snapshot；计时前必须以真实输入源、first responder 和选区状态证明现场就绪，不能用固定 sleep 或把输入源切换清理算作业务首键。Storage 门禁除持有真实 SQLite 读快照／写事务外，还必须证明已准备 Store 的热路径不重复 `journal_mode`／`quick_check`、活跃 repository 的共享 WAL anchor 阻止最后连接 teardown、普通 probe 仍可读取、无竞争退出会物化可独立回读的主库并关闭 runtime、外部 writer 的 `SQLITE_BUSY` 只延后 checkpoint 而不阻塞 runtime 关闭，以及文件或 schema 身份变化会重新完整校验；不得以 busy timeout 或重试代替连接生命周期修复。E2E 的真实写竞争注入统一先等待 WAL writer ready handshake，再用第二 writer 证明排他，不能用并发抢锁结果反推 holder 已就绪。除已由 holder handshake 证明的预期竞争分支外，所有真实 App runtime evidence 都把 `database is locked` 直接视为失败。完整方法与输入面表见 `docs/engineering/tencent-ime-input-performance.md`。
+- 腾讯输入法专项：`make test-tencent-ime-input-contract` 是可在 hosted runner 执行的快速门禁，只校验共享 catalog、真实输入源与生命周期能力等稳定语义。`make test-tencent-ime-release-smoke`、`make test-tencent-ime-input-matrix` 和 `make test-tencent-ime-termination-persistence` 依赖真实腾讯拼音、稳定签名、Input Monitoring 和 WindowServer，因此只作为 push 前本地全集自测，不进入 GitHub workflow，也不被 tag publisher 消费。完整方法与输入面表见 `docs/engineering/tencent-ime-input-performance.md`。
 - DST：确定性仿真测试，当前入口为 `scripts/test-deterministic-sim`，使用 seed 驱动领域操作序列并在每一步检查不变量。
 - Live AI Provider Smoke：只验证真实 DeepSeek provider，当前入口为 `scripts/test-ai-provider-live`。该入口不进入默认 `make check`，优先读取被 Git 忽略且权限为 `0600` 的 `config/ai-provider.local.json`，格式参考 `config/ai-provider.local.example.json`；也可显式提供 `NOONMARK_AI_BASE_URL`、`NOONMARK_AI_MODEL` 和 `NOONMARK_AI_API_KEY`。它同时验证结构化归类、至少两个 SSE 文本片段、真实烛龙对话产物经过流式 adapter／Provider run／任务 diff／加密 sidecar 保存恢复的完整链，以及真实 App 自动归类；诊断烛龙链时可对底层 executable 显式设置 `NOONMARK_AI_ZHULONG_ONLY=1`，跳过无关归类请求。一旦手动启用，缺少 key、配置并非 DeepSeek、provider 不可达、流式传输不可用、烛龙产物无法形成可恢复任务 diff，或 EXIT 清理后 E2E Keychain／UserDefaults 仍有测试凭证都必须失败。
 - Live iCloud Sync：真实 Apple Account / iCloud Drive 手动测试，入口为 `NOONMARK_LIVE_ICLOUD_PACKAGE_PATH=/absolute/current-package.json scripts/test-icloud-sync-live`，不进入默认 `make check`；数据包路径为必填且缺失时 fail-closed，固定运行 `e2e` profile，只使用 `Noonmark-E2E/LiveTests/<UUID>`，覆盖真实数据包双 SQLite 往返、record merge、真实 `.app` 同步、SQLite status、仓库 ref 与 `brctl` 上传完成信号。它不得读取或写入 production `Noonmark/SyncRepository`。
@@ -195,27 +195,24 @@ scripts/test-visual-regression
 
 合并到 `main` 或在 `main` ref 上手动触发：
 
-- 先在 GitHub-hosted Mac 运行 `scripts/check`。
-- 通过后才在带固定 `noonmark-ui-e2e` label、稳定签名身份、腾讯拼音与预授权 TCC 的持久交互式 Mac runner 运行 `scripts/test-e2e` 与 `scripts/test-tencent-ime-release-smoke`，并上传截图与运行时证据。
-- self-hosted E2E job 必须以 job-level ref／event 条件拒绝 `pull_request` 和非 `main` 的 `workflow_dispatch`。未合并 PR 可以修改仓库脚本，因此绝不得在持有签名资产和交互权限的持久 runner 上执行。
+- 只在 GitHub-hosted Mac 运行单一 `scripts/check` job。
+- GitHub workflow 不得声明 `self-hosted` runner，不调度本机真实 App E2E，不上传本地 evidence。
 
 Nightly：
 
 - 提高 `ST_SIM_RUNS`，运行更深的 DST。
-- 在同一受控 runner 运行腾讯输入 53 面性能矩阵与 24 面退出／重启矩阵；也可由 `workflow_dispatch` 手动触发。
+- 腾讯输入 53 面性能矩阵与 24 面退出／重启矩阵保留为本地专项入口，不由 GitHub 调度。
 - 保留测试输出，方便复现 seed。
 
 私有 Apple Development DMG 发行验收：
 
-- `.github/workflows/release.yml` 只做 main 上的发行链健康校验：手动触发，没有 GitHub Release 写权限，不接受 tag 自动触发，产物标记不可分发。
-- 正式发版由 tag 触发的 `.github/workflows/release-publish.yml` 承担：本地跑通完整验证链后打 tag，GitHub-hosted runner 复跑 `scripts/check`、`scripts/package-dmg release` 与 `scripts/verify-dmg`，创建公开 GitHub Release 并上传 DMG 与 SHA-256（见 `.github/RELEASING.md`）。
-- 重新跑 `scripts/check`。
-- 在稳定 `Apple Development` 签名、预授权 TCC 的交互式 runner 重新跑 `scripts/test-e2e` 与腾讯拼音 release smoke，确认真实 Mac app 的组合输入、即时退出与持久化重启仍可用。完整性能与覆盖矩阵由独立 quality workflow 报告，不阻断本次私有 DMG。
+- 本地先跑通完整自测全集，但本地 evidence 不是线上发布依赖。
+- 正式发版由 tag 触发的 `.github/workflows/release-publish.yml` 承担：它验证该精确 commit 的单一 GitHub-hosted `ci.yml` job 已成功，不重跑 `scripts/check`；随后执行 `scripts/package-dmg release` 与 `scripts/verify-dmg`，创建公开 GitHub Release 并上传 DMG 与 SHA-256（见 `.github/RELEASING.md`）。
 - 用 release 优化配置打包 `.app` 与 DMG；产物只面向指定用户私下自行下载和安装，不代表可公开分发。
 - 保留与主 executable UUID 集完全匹配的 dSYM，并以 package／install manifest、SHA 与双层 inventory 绑定；dSYM 不进入用户 DMG。
 - 校验 DMG／zip checksum、挂载内容、严格 code signature、canonical icon、`.app` bundle、可执行文件、`Info.plist` 和 Applications shortcut。
 - 正式 DMG 只做 checksum、只读挂载、签名、metadata、UUID／dSYM 与 source-linked SHA 静态门禁；不得在当前账户启动正式 bundle。交互路径由 mounted production App 受控派生并重新签名为 `app.noonmark.mac.dmg-validation`，再由不进入产物的独立 `NoonmarkDMGInstallHarness.app` 通过真实 WindowServer 输入打开 Settings、Quick Entry、建立任务、退出并重启；同时以 AX 可见性、截图、ledger、unified log、DiagnosticReports 与完整 SQLite joined-row 对账隔离持久化。
-- Actions artifact 固定命名为 `development-signed-not-for-distribution`，并包含 `NOT-FOR-DISTRIBUTION.txt`；这里的禁止分发指不得公开发布。完成同一候选的全部门禁后，只能由指定用户私下下载 DMG 并自行安装，workflow 不得创建、修改或上传 GitHub Release，也不提供自动更新。
+- GitHub Release 只接受 tag workflow 新建，不得覆盖既有 Release 或 asset；分发正本为 CI 签名与静态验证后上传的 DMG。
 
 当前发行范围：
 

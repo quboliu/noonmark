@@ -158,7 +158,7 @@ rg -F 'codesign --verify --strict "$NOONMARK_CI_SIGNING_PROBE"' \
   fail "release workflow does not prove the imported private key"
 require_order \
   "$workflow" \
-  'name: Verify (build · lint · UT · IT · ST · DST)' \
+  'name: Verify prior GitHub-hosted CI' \
   'name: Import and prove Apple Development signing identity'
 require_order \
   "$workflow" \
@@ -167,22 +167,28 @@ require_order \
 
 require_order \
   "$tag_publisher" \
-  'scripts/verify-development-validation-evidence --scope full' \
-  'scripts/verify-tencent-ime-release-smoke-evidence'
-require_order \
-  "$tag_publisher" \
-  'scripts/verify-tencent-ime-release-smoke-evidence' \
-  'scripts/verify-github-release-readiness'
-require_order \
-  "$tag_publisher" \
   'scripts/verify-github-release-readiness' \
+  'scripts/verify-github-hosted-ci "$head_commit"'
+require_order \
+  "$tag_publisher" \
+  'scripts/verify-github-hosted-ci "$head_commit"' \
   'git push origin'
 require_order \
   "$tag_publisher" \
   'git push origin' \
   'scripts/verify-github-release-publication'
-rg -F 'scripts/verify-release-static-preflight' "$tag_publisher" >/dev/null ||
-  fail "tag publisher does not consume the final make-check evidence"
+for forbidden_local_evidence in \
+  'scripts/verify-release-static-preflight' \
+  'scripts/verify-development-validation-evidence' \
+  'scripts/verify-tencent-ime-release-smoke-evidence' \
+  'artifacts/e2e-runtime' \
+  'artifacts/e2e-data-root-process-lease'; do
+  if rg -F "$forbidden_local_evidence" "$tag_publisher" >/dev/null; then
+    fail "tag publisher consumes local self-test evidence: $forbidden_local_evidence"
+  fi
+done
+rg -F 'expected_job_boundary=' scripts/verify-github-release-publication >/dev/null ||
+  fail "publication verifier does not enforce one GitHub-hosted release job"
 if rg -F -- '--clobber' "$workflow" >/dev/null ||
   rg -F 'gh release edit' "$workflow" >/dev/null; then
   fail "release workflow can overwrite an existing delivered build"

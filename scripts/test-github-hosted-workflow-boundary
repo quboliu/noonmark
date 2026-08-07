@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "GitHub-hosted workflow boundary: $*" >&2
+  exit 1
+}
+
+workflow_root=".github/workflows"
+ci_workflow="$workflow_root/ci.yml"
+release_workflow="$workflow_root/release-publish.yml"
+tag_publisher="scripts/push-release-tag"
+
+[[ -d "$workflow_root" ]] || fail "workflow directory is missing"
+[[ -r "$ci_workflow" ]] || fail "CI workflow is missing"
+[[ -r "$release_workflow" ]] || fail "release workflow is missing"
+
+workflow_inventory="$(
+  rg --files "$workflow_root" -g '*.yml' -g '*.yaml' | sort
+)"
+expected_inventory=$'.github/workflows/ci.yml\n.github/workflows/nightly-deterministic-sim.yml\n.github/workflows/release-publish.yml'
+[[ "$workflow_inventory" == "$expected_inventory" ]] ||
+  fail "workflow inventory is not the three approved single-owner entries"
+
+if rg -n -i 'self-hosted|noonmark-ui-e2e' "$workflow_root" >/dev/null; then
+  fail "GitHub workflows must never schedule a repository-owned runner"
+fi
+[[ ! -e "$workflow_root/release.yml" ]] ||
+  fail "legacy self-hosted distribution workflow still exists"
+[[ ! -e "$workflow_root/tencent-ime-quality.yml" ]] ||
+  fail "self-hosted Tencent IME workflow still exists"
+
+job_count() {
+  local workflow="$1"
+
+  awk '
+    /^jobs:$/ { in_jobs = 1; next }
+    in_jobs && /^[^[:space:]]/ { in_jobs = 0 }
+    in_jobs && /^  [a-zA-Z0-9_-]+:$/ { count += 1 }
+    END { print count + 0 }
+  ' "$workflow"
+}
+
+while IFS= read -r workflow; do
+  [[ "$(job_count "$workflow")" -eq 1 ]] ||
+    fail "$workflow must contain exactly one job"
+  [[ "$(grep -Fc 'runs-on: macos-15' "$workflow")" -eq 1 ]] ||
+    fail "$workflow must contain exactly one macos-15 runner"
+done <<<"$workflow_inventory"
+for local_only_entry in \
+  scripts/test-data-root-process-lease-e2e \
+  scripts/test-e2e \
+  scripts/test-tencent-ime-release-smoke \
+  scripts/release-private-dmg; do
+  if rg -F "$local_only_entry" "$ci_workflow" >/dev/null; then
+    fail "ordinary CI invokes local-only entry: $local_only_entry"
+  fi
+done
+
+[[ "$(grep -Fc 'runs-on: macos-15' "$release_workflow")" -eq 1 ]] ||
+  fail "release publication must run exactly one macos-15 job"
+if rg -F 'run: scripts/check' "$release_workflow" >/dev/null; then
+  fail "release publication repeats the already successful main CI subset"
+fi
+rg -F 'run: scripts/verify-github-hosted-ci "$GITHUB_SHA"' \
+  "$release_workflow" >/dev/null ||
+  fail "release publication does not consume the exact hosted CI result"
+for local_evidence_consumer in \
+  scripts/verify-release-static-preflight \
+  scripts/verify-development-validation-evidence \
+  scripts/verify-tencent-ime-release-smoke-evidence; do
+  if rg -F "$local_evidence_consumer" "$tag_publisher" >/dev/null; then
+    fail "tag publisher consumes local self-test evidence: $local_evidence_consumer"
+  fi
+done
+rg -F 'expected_job_boundary=' scripts/verify-github-release-publication >/dev/null ||
+  fail "release publication verifier does not enforce the hosted job boundary"
+
+echo "GitHub-hosted workflow boundary passed"

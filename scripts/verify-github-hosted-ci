@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+repo="quboliu/noonmark"
+
+fail() {
+  echo "GitHub-hosted CI verification: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 1 ]]; then
+  echo "usage: scripts/verify-github-hosted-ci <commit>" >&2
+  exit 64
+fi
+
+commit="$1"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "commit must be a full SHA"
+command -v gh >/dev/null 2>&1 || fail "GitHub CLI is unavailable"
+
+run_rows="$(
+  gh api --method GET \
+    "repos/${repo}/actions/workflows/ci.yml/runs" \
+    -f head_sha="$commit" \
+    -F per_page=100 \
+    --jq '.workflow_runs[] | select(.event == "push" and .head_branch == "main") | [.id, .status, (.conclusion // ""), .run_attempt] | @tsv'
+)"
+[[ "$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$run_rows")" -eq 1 ]] ||
+  fail "expected exactly one main push CI run for ${commit}"
+
+IFS=$'\t' read -r run_id run_status run_conclusion run_attempt <<<"$run_rows"
+[[ "$run_id" =~ ^[0-9]+$ && "$run_status" == "completed" &&
+  "$run_conclusion" == "success" && "$run_attempt" == "1" ]] ||
+  fail "CI run is not a first-attempt success: ${run_rows}"
+
+job_boundary="$(
+  gh api "repos/${repo}/actions/runs/${run_id}/jobs" \
+    --jq '[.total_count, .jobs[0].name, (.jobs[0].labels | join(",")), .jobs[0].status, (.jobs[0].conclusion // "")] | @tsv'
+)"
+expected_boundary=$'1\tBuild · Lint · UT · IT · ST · DST\tmacos-15\tcompleted\tsuccess'
+[[ "$job_boundary" == "$expected_boundary" ]] ||
+  fail "CI run did not use the single successful GitHub-hosted job: ${job_boundary}"
+
+echo "GitHub-hosted CI verified: run=${run_id} commit=${commit}"

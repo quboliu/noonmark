@@ -106,22 +106,6 @@ expected_ime_smoke_contract=$'surface=day-title\ninput_source=com.tencent.inputm
 if [[ "$("$ime_release_smoke" --contract)" != "$expected_ime_smoke_contract" ]]; then
   fail "Tencent IME release smoke contract changed"
 fi
-rg -F 'artifacts/release-diagnostic-closure-gate' \
-  .github/workflows/release.yml >/dev/null ||
-  fail "release workflow does not retain the diagnostic closure evidence"
-rg -F 'scripts/release-private-dmg' .github/workflows/release.yml >/dev/null ||
-  fail "release workflow does not delegate validation to the release entry"
-if rg -F 'scripts/test-tencent-ime-input-matrix' \
-  .github/workflows/release.yml >/dev/null ||
-  rg -F 'scripts/test-tencent-ime-termination-persistence' \
-    .github/workflows/release.yml >/dev/null; then
-  fail "release workflow must delegate Tencent IME smoke to the release entry"
-fi
-if rg -F 'scripts/verify-development-validation-evidence' \
-  .github/workflows/release.yml >/dev/null; then
-  fail "release workflow duplicates validation owned by the release entry"
-fi
-
 if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
   source_snapshot="$(
     mktemp "${TMPDIR:-/tmp}/noonmark-release-contract-source.XXXXXX"

@@ -1187,27 +1187,14 @@ require_literal scripts/test-data-root-process-lease-e2e '"${diagnostic_baseline
 require_literal scripts/test-data-root-process-lease-e2e 'ps -ww -p "$sigkill_target_pid" -o command='
 require_literal scripts/test-data-root-process-lease-e2e "evidence_verify_sigkill_allowlist"
 
-for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
-  require_order \
-    "$workflow" \
-    "scripts/test-data-root-process-lease-e2e" \
-    "scripts/test-e2e"
-  require_literal "$workflow" "artifacts/e2e*"
-  require_literal "$workflow" "if-no-files-found: error"
-  require_literal "$workflow" "NOONMARK_EVIDENCE_RUN_ID"
-  if grep -F "source scripts/evidence-common" "$workflow" >/dev/null ||
-    grep -F "evidence_require_manifest" "$workflow" >/dev/null ||
-    grep -F "evidence_read" "$workflow" >/dev/null; then
-    echo "$workflow duplicates evidence validation outside the shared validator" >&2
-    exit 1
-  fi
+for workflow in .github/workflows/*.yml; do
+  forbid_literal "$workflow" "scripts/test-data-root-process-lease-e2e"
+  forbid_literal "$workflow" "scripts/test-e2e"
+  forbid_literal "$workflow" "scripts/release-private-dmg"
 done
-require_literal \
-  .github/workflows/ci.yml \
-  "scripts/verify-development-validation-evidence --scope runtime"
-require_literal .github/workflows/release.yml "scripts/release-private-dmg"
-forbid_literal \
-  .github/workflows/release.yml \
-  "scripts/verify-development-validation-evidence"
+require_order \
+  scripts/release-private-dmg \
+  "scripts/verify-development-validation-evidence --scope runtime" \
+  "scripts/test-release-diagnostic-closure"
 
 echo "E2E and data-root process lease evidence contract passed"

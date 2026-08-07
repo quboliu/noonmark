@@ -991,13 +991,8 @@ for literal in \
     fail "scripts/check is missing auditable final-check evidence: $literal"
   fi
 done
-if ! grep -F \
-  "artifacts/audit-final/make-check" \
+grep -F "artifacts/audit-final/make-check" \
   "$repo_root/.github/workflows/ci.yml" >/dev/null ||
-  ! grep -F \
-    "artifacts/audit-final" \
-    "$repo_root/.github/workflows/release.yml" >/dev/null; then
-  fail "check evidence is not retained by CI and release workflows"
-fi
+  fail "check evidence is not retained by the hosted CI owner"
 
 echo "Validation evidence common seam checks passed"

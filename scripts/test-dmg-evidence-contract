@@ -3290,9 +3290,6 @@ require_order \
   "$repo_root/scripts/release-private-dmg" \
   'scripts/verify-dmg dist/Noonmark.dmg' \
   'scripts/test-dmg-install dist/Noonmark.dmg'
-require_literal "$repo_root/.github/workflows/release.yml" \
-  'scripts/release-private-dmg'
-require_literal "$repo_root/.github/workflows/release.yml" 'dist/Noonmark.app.dSYM'
 require_order \
   "$repo_root/scripts/test-dmg-install" \
   'rm -rf "$work_dir" "$helper_evidence_root"' \

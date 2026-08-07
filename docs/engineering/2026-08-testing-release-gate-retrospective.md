@@ -30,7 +30,7 @@
 2. **用精确数量、控件个数、源文件字符串做发布标准。** `53`、`24`、某个 SwiftUI／AppKit 控件数量、特定文件中的一行实现都不是稳定用户价值。它们会迫使正常重构修改测试，却不一定提升保护力。
 3. **同一个事实有多名 owner。** workflow、release 脚本、fixture 和 verifier 分别表达“腾讯输入已验证”会天然漂移。发行只应有一个 owner；quality 覆盖也应有一个明确 owner。
 4. **为每个 cross-boundary 事实增加 manifest。** manifest、hash 和 inventory 对 package identity、诊断导出、安全边界，以及打包 worktree 的证据属地很有价值；把它们扩展到每一份质量测试结果，会令 fixture 和 verifier 的维护成本高于获得的风险降低。
-5. **把环境不可用混同为产品失败。** GitHub-hosted macOS 没有腾讯拼音，不能伪造通过；但也不应因此使普通编译／单测 CI 失去价值。真实输入验证应只在预配的 self-hosted runner 执行。
+5. **把环境不可用混同为产品失败。** GitHub-hosted macOS 没有腾讯拼音，不能伪造通过；但也不应因此使普通编译／单测 CI 失去价值。真实输入验证只在 push 前本地全集自测执行，GitHub 不调度本机。
 
 ## 新的分层与责任
 
@@ -38,7 +38,7 @@
 | --- | --- | --- | --- |
 | fast | 编译、领域不变量、隔离边界和发行编排的轻量语义 | `scripts/check` | 阻断 |
 | release smoke | 少量不可替代的真实用户承诺 | `scripts/release-private-dmg` 内的 `scripts/test-tencent-ime-release-smoke release` | 阻断 |
-| quality matrix | 广覆盖、性能分布、页面与输入面的回归侦测 | `.github/workflows/tencent-ime-quality.yml` 或手动矩阵入口 | 不阻断当次 DMG；失败必须调查 |
+| quality matrix | 广覆盖、性能分布、页面与输入面的回归侦测 | 本地手动矩阵入口 | 不阻断线上发布；失败必须调查 |
 
 腾讯输入 release smoke 固定为 Day Todo 标题：真实腾讯拼音进入 marked text，提交后的最终编辑器文本在自动保存尚 pending 时发起退出，并在重启后由 App 与 SQLite 读取同一精确值。它保护产品可控制的输入持久化承诺，而不是要求所有页面在每次发行都维持相同的测试布局，或把输入法词典变化误判为产品回归。
 

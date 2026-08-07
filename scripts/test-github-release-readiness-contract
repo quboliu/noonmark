@@ -63,6 +63,7 @@ chmod 0700 "$fake_gh"
 
 complete_secrets="$fixture_root/complete-secrets.txt"
 missing_secrets="$fixture_root/missing-secrets.txt"
+extra_secrets="$fixture_root/extra-secrets.txt"
 exact_policy="$fixture_root/exact-policy.txt"
 branch_policy="$fixture_root/branch-policy.txt"
 broad_policy="$fixture_root/broad-policy.txt"
@@ -73,6 +74,11 @@ printf '%s\n' \
 printf '%s\n' \
   APPLE_DEV_CERT_P12_BASE64 \
   APPLE_DEV_CERT_PASSWORD >"$missing_secrets"
+printf '%s\n' \
+  APPLE_DEV_CERT_P12_BASE64 \
+  APPLE_DEV_CERT_PASSWORD \
+  APPLE_DEV_KEYCHAIN_PASSWORD \
+  UNEXPECTED_RELEASE_SECRET >"$extra_secrets"
 printf 'tag\tv*\n' >"$exact_policy"
 printf 'branch\tmain\n' >"$branch_policy"
 printf 'tag\t*\n' >"$broad_policy"
@@ -101,6 +107,13 @@ if run_readiness "$missing_secrets" "$exact_policy" "$missing_output"; then
 fi
 grep -Fq 'missing environment secret: APPLE_DEV_KEYCHAIN_PASSWORD' \
   "$missing_output" || fail "missing-secret failure was not specific"
+
+extra_output="$fixture_root/extra-output.txt"
+if run_readiness "$extra_secrets" "$exact_policy" "$extra_output"; then
+  fail "readiness verifier accepted an unexpected environment secret"
+fi
+grep -Fq 'release environment must contain exactly the three signing secrets' \
+  "$extra_output" || fail "extra-secret failure was not specific"
 
 branch_output="$fixture_root/branch-output.txt"
 if run_readiness "$complete_secrets" "$branch_policy" "$branch_output"; then
@@ -153,8 +166,26 @@ require_order \
 
 require_order \
   "$tag_publisher" \
+  'scripts/verify-development-validation-evidence --scope full' \
+  'scripts/verify-github-release-readiness'
+require_order \
+  "$tag_publisher" \
   'scripts/verify-github-release-readiness' \
   'git push origin'
+rg -F 'scripts/verify-release-static-preflight' "$tag_publisher" >/dev/null ||
+  fail "tag publisher does not consume the final make-check evidence"
+if rg -F -- '--clobber' "$workflow" >/dev/null ||
+  rg -F 'gh release edit' "$workflow" >/dev/null; then
+  fail "release workflow can overwrite an existing delivered build"
+fi
+rg -F 'GitHub Release already exists; refusing to overwrite this build' \
+  "$workflow" >/dev/null ||
+  fail "release workflow does not reject an existing release"
+if rg -F 'workflow_dispatch:' "$workflow" >/dev/null; then
+  fail "release workflow exposes an unsafe manual rerun path"
+fi
+rg -F 'release workflow reruns are forbidden' "$workflow" >/dev/null ||
+  fail "release workflow does not reject a repeated run attempt"
 rg -F 'scripts/push-release-tag' "$release_guide" >/dev/null ||
   fail "release guide bypasses the guarded tag publisher"
 rg -F 'gh secret set --env release' "$release_guide" >/dev/null ||

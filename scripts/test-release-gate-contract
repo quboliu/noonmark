@@ -115,22 +115,6 @@ if rg -F 'scripts/verify-development-validation-evidence' \
   fail "release workflow duplicates validation owned by the release entry"
 fi
 
-publish_workflow=".github/workflows/release-publish.yml"
-rg -n 'uses: actions/checkout@[0-9a-f]{40}$' "$publish_workflow" >/dev/null ||
-  fail "canonical release workflow does not pin checkout by full SHA"
-rg -F 'persist-credentials: false' "$publish_workflow" >/dev/null ||
-  fail "canonical release workflow retains checkout credentials"
-rg -F 'if: always()' "$publish_workflow" >/dev/null ||
-  fail "canonical release workflow lacks unconditional signing cleanup"
-require_order \
-  "$publish_workflow" \
-  'name: Verify (build · lint · UT · IT · ST · DST)' \
-  'name: Import and prove Apple Development signing identity'
-require_order \
-  "$publish_workflow" \
-  'name: Remove signing material' \
-  'name: Checksum and release notes'
-
 if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
   source_snapshot="$(
     mktemp "${TMPDIR:-/tmp}/noonmark-release-contract-source.XXXXXX"

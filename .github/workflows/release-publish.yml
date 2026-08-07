@@ -16,7 +16,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: # manual re-run; the selected ref must be an existing v* tag
 
 # Never cancel a release mid-flight (a half-published version is worse than a
 # queued one).
@@ -50,6 +49,10 @@ jobs:
         run: |
           MARKETING="$(scripts/release-version marketing-version)"
           BUILD="$(scripts/release-version build-number)"
+          if [[ "${GITHUB_RUN_ATTEMPT}" != "1" ]]; then
+            echo "::error::release workflow reruns are forbidden; retire this build and open a new candidate"
+            exit 1
+          fi
           if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
             echo "::error::release workflow requires an existing v* tag ref, got ${GITHUB_REF}"
             exit 1
@@ -171,20 +174,27 @@ jobs:
           } >> RELEASE_NOTES.md
           echo "---- release notes ----"; cat RELEASE_NOTES.md
 
-      - name: Create / update GitHub Release
+      - name: Create immutable GitHub Release
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           TITLE="Noonmark ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.build }})"
-          git fetch --force --tags origin "$TAG"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TITLE" --notes-file RELEASE_NOTES.md
-          else
-            gh release create "$TAG" --title "$TITLE" \
-              --notes-file RELEASE_NOTES.md --verify-tag
+          RELEASE_VIEW_ERROR="$RUNNER_TEMP/noonmark-release-view-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          if gh release view "$TAG" >/dev/null 2>"$RELEASE_VIEW_ERROR"; then
+            echo "::error::GitHub Release already exists; refusing to overwrite this build"
+            exit 1
           fi
-          gh release upload "$TAG" dist/Noonmark.dmg dist/Noonmark.dmg.sha256 \
-            --clobber
-          gh release edit "$TAG" --draft=false --latest
+          if ! grep -Eqi 'release not found|HTTP 404' "$RELEASE_VIEW_ERROR"; then
+            echo "::error::cannot prove that GitHub Release ${TAG} is absent"
+            exit 1
+          fi
+          rm -f "$RELEASE_VIEW_ERROR"
+          gh release create "$TAG" \
+            dist/Noonmark.dmg \
+            dist/Noonmark.dmg.sha256 \
+            --title "$TITLE" \
+            --notes-file RELEASE_NOTES.md \
+            --verify-tag \
+            --latest
           ACTUAL_TAG="$(gh release view "$TAG" --json tagName --jq '.tagName')"
           if [[ "$ACTUAL_TAG" != "$TAG" ]]; then
             echo "::error::GitHub Release tag mismatch: expected ${TAG}, got ${ACTUAL_TAG}"

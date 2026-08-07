@@ -29,13 +29,13 @@ CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `
 
 1. 在 `main` 完成开发，本地跑通完整验证链（见上），故障案例与门禁按纪律闭环。
 2. 准备候选：更新 `release/VERSION`（PATCH 修复递增 build；MINOR 新能力；MAJOR 需用户明确批准）、`release/BUILD-LEDGER.tsv` 登记 `candidate`、新建 `docs/releases/vX.Y.Z.md`，commit 并 push `main`。
-3. 打带注释 tag，再走唯一受保护推送入口：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate" && scripts/push-release-tag`。该入口会拒绝脏工作树、未同步的 `origin/main`、既有远端 tag／Release、缺失签名 secret 或过宽 Environment policy，并在推送后对账 annotated tag object 与 commit。
-4. workflow 自动执行：tag 与 `release/VERSION` 对账 → 导入签名身份 → `scripts/check` → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建或更新 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。
+3. 打带注释 tag，再走唯一受保护推送入口：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate" && scripts/push-release-tag`。该入口会先消费同一 run 的完整本地检查、writer-lease、E2E、诊断闭环与 DMG 证据，再拒绝脏工作树、未同步的 `origin/main`、既有远端 tag／Release、缺失签名 secret 或过宽 Environment policy，并在推送后对账 annotated tag object 与 commit。
+4. workflow 自动执行：tag 与 `release/VERSION` 对账 → `scripts/check` → 导入并实际证明签名身份 → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建全新的 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。workflow 拒绝覆盖既有 Release 或 asset。
 5. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
 
 任何一步判红：删除未交付的候选 tag，修复后用**新 build 号**重开；不得移动已交付 tag，不得复用 build 号。
 
-手动重跑只可在 Actions → Release → Run workflow 选择已经存在、符合 `v*` 的候选 tag；不得选择 `main` 或其他 branch 代替 tag。
+发行 workflow 不提供手动 rerun 入口；任何判红候选都按新 build 号重新开始，避免覆盖或重签既有产物。
 
 ## 边界
 

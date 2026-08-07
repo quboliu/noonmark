@@ -39,6 +39,10 @@ for secret_name in "${required_secrets[@]}"; do
     fail "missing environment secret: ${secret_name}"
   fi
 done
+secret_count="$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$secret_names")"
+if [[ "$secret_count" != "${#required_secrets[@]}" ]]; then
+  fail "release environment must contain exactly the three signing secrets"
+fi
 
 if ! policy_rows="$(
   gh api \

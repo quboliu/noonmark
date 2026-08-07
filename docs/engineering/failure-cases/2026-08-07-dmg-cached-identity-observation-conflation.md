@@ -1,13 +1,13 @@
 # FAIL-2026-08-07-02：DMG 身份验证器混淆目标身份与 cached-info 观察
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T07:01:10Z（0.2.4 (10) 最终发行证据对账判红）
 - 影响版本／构建：0.2.4 (10) 本机候选，source commit `8a90e311f21a0e62a1164c44a4371e26bed243df`；不影响已交付版本
 - 引入提交：`403110f0784a9a1ed89a3c9ffa5bafe1955cd2ff` fix(release): verify cached LaunchServices app identity
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：Codex agent（当前发行 session 的工具与会话记录可确认）
-- 修复提交：待回填
+- 修复提交：`e1a27e23d6ae952eb20c48e94c150155d9f27a2f` fix(release): bind LaunchServices identity by subject ASN
 
 ## 用户症状与影响
 
@@ -40,12 +40,16 @@
 
 - 直接 `appInfo` 继续要求 executable path、bundle path、bundle identifier 与 audit-token PID 全部一致。
 - 有直接 `appInfo` 时，从其中提取权威 LSASN；缺少 `appInfo` 时，仅由 executable path 与 bundle identifier 均完全一致的 cached-info seed 确定唯一 subject ASN，多 ASN 或无 ASN 均判红。
-- 只把该 subject ASN 的 cached-info 视为目标身份全集；目标进程查询的其他 ASN 不参与目标 App 身份判断。
+- 先由目标进程 observer 确定 fallback subject ASN，再从整份 phase capture 收集所有 observer 对该 subject ASN 的 cached-info 作为目标身份全集；任何 observer 查询的其他 ASN 不参与目标 App 身份判断。
 - subject ASN 下每条 payload 都必须包含 exact executable path 与 bundle identifier；`LSBundlePath` 若实际出现则必须 exact，若被统一日志截断则不臆造缺失值。即使伪造 payload 完全不含目标字段，也不能逃过 ASN 绑定后的全集校验。
 
 ## 验证结果
 
-- 待完成 fast contract、真实 `dmg-validation` symptom gate 与同一 run 的完整 release gate 后回填。
+- fast：`scripts/test-dmg-evidence-contract` 独立完整运行与 evidence run `release-v0.2.4-b10-20260807T081500Z` 的 `make check` 均通过；canonical／fallback、统一日志截断、其他 ASN、跨 observer 同 ASN 伪造、非法 subject、多个 exact subject 与可见错误 `LSBundlePath` 均完成正负向对账。
+- symptom：同一 run 的真实 App E2E 通过飞光、子任务、Sticky Note、输入、退出、重启与 SQLite 等用户路径；`scripts/test-dmg-install` 从正式 DMG 受控派生 `dmg-validation` App，完成真实窗口、Settings、Quick Entry、退出、重启、AX／SQLite 恒等与锁中诊断导出。
+- release：同一 run 的 `scripts/release-private-dmg` 输出 `Full development-validation evidence is internally consistent` 与 `Private DMG package and complete same-run validation evidence passed`，production App 保持 `production_app_executed=false`。
+- 本轮 exercise／restart／diagnostic-export 的 canonical subject ASN 分别聚合 9／10／11 条跨 observer cached-info；其中目标 App observer 分别为 8／9／10 条。restart 阶段 `appInfo` 计数为 0，真实覆盖 fallback；其余两阶段各有一条权威 `appInfo`，真实覆盖 canonical 分支。
+- 发行证明包 SHA-256 为 `4b7218f80623b7348e6107980f6eef51ab7ecd02600f0912cb1f699f5e0a723f`。两位独立只读 reviewer 最终均报告无剩余高／中 finding。
 
 ## 永久门禁
 

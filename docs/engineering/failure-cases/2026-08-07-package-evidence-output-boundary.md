@@ -7,7 +7,7 @@
 - 引入提交：`038e4e71f72b2d808e3327aae7b7f23f570f3850`（`fix(evidence): harden evidence paths and session lifecycle`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`d37ced6cc5c04001367c18a678dd326f30be37e4`（`fix(release): initialize the package evidence boundary`）
 
 ## 用户症状与影响
 

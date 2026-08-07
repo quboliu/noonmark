@@ -143,3 +143,6 @@ FAIL-2026-08-07-04	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-05	fast	scripts/test-hosted-xcode-toolchain-contract	scripts/check	普通 CI 与 canonical Release 必须精确选择并 fail-closed 验证 Xcode 26.2
 FAIL-2026-08-07-05	symptom	scripts/test-unit	scripts/check	hosted Xcode 26.2 必须真实编译 NoonmarkDiagnostics 并验证两个 MetricKit subscriber selector
 FAIL-2026-08-07-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	hosted check 与打包必须成功并建立 canonical DMG 与 checksum
+FAIL-2026-08-07-06	fast	scripts/test-hosted-xcode-toolchain-contract	scripts/check	两条 hosted workflow 必须安装 ripgrep，scripts/check 必须在套件开始前声明并检查 rg
+FAIL-2026-08-07-06	symptom	scripts/check-ui-localization	scripts/check	hosted UI 文案静态门禁必须真实调用 rg 并与已审核 baseline 对账
+FAIL-2026-08-07-06	release	scripts/verify-github-release-publication	scripts/push-release-tag	canonical hosted check 不得因缺少 rg 中断，随后必须建立 DMG 与 checksum

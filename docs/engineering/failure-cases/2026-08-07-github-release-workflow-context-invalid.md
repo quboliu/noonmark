@@ -48,7 +48,7 @@ actionlint .github/workflows/release-publish.yml
 
 - Red：旧 workflow 的 `actionlint` 稳定输出三项 `runner` context error。
 - Green（fast）：修复提交上的 5 份 workflow 已通过 `actionlint`；release readiness、release aggregation 与 failure-case registry contract 同时通过。
-- 待 Green（受害路径）：build 13 的普通 CI 与 tag workflow 必须建立真实 job 并成功完成。
+- 待 Green（受害路径）：build 13 普通 CI 已建立真实 job，但因独立的 hosted 工具依赖故障退役；build 14 的 tag workflow 必须建立真实 job 并成功完成。
 - 本案例在公开 Release、两个 canonical 资产与 checksum 尚未完成前保持「处理中」。
 
 ## 永久门禁
@@ -59,7 +59,7 @@ actionlint .github/workflows/release-publish.yml
 
 ## 发行与回滚
 
-build 12 永久标记 `retired`，不得复用。修复先随 build 13 推送 `main` 并观察普通 CI，再由完整 tag-only 路径触发 Release。若 hosted run 再失败，退役 build 13，保留失败 run 与 commit，不 rerun、不移动 tag。workflow 代码可以普通 revert，但不得恢复 job 级 `runner.temp`。
+build 12 与 build 13 永久标记 `retired`，不得复用。build 13 的普通 CI 已证明 workflow 能建立真实 job，但因独立工具依赖故障停止；build 14 由完整 tag-only 路径触发 Release。若 hosted run 再失败，退役该 build，保留失败 run 与 commit，不 rerun、不移动 tag。workflow 代码可以普通 revert，但不得恢复 job 级 `runner.temp`。
 
 ## 教训与永久约束
 

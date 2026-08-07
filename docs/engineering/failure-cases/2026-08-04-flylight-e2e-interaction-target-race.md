@@ -82,7 +82,7 @@ idea capture target has no clickable visible area
 - Red：更新后的 `scripts/test-idea-capture-interaction-target-contract` 在旧实现上 exit 1；phase retry 单元测试在 contract 实现前编译判红。
 - 中间修复证据：早期 repair tree 的 fast contract 与 release build 编译通过，并连续五轮跑绿聚焦真实飞光 E2E；后续又加入窗口可见性与 post-`mouseDown` phase 守卫，因此这五轮只证明原始失败位置曾转绿，不作为当前候选的最终症状证据。
 - 当前 Green：phase retry 单元测试、收紧到精确函数范围的 fast contract 与 failure-case gate 已通过；精确修复 commit `ff62a33938e15d8ecdce827e7f3ae82ddc666ca9` 的聚焦与完整真实 App E2E 均通过，并完成分类候选、回看刷新、SQLite 与重启对账。
-- build 12 的 `make check`、writer lease、完整 E2E 与本地 DMG 发行链使用同一 source commit 全绿。随后 build 12 因独立的 GitHub workflow／hosted SDK 故障退役，不改变本案例原始用户症状已经由红转绿的事实；build 13 继承同一修复。
+- build 12 的 `make check`、writer lease、完整 E2E 与本地 DMG 发行链使用同一 source commit 全绿。随后 build 12 因独立的 GitHub workflow／hosted SDK 故障退役，不改变本案例原始用户症状已经由红转绿的事实；build 13 因独立 hosted 工具缺口退役，build 14 继续继承同一修复。
 
 ## 永久门禁
 
@@ -91,7 +91,7 @@ idea capture target has no clickable visible area
 
 ## 发行与回滚
 
-build 11 已在本地完整 E2E 判红并永久退役。build 12 完成原始症状验证后因独立发行基础设施故障退役；v0.2.4 仍没有 GitHub Release。build 13 保留精确修复 commit。若修复本身回归，回退共享 E2E 修复 commit 并继续阻断发行；不得恢复被动坐标兜底、放宽 WindowServer 校验或触碰 production 资料。
+build 11 已在本地完整 E2E 判红并永久退役。build 12 完成原始症状验证后因独立发行基础设施故障退役，build 13 又因 hosted 工具依赖故障退役；v0.2.4 仍没有 GitHub Release。build 14 保留精确修复 commit。若修复本身回归，回退共享 E2E 修复 commit 并继续阻断发行；不得恢复被动坐标兜底、放宽 WindowServer 校验或触碰 production 资料。
 
 ## 教训与永久约束
 

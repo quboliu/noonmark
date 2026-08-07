@@ -28,7 +28,7 @@ evidence_append_snapshot "$check_manifest" "$source_start_fragment"
 
 run_check_suite() {
   local required_tools=(
-    swift xcodebuild xcrun actionlint swiftlint swiftformat sips iconutil
+    swift xcodebuild xcrun actionlint rg swiftlint swiftformat sips iconutil
   )
 
   for tool in "${required_tools[@]}"; do

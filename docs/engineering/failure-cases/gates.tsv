@@ -161,3 +161,6 @@ FAIL-2026-08-07-10	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-11	fast	scripts/test-swiftformat-toolchain-contract	scripts/check	拒绝浮动 Homebrew SwiftFormat，并固定版本、官方资产 checksum、共享调用入口与 CI 安装边界
 FAIL-2026-08-07-11	symptom	scripts/format	scripts/check	全部 Swift source 必须由固定 SwiftFormat 0.62.1 全量 lint 且无格式漂移
 FAIL-2026-08-07-11	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布
+FAIL-2026-08-07-12	fast	scripts/test-notes-ui-contract-formatting	scripts/check	格式无关 matcher 必须接受单行与多行 failed retry，并拒绝 return false mutation
+FAIL-2026-08-07-12	symptom	scripts/test-notes-ui-contract	scripts/check	真实飞光 composer 必须保留 failed retry 控制流及完整 Notes UI 契约
+FAIL-2026-08-07-12	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布

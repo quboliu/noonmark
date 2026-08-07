@@ -45,7 +45,8 @@
 - Red（最小差分）：同一文件在 `0.61.1` 为绿、`0.62.1` 为四个同规则错误。
 - Green（fast）：固定工具链 contract、首次下载 checksum 校验、缓存后二次版本校验均通过。
 - Green（本机 symptom）：固定 `0.62.1` 的 `scripts/format --lint` 报告 `0/472`；72 个 Swift 文件的无空白 token 序列没有增删。
-- 待 Green（hosted symptom／release）：build 19 的唯一 main hosted job 必须完整成功，tag job 必须只打包并建立唯一 DMG 与 checksum。
+- Green（hosted 工具身份与 build）：build 19 run `31206472761` 的 Toolchain 真实输出 `0.62.1`，随后 Swift build 完整成功；该 run 之后因独立 Notes UI 静态扫描器与合法换行耦合而判红。
+- 待 Green（hosted symptom／release）：build 20 的唯一 main hosted job 必须完整成功，tag job 必须只打包并建立唯一 DMG 与 checksum。
 
 ## 永久门禁
 
@@ -55,7 +56,7 @@
 
 ## 发行与回滚
 
-build 18 永久退役，不 rerun、不 tag。build 19 只在 targeted contract 全绿后 push，以唯一 main hosted run 灰度固定工具链；成功才建立 `v0.2.4` tag。未发布前可普通 revert 工具链与格式 commit，但不得恢复浮动 formatter；若官方资产不可取得或 checksum 不符，Toolchain 必须在长测试前失败。已交付 tag 不移动，production 资料不参与回滚。
+build 18 与 build 19 永久退役，不 rerun、不 tag。build 20 只在 targeted contract 全绿后 push，以唯一 main hosted run 灰度固定工具链及格式无关扫描器；成功才建立 `v0.2.4` tag。未发布前可普通 revert 工具链与格式 commit，但不得恢复浮动 formatter；若官方资产不可取得或 checksum 不符，Toolchain 必须在长测试前失败。已交付 tag 不移动，production 资料不参与回滚。
 
 ## 教训与永久约束
 

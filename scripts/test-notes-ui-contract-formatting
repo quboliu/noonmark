@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+contract="scripts/test-notes-ui-contract"
+
+if ! /usr/bin/grep -Fq 'require_compact_literal()' "$contract"; then
+  echo 'Notes UI contract has no formatting-independent structure matcher' >&2
+  exit 1
+fi
+
+scripts/test-notes-ui-contract --self-test
+
+echo 'Notes UI contract formatting matcher passed'

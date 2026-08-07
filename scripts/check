@@ -55,6 +55,9 @@ run_check_suite() {
   echo "==> Window lookup binary boundary"
   scripts/test-window-lookup-boundary
 
+  echo "==> Notes UI contract matcher"
+  scripts/test-notes-ui-contract-formatting
+
   echo "==> Notes UI contract"
   scripts/test-notes-ui-contract
 

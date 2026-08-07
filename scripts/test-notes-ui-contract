@@ -36,6 +36,76 @@ require_literal() {
   fi
 }
 
+require_compact_literal() {
+  local literal="$1"
+  local file="$2"
+  local message="$3"
+  local compact_literal
+  local compact_source
+
+  compact_literal="$(printf '%s' "$literal" | tr -d '[:space:]')"
+  compact_source="$(tr -d '[:space:]' <"$file")"
+  if ! /usr/bin/grep -Fq "$compact_literal" <<<"$compact_source"; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
+
+test_compact_literal_matcher() {
+  local fixture
+  fixture="$(mktemp "${TMPDIR:-/tmp}/noonmark-notes-contract.XXXXXX")"
+
+  printf '%s\n' \
+    'if state == .failed { return true } return issueMessage == nil && state == .dirty' \
+    >"$fixture"
+  require_compact_literal \
+    'if state == .failed { return true } return issueMessage == nil && state == .dirty' \
+    "$fixture" \
+    'compact matcher rejected the one-line retry structure'
+
+  printf '%s\n' \
+    'if state == .failed {' \
+    '    return true' \
+    '}' \
+    'return issueMessage == nil && state == .dirty' \
+    >"$fixture"
+  require_compact_literal \
+    'if state == .failed { return true } return issueMessage == nil && state == .dirty' \
+    "$fixture" \
+    'compact matcher rejected the formatted retry structure'
+
+  printf '%s\n' \
+    'if state == .failed {' \
+    '    return false' \
+    '}' \
+    'return issueMessage == nil && state == .dirty' \
+    >"$fixture"
+  if (
+    require_compact_literal \
+      'if state == .failed { return true } return issueMessage == nil && state == .dirty' \
+      "$fixture" \
+      'expected negative matcher fixture'
+  ) >/dev/null 2>&1; then
+    echo 'compact matcher accepted a disabled retry structure' >&2
+    rm -f "$fixture"
+    exit 1
+  fi
+
+  rm -f "$fixture"
+}
+
+case "${1:-}" in
+  --self-test)
+    test_compact_literal_matcher
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo 'usage: scripts/test-notes-ui-contract [--self-test]' >&2
+    exit 2
+    ;;
+esac
+
 require_literal \
   '.fixedSize(horizontal: false, vertical: true)' \
   "$markdown_editor" \
@@ -156,8 +226,8 @@ require_literal \
   'store.copy.ideaRetryAction' \
   "$flylight_composer" \
   'Flylight failure no longer exposes a local retry action'
-require_literal \
-  'if state == .failed { return true }' \
+require_compact_literal \
+  'if state == .failed { return true } return issueMessage == nil && state == .dirty' \
   "$flylight_composer" \
   'Flylight retry action became disabled by its retained failure message'
 require_literal \

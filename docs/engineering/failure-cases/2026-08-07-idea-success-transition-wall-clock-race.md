@@ -44,7 +44,7 @@ run `31194926190`／job `92920698454` 的同步断言先证明持久化闭包收
 - Red（原始 hosted 症状）：run `31194926190` 在全量测试负载下稳定捕获一次完整的 pre-transition 状态并阻断 build 14。
 - Red（fast 结构）：旧代码没有 retained transition task，两个测试均含固定 `Task.sleep`，不满足新增 contract。
 - Green（fast）：`scripts/test-idea-success-transition-contract`、failure-case registry、build 15 version contract、ShellCheck、SwiftFormat 与 `git diff --check` 全绿；没有重跑本地完整测试链。
-- Green（原始 hosted 受害路径）：build 15 run `31196238509` 以 Xcode 26.2 完成同一 1527 项聚合测试，2 项既有 skip、0 failure；原失败测试与同型 composer 测试都通过。后续 check 因独立的 `FAIL-2026-08-07-08` localization oracle 漂移停止，真实 App E2E 顺延至 build 16。
+- Green（原始 hosted 受害路径）：build 15 与 build 16 均以 Xcode 26.2 完成同一 1527 项聚合测试，2 项既有 skip、0 failure；原失败测试与同型 composer 测试都通过。后续 check 因独立 localization 与 hosted 预算故障停止，真实 App E2E 顺延至 build 17。
 
 ## 永久门禁
 
@@ -54,7 +54,7 @@ run `31194926190`／job `92920698454` 的同步断言先证明持久化闭包收
 
 ## 发行与回滚
 
-build 14 与 build 15 已永久标记 `retired`，不得 rerun、复用或 tag；build 15 已证明原 hosted 测试症状修复，build 16 继续完成剩余 `main` CI 与 tag 路径。若 retained task 边界改变产品状态次序，撤销本案例对应提交并使用新 build；不得延长测试睡眠、缩短产品反馈、跳过 XCTest 或复用失败候选。production 资料与 App 不参与本修复验证。
+build 14 至 build 16 已永久标记 `retired`，不得 rerun、复用或 tag；后续两个 hosted run 已重复证明原测试症状修复，build 17 继续完成剩余 `main` CI 与 tag 路径。若 retained task 边界改变产品状态次序，撤销本案例对应提交并使用新 build；不得延长测试睡眠、缩短产品反馈、跳过 XCTest 或复用失败候选。production 资料与 App 不参与本修复验证。
 
 ## 教训与永久约束
 

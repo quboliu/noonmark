@@ -50,7 +50,7 @@ scripts/check-ui-localization: line 122: rg: command not found
 - Red（原始受害路径）：run `31194101256` 的 clean build与全部测试通过后，UI localization guard 因 `rg` 缺失判红。
 - Red（fast）：更新后的 hosted toolchain contract 在旧 workflow 上立即判红，精确识别缺少 `ripgrep`。
 - Green（fast）：hosted toolchain contract、5 份 workflow 的 `actionlint`、failure-case registry、release readiness／aggregation 与 build 14 version contract 全绿；build 14 Toolchain step 也已真实安装 `ripgrep`。
-- Green（原始受害路径）：build 15 run `31196238509` 真实调用 ripgrep 15.2.0 并到达 UI localization guard；`rg: command not found` 没有复发。该 guard 随后因独立的 `FAIL-2026-08-07-08` Unicode oracle 漂移判红，build 16 继续完成后续门禁。
+- Green（原始受害路径）：build 15 与 build 16 都真实调用 ripgrep 15.2.0 并到达 UI localization guard；`rg: command not found` 没有复发，build 16 还完成 7 条 baseline 对账。后续因独立 hosted 预算故障取消，build 17 继续完整链。
 
 ## 永久门禁
 
@@ -60,7 +60,7 @@ scripts/check-ui-localization: line 122: rg: command not found
 
 ## 发行与回滚
 
-build 13、build 14 与 build 15 的 hosted CI 已判红，永久标记 `retired`，不得复用或 tag。build 15 已证明 Toolchain step 安装的 ripgrep 能真实执行 localization guard，但独立 Unicode oracle 故障阻断后续路径；build 16 继续验证完整链。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
+build 13 至 build 16 的 hosted CI 已判红或取消，永久标记 `retired`，不得复用或 tag。build 16 已证明 Toolchain step 安装的 ripgrep 能执行完整 localization baseline 对账，独立 hosted 预算故障阻断后续路径；build 17 继续验证完整链。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
 
 ## 教训与永久约束
 

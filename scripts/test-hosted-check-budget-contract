@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "Hosted check budget contract: $*" >&2
+  exit 1
+}
+
+job_timeout() {
+  local workflow="$1"
+  local job="$2"
+
+  awk -v job="$job" '
+    $0 == "  " job ":" { in_job = 1; next }
+    in_job && $0 ~ /^  [A-Za-z0-9_-]+:$/ { exit }
+    in_job && $0 ~ /^    timeout-minutes: [0-9]+$/ {
+      sub(/^    timeout-minutes: /, "")
+      print
+      exit
+    }
+  ' "$workflow"
+}
+
+ci_timeout="$(job_timeout .github/workflows/ci.yml check)"
+release_timeout="$(job_timeout .github/workflows/release-publish.yml publish)"
+[[ "$ci_timeout" == "90" ]] ||
+  fail "ordinary hosted check must retain the 90-minute full-suite budget"
+[[ "$release_timeout" == "90" ]] ||
+  fail "canonical hosted release must retain the 90-minute full-suite budget"
+[[ "$ci_timeout" == "$release_timeout" ]] ||
+  fail "ordinary and canonical hosted scripts/check budgets diverged"
+
+echo "Hosted check budget contract passed (${ci_timeout} minutes)"

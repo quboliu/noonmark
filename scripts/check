@@ -127,6 +127,9 @@ run_check_suite() {
   echo "==> Hosted Xcode toolchain contract"
   scripts/test-hosted-xcode-toolchain-contract
 
+  echo "==> Hosted full-check budget contract"
+  scripts/test-hosted-check-budget-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

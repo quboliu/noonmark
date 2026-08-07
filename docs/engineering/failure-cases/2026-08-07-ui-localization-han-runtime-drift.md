@@ -43,7 +43,7 @@ scanner 改用明确的 CJK Unified／Compatibility Ideograph scalar 范围，�
 - Red（原始 hosted 症状）：run `31196238509` 在 1527 项测试全绿后输出 12 条中点假阳性并阻断 build 15。
 - Green（fast）：新增 Han contract 与 scanner self-test 全绿，两个中点负例不进入 inventory，四种中文正例仍被捕获。
 - Green（本机 symptom）：真实 production inventory 精确保持已审核的 7 条中文 literal，baseline guard 全绿。
-- 待 Green（hosted 受害路径）：build 16 必须在相同 macOS hosted image 得到同一 7 条 inventory，并完成后续门禁与真实 App E2E。
+- Green（hosted 受害路径）：build 16 run `31197305770` 在相同 macOS hosted image 输出 `UI localization literal guard: ok (7 known literals)`；后续 check 因独立的 `FAIL-2026-08-07-09` 外层预算耗尽而取消，真实 App E2E 顺延至 build 17。
 
 ## 永久门禁
 
@@ -53,7 +53,7 @@ scanner 改用明确的 CJK Unified／Compatibility Ideograph scalar 范围，�
 
 ## 发行与回滚
 
-build 15 已永久标记 `retired`，不得 rerun、复用或 tag；build 16 先经新的 `main` CI 验证 hosted inventory，再允许进入 tag 路径。若明确 scalar 范围漏掉产品实际使用的 Han ideograph，扩充范围与正例后使用新 build；不得恢复 runtime-dependent property、把中点假阳性加入 baseline或跳过 localization guard。回滚只撤销 scanner 与门禁提交，产品 UI 和资料均不需要迁移。
+build 15 与 build 16 已永久标记 `retired`，不得 rerun、复用或 tag；build 16 已证明 hosted inventory 修复，build 17 继续完成剩余 `main` CI 与 tag 路径。若明确 scalar 范围漏掉产品实际使用的 Han ideograph，扩充范围与正例后使用新 build；不得恢复 runtime-dependent property、把中点假阳性加入 baseline或跳过 localization guard。回滚只撤销 scanner 与门禁提交，产品 UI 和资料均不需要迁移。
 
 ## 教训与永久约束
 

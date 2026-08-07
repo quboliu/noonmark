@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+repo="quboliu/noonmark"
+environment="release"
+required_secrets=(
+  APPLE_DEV_CERT_P12_BASE64
+  APPLE_DEV_CERT_PASSWORD
+  APPLE_DEV_KEYCHAIN_PASSWORD
+)
+
+fail() {
+  echo "GitHub release readiness: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/verify-github-release-readiness" >&2
+  exit 64
+fi
+
+command -v gh >/dev/null 2>&1 || fail "GitHub CLI is unavailable"
+
+if ! secret_names="$(
+  gh secret list \
+    --repo "$repo" \
+    --env "$environment" \
+    --app actions \
+    --json name \
+    --jq '.[].name'
+)"; then
+  fail "cannot inspect the ${environment} environment secrets"
+fi
+for secret_name in "${required_secrets[@]}"; do
+  if ! grep -Fqx "$secret_name" <<<"$secret_names"; then
+    fail "missing environment secret: ${secret_name}"
+  fi
+done
+
+if ! policy_rows="$(
+  gh api \
+    "repos/${repo}/environments/${environment}/deployment-branch-policies" \
+    --paginate \
+    --jq '.branch_policies[] | [.type, .name] | @tsv'
+)"; then
+  fail "cannot inspect the ${environment} deployment policy"
+fi
+if [[ "$policy_rows" != $'tag\tv*' ]]; then
+  fail "release environment must allow exactly the v* tag policy"
+fi
+
+echo "GitHub release readiness verified: ${repo} environment ${environment}"

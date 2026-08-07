@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+repo="quboliu/noonmark"
+
+fail() {
+  echo "release tag push: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/push-release-tag" >&2
+  exit 64
+fi
+
+command -v gh >/dev/null 2>&1 || fail "GitHub CLI is unavailable"
+scripts/verify-release-version-tag
+
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  fail "source worktree must be clean"
+fi
+
+tag="v$(scripts/release-version marketing-version)"
+head_commit="$(git rev-parse HEAD)"
+tag_object="$(git rev-parse "refs/tags/${tag}")"
+remote_main="$(
+  git ls-remote --heads origin refs/heads/main | awk 'NR == 1 { print $1 }'
+)"
+[[ "$remote_main" == "$head_commit" ]] ||
+  fail "origin/main ${remote_main:-missing} does not match HEAD ${head_commit}"
+
+if [[ -n "$(
+  git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}"
+)" ]]; then
+  fail "remote tag ${tag} already exists"
+fi
+
+release_error="$(mktemp "${TMPDIR:-/tmp}/noonmark-release-view.XXXXXX")"
+cleanup() {
+  rm -f "$release_error"
+}
+trap cleanup EXIT
+if gh release view "$tag" --repo "$repo" >/dev/null 2>"$release_error"; then
+  fail "GitHub Release ${tag} already exists"
+elif ! rg -qi 'release not found|HTTP 404' "$release_error"; then
+  fail "cannot prove that GitHub Release ${tag} is absent"
+fi
+
+scripts/verify-github-release-readiness
+git push origin "refs/tags/${tag}:refs/tags/${tag}"
+
+remote_tag_rows="$(
+  git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}"
+)"
+remote_tag_object="$(
+  awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }' <<<"$remote_tag_rows"
+)"
+remote_tag_commit="$(
+  awk -v ref="refs/tags/${tag}^{}" '$2 == ref { print $1 }' \
+    <<<"$remote_tag_rows"
+)"
+[[ "$remote_tag_object" == "$tag_object" ]] ||
+  fail "remote tag object does not match local annotated tag"
+[[ "$remote_tag_commit" == "$head_commit" ]] ||
+  fail "remote tag commit does not match HEAD"
+
+echo "Release tag pushed and verified: ${tag} -> ${head_commit}"

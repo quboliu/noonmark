@@ -134,3 +134,6 @@ FAIL-2026-08-07-01	release	scripts/verify-development-validation-evidence	script
 FAIL-2026-08-07-02	fast	scripts/test-dmg-evidence-contract	scripts/check	LaunchServices cached-info 按 subject ASN 绑定；截断字段与其他 ASN 查询不得误判，同一目标 ASN 的完整伪造 payload 仍判红
 FAIL-2026-08-07-02	symptom	scripts/verify-development-validation-evidence	scripts/release-private-dmg	消费前序真实受控派生 App 多阶段统一日志，允许截断的目标 cached-info 与其他 ASN 查询并存
 FAIL-2026-08-07-02	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	同一发行 run 的真实 DMG 交互证据经 subject ASN 分类与最终 full consumer 对账必须全绿
+FAIL-2026-08-07-03	fast	scripts/test-github-release-readiness-contract	scripts/check	缺失 Environment secret、branch policy、过宽 tag policy 或 canonical workflow 私钥边界任一回退即判红
+FAIL-2026-08-07-03	symptom	scripts/verify-github-release-readiness	scripts/release-private-dmg	任何真实 App／DMG 发行门禁前必须确认三个 release Environment secret 名称与精确 v* tag policy
+FAIL-2026-08-07-03	release	scripts/verify-github-release-readiness	scripts/push-release-tag	远端 tag 副作用前必须 live 对账签名 Environment readiness，缺失或过宽即判红

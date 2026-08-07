@@ -8,7 +8,7 @@ name: Release
 # GitHub Release. The CI-built DMG is the canonical distribution artifact;
 # see .github/RELEASING.md.
 #
-#   git tag v0.2.4 && git push origin v0.2.4
+#   scripts/push-release-tag
 #
 # The distributed binary is Apple Development signed only: not notarized, not
 # stapled. Users install it manually.
@@ -16,7 +16,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: # manual re-run; releases the release/VERSION at this ref
+  workflow_dispatch: # manual re-run; the selected ref must be an existing v* tag
 
 # Never cancel a release mid-flight (a half-published version is worse than a
 # queued one).
@@ -35,22 +35,26 @@ jobs:
     environment: release
     env:
       NOONMARK_EVIDENCE_RUN_ID: github-release-${{ github.run_id }}-${{ github.run_attempt }}
+      NOONMARK_CI_CERT_P12: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.p12
+      NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
+      NOONMARK_CI_SIGNING_PROBE: ${{ runner.temp }}/noonmark-${{ github.run_id }}-${{ github.run_attempt }}-signing-probe
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version and assert tag binding
         id: ver
         run: |
           MARKETING="$(scripts/release-version marketing-version)"
           BUILD="$(scripts/release-version build-number)"
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="v${MARKETING}"
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "::error::release workflow requires an existing v* tag ref, got ${GITHUB_REF}"
+            exit 1
           fi
+          TAG="${GITHUB_REF#refs/tags/}"
           if [[ "$TAG" != "v${MARKETING}" ]]; then
             echo "::error::tag ${TAG} does not match release/VERSION marketing_version v${MARKETING}"
             exit 1
@@ -66,38 +70,84 @@ jobs:
           swift --version
           brew install swiftlint swiftformat
 
-      - name: Import Apple Development signing identity
+      - name: Verify (build · lint · UT · IT · ST · DST)
+        run: scripts/check
+
+      - name: Import and prove Apple Development signing identity
         env:
           APPLE_DEV_CERT_P12_BASE64: ${{ secrets.APPLE_DEV_CERT_P12_BASE64 }}
           APPLE_DEV_CERT_PASSWORD: ${{ secrets.APPLE_DEV_CERT_PASSWORD }}
           APPLE_DEV_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_DEV_KEYCHAIN_PASSWORD }}
         run: |
+          umask 077
           if [[ -z "${APPLE_DEV_CERT_P12_BASE64:-}" ||
                 -z "${APPLE_DEV_CERT_PASSWORD:-}" ||
                 -z "${APPLE_DEV_KEYCHAIN_PASSWORD:-}" ]]; then
             echo "::error::missing signing secrets (APPLE_DEV_CERT_P12_BASE64 / APPLE_DEV_CERT_PASSWORD / APPLE_DEV_KEYCHAIN_PASSWORD) — export guide: .github/RELEASING.md"
             exit 1
           fi
-          echo "$APPLE_DEV_CERT_P12_BASE64" | base64 -d > /tmp/noonmark-cert.p12
-          security create-keychain -p "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
-          security set-keychain-settings -lut 21600 noonmark-ci.keychain
-          security unlock-keychain -p "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
-          security import /tmp/noonmark-cert.p12 -k noonmark-ci.keychain \
+          printf '%s' "$APPLE_DEV_CERT_P12_BASE64" \
+            | base64 -d > "$NOONMARK_CI_CERT_P12"
+          chmod 0600 "$NOONMARK_CI_CERT_P12"
+          security create-keychain \
+            -p "$APPLE_DEV_KEYCHAIN_PASSWORD" "$NOONMARK_CI_KEYCHAIN"
+          security set-keychain-settings \
+            -lut 21600 "$NOONMARK_CI_KEYCHAIN"
+          security unlock-keychain \
+            -p "$APPLE_DEV_KEYCHAIN_PASSWORD" "$NOONMARK_CI_KEYCHAIN"
+          security import "$NOONMARK_CI_CERT_P12" -k "$NOONMARK_CI_KEYCHAIN" \
             -P "$APPLE_DEV_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s \
-            -k "$APPLE_DEV_KEYCHAIN_PASSWORD" noonmark-ci.keychain
-          security list-keychains -d user -s noonmark-ci.keychain login.keychain
-          rm -f /tmp/noonmark-cert.p12
-          security find-identity -v -p codesigning noonmark-ci.keychain
+            -k "$APPLE_DEV_KEYCHAIN_PASSWORD" "$NOONMARK_CI_KEYCHAIN"
+          security list-keychains -d user -s "$NOONMARK_CI_KEYCHAIN"
 
-      - name: Verify (build · lint · UT · IT · ST · DST)
-        run: scripts/check
+          identity_output="$(
+            security find-identity -v -p codesigning "$NOONMARK_CI_KEYCHAIN"
+          )"
+          valid_count="$(
+            sed -nE 's/^[[:space:]]*([0-9]+) valid identities found$/\1/p' \
+              <<<"$identity_output"
+          )"
+          identity_hashes="$(
+            sed -nE \
+              's/^[[:space:]]*[0-9]+\) ([0-9A-F]{40}) "Apple Development:.*$/\1/p' \
+              <<<"$identity_output"
+          )"
+          identity_count="$(
+            awk 'NF { count += 1 } END { print count + 0 }' \
+              <<<"$identity_hashes"
+          )"
+          if [[ "$valid_count" != "1" || "$identity_count" != "1" ]]; then
+            echo "::error::signing keychain must contain exactly one valid Apple Development identity"
+            exit 1
+          fi
+          identity_hash="$identity_hashes"
+          security find-certificate -c 'Apple Development:' -p \
+            "$NOONMARK_CI_KEYCHAIN" \
+            | openssl x509 -noout -checkend 0
+          printf '#!/bin/sh\nexit 0\n' > "$NOONMARK_CI_SIGNING_PROBE"
+          chmod 0700 "$NOONMARK_CI_SIGNING_PROBE"
+          codesign --force --sign "$identity_hash" \
+            --keychain "$NOONMARK_CI_KEYCHAIN" \
+            "$NOONMARK_CI_SIGNING_PROBE"
+          codesign --verify --strict "$NOONMARK_CI_SIGNING_PROBE"
+          rm -f "$NOONMARK_CI_CERT_P12"
 
       - name: Package production DMG
         run: scripts/package-dmg release
 
       - name: Verify DMG (static, read-only)
         run: scripts/verify-dmg dist/Noonmark.dmg
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          cleanup_status=0
+          rm -f "$NOONMARK_CI_CERT_P12" "$NOONMARK_CI_SIGNING_PROBE" || cleanup_status=1
+          if [[ -e "$NOONMARK_CI_KEYCHAIN" ]]; then
+            security delete-keychain "$NOONMARK_CI_KEYCHAIN" || cleanup_status=1
+          fi
+          exit "$cleanup_status"
 
       - name: Checksum and release notes
         run: |

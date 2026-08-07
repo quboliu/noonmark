@@ -1,4 +1,4 @@
-# 私有发行流程（Tag 触发 CI 发版）
+# GitHub 发行流程（Tag 触发 CI 发版）
 
 本文件是晷迹发版的唯一操作说明。发行入口是 `.github/workflows/release-publish.yml`：**推送版本 tag 自动触发**，在 GitHub-hosted runner 上复跑 `scripts/check`、打包、签名并发布公开 GitHub Release。CI 构建的 DMG 是分发的唯一正本。
 
@@ -9,33 +9,33 @@
 
 ## 前置条件：签名 secrets（一次性配置）
 
-CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 secrets 形式注入临时 keychain。配置一次，直到证书过期（Apple Development 证书一年有效）：
+CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `release` Environment secrets 注入临时 keychain。该 Environment 只允许 `v*` tag，配置一次后沿用至证书过期或撤销：
 
 1. 打开「钥匙串访问」→ 左侧「登录」→ 顶部「我的证书」→ 找到 `Apple Development: <你的名字> (<Team ID>)`，展开左侧三角确认挂着私钥。
 2. 右键证书 → 导出 → 格式 `.p12` → 设一个一次性强密码。
-3. 终端执行（p12 路径按实际替换）：
+3. 终端执行（p12 路径按实际替换；base64 不落盘，三个 secret 都明确写入 `release` Environment）：
 
    ```bash
-   base64 -i ~/Desktop/证书.p12 | tr -d '\n' > /tmp/cert.b64
-   gh secret set APPLE_DEV_CERT_P12_BASE64 < /tmp/cert.b64
-   gh secret set APPLE_DEV_CERT_PASSWORD        # 回车后粘贴 p12 密码
-   gh secret set APPLE_DEV_KEYCHAIN_PASSWORD    # 随机生成一个串即可
-   rm -P ~/Desktop/证书.p12 /tmp/cert.b64       # 粉碎本地副本
+   base64 -i /绝对路径/证书.p12 | tr -d '\n' | gh secret set --env release --repo quboliu/noonmark --app actions APPLE_DEV_CERT_P12_BASE64
+   gh secret set --env release --repo quboliu/noonmark --app actions APPLE_DEV_CERT_PASSWORD
+   openssl rand -base64 48 | tr -d '\n' | gh secret set --env release --repo quboliu/noonmark --app actions APPLE_DEV_KEYCHAIN_PASSWORD
+   rm -P /绝对路径/证书.p12
+   scripts/verify-github-release-readiness
    ```
 
-铁律：p12 与 base64 绝不进 git、绝不粘到聊天或 issue；缺 secrets 时 workflow 会 fail-closed 并指向本文件。
+`APPLE_DEV_CERT_PASSWORD` 由 `gh` 的隐藏输入提示接收，不得放进命令参数。铁律：p12、base64 和密码绝不进 git、日志、聊天或 issue。readiness 只能证明 secret 名称与 tag policy 存在；secret 内容与私钥可用性由 CI 的隔离 keychain、唯一身份检查和一次性签名探针 fail-closed 验证。workflow 使用固定 commit 的 checkout action，并在成功或失败路径删除 p12、签名探针和临时 keychain。
 
 ## 发版步骤
 
 1. 在 `main` 完成开发，本地跑通完整验证链（见上），故障案例与门禁按纪律闭环。
 2. 准备候选：更新 `release/VERSION`（PATCH 修复递增 build；MINOR 新能力；MAJOR 需用户明确批准）、`release/BUILD-LEDGER.tsv` 登记 `candidate`、新建 `docs/releases/vX.Y.Z.md`，commit 并 push `main`。
-3. 打带注释 tag 并推送：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate" && git push origin vX.Y.Z`。
+3. 打带注释 tag，再走唯一受保护推送入口：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate" && scripts/push-release-tag`。该入口会拒绝脏工作树、未同步的 `origin/main`、既有远端 tag／Release、缺失签名 secret 或过宽 Environment policy，并在推送后对账 annotated tag object 与 commit。
 4. workflow 自动执行：tag 与 `release/VERSION` 对账 → 导入签名身份 → `scripts/check` → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建或更新 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。
 5. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
 
 任何一步判红：删除未交付的候选 tag，修复后用**新 build 号**重开；不得移动已交付 tag，不得复用 build 号。
 
-也可以手动触发：Actions → Release → Run workflow（发布当前 ref 的 `release/VERSION` 对应版本）。
+手动重跑只可在 Actions → Release → Run workflow 选择已经存在、符合 `v*` 的候选 tag；不得选择 `main` 或其他 branch 代替 tag。
 
 ## 边界
 

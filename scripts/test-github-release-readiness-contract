@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "GitHub release readiness contract: $*" >&2
+  exit 1
+}
+
+require_order() {
+  local path="$1"
+  local first="$2"
+  local second="$3"
+  local first_line
+  local second_line
+
+  first_line="$(rg -n -F "$first" "$path" | head -n 1 | cut -d: -f1)"
+  second_line="$(rg -n -F "$second" "$path" | head -n 1 | cut -d: -f1)"
+  [[ "$first_line" =~ ^[0-9]+$ && "$second_line" =~ ^[0-9]+$ &&
+    "$first_line" -lt "$second_line" ]] ||
+    fail "$path does not order '$first' before '$second'"
+}
+
+readiness="scripts/verify-github-release-readiness"
+tag_publisher="scripts/push-release-tag"
+workflow=".github/workflows/release-publish.yml"
+release_guide=".github/RELEASING.md"
+
+[[ -x "$readiness" ]] || fail "missing executable readiness verifier"
+[[ -x "$tag_publisher" ]] || fail "missing executable tag publisher"
+
+fixture_root="$(
+  mktemp -d "${TMPDIR:-/tmp}/noonmark-github-release-readiness.XXXXXX"
+)"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT
+
+fixture_bin="$fixture_root/bin"
+mkdir -p "$fixture_bin"
+fake_gh="$fixture_bin/gh"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'case "${1:-} ${2:-}" in' \
+  '  "secret list")' \
+  '    [[ -r "${NOONMARK_READINESS_SECRETS_FIXTURE:?}" ]]' \
+  '    /bin/cat "$NOONMARK_READINESS_SECRETS_FIXTURE"' \
+  '    ;;' \
+  '  "api repos/quboliu/noonmark/environments/release/deployment-branch-policies")' \
+  '    [[ -r "${NOONMARK_READINESS_POLICY_FIXTURE:?}" ]]' \
+  '    /bin/cat "$NOONMARK_READINESS_POLICY_FIXTURE"' \
+  '    ;;' \
+  '  *)' \
+  '    echo "unexpected fake gh arguments: $*" >&2' \
+  '    exit 64' \
+  '    ;;' \
+  'esac' >"$fake_gh"
+chmod 0700 "$fake_gh"
+
+complete_secrets="$fixture_root/complete-secrets.txt"
+missing_secrets="$fixture_root/missing-secrets.txt"
+exact_policy="$fixture_root/exact-policy.txt"
+branch_policy="$fixture_root/branch-policy.txt"
+broad_policy="$fixture_root/broad-policy.txt"
+printf '%s\n' \
+  APPLE_DEV_CERT_P12_BASE64 \
+  APPLE_DEV_CERT_PASSWORD \
+  APPLE_DEV_KEYCHAIN_PASSWORD >"$complete_secrets"
+printf '%s\n' \
+  APPLE_DEV_CERT_P12_BASE64 \
+  APPLE_DEV_CERT_PASSWORD >"$missing_secrets"
+printf 'tag\tv*\n' >"$exact_policy"
+printf 'branch\tmain\n' >"$branch_policy"
+printf 'tag\t*\n' >"$broad_policy"
+
+run_readiness() {
+  local secrets_fixture="$1"
+  local policy_fixture="$2"
+  local output_path="$3"
+
+  PATH="$fixture_bin:$PATH" \
+    NOONMARK_READINESS_SECRETS_FIXTURE="$secrets_fixture" \
+    NOONMARK_READINESS_POLICY_FIXTURE="$policy_fixture" \
+    "$readiness" >"$output_path" 2>&1
+}
+
+complete_output="$fixture_root/complete-output.txt"
+run_readiness "$complete_secrets" "$exact_policy" "$complete_output" ||
+  fail "readiness verifier rejected the exact release environment"
+grep -Fqx \
+  'GitHub release readiness verified: quboliu/noonmark environment release' \
+  "$complete_output" || fail "readiness verifier omitted its success identity"
+
+missing_output="$fixture_root/missing-output.txt"
+if run_readiness "$missing_secrets" "$exact_policy" "$missing_output"; then
+  fail "readiness verifier accepted a missing signing secret"
+fi
+grep -Fq 'missing environment secret: APPLE_DEV_KEYCHAIN_PASSWORD' \
+  "$missing_output" || fail "missing-secret failure was not specific"
+
+branch_output="$fixture_root/branch-output.txt"
+if run_readiness "$complete_secrets" "$branch_policy" "$branch_output"; then
+  fail "readiness verifier accepted a branch deployment policy"
+fi
+grep -Fq 'release environment must allow exactly the v* tag policy' \
+  "$branch_output" || fail "branch-policy failure was not specific"
+
+broad_output="$fixture_root/broad-output.txt"
+if run_readiness "$complete_secrets" "$broad_policy" "$broad_output"; then
+  fail "readiness verifier accepted an over-broad tag policy"
+fi
+
+rg -n 'uses: actions/checkout@[0-9a-f]{40}$' "$workflow" >/dev/null ||
+  fail "release workflow does not pin checkout to a full commit SHA"
+rg -F 'persist-credentials: false' "$workflow" >/dev/null ||
+  fail "release workflow leaves checkout credentials available"
+for required_path in \
+  'NOONMARK_CI_CERT_P12: ${{ runner.temp }}/' \
+  'NOONMARK_CI_KEYCHAIN: ${{ runner.temp }}/'; do
+  rg -F "$required_path" "$workflow" >/dev/null ||
+    fail "release workflow does not keep signing material in RUNNER_TEMP"
+done
+rg -F "printf '%s' \"\$APPLE_DEV_CERT_P12_BASE64\"" "$workflow" >/dev/null ||
+  fail "release workflow does not stream the P12 secret without echo"
+if rg -F 'echo "$APPLE_DEV_CERT_P12_BASE64"' "$workflow" >/dev/null; then
+  fail "release workflow still passes the P12 secret through echo"
+fi
+rg -F 'if: always()' "$workflow" >/dev/null ||
+  fail "release workflow lacks an unconditional signing cleanup step"
+rg -F 'security delete-keychain "$NOONMARK_CI_KEYCHAIN"' \
+  "$workflow" >/dev/null ||
+  fail "release workflow does not delete its temporary keychain"
+rg -F 'rm -f "$NOONMARK_CI_CERT_P12"' "$workflow" >/dev/null ||
+  fail "release workflow does not delete its temporary P12"
+rg -F 'signing keychain must contain exactly one valid Apple Development identity' \
+  "$workflow" >/dev/null ||
+  fail "release workflow does not enforce one signing identity"
+rg -F 'codesign --verify --strict "$NOONMARK_CI_SIGNING_PROBE"' \
+  "$workflow" >/dev/null ||
+  fail "release workflow does not prove the imported private key"
+require_order \
+  "$workflow" \
+  'name: Verify (build · lint · UT · IT · ST · DST)' \
+  'name: Import and prove Apple Development signing identity'
+require_order \
+  "$workflow" \
+  'name: Remove signing material' \
+  'name: Checksum and release notes'
+
+require_order \
+  "$tag_publisher" \
+  'scripts/verify-github-release-readiness' \
+  'git push origin'
+rg -F 'scripts/push-release-tag' "$release_guide" >/dev/null ||
+  fail "release guide bypasses the guarded tag publisher"
+rg -F 'gh secret set --env release' "$release_guide" >/dev/null ||
+  fail "release guide does not scope signing secrets to the release environment"
+
+echo "GitHub release readiness contract passed"

@@ -110,6 +110,9 @@ run_check_suite() {
   echo "==> Preferences checkbox interaction target contract"
   bash scripts/test-preferences-checkbox-interaction-target-contract
 
+  echo "==> GitHub release readiness contract"
+  scripts/test-github-release-readiness-contract
+
   echo "==> Failure-case regression gates"
   scripts/test-failure-case-gates
 

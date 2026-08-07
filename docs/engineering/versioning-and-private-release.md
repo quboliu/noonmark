@@ -1,12 +1,12 @@
-# 晷迹版本体系与私有发行流程
+# 晷迹版本体系与 GitHub 发行流程
 
 ## 状态与范围
 
 - 生效日期：2026-08-05
-- 当前产品基线：`0.2.1 (6)`；候选源码 commit `5f4d6cdcf0d39e38a47ee128a9e6102e13b58d80`
-- 发行方式：仅向指定用户提供私有 Apple Development 签名 DMG；不是公开 GitHub Release，也不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
+- 当前已发行基线：`0.2.3 (9)`；当前候选为 `0.2.4 (11)`，精确 commit 由发行 tag 决定。
+- 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
-本文是营销版本、构建号、资料兼容与私有发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
+本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
 
 ## 唯一版本来源
 
@@ -39,9 +39,9 @@ build_number=正整数
 2. **开发与合并**：每项工作使用隔离 worktree，按需求、现状、设计、实施、验证、闭环推进。修复必须更新故障案例和 fast／symptom／release 门禁映射。
 3. **合入 `main`**：只接受经过 review 的干净提交并先正常 push `main`；它是唯一发行候选分支。任何未提交内容都不能进入 package。
 4. **发行前验证**：在实际打包的 `main` worktree 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，得到同一 evidence run 的成功清单。新增或改变用户可见能力时，同步运行 `make test-demo-fixture`；资料变更额外运行升级与旧 JSON 导入专项测试。
-5. **候选 tag**：在候选 commit 创建带注释 tag `v<marketing_version>` 并 push。`scripts/verify-release-version-tag` 要求 tag 精确指向当前 `HEAD`，GitHub workflow 必须抓取完整 tag 历史；该 tag 只标识待验证候选，不代表已经交付。
+5. **候选 tag**：在候选 commit 创建带注释 tag `v<marketing_version>`，并只用 `scripts/push-release-tag` 推送。该入口要求本地完整门禁已通过、`origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 的 secret 名称齐全且只允许 `v*` tag。`scripts/verify-release-version-tag` 要求 tag 精确指向当前 `HEAD`；该 tag 只标识待验证候选，不代表已经交付。
 6. **唯一发行入口**：运行 `scripts/release-private-dmg`（`make package-dmg` 也只委托至此入口）。它依次验证同一 run 的静态证据、诊断闭环、腾讯输入 release smoke、DMG 打包、只读 DMG 静态验证、受控 `dmg-validation` 安装／退出／重启验证及最终证据对账。若门禁失败，删除未交付的候选 tag，修复后用新 build 重新开始；不得移动 tag。
-7. **灰度交付与记录**：仅向指定用户提供带版本、build 与 commit 后缀的 DMG，并保留 SHA-256、release manifest、dSYM 和本版 release note。全部成功后保留该 immutable tag；这里的 immutable 仅指已成功交付的 tag，不包括失败候选；不创建公开 Release。
+7. **灰度交付与记录**：tag workflow 复跑非 GUI 门禁，以临时 keychain 验证唯一签名身份和一次性签名探针，再发布公开 GitHub Release，并保留 SHA-256、release manifest、dSYM 和本版 release note。全部成功后保留该 immutable tag；这里的 immutable 仅指已成功交付的 tag，不包括失败候选。
 
 ## 版本号语义
 
@@ -59,6 +59,6 @@ build_number=正整数
 | 版本、tag 或二进制身份错配 | `release/VERSION` 单一来源、精确 tag、manifest／UUID／dSYM／SHA 对账 | 停止交付该 DMG；不移动已推送 tag，使用新 build 修复并重新验证 |
 | 用户资料升级或导入损失 | 每版显式兼容矩阵、SQLite／JSON 专项测试、真实 File → Import E2E | 不自动降级或删除用户资料；停止候选，保留原 DMG，由用户审核恢复路径 |
 | 发行验证误触 production | production 只读静态验证；动态验证固定 `e2e`／`dmg-validation` profile | 立即停止发行流程，保留最小无敏感证据并审查 profile 边界 |
-| 小范围设备／输入环境回归 | 指定用户私有灰度、真实 IME smoke、用户主动导出的有界诊断 | 暂停继续分发，回退到上一已验证私有 DMG；诊断不自动上传 |
+| 小范围设备／输入环境回归 | 本地真实 IME smoke、公开资产 checksum、用户主动导出的有界诊断 | 撤下 Release 资产，回退到上一已验证 DMG；诊断不自动上传 |
 
 监控只使用用户主动导出的、隐私哨兵保护的结构化诊断，以及发行 manifest 的版本／commit／SHA 证据。不得记录任务正文、路径、账户、同步 payload、AI 内容或凭证。

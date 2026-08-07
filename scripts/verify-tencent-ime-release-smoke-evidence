@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+source scripts/evidence-common
+
+if [[ "$#" -gt 1 ]]; then
+  echo "usage: scripts/verify-tencent-ime-release-smoke-evidence [manifest]" >&2
+  exit 64
+fi
+if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
+  echo "Tencent IME release evidence requires NOONMARK_EVIDENCE_RUN_ID" >&2
+  exit 1
+fi
+
+manifest="${1:-artifacts/e2e-tencent-ime-release-smoke/manifest.txt}"
+evidence_root="$(dirname "$manifest")"
+inventory="$evidence_root/artifact-inventory.sha256"
+result_relative="$(evidence_read "$manifest" result_path)"
+expected_result="artifacts/e2e-tencent-ime-termination/results.tsv"
+[[ "$result_relative" == "$expected_result" ]] || {
+  echo "Tencent IME release evidence uses an unexpected result path" >&2
+  exit 1
+}
+result_path="$repo_root/$result_relative"
+
+evidence_require_manifest \
+  "$manifest" \
+  "evidence_schema_version=1" \
+  "suite=tencent-ime-release-smoke" \
+  "evidence_run_id=$NOONMARK_EVIDENCE_RUN_ID" \
+  "configuration=release" \
+  "suite_mode=full" \
+  "source_tree_dirty=0" \
+  "source_end_tree_dirty=0" \
+  "suite_exit_status=0"
+
+for suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
+  [[ "$(evidence_read "$manifest" "source_${suffix}")" == \
+    "$(evidence_read "$manifest" "source_end_${suffix}")" ]] || {
+    echo "Tencent IME release source changed during smoke: ${suffix}" >&2
+    exit 1
+  }
+done
+
+current_source="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-tencent-release-source.XXXXXX"
+)"
+cleanup() {
+  rm -f "$current_source"
+}
+trap cleanup EXIT
+evidence_capture_source "$repo_root" current "$current_source"
+for suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
+  [[ "$(evidence_read "$current_source" "current_${suffix}")" == \
+    "$(evidence_read "$manifest" "source_${suffix}")" ]] || {
+    echo "Tencent IME release evidence does not describe current source: ${suffix}" >&2
+    exit 1
+  }
+done
+
+[[ -s "$result_path" ]] || {
+  echo "Tencent IME release result is missing" >&2
+  exit 1
+}
+[[ "$(shasum -a 256 "$result_path" | awk '{print $1}')" == \
+  "$(evidence_read "$manifest" result_sha256)" ]] || {
+  echo "Tencent IME release result digest changed" >&2
+  exit 1
+}
+[[ "$(shasum -a 256 "$inventory" | awk '{print $1}')" == \
+  "$(evidence_read "$manifest" artifact_inventory_sha256)" ]] || {
+  echo "Tencent IME release inventory digest changed" >&2
+  exit 1
+}
+evidence_verify_inventory "$repo_root" "$inventory"
+evidence_require_inventory_paths \
+  "$repo_root" \
+  "$inventory" \
+  "$result_path" \
+  "$evidence_root/source-start.fragment" \
+  "$evidence_root/source-end.fragment"
+
+awk -F $'\t' '
+  NR == 1 { next }
+  $1 == "day-title" {
+    count += 1
+    if ($2 == "PASS" && $4 == "false" && $5 == "true" && $6 == "true") {
+      passed = 1
+    }
+  }
+  END { exit(count == 1 && passed ? 0 : 1) }
+' "$result_path" || {
+  echo "Tencent IME release result no longer proves the exact restart path" >&2
+  exit 1
+}
+
+echo "Tencent IME release smoke evidence passed"

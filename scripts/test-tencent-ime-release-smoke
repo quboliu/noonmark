@@ -25,15 +25,39 @@ case "$configuration" in
     ;;
 esac
 
+source scripts/evidence-common
+
+evidence_relative="artifacts/e2e-tencent-ime-release-smoke"
+evidence_root="$repo_root/$evidence_relative"
+manifest="$evidence_root/manifest.txt"
+inventory="$evidence_root/artifact-inventory.sha256"
+source_start="$evidence_root/source-start.fragment"
+source_end="$evidence_root/source-end.fragment"
+summary_relative="artifacts/e2e-tencent-ime-termination/results.tsv"
+summary_path="$repo_root/$summary_relative"
+evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
+suite_status=0
+
+evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"
+evidence_capture_source "$repo_root" source "$source_start"
+evidence_begin_manifest \
+  "$manifest" \
+  "tencent-ime-release-smoke" \
+  "$evidence_run_id" \
+  "$configuration" \
+  "full"
+evidence_append_snapshot "$manifest" "$source_start"
+
 # The release criterion is one stable user promise, not the whole coverage
 # catalog: real Tencent composition commits exact text, the app exits while the
 # autosave is pending, then the restarted App and SQLite agree on that text.
-NOONMARK_TENCENT_IME_TERMINATION_SURFACES=day-title \
+if ! NOONMARK_TENCENT_IME_TERMINATION_SURFACES=day-title \
   NOONMARK_TENCENT_IME_SKIP_FAILURE_RETRY=1 \
-  scripts/test-tencent-ime-termination-persistence "$configuration"
+  scripts/test-tencent-ime-termination-persistence "$configuration"; then
+  suite_status=1
+fi
 
-summary_path="artifacts/e2e-tencent-ime-termination/results.tsv"
-if ! awk -F $'\t' '
+if [[ "$suite_status" -eq 0 ]] && ! awk -F $'\t' '
   NR == 1 { next }
   $1 == "day-title" {
     count += 1
@@ -44,7 +68,48 @@ if ! awk -F $'\t' '
   END { exit(count == 1 && passed ? 0 : 1) }
 ' "$summary_path"; then
   echo "Tencent IME release smoke did not prove the day-title restart path" >&2
-  exit 1
+  suite_status=1
+fi
+
+evidence_capture_source "$repo_root" source_end "$source_end"
+evidence_append_snapshot "$manifest" "$source_end"
+evidence_append "$manifest" result_path "$summary_relative"
+if [[ -s "$summary_path" ]]; then
+  evidence_append \
+    "$manifest" \
+    result_sha256 \
+    "$(shasum -a 256 "$summary_path" | awk '{print $1}')"
+else
+  evidence_append "$manifest" result_sha256 missing
+  suite_status=1
+fi
+if evidence_inventory \
+  "$repo_root" \
+  "$inventory" \
+  "$summary_path" \
+  "$source_start" \
+  "$source_end"; then
+  evidence_append \
+    "$manifest" \
+    artifact_inventory_sha256 \
+    "$(shasum -a 256 "$inventory" | awk '{print $1}')"
+else
+  suite_status=1
+fi
+if ! evidence_finish_manifest \
+  "$manifest" \
+  "$suite_status" \
+  source_head_commit \
+  source_worktree_tree_oid \
+  source_end_worktree_tree_oid \
+  result_path \
+  result_sha256 \
+  artifact_inventory_sha256; then
+  suite_status=1
+fi
+
+if [[ "$suite_status" -ne 0 ]]; then
+  exit "$suite_status"
 fi
 
 echo "Tencent IME release smoke passed: day-title composition, exit, restart"

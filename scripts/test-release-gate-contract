@@ -31,8 +31,11 @@ release_script="scripts/release-private-dmg"
 closure_script="scripts/test-release-diagnostic-closure"
 verifier="scripts/verify-development-validation-evidence"
 ime_release_smoke="scripts/test-tencent-ime-release-smoke"
+ime_evidence_verifier="scripts/verify-tencent-ime-release-smoke-evidence"
 [[ -x "$ime_release_smoke" ]] ||
   fail "Tencent IME release smoke is missing or not executable"
+[[ -x "$ime_evidence_verifier" ]] ||
+  fail "Tencent IME release evidence verifier is missing or not executable"
 require_order \
   "$release_script" \
   "scripts/verify-release-version-tag" \
@@ -56,6 +59,10 @@ require_order \
 require_order \
   "$release_script" \
   "scripts/test-tencent-ime-release-smoke release" \
+  "scripts/verify-tencent-ime-release-smoke-evidence"
+require_order \
+  "$release_script" \
+  "scripts/verify-tencent-ime-release-smoke-evidence" \
   "scripts/package-dmg release"
 require_order \
   "$release_script" \
@@ -187,11 +194,18 @@ fi
 fixture_relative="artifacts/release-static-preflight-contract"
 evidence_prepare_fresh_directory "$repo_root" "$fixture_relative"
 fixture_root="$repo_root/$fixture_relative"
+ime_evidence_relative="artifacts/e2e-tencent-ime-release-smoke"
+ime_result_relative="artifacts/e2e-tencent-ime-termination"
+evidence_prepare_fresh_directory "$repo_root" "$ime_evidence_relative"
+evidence_prepare_fresh_directory "$repo_root" "$ime_result_relative"
+ime_evidence_root="$repo_root/$ime_evidence_relative"
+ime_result_root="$repo_root/$ime_result_relative"
 cleanup() {
   if [[ -n "${dirty_marker:-}" ]]; then
     rm -f "$dirty_marker"
   fi
   rm -rf "$fixture_root"
+  rm -rf "$ime_evidence_root" "$ime_result_root"
 }
 trap cleanup EXIT
 fixture_manifest="$fixture_root/manifest.txt"
@@ -200,6 +214,60 @@ fixture_inventory="$fixture_root/artifact-inventory.sha256"
 fixture_start="$fixture_root/source-start.fragment"
 fixture_end="$fixture_root/source-end.fragment"
 fixture_run_id="release-static-fixture"
+
+ime_manifest="$ime_evidence_root/manifest.txt"
+ime_inventory="$ime_evidence_root/artifact-inventory.sha256"
+ime_source_start="$ime_evidence_root/source-start.fragment"
+ime_source_end="$ime_evidence_root/source-end.fragment"
+ime_result="$ime_result_root/results.tsv"
+printf 'surface\tstatus\tquit_after_final_echo_ms\tfailure_retry\tlive_readback_match\tdurable_readback_match\tsidecar_plaintext_absent\n' \
+  >"$ime_result"
+printf 'day-title\tPASS\t3.0\tfalse\ttrue\ttrue\tn/a\n' >>"$ime_result"
+evidence_capture_source "$repo_root" source "$ime_source_start"
+evidence_begin_manifest \
+  "$ime_manifest" \
+  tencent-ime-release-smoke \
+  "$fixture_run_id" \
+  release \
+  full
+evidence_append_snapshot "$ime_manifest" "$ime_source_start"
+evidence_capture_source "$repo_root" source_end "$ime_source_end"
+evidence_append_snapshot "$ime_manifest" "$ime_source_end"
+evidence_append "$ime_manifest" result_path \
+  "$ime_result_relative/results.tsv"
+evidence_append "$ime_manifest" result_sha256 \
+  "$(shasum -a 256 "$ime_result" | awk '{print $1}')"
+evidence_inventory \
+  "$repo_root" \
+  "$ime_inventory" \
+  "$ime_result" \
+  "$ime_source_start" \
+  "$ime_source_end"
+evidence_append "$ime_manifest" artifact_inventory_sha256 \
+  "$(shasum -a 256 "$ime_inventory" | awk '{print $1}')"
+evidence_finish_manifest \
+  "$ime_manifest" \
+  0 \
+  source_head_commit \
+  source_worktree_tree_oid \
+  source_end_worktree_tree_oid \
+  result_path \
+  result_sha256 \
+  artifact_inventory_sha256
+NOONMARK_EVIDENCE_RUN_ID="$fixture_run_id" \
+  "$ime_evidence_verifier" "$ime_manifest" >/dev/null ||
+  fail "Tencent IME evidence verifier rejected exact same-run evidence"
+printf 'tampered\n' >>"$ime_result"
+if NOONMARK_EVIDENCE_RUN_ID="$fixture_run_id" \
+  "$ime_evidence_verifier" "$ime_manifest" >/dev/null 2>&1; then
+  fail "Tencent IME evidence verifier accepted a changed result"
+fi
+sed -i '' '$d' "$ime_result"
+if NOONMARK_EVIDENCE_RUN_ID="wrong-run" \
+  "$ime_evidence_verifier" "$ime_manifest" >/dev/null 2>&1; then
+  fail "Tencent IME evidence verifier accepted a stale run"
+fi
+
 printf '%s\n' 'fixture static gate passed' >"$fixture_log"
 evidence_capture_source "$repo_root" source "$fixture_start"
 evidence_begin_manifest \

@@ -39,9 +39,9 @@ build_number=正整数
 2. **开发与合并**：每项工作使用隔离 worktree，按需求、现状、设计、实施、验证、闭环推进。修复必须更新故障案例和 fast／symptom／release 门禁映射。
 3. **合入 `main`**：只接受经过 review 的干净提交并先正常 push `main`；它是唯一发行候选分支。任何未提交内容都不能进入 package。
 4. **发行前验证**：在实际打包的 `main` worktree 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，得到同一 evidence run 的成功清单。新增或改变用户可见能力时，同步运行 `make test-demo-fixture`；资料变更额外运行升级与旧 JSON 导入专项测试。
-5. **候选 tag**：在候选 commit 创建带注释 tag `v<marketing_version>`，并只用 `scripts/push-release-tag` 推送。该入口要求本地完整门禁已通过、`origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 的 secret 名称齐全且只允许 `v*` tag。`scripts/verify-release-version-tag` 要求 tag 精确指向当前 `HEAD`；该 tag 只标识待验证候选，不代表已经交付。
-6. **唯一发行入口**：运行 `scripts/release-private-dmg`（`make package-dmg` 也只委托至此入口）。它依次验证同一 run 的静态证据、诊断闭环、腾讯输入 release smoke、DMG 打包、只读 DMG 静态验证、受控 `dmg-validation` 安装／退出／重启验证及最终证据对账。若门禁失败，删除未交付的候选 tag，修复后用新 build 重新开始；不得移动 tag。
-7. **灰度交付与记录**：tag workflow 复跑非 GUI 门禁，以临时 keychain 验证唯一签名身份和一次性签名探针，再发布公开 GitHub Release，并保留 SHA-256、release manifest、dSYM 和本版 release note。全部成功后保留该 immutable tag；这里的 immutable 仅指已成功交付的 tag，不包括失败候选。
+5. **本地候选 tag**：在候选 commit 创建带注释 tag `v<marketing_version>`，先不 push。`scripts/verify-release-version-tag` 要求 tag 精确指向当前 `HEAD`；该本地 tag 只绑定待验证候选，不代表已经交付。
+6. **唯一本地发行门禁**：运行 `scripts/release-private-dmg`（名称保留自既有本地验证入口，不表示最终 GitHub Release 是私有的；`make package-dmg` 也只委托至此入口）。它依次验证同一 run 的静态证据、诊断闭环、腾讯输入 release smoke 及其 source／run 绑定证据、DMG 打包、只读 DMG 静态验证、受控 `dmg-validation` 安装／退出／重启验证及最终证据对账。
+7. **候选发布**：只用 `scripts/push-release-tag` 推送。该入口重新消费本地完整 evidence，要求 `origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 恰有三个签名 secret 且只允许 `v*` tag。tag workflow 还拒绝重复 run attempt 和同一 commit 的既有 run，再复跑非 GUI 门禁，以临时 keychain 验证唯一签名身份和一次性签名探针，最后发布公开 GitHub Release。若任一门禁失败，删除未交付候选并用新 build 重新开始；不得移动已交付 tag。成功后保留 SHA-256、release manifest、dSYM 和 release note。
 
 ## 版本号语义
 

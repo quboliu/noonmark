@@ -36,6 +36,7 @@ NOONMARK_EVIDENCE_RUN_ID="$release_run_id"
 export NOONMARK_EVIDENCE_RUN_ID
 scripts/verify-release-static-preflight
 scripts/verify-development-validation-evidence --scope full
+scripts/verify-tencent-ime-release-smoke-evidence
 
 tag="v$(scripts/release-version marketing-version)"
 head_commit="$(git rev-parse HEAD)"

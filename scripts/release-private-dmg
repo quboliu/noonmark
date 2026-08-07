@@ -32,6 +32,7 @@ scripts/verify-release-static-preflight
 scripts/verify-development-validation-evidence --scope runtime
 scripts/test-release-diagnostic-closure
 scripts/test-tencent-ime-release-smoke release
+scripts/verify-tencent-ime-release-smoke-evidence
 scripts/package-dmg release
 scripts/verify-dmg dist/Noonmark.dmg
 scripts/test-dmg-install dist/Noonmark.dmg

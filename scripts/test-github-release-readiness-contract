@@ -167,6 +167,10 @@ require_order \
 require_order \
   "$tag_publisher" \
   'scripts/verify-development-validation-evidence --scope full' \
+  'scripts/verify-tencent-ime-release-smoke-evidence'
+require_order \
+  "$tag_publisher" \
+  'scripts/verify-tencent-ime-release-smoke-evidence' \
   'scripts/verify-github-release-readiness'
 require_order \
   "$tag_publisher" \
@@ -185,6 +189,13 @@ rg -F 'workflow_dispatch:' "$workflow" >/dev/null ||
   fail "release workflow lost its explicit manual tag entry"
 rg -F 'release workflow requires an existing v* tag ref' "$workflow" >/dev/null ||
   fail "manual release entry is not restricted to an existing v* tag ref"
+rg -F 'actions: read' "$workflow" >/dev/null ||
+  fail "release workflow cannot inspect prior candidate runs"
+rg -F 'release workflow reruns are forbidden' "$workflow" >/dev/null ||
+  fail "release workflow accepts a repeated run attempt"
+rg -F 'this candidate commit already entered the release workflow' \
+  "$workflow" >/dev/null ||
+  fail "manual release entry accepts a previously failed candidate"
 rg -F 'scripts/push-release-tag' "$release_guide" >/dev/null ||
   fail "release guide bypasses the guarded tag publisher"
 rg -F 'gh secret set --env release' "$release_guide" >/dev/null ||

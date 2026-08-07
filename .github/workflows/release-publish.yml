@@ -25,6 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read # prove this candidate has no earlier failed release run
   contents: write # create/update the GitHub Release
 
 jobs:
@@ -55,6 +56,21 @@ jobs:
             exit 1
           fi
           TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_RUN_ATTEMPT}" != "1" ]]; then
+            echo "::error::release workflow reruns are forbidden; retire this build and open a new candidate"
+            exit 1
+          fi
+          PRIOR_RUN_COUNT="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/release-publish.yml/runs" \
+              -f head_sha="$GITHUB_SHA" \
+              -F per_page=100 \
+              --jq ".workflow_runs | map(select(.id != ${GITHUB_RUN_ID})) | length"
+          )"
+          if [[ "$PRIOR_RUN_COUNT" != "0" ]]; then
+            echo "::error::this candidate commit already entered the release workflow; retire its build"
+            exit 1
+          fi
           if [[ "$TAG" != "v${MARKETING}" ]]; then
             echo "::error::tag ${TAG} does not match release/VERSION marketing_version v${MARKETING}"
             exit 1

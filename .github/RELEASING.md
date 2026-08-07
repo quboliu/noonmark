@@ -4,7 +4,7 @@
 
 ## 分工：本地是门禁，CI 是发布
 
-- **本地（质量门禁）**：打 tag 前在开发机跑完整验证链——`make check`、writer-lease E2E、完整 `scripts/test-e2e`、`scripts/release-private-dmg`（诊断闭环、腾讯拼音 smoke、DMG 静态验证、dmg-validation 安装/重启）。全绿才允许打 tag。
+- **本地（质量门禁）**：先在开发机跑 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，再创建只存在于本机的 annotated tag，最后运行 `scripts/release-private-dmg`（诊断闭环、腾讯拼音 smoke、DMG 静态验证、dmg-validation 安装／重启）。完整入口签发同一 run 的全部证据后，才允许推送 tag。
 - **CI（发布通道）**：hosted runner 跑不了真实 GUI／TCC／腾讯拼音的链路，只做 `scripts/check` + `scripts/package-dmg release` + `scripts/verify-dmg` 静态验证 + 创建 GitHub Release。tag 绑定的 commit 与本地验证过的 commit 是同一个，门禁效果等价。
 
 ## 前置条件：签名 secrets（一次性配置）
@@ -27,15 +27,17 @@ CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `
 
 ## 发版步骤
 
-1. 在 `main` 完成开发，本地跑通完整验证链（见上），故障案例与门禁按纪律闭环。
-2. 准备候选：更新 `release/VERSION`（PATCH 修复递增 build；MINOR 新能力；MAJOR 需用户明确批准）、`release/BUILD-LEDGER.tsv` 登记 `candidate`、新建 `docs/releases/vX.Y.Z.md`，commit 并 push `main`。
-3. 打带注释 tag，再走唯一受保护推送入口：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate" && scripts/push-release-tag`。该入口会先消费同一 run 的完整本地检查、writer-lease、E2E、诊断闭环与 DMG 证据，再拒绝脏工作树、未同步的 `origin/main`、既有远端 tag／Release、缺失签名 secret 或过宽 Environment policy，并在推送后对账 annotated tag object 与 commit。
-4. workflow 自动执行：tag 与 `release/VERSION` 对账 → `scripts/check` → 导入并实际证明签名身份 → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建全新的 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。workflow 拒绝覆盖既有 Release 或 asset。
-5. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
+1. 在 `main` 完成开发与候选资料：更新 `release/VERSION`（PATCH 修复递增 build；MINOR 新能力；MAJOR 需用户明确批准）、`release/BUILD-LEDGER.tsv` 登记 `candidate`、新建 `docs/releases/vX.Y.Z.md`，闭环故障案例与门禁，形成最终 candidate commit 并 push `main`。
+2. 在该精确 commit 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，三者必须使用同一 evidence run ID；验证开始后不得再修改候选源码或文档。
+3. 只在本机打带注释 tag：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate"`，暂不 push。
+4. 在同一 tagged commit 与 evidence run 运行 `scripts/release-private-dmg`；它消费前序证据，并生成诊断闭环、腾讯拼音 release smoke、DMG 与受控安装／重启证据。
+5. 运行 `scripts/push-release-tag`。该入口会重新消费同一 run 的完整本地检查、writer-lease、E2E、诊断闭环、腾讯拼音 smoke 与 DMG 证据，再拒绝脏工作树、未同步的 `origin/main`、既有远端 tag／Release、缺失签名 secret 或过宽 Environment policy，并在推送后对账 annotated tag object 与 commit。
+6. workflow 自动执行：tag 与 `release/VERSION` 对账 → `scripts/check` → 导入并实际证明签名身份 → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建全新的 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。workflow 拒绝覆盖既有 Release 或 asset。
+7. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
 
 任何一步判红：删除未交付的候选 tag，修复后用**新 build 号**重开；不得移动已交付 tag，不得复用 build 号。
 
-若 tag push 没有建立 run，可在 Actions → Release → Run workflow 手动选择已经存在的 `v*` tag；branch ref 会被 fail-closed 拒绝。已经判红的 run 不得 rerun，必须按新 build 号重新开始；既有 Release 与 asset 也始终拒绝覆盖或重签。
+若 tag push 没有建立任何 run，可在 Actions → Release → Run workflow 手动选择已经存在的 `v*` tag；branch ref、重复 run attempt，或同一 candidate commit 的任何既有 workflow run 都会被 fail-closed 拒绝。已经判红的 run 必须按新 build 号重新开始；既有 Release 与 asset 也始终拒绝覆盖或重签。
 
 ## 边界
 

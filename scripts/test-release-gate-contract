@@ -32,10 +32,15 @@ closure_script="scripts/test-release-diagnostic-closure"
 verifier="scripts/verify-development-validation-evidence"
 ime_release_smoke="scripts/test-tencent-ime-release-smoke"
 ime_evidence_verifier="scripts/verify-tencent-ime-release-smoke-evidence"
+package_script="scripts/package-dmg"
 [[ -x "$ime_release_smoke" ]] ||
   fail "Tencent IME release smoke is missing or not executable"
 [[ -x "$ime_evidence_verifier" ]] ||
   fail "Tencent IME release evidence verifier is missing or not executable"
+require_order \
+  "$package_script" \
+  'evidence_guard_repo_path "$repo_root" "$package_manifest_path"' \
+  'evidence_begin_manifest'
 require_order \
   "$release_script" \
   "scripts/verify-release-version-tag" \

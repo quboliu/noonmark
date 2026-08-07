@@ -39,6 +39,14 @@ case "$configuration" in
     ;;
 esac
 
+# The descriptor-bound evidence writer deliberately refuses to create its
+# destination parent. Establish the package-owned output boundary from the
+# physical repository root before the first manifest write. This preserves the
+# symlink and traversal protections on a clean checkout where dist/ is absent.
+package_manifest_path="$(
+  evidence_guard_repo_path "$repo_root" "$package_manifest_path"
+)" || exit 1
+
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-}"
 if [[ -z "$evidence_run_id" ]]; then
   evidence_run_id="$(uuidgen)"

@@ -374,6 +374,30 @@ export NOONMARK_EVIDENCE_HELPER_SESSION_ACTIVE
 export NOONMARK_EVIDENCE_HELPER_SESSION_PID
 export NOONMARK_EVIDENCE_HELPER_SESSION_ROOT
 
+# A GitHub-hosted release starts from a clean checkout without a dist/
+# directory. Exercise that exact first-write boundary before the existing
+# second run verifies stale package outputs are replaced.
+rm -rf "$fixture_root/dist"
+set +e
+(
+  cd "$fixture_root"
+  FIXTURE_CODESIGN_LOG="$fixture_root/codesign.log" \
+  NOONMARK_EVIDENCE_RUN_ID="fixture-clean-checkout-run" \
+    PATH="$fixture_root/bin:$PATH" \
+    scripts/package-dmg release
+) >"$fixture_root/package-clean-checkout.stdout" \
+  2>"$fixture_root/package-clean-checkout.stderr"
+clean_checkout_package_status=$?
+set -e
+if [[ "$clean_checkout_package_status" -ne 0 ]] ||
+  [[ ! -s "$fixture_root/dist/Noonmark.dmg.manifest" ]] ||
+  ! grep -Fqx 'evidence_run_id=fixture-clean-checkout-run' \
+    "$fixture_root/dist/Noonmark.dmg.manifest"; then
+  echo "package-dmg could not initialize evidence from a clean checkout" >&2
+  cat "$fixture_root/package-clean-checkout.stderr" >&2
+  exit 1
+fi
+
 set +e
 (
   cd "$fixture_root"

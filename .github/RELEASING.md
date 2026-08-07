@@ -28,12 +28,13 @@ CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `
 ## 发版步骤
 
 1. 在 `main` 完成开发与候选资料：更新 `release/VERSION`、`release/BUILD-LEDGER.tsv` 与 `docs/releases/vX.Y.Z.md`，闭环故障案例与门禁。
-2. 在该精确 commit 完成本地全集自测：`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg`。本地 evidence 只服务自测审计，不上传给 GitHub，也不是 tag 推送入口的前置输入。
-3. push 最终 candidate commit 到 `main`，等待该精确 commit 的 `ci.yml` 单一 GitHub-hosted job 成功。
-4. 只在本机打带注释 tag：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate"`，暂不 push。
-5. 运行 `scripts/push-release-tag`。该入口拒绝脏工作树、未同步的 `origin/main`、未成功的精确 commit hosted CI、既有远程 tag／Release、缺失签名 secret 或过宽 Environment policy；它不读取本地测试 evidence。
-6. tag workflow 自动执行：tag 与 `release/VERSION` 对账 → 再次验证该 commit 的单一 GitHub-hosted CI 成功 → 导入并实际证明签名身份 → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建全新的 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。workflow 不重跑 `scripts/check`，也拒绝覆盖既有 Release 或 asset。
-7. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
+2. 在该精确 commit 运行本地 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`。
+3. 只在本机打带注释 tag：`git tag -a vX.Y.Z -m "Noonmark X.Y.Z (N) release candidate"`，暂不 push。该本地 tag 只给本地 package 身份校验和后续 tag 推送使用。
+4. 运行 `scripts/release-private-dmg` 完成本地诊断闭环、腾讯拼音、DMG 与安装重启自测。全部本地 evidence 只服务自测审计，不上传给 GitHub，也不是 tag 推送入口的前置输入。
+5. push 最终 candidate commit 到 `main`，等待该精确 commit 的 `ci.yml` 单一 GitHub-hosted job 成功。
+6. 运行 `scripts/push-release-tag`。该入口拒绝脏工作树、未同步的 `origin/main`、未成功的精确 commit hosted CI、既有远程 tag／Release、缺失签名 secret 或过宽 Environment policy；它不读取本地测试 evidence。
+7. tag workflow 自动执行：tag 与 `release/VERSION` 对账 → 再次验证该 commit 的单一 GitHub-hosted CI 成功 → 导入并实际证明签名身份 → `scripts/package-dmg release` → `scripts/verify-dmg` → 创建全新的 GitHub Release 并上传 `Noonmark.dmg` 与 `Noonmark.dmg.sha256` → 校验 asset 可公开下载。workflow 不重跑 `scripts/check`，也拒绝覆盖既有 Release 或 asset。
+8. 全绿后回填 `docs/releases/vX.Y.Z.md`（发行 commit、CI 产物 SHA-256、验证摘要、Release 链接），`BUILD-LEDGER.tsv` 标 `released`，commit 并 push。
 
 未交付候选的 tag workflow 若失败，删除远程候选 tag，修复后用新 build 号重开；不得移动已交付 tag，不得复用失败 build 号。发行只接受 tag push，不提供 `workflow_dispatch` 或其他手动发布入口；重复 run attempt 与既有 Release／asset 始终 fail-closed。
 

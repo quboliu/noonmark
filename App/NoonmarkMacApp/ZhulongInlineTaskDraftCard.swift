@@ -560,7 +560,7 @@ struct ZhulongInlineTaskDraftCard: View {
         task: Binding<ZhulongInlineTaskDraftState.Task>,
         accessibilityIdentifier: String
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SubtaskRowMetrics.controlSpacing) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.noonmarkSystem(size: 9))
                 .foregroundStyle(Theme.text3)
@@ -583,16 +583,14 @@ struct ZhulongInlineTaskDraftCard: View {
                     verificationText: subtask.wrappedValue.title
                 )
             }
-            Picker("", selection: subtask.difficulty) {
-                Text(copy.zhulongSimpleDifficultyAbbreviation)
-                    .tag(SubtaskDifficulty.simple)
-                Text(copy.zhulongMediumDifficultyAbbreviation)
-                    .tag(SubtaskDifficulty.medium)
-                Text(copy.zhulongHardDifficultyAbbreviation)
-                    .tag(SubtaskDifficulty.hard)
+            SubtaskDifficultyDotMenu(
+                difficulty: subtask.wrappedValue.difficulty,
+                copy: copy,
+                isEnabled: isApplied == false && isUpdating == false,
+                accessibilityIdentifier: "\(accessibilityIdentifier).difficulty"
+            ) { difficulty in
+                subtask.wrappedValue.difficulty = difficulty
             }
-            .labelsHidden()
-            .frame(width: 54)
             Button {
                 task.wrappedValue.subtasks.removeAll {
                     $0.id == subtask.wrappedValue.id

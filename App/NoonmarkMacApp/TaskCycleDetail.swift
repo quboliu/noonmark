@@ -374,7 +374,21 @@ private struct TaskCyclePlannedSubtasksSection: View {
     var body: some View {
         VStack(spacing: 6) {
             ForEach(series.plannedSubtasks) { subtask in
-                HStack(spacing: 8) {
+                HStack(spacing: SubtaskRowMetrics.controlSpacing) {
+                    SubtaskDifficultyDotMenu(
+                        difficulty: subtask.difficulty,
+                        copy: store.copy,
+                        isEnabled: editable,
+                        accessibilityIdentifier:
+                        "task-cycle-subtask.\(subtask.id.description).difficulty"
+                    ) { difficulty in
+                        store.setTaskCyclePlannedSubtaskDifficulty(
+                            seriesID: series.id,
+                            subtaskID: subtask.id,
+                            difficulty: difficulty
+                        )
+                    }
+
                     EditableSubtaskTitle(
                         title: subtask.title,
                         editable: editable,
@@ -388,40 +402,6 @@ private struct TaskCyclePlannedSubtasksSection: View {
                                 title: $0
                             )
                     }
-
-                    Spacer()
-
-                    Menu {
-                        ForEach(
-                            SubtaskDifficulty.allCases,
-                            id: \.self
-                        ) { difficulty in
-                            Button {
-                                store
-                                    .setTaskCyclePlannedSubtaskDifficulty(
-                                        seriesID: series.id,
-                                        subtaskID: subtask.id,
-                                        difficulty: difficulty
-                                    )
-                            } label: {
-                                Text(
-                                    store.copy.subtaskDifficulty(
-                                        difficulty,
-                                        compact: true
-                                    )
-                                )
-                            }
-                        }
-                    } label: {
-                        Text(
-                            store.copy.subtaskDifficulty(
-                                subtask.difficulty,
-                                compact: true
-                            )
-                        )
-                        .font(.noonmarkSystem(size: 9.5, weight: .semibold))
-                    }
-                    .disabled(editable == false)
 
                     if editable {
                         Button {

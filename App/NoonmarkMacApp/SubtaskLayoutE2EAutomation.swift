@@ -141,12 +141,31 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             chainID: chainID,
             store: store
         )
+        try configureDifficultyDepthFixture(
+            plannedIDs: plannedIDs,
+            chainID: chainID,
+            store: store
+        )
         try await verifyLayout(
             namespace: "pool",
             itemIDs: plannedIDs.map(\.description),
             newEditorIdentifier: "pool.subtask.\(chainID.description).new"
         )
         try captureMainWindow(to: poolScreenshotURL)
+        try assertDifficultyDotsHaveDistinctDepth(
+            identifiers: plannedIDs.map {
+                "pool.subtask.\($0.description).difficulty"
+            },
+            screenshotURL: poolScreenshotURL
+        )
+        try await selectHardDifficultyFromCompactMenu(
+            plannedSubtaskID: try firstPlannedSubtaskID(
+                chainID: chainID,
+                store: store
+            ),
+            chainID: chainID,
+            store: store
+        )
 
         store.schedulePoolTask(chainID, date: store.today)
         guard let traceID = store.selectedTraceID else {
@@ -175,6 +194,7 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             $0.title == editedTitle
         }
         guard matches.count == 1, let subtask = matches.first,
+              subtask.difficulty == .hard,
               let trace = store.engine.traces[subtask.traceID]
         else {
             throw Failure.failed(
@@ -206,6 +226,7 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             return listEditor.string == editedTitle
                 && detailEditor.string == editedTitle
                 && store.engine.subtasks[subtask.id]?.title == editedTitle
+                && store.engine.subtasks[subtask.id]?.difficulty == .hard
         }
     }
 
@@ -252,6 +273,40 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
         return ids
     }
 
+    private func configureDifficultyDepthFixture(
+        plannedIDs: [PlannedSubtaskID],
+        chainID: TaskChainID,
+        store: NoonmarkStore
+    ) throws {
+        guard plannedIDs.count == 3,
+              let initial = store.engine.taskPool().first(where: {
+                  $0.chain.id == chainID
+              })?.definition.plannedSubtasks.sorted(
+                  by: { $0.position < $1.position }
+              ), initial.map(\.difficulty) == [.simple, .simple, .simple]
+        else {
+            throw Failure.failed("新建计划子任务没有统一使用最浅默认难度")
+        }
+        store.setPoolPlannedSubtaskDifficulty(
+            chainID: chainID,
+            plannedSubtaskID: plannedIDs[1],
+            difficulty: .medium
+        )
+        store.setPoolPlannedSubtaskDifficulty(
+            chainID: chainID,
+            plannedSubtaskID: plannedIDs[2],
+            difficulty: .hard
+        )
+        let configured = store.engine.taskPool().first(where: {
+            $0.chain.id == chainID
+        })?.definition.plannedSubtasks.sorted(
+            by: { $0.position < $1.position }
+        ).map(\.difficulty)
+        guard configured == [.simple, .medium, .hard] else {
+            throw Failure.failed("计划子任务无法建立简、中、难深浅 fixture")
+        }
+    }
+
     private func firstSubtaskID(
         traceID: DayTraceID,
         store: NoonmarkStore
@@ -260,6 +315,77 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("Day Todo 主列表缺少可编辑子任务")
         }
         return subtaskID
+    }
+
+    private func firstPlannedSubtaskID(
+        chainID: TaskChainID,
+        store: NoonmarkStore
+    ) throws -> PlannedSubtaskID {
+        guard let subtaskID = store.engine.taskPool().first(where: {
+            $0.chain.id == chainID
+        })?.definition.plannedSubtasks.sorted(
+            by: { $0.position < $1.position }
+        ).first?.id
+        else {
+            throw Failure.failed("任务池布局 fixture 缺少可修改的子任务")
+        }
+        return subtaskID
+    }
+
+    private func selectHardDifficultyFromCompactMenu(
+        plannedSubtaskID: PlannedSubtaskID,
+        chainID: TaskChainID,
+        store: NoonmarkStore
+    ) async throws {
+        try await waitUntil("子任务难度菜单无法激活主窗口") {
+            AppViewTreeE2E.activateMainWindow()
+        }
+        guard let window = NSApp.keyWindow else {
+            throw Failure.failed("子任务难度菜单缺少已激活的主窗口")
+        }
+        let identifier = "pool.subtask.\(plannedSubtaskID.description).difficulty"
+        let input = try WindowServerInputDriver()
+        let menuTrackingProbe = MenuTrackingProbe()
+        defer { menuTrackingProbe.stop() }
+        let resolveTarget = {
+            () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.keyWindow === window,
+                  let target = AppViewTreeE2E.view(identifier: identifier),
+                  target.window === window,
+                  target.isHiddenOrHasHiddenAncestor == false
+            else {
+                throw Failure.failed(
+                    "紧凑难度菜单在点击前不可用：\(identifier)"
+                )
+            }
+            let point = target.convert(
+                NSPoint(x: target.bounds.midX, y: target.bounds.midY),
+                to: nil
+            )
+            return try input.pointerCoordinate(
+                windowPoint: point,
+                in: window
+            )
+        }
+        try await input.postClick(
+            at: try resolveTarget(),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
+        try await waitUntil("紧凑难度菜单没有开始追踪") {
+            menuTrackingProbe.didBeginTracking
+        }
+        try input.postKey(keyCode: 125)
+        try input.postKey(keyCode: 125)
+        try input.postKey(keyCode: 125)
+        try input.postKey(keyCode: 36)
+        try await waitUntil("紧凑难度菜单没有把子任务更新为困难") {
+            store.engine.taskPool().first(where: {
+                $0.chain.id == chainID
+            })?.definition.plannedSubtasks.first(where: {
+                $0.id == plannedSubtaskID
+            })?.difficulty == .hard
+        }
     }
 
     private func verifyInlineEditing(
@@ -863,6 +989,11 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             ), let textView = AppViewTreeE2E.view(
                 identifier: "\(prefix).title.input"
             ) as? NSTextView,
+                let difficultyControl = AppViewTreeE2E.view(
+                    identifier: "\(prefix).difficulty"
+                ), let deleteControl = AppViewTreeE2E.view(
+                    identifier: "\(prefix).delete"
+                ),
                 let textContainer = textView.textContainer,
                 let layoutManager = textView.layoutManager,
                 let scrollView = textView.enclosingScrollView
@@ -877,6 +1008,46 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             )
             let rowFrame = AppViewTreeE2E.frameInWindow(for: row)
             let editorFrame = AppViewTreeE2E.frameInWindow(for: scrollView)
+            let difficultyFrame = AppViewTreeE2E.frameInWindow(
+                for: difficultyControl
+            )
+            let deleteFrame = AppViewTreeE2E.frameInWindow(
+                for: deleteControl
+            )
+            let titleToDeleteSpacing = deleteFrame.minX - editorFrame.maxX
+            guard difficultyFrame.width <= 14.5,
+                  difficultyFrame.maxX <= editorFrame.minX + 0.5,
+                  editorFrame.width >= rowFrame.width * 0.63,
+                  (3.5 ... 4.5).contains(titleToDeleteSpacing),
+                  textView.textContainerInset.width <= 0.5,
+                  textContainer.lineFragmentPadding <= 0.5
+            else {
+                throw Failure.failed(
+                    "\(prefix) 难度入口或标题空间仍然浪费："
+                        + "difficulty=\(difficultyFrame), editor=\(editorFrame),"
+                        + " delete=\(deleteFrame), row=\(rowFrame),"
+                        + " titleToDelete=\(titleToDeleteSpacing),"
+                        + " textInset=\(textView.textContainerInset.width),"
+                        + " linePadding=\(textContainer.lineFragmentPadding)"
+                )
+            }
+            if namespace == "day" {
+                guard let completionControl = AppViewTreeE2E.view(
+                    identifier: "\(prefix).completion"
+                ) else {
+                    throw Failure.failed("\(prefix) 缺少子任务完成控件")
+                }
+                let completionFrame = AppViewTreeE2E.frameInWindow(
+                    for: completionControl
+                )
+                guard completionFrame.maxX <= difficultyFrame.minX + 0.5 else {
+                    throw Failure.failed(
+                        "\(prefix) 难度圆点不在待办方框右侧："
+                            + "completion=\(completionFrame),"
+                            + " difficulty=\(difficultyFrame)"
+                    )
+                }
+            }
             guard usedTextHeight > 28 else {
                 throw Failure.failed(
                     "\(prefix) fixture 没有形成多行：used=\(usedTextHeight)"
@@ -944,6 +1115,87 @@ struct SubtaskLayoutE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed(
                 "无法捕获真实 App 主窗口截图：\(error.localizedDescription)"
             )
+        }
+    }
+
+    private func assertDifficultyDotsHaveDistinctDepth(
+        identifiers: [String],
+        screenshotURL: URL
+    ) throws {
+        guard let window = NSApp.windows.first(where: { $0 is NoonmarkWindow }),
+              let rootView = window.contentView,
+              let bitmap = NSBitmapImageRep(
+                  data: try Data(contentsOf: screenshotURL)
+              ),
+              bitmap.pixelsWide > 0,
+              bitmap.pixelsHigh > 0,
+              rootView.bounds.width > 0,
+              rootView.bounds.height > 0
+        else {
+            throw Failure.failed("无法读取子任务难度圆点的真实截图")
+        }
+        let scaleX = CGFloat(bitmap.pixelsWide) / rootView.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / rootView.bounds.height
+        let luminances = try identifiers.map { identifier in
+            guard let target = AppViewTreeE2E.view(identifier: identifier),
+                  target.window === window
+            else {
+                throw Failure.failed("难度圆点缺少真实视图：\(identifier)")
+            }
+            let frame = target.convert(target.bounds, to: rootView)
+            let centerX = Int((frame.midX * scaleX).rounded())
+            let centerY = Int(
+                ((rootView.bounds.maxY - frame.midY) * scaleY).rounded()
+            )
+            guard let color = bitmap.colorAt(x: centerX, y: centerY)?
+                .usingColorSpace(.sRGB)
+            else {
+                throw Failure.failed("难度圆点中心像素无法读取：\(identifier)")
+            }
+            return 0.2126 * color.redComponent
+                + 0.7152 * color.greenComponent
+                + 0.0722 * color.blueComponent
+        }
+        guard luminances.count == 3 else {
+            throw Failure.failed("难度圆点深浅 fixture 数量错误：\(luminances.count)")
+        }
+        let simpleLuminance = luminances[0]
+        let mediumLuminance = luminances[1]
+        let hardLuminance = luminances[2]
+        guard simpleLuminance < 0.95,
+              simpleLuminance > mediumLuminance + 0.03,
+              mediumLuminance > hardLuminance + 0.03
+        else {
+            throw Failure.failed(
+                "子任务简、中、难圆点没有形成递进深浅："
+                    + "simple=\(simpleLuminance),"
+                    + " medium=\(mediumLuminance), hard=\(hardLuminance)"
+            )
+        }
+    }
+
+    @MainActor
+    private final class MenuTrackingProbe {
+        private(set) var didBeginTracking = false
+        private var observer: NSObjectProtocol?
+
+        init() {
+            observer = NotificationCenter.default.addObserver(
+                forName: NSMenu.didBeginTrackingNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.didBeginTracking = true
+                }
+            }
+        }
+
+        func stop() {
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+                self.observer = nil
+            }
         }
     }
 

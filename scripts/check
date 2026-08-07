@@ -53,6 +53,9 @@ run_check_suite() {
   echo "==> Notes UI contract"
   scripts/test-notes-ui-contract
 
+  echo "==> Subtask difficulty UI contract"
+  scripts/test-subtask-difficulty-ui-contract
+
   echo "==> Unit tests"
   scripts/test-unit
 

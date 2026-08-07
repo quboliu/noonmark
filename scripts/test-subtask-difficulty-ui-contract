@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+component="App/NoonmarkMacApp/SubtaskDifficultyDotMenu.swift"
+markdown_editor="App/NoonmarkMacApp/MarkdownEditing.swift"
+layout_e2e="App/NoonmarkMacApp/SubtaskLayoutE2EAutomation.swift"
+subtask_e2e="scripts/test-e2e"
+row_files=(
+  "App/NoonmarkMacApp/DayTodoPage.swift"
+  "App/NoonmarkMacApp/PoolDetail.swift"
+  "App/NoonmarkMacApp/TaskCycleDetail.swift"
+  "App/NoonmarkMacApp/ZhulongInlineTaskDraftCard.swift"
+)
+
+require_literal() {
+  local literal="$1"
+  local file="$2"
+  local message="$3"
+  if ! /usr/bin/grep -Fq "$literal" "$file"; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
+
+require_literal \
+  'static let controlSpacing: CGFloat = 4' \
+  "$component" \
+  'subtask controls no longer reserve only 4 pt between adjacent controls'
+require_literal \
+  'ZStack {' \
+  "$component" \
+  'difficulty dot is no longer painted independently from the native menu label'
+require_literal \
+  'Circle()' \
+  "$component" \
+  'difficulty control lost its visible dot'
+require_literal \
+  '.frame(width: 12, height: 28)' \
+  "$component" \
+  'difficulty control again reserves more than one compact dot column'
+require_literal \
+  'Color.clear' \
+  "$component" \
+  'native menu label again owns the painted difficulty dot'
+require_literal \
+  'ForEach(SubtaskDifficulty.allCases, id: \.self)' \
+  "$component" \
+  'compact difficulty entry lost the full named menu choices'
+
+for row_file in "${row_files[@]}"; do
+  require_literal \
+    'SubtaskDifficultyDotMenu(' \
+    "$row_file" \
+    "$row_file does not use the shared compact difficulty entry"
+  require_literal \
+    'spacing: SubtaskRowMetrics.controlSpacing' \
+    "$row_file" \
+    "$row_file no longer gives reclaimed control spacing back to title text"
+done
+
+if /usr/bin/grep -Eq \
+  'difficultyMenuTitle|slider\.horizontal\.3|subtaskDifficulty\([^)]*compact: true|frame\(width: 54\)' \
+  "${row_files[@]}"; then
+  echo 'a subtask row reintroduced a wide named difficulty control' >&2
+  exit 1
+fi
+
+require_literal \
+  'NSSize(width: 0, height: NoonmarkVisualMetrics.compactEditorVerticalInset)' \
+  "$markdown_editor" \
+  'subtask editor reintroduced horizontal text-container inset'
+require_literal \
+  'case .subtask:' \
+  "$markdown_editor" \
+  'subtask editor lost its dedicated line-fragment padding branch'
+require_literal \
+  '(3.5 ... 4.5).contains(titleToDeleteSpacing)' \
+  "$layout_e2e" \
+  'real App layout gate no longer holds title-to-delete spacing at 4 pt'
+require_literal \
+  'textView.textContainerInset.width <= 0.5' \
+  "$layout_e2e" \
+  'real App layout gate no longer rejects horizontal editor inset'
+require_literal \
+  'textContainer.lineFragmentPadding <= 0.5' \
+  "$layout_e2e" \
+  'real App layout gate no longer rejects line-fragment padding'
+require_literal \
+  'simpleLuminance > mediumLuminance + 0.03' \
+  "$layout_e2e" \
+  'real App screenshot gate no longer proves simple is lighter than medium'
+require_literal \
+  'mediumLuminance > hardLuminance + 0.03' \
+  "$layout_e2e" \
+  'real App screenshot gate no longer proves medium is lighter than hard'
+require_literal \
+  'menuTrackingProbe.didBeginTracking' \
+  "$layout_e2e" \
+  'real App E2E no longer proves the compact dot opens a native menu'
+require_literal \
+  'subtask.difficulty == .hard' \
+  "$layout_e2e" \
+  'real App restart no longer proves the selected difficulty persisted'
+require_literal \
+  'AND subtask.difficulty = 3' \
+  "$subtask_e2e" \
+  'SQLite probe no longer proves the selected difficulty persisted'
+
+echo 'Subtask difficulty UI contract passed'

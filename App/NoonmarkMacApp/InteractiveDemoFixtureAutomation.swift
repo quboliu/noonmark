@@ -641,27 +641,18 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
                 return AppViewTreeE2E.view(identifier: identifier)
                     .flatMap(AppViewTreeE2E.verificationText) == idea.body
             }
-        let stickySourcesStayInFlylight = stickyNotes.count >= 3
+        let stickySourcesBelongToFlylightProjection = stickyNotes.count >= 3
             && AppViewTreeE2E.view(identifier: "ideas.pinned") == nil
             && stickyNotes.allSatisfy { idea in
                 timelineGroupIdeaIDs.contains(idea.id)
-                    && AppViewTreeE2E.view(
-                        identifier: "ideas.card.\(idea.id)"
-                    )
-                    .flatMap(AppViewTreeE2E.verificationText) == idea.body
             }
         let tombstonesStayHidden = tombstonedIdeaIDs.allSatisfy {
             AppViewTreeE2E.hasNoVisibleView(
                 identifier: "ideas.card.\($0)"
             )
         }
-        let inspectorMatchesSelection = context.store.selectedIdea.map(
-            { idea in
-                AppViewTreeE2E.view(
-                    identifier: "ideas.inspector.idea.\(idea.id)"
-                ).flatMap(AppViewTreeE2E.verificationText) == idea.body
-            }
-        ) == true
+        let flylightRailHasNoDuplicatedContent = AppViewTreeE2E
+            .identifiers(withPrefix: "ideas.inspector.")?.isEmpty == true
         guard context.store.page == .ideas,
               timelineGroups.isEmpty == false,
               tombstonedIdeaIDs.isEmpty == false,
@@ -675,7 +666,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               ) != nil,
               AppViewTreeE2E.view(
                   identifier: "ideas.composer.secondary"
-              ) != nil,
+              ) == nil,
               AppViewTreeE2E.view(
                   identifier: "ideas.composer.tool.label"
               ) != nil,
@@ -687,16 +678,39 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               ) != nil,
               context.store.detailRailRoute == .flylight,
               AppViewTreeE2E.view(identifier: "shell.detail-rail") != nil,
-              inspectorMatchesSelection,
+              flylightRailHasNoDuplicatedContent,
               AppViewTreeE2E.view(identifier: "ideas.filter") == nil,
               AppViewTreeE2E.view(identifier: "ideas.timeline")
               .flatMap(AppViewTreeE2E.verificationText)
               == "\(projectedIdeas.count)",
               topGroupIsFullyVisible,
               visibleCardsMatchProjection,
-              stickySourcesStayInFlylight,
+              stickySourcesBelongToFlylightProjection,
               tombstonesStayHidden
         else {
+            if remainingAttempts == 1 {
+                let composerHasSecondary = AppViewTreeE2E.view(
+                    identifier: "ideas.composer.secondary"
+                ) != nil
+                let diagnostic = [
+                    "page=\(context.store.page.rawValue)",
+                    "detailRail=\(context.store.isDetailRailExpanded)",
+                    "timelineGroups=\(timelineGroups.count)",
+                    "projectedIdeas=\(projectedIdeas.count)",
+                    "secondary=\(composerHasSecondary)",
+                    "topGroup=\(topGroupIsFullyVisible)",
+                    "visibleProjection=\(visibleCardsMatchProjection)",
+                    "stickySources=\(stickySourcesBelongToFlylightProjection)",
+                    "tombstones=\(tombstonesStayHidden)"
+                ].joined(separator: " ")
+                AppViewTreeE2E.writeDump(beside: resultURL)
+                finishWithFailure(
+                    InteractiveDemoFixtureError
+                        .taskCollectionPresentationFailed(diagnostic),
+                    on: context.store
+                )
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 verifyIdeasPresentation(
                     context: context,
@@ -764,65 +778,48 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         ) as? NSTextView else {
             throw InteractiveDemoFixtureError.presentationContractFailed
         }
-        let collapsedDraft = interactionCopy.collapsedDraft
+        guard let composerSurface = AppViewTreeE2E.view(
+            identifier: "ideas.composer.surface",
+            in: mainWindow
+        ) else {
+            throw InteractiveDemoFixtureError.presentationContractFailed
+        }
+        mainWindow.contentView?.layoutSubtreeIfNeeded()
+        guard (111 ... 222).contains(
+            AppViewTreeE2E.frameInWindow(for: composerSurface).height
+        ), AppViewTreeE2E.view(
+            identifier: "ideas.composer.secondary",
+            in: mainWindow
+        ) == nil else {
+            throw InteractiveDemoFixtureError.taskCollectionPresentationFailed(
+                "飞光输入框不是默认展开的单一输入面"
+            )
+        }
+        let suggestionDraft = interactionCopy.suggestionDraft
         try await demoClick(
             "ideas.composer.input",
             in: mainWindow,
             input: input
         )
-        try await waitForFlylightDemo("飞光草稿收起验收没有取得焦点") {
+        try await waitForFlylightDemo("飞光默认展开输入框没有取得焦点") {
             mainWindow.firstResponder === composerEditor
         }
-        try input.typeUnicode(collapsedDraft)
-        try await waitForFlylightDemo("飞光草稿收起验收文本没有进入编辑器") {
-            composerEditor.string == collapsedDraft
-                && context.store.ideaText == collapsedDraft
+        try input.typeUnicode(suggestionDraft)
+        try await waitForFlylightDemo("飞光默认展开输入框没有接收正文") {
+            composerEditor.string == suggestionDraft
+                && context.store.ideaText == suggestionDraft
                 && AppViewTreeE2E.view(
                     identifier: "ideas.composer.suggestions",
                     in: mainWindow
                 ) != nil
-        }
-        try await demoClick(
-            "ideas.composer.secondary",
-            in: mainWindow,
-            input: input
-        )
-        try await waitForFlylightDemo("飞光脏草稿没有在保留正文时收起") {
-            mainWindow.contentView?.layoutSubtreeIfNeeded()
-            guard let surface = AppViewTreeE2E.view(
-                identifier: "ideas.composer.surface",
-                in: mainWindow
-            ) else { return false }
-            return mainWindow.firstResponder !== composerEditor
-                && (62 ... 72).contains(
-                    AppViewTreeE2E.frameInWindow(for: surface).height
-                )
-                && composerEditor.string == collapsedDraft
-                && context.store.ideaText == collapsedDraft
-                && composerEditor.accessibilityLabel()
-                == context.store.copy.ideaBodyAccessibilityLabel
-                && composerEditor.accessibilityValue() == collapsedDraft
                 && AppViewTreeE2E.view(
-                    identifier: "ideas.composer.suggestions",
+                    identifier: "ideas.composer.secondary",
                     in: mainWindow
                 ) == nil
         }
-        try await demoClick(
-            "ideas.composer.secondary",
-            in: mainWindow,
-            input: input
-        )
-        try await waitForFlylightDemo("飞光脏草稿收起后无法重新展开") {
-            mainWindow.firstResponder === composerEditor
-                && composerEditor.string == collapsedDraft
-                && AppViewTreeE2E.view(
-                    identifier: "ideas.composer.suggestions",
-                    in: mainWindow
-                ) != nil
-        }
         try input.postKey(keyCode: 0, modifiers: [.command])
         try input.postKey(keyCode: 51)
-        try await waitForFlylightDemo("飞光草稿收起验收文本没有清理") {
+        try await waitForFlylightDemo("飞光默认展开输入框文本没有清理") {
             composerEditor.string.isEmpty && context.store.ideaText.isEmpty
         }
 
@@ -1371,13 +1368,8 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.view(identifier: "ideas.card.\(idea.id)")
                 .flatMap(AppViewTreeE2E.verificationText) == idea.body
         }
-        let inspectorMatchesSelection = context.store.selectedIdea.map(
-            { idea in
-                AppViewTreeE2E.view(
-                    identifier: "ideas.inspector.idea.\(idea.id)"
-                ).flatMap(AppViewTreeE2E.verificationText) == idea.body
-            }
-        ) == true
+        let flylightRailHasNoDuplicatedContent = AppViewTreeE2E
+            .identifiers(withPrefix: "ideas.inspector.")?.isEmpty == true
         guard reviewIdeas.isEmpty == false,
               context.store.ideaBrowseMode == .review,
               AppViewTreeE2E.view(identifier: "ideas.collection")
@@ -1386,7 +1378,7 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
               .flatMap(AppViewTreeE2E.verificationText)
               == "\(reviewIdeas.count)",
               reviewCardsAreVisible,
-              inspectorMatchesSelection
+              flylightRailHasNoDuplicatedContent
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 verifyIdeasReviewPresentation(
@@ -1521,7 +1513,10 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         guard context.store.page == .stickyNotes,
               AppViewTreeE2E.view(identifier: "sticky-notes.page")
               .flatMap(AppViewTreeE2E.verificationText)
-              == "\(stickyNotes.count)"
+              == "\(stickyNotes.count)",
+              AppViewTreeE2E.view(identifier: "sticky-notes.subtitle")
+              .flatMap(AppViewTreeE2E.verificationText)
+              == context.store.copy.stickyNotesSubtitle
         else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 verifyStickyNotesStreamPresentation(
@@ -4016,7 +4011,7 @@ private struct PageSwitchLatencyResult {
 /// 飞光交互验收真实键入 UI 的文案，按故事语言切换；建议候选分组名直接
 /// 取自 `DemoStoryText`，避免与年度故事数据漂移。
 private struct DemoFlylightInteractionCopy {
-    let collapsedDraft: String
+    let suggestionDraft: String
     let editPrefix: String
     let suggestionQuery: String
     let suggestionCategoryName: String
@@ -4031,14 +4026,14 @@ private struct DemoFlylightInteractionCopy {
         switch language {
         case .chinese:
             return Self(
-                collapsedDraft: "演示中暂时收起、稍后继续的飞光草稿 @工",
+                suggestionDraft: "演示中默认展开的飞光草稿 @工",
                 editPrefix: "演示验收",
                 suggestionQuery: "@工",
                 suggestionCategoryName: categoryName
             )
         case .english:
             return Self(
-                collapsedDraft: "A flylight draft collapsed mid-demo and resumed later @En",
+                suggestionDraft: "A Flylight draft remains expanded during the demo @En",
                 editPrefix: "Demo acceptance",
                 suggestionQuery: "@En",
                 suggestionCategoryName: categoryName

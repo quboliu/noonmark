@@ -502,8 +502,7 @@ public enum MacUIIdeasPageElement: String, CaseIterable, Sendable {
 }
 
 public enum MacUIIdeasPageLayout {
-    public static let composerIdleHeight = 64.0
-    public static let composerExpandedMinimumHeight = 112.0
+    public static let composerMinimumHeight = 112.0
     public static let composerMaximumHeight = 220.0
     public static let composerCornerRadius = 12.0
     public static let composerActionBarHeight = 42.0

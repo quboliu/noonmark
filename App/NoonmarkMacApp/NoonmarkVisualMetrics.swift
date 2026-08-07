@@ -43,15 +43,6 @@ enum NoonmarkVisualMetrics {
     static let ideasComposerCornerRadius = CGFloat(
         MacUIIdeasPageLayout.composerCornerRadius
     )
-    static let ideasComposerIdleHeight = CGFloat(
-        MacUIIdeasPageLayout.composerIdleHeight
-    )
-    static let ideasComposerExpandedMinimumHeight = CGFloat(
-        MacUIIdeasPageLayout.composerExpandedMinimumHeight
-    )
-    static let ideasComposerMaximumHeight = CGFloat(
-        MacUIIdeasPageLayout.composerMaximumHeight
-    )
     static let ideasComposerActionBarHeight = CGFloat(
         MacUIIdeasPageLayout.composerActionBarHeight
     )

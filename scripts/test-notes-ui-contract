@@ -69,21 +69,49 @@ require_literal \
   "$flylight_composer" \
   'Flylight composer lost visible success state'
 require_literal \
-  'if isCollapsedByIntent { return false }' \
+  'case .pageCreate: nil' \
   "$flylight_composer" \
-  'Flylight dirty drafts can no longer stay explicitly collapsed'
+  'Flylight page Composer reintroduced a secondary action'
 require_literal \
-  'if isExpanded,' \
+  '? "把值得反复看见的内容，留在手边。"' \
+  "$notes_copy" \
+  'Sticky Note slogan again treats Flylight as a countable entry'
+require_literal \
+  ': "Keep what matters within sight."' \
+  "$notes_copy" \
+  'English Sticky Note slogan again treats Flylight as a countable entry'
+if /usr/bin/grep -Eq \
+  'Flylights|Flylight body|Capture Flylight|Edit Flylight|Delete Flylight|Flylight actions|Edit the Flylight|Flylight deleted|Flylight content|每条飞光|还没有飞光|飞光过滤词|一周以前的飞光|飞光正文|记录飞光|编辑飞光|删除飞光|飞光操作|已删除飞光|飞光内容' \
+  "$notes_copy"; then
+  echo 'notes copy again treats the Flylight module name as a countable entry' >&2
+  exit 1
+fi
+require_literal \
+  'language == .chinese ? "记录正文" : "Entry body"' \
+  "$notes_copy" \
+  'entry editor lost its stable non-module accessibility label'
+require_literal \
+  'identifier: "sticky-notes.subtitle"' \
+  "$sticky_page" \
+  'real App has no stable Sticky Note slogan evidence anchor'
+require_literal \
+  'style: .flylight' \
   "$flylight_composer" \
-  'collapsed Flylight drafts can still leak classification suggestions'
+  'Flylight page Composer no longer uses its full editor surface'
 require_literal \
-  'ideas-composer-dirty-collapsed.png' \
+  'Flylight composer did not start as one expanded input surface' \
   "$flylight_e2e" \
-  'real App no longer proves a dirty Flylight draft can collapse and reopen'
+  'real App E2E no longer rejects a compact default Flylight Composer'
 require_literal \
-  'identifier: "ideas.composer.suggestions"' \
+  'identifier: "ideas.composer.secondary"' \
   "$flylight_e2e" \
-  'real App no longer proves active-token suggestions disappear while collapsed'
+  'real App E2E no longer asserts that Flylight has no secondary action'
+if /usr/bin/grep -Eq \
+  'flylightCollapsed|isCollapsedByIntent|isExpandedByIntent|idea(Collapse|Expand)ComposerAction' \
+  "$markdown_editor" "$flylight_composer" "$notes_copy"; then
+  echo 'Flylight Composer reintroduced its collapsed state' >&2
+  exit 1
+fi
 require_literal \
   'accessibilityLabel: store.copy.ideaBodyAccessibilityLabel' \
   "$flylight_composer" \
@@ -177,9 +205,9 @@ require_literal \
   "$store_ideas" \
   'Flylight deletion can bypass the active editor preflight'
 require_literal \
-  'deleting from the inspector discarded an invalid inline draft' \
+  'invalid inline draft did not block navigation' \
   "$flylight_e2e" \
-  'real App E2E no longer protects an invalid draft from inspector deletion'
+  'real App E2E no longer protects an invalid Flylight draft from navigation'
 require_literal \
   'public static func editableText(' \
   "$draft_parser" \
@@ -217,9 +245,9 @@ require_literal \
   "$demo_automation" \
   'annual Demo lost its saved Flylight card body readiness assertion'
 require_literal \
-  '飞光脏草稿没有在保留正文时收起' \
+  '飞光输入框不是默认展开的单一输入面' \
   "$demo_automation" \
-  'annual Demo no longer proves dirty Flylight draft collapse and accessibility recovery'
+  'annual Demo no longer proves the Flylight Composer starts expanded'
 require_literal \
   'Sticky Note 来源没有恢复此前浏览位置' \
   "$demo_automation" \
@@ -321,11 +349,20 @@ require_literal \
 require_literal \
   'case .flylight:' \
   "$detail_rails" \
-  'Shared detail rail cannot render Flylight details'
+  'Shared detail rail no longer handles the Flylight route'
 require_literal \
-  'FlylightRail()' \
-  "$detail_rails" \
-  'Flylight detail rail surface is missing'
+  'Flylight rail rendered duplicate content' \
+  "$flylight_e2e" \
+  'real App E2E no longer rejects duplicate Flylight rail content'
+require_literal \
+  'hasVisibleVerificationText' \
+  "$flylight_e2e" \
+  'real App E2E no longer checks the selected Flylight body is absent from the rail'
+if /usr/bin/grep -Eq 'FlylightRail|ideaInspector|ideas\.inspector\.' \
+  "$detail_rails" "$notes_copy"; then
+  echo 'Flylight detail rail reintroduced duplicate Flylight content' >&2
+  exit 1
+fi
 require_literal \
   'case stickyNotes' \
   "$ui_contract" \

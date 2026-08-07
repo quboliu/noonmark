@@ -149,29 +149,16 @@ struct FlylightComposerSurface: View {
     var focusesOnAppear = false
     var focusRequest = 0
     let onSubmit: () -> Void
-    let onSecondary: () -> Void
+    var onSecondary: (() -> Void)?
     var onBlur: (() -> Bool)?
 
     @State private var isFocused = false
-    @State private var isExpandedByIntent = false
-    @State private var isCollapsedByIntent = false
     @State private var commandGeneration: UInt64 = 0
     @State private var commandRequest: MarkdownEditorCommandRequest?
     @State private var recoveryFocusRequest = 0
 
     private var normalizedText: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var isExpanded: Bool {
-        switch mode {
-        case .pageCreate:
-            if isCollapsedByIntent { return false }
-            return isFocused || isExpandedByIntent
-                || normalizedText.isEmpty == false
-        case .globalCapture, .inlineEdit:
-            return true
-        }
     }
 
     private var canSubmit: Bool {
@@ -194,12 +181,9 @@ struct FlylightComposerSurface: View {
         }
     }
 
-    private var secondaryTitle: String {
+    private var secondaryTitle: String? {
         switch mode {
-        case .pageCreate:
-            isExpanded
-                ? store.copy.ideaCollapseComposerAction
-                : store.copy.ideaExpandComposerAction
+        case .pageCreate: nil
         case .globalCapture: store.copy.ideaContinueLaterAction
         case .inlineEdit: store.copy.ideaCancelEditAction
         }
@@ -247,10 +231,7 @@ struct FlylightComposerSurface: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             composerSurface
-            if isExpanded,
-               let activeClassificationToken,
-               classificationSuggestions.isEmpty == false
-            {
+            if let activeClassificationToken, classificationSuggestions.isEmpty == false {
                 NewTaskClassificationSuggestionList(
                     tokenKind: activeClassificationToken.kind,
                     suggestions: classificationSuggestions,
@@ -264,19 +245,9 @@ struct FlylightComposerSurface: View {
                 }
             }
         }
-        .onChange(of: text) { oldValue, newValue in
-            if oldValue != newValue, newValue.isEmpty == false {
-                isCollapsedByIntent = false
-                isExpandedByIntent = true
-            }
-        }
         .onChange(of: state) { _, nextState in
-            guard mode == .pageCreate else { return }
-            if nextState == .success {
+            if mode == .pageCreate, nextState == .success {
                 NSApp.keyWindow?.makeFirstResponder(nil)
-            } else if nextState == .pristine, normalizedText.isEmpty {
-                isCollapsedByIntent = false
-                isExpandedByIntent = false
             }
         }
     }
@@ -286,17 +257,13 @@ struct FlylightComposerSurface: View {
             MarkdownEditor(
                 text: $text,
                 placeholder: placeholder,
-                style: isExpanded ? .flylight : .flylightCollapsed,
+                style: .flylight,
                 showsSurface: false,
                 onCommit: submit,
                 onEscape: escape,
                 onEndEditing: scheduleBlur,
                 onFocusChange: { focused in
                     isFocused = focused
-                    if focused {
-                        isCollapsedByIntent = false
-                        isExpandedByIntent = true
-                    }
                 },
                 commandRequest: commandRequest,
                 accessibilityLabel: store.copy.ideaBodyAccessibilityLabel,
@@ -357,13 +324,15 @@ struct FlylightComposerSurface: View {
                 }
 
                 HStack(spacing: NoonmarkVisualMetrics.ideasComposerActionSpacing) {
-                    FlylightActionButton(
-                        title: secondaryTitle,
-                        identifier: secondaryIdentifier
-                            ?? "\(identifier).secondary",
-                        emphasis: .secondary,
-                        action: secondary
-                    )
+                    if let secondaryTitle {
+                        FlylightActionButton(
+                            title: secondaryTitle,
+                            identifier: secondaryIdentifier
+                                ?? "\(identifier).secondary",
+                            emphasis: .secondary,
+                            action: secondary
+                        )
+                    }
                     FlylightActionButton(
                         title: primaryTitle,
                         identifier: primaryIdentifier
@@ -498,8 +467,6 @@ struct FlylightComposerSurface: View {
     }
 
     private func request(_ command: MarkdownEditorCommand) {
-        isCollapsedByIntent = false
-        isExpandedByIntent = true
         commandGeneration &+= 1
         commandRequest = MarkdownEditorCommandRequest(
             generation: commandGeneration,
@@ -516,26 +483,15 @@ struct FlylightComposerSurface: View {
     }
 
     private func secondary() {
-        if mode == .pageCreate {
-            if isExpanded {
-                isCollapsedByIntent = true
-                isExpandedByIntent = false
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            } else {
-                isCollapsedByIntent = false
-                isExpandedByIntent = true
-                recoveryFocusRequest &+= 1
-            }
-        }
-        onSecondary()
+        onSecondary?()
     }
 
     private func escape() {
         switch mode {
         case .pageCreate:
-            secondary()
+            NSApp.keyWindow?.makeFirstResponder(nil)
         case .globalCapture, .inlineEdit:
-            onSecondary()
+            secondary()
         }
     }
 

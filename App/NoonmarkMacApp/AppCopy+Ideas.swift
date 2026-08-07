@@ -7,8 +7,8 @@ extension AppCopy {
 
     var stickyNotesSubtitle: String {
         language == .chinese
-            ? "把值得反复看见的飞光留在这里。"
-            : "Keep the Flylights worth seeing again close at hand."
+            ? "把值得反复看见的内容，留在手边。"
+            : "Keep what matters within sight."
     }
 
     var stickyNotesEmptyState: String {
@@ -46,7 +46,7 @@ extension AppCopy {
     }
 
     var ideaBodyAccessibilityLabel: String {
-        language == .chinese ? "飞光正文" : "Flylight body"
+        language == .chinese ? "记录正文" : "Entry body"
     }
 
     var restoreIdeaBrowseLocationAction: String {
@@ -79,48 +79,28 @@ extension AppCopy {
         language == .chinese ? "换一组" : "Refresh"
     }
 
-    var ideaInspectorTitle: String {
-        language == .chinese ? "飞光详情" : "Flylight details"
-    }
-
-    var ideaInspectorRecordedAt: String {
-        language == .chinese ? "记录时间" : "Captured"
-    }
-
-    var ideaInspectorClassification: String {
-        language == .chinese ? "分类" : "Classification"
-    }
-
-    var ideaInspectorActions: String {
-        language == .chinese ? "操作" : "Actions"
-    }
-
-    var ideaInspectorEmptyState: String {
-        language == .chinese ? "选择一条飞光查看详情。" : "Select a Flylight to inspect it."
-    }
-
     var ideaEmptyState: String {
         language == .chinese
-            ? "还没有飞光。把第一条记录写在上面的速记框里。"
-            : "No Flylights yet. Capture the first one above."
+            ? "飞光里还没有记录。把第一条写在上面的速记框里。"
+            : "No entries in Flylight yet. Capture the first one above."
     }
 
     var ideaFilterEmptyState: String {
         language == .chinese
-            ? "没有匹配这个飞光过滤词的内容。"
-            : "No Flylights match this filter."
+            ? "飞光里没有匹配这个过滤词的内容。"
+            : "No Flylight entries match this filter."
     }
 
     var ideaReviewEmptyState: String {
         language == .chinese
-            ? "暂时没有一周以前的飞光可回看。"
-            : "No Flylights older than one week are ready to review."
+            ? "飞光里暂时没有一周以前的内容可回看。"
+            : "No Flylight entries older than one week are ready to review."
     }
 
     var ideaMultipleCategories: String {
         language == .chinese
-            ? "每条飞光只能有一个分组，请只保留一个 @分组。"
-            : "A Flylight can have only one group. Keep a single @group."
+            ? "每条记录只能有一个分组，请只保留一个 @分组。"
+            : "A Flylight entry can have only one group. Keep a single @group."
     }
 
     func ideaUnresolvedClassification(_ names: [String]) -> String {
@@ -131,19 +111,11 @@ extension AppCopy {
     }
 
     var addIdeaAction: String {
-        language == .chinese ? "记录飞光" : "Capture Flylight"
+        language == .chinese ? "写下记录" : "Capture an entry"
     }
 
     var ideaPublishAction: String {
         language == .chinese ? "发布" : "Publish"
-    }
-
-    var ideaCollapseComposerAction: String {
-        language == .chinese ? "收起" : "Collapse"
-    }
-
-    var ideaExpandComposerAction: String {
-        language == .chinese ? "展开" : "Expand"
     }
 
     var ideaContinueLaterAction: String {
@@ -237,21 +209,21 @@ extension AppCopy {
     }
 
     var editIdeaAction: String {
-        language == .chinese ? "编辑飞光" : "Edit Flylight"
+        language == .chinese ? "编辑记录" : "Edit entry"
     }
 
     var deleteIdeaAction: String {
-        language == .chinese ? "删除飞光" : "Delete Flylight"
+        language == .chinese ? "删除记录" : "Delete entry"
     }
 
     var ideaActionsAccessibilityLabel: String {
-        language == .chinese ? "飞光操作" : "Flylight actions"
+        language == .chinese ? "记录操作" : "Entry actions"
     }
 
     var ideaEditPlaceholder: String {
         language == .chinese
-            ? "用 Markdown 编辑飞光；⌘回车保存，Esc 取消"
-            : "Edit the Flylight in Markdown; ⌘Return saves, Esc cancels"
+            ? "用 Markdown 编辑记录；⌘回车保存，Esc 取消"
+            : "Edit the entry in Markdown; ⌘Return saves, Esc cancels"
     }
 
     var ideaSaveEditAction: String {
@@ -263,7 +235,7 @@ extension AppCopy {
     }
 
     var ideaDeletedToast: String {
-        language == .chinese ? "已删除飞光" : "Flylight deleted"
+        language == .chinese ? "已删除记录" : "Entry deleted"
     }
 
     var ideaEditSaveFailed: String {
@@ -274,8 +246,8 @@ extension AppCopy {
 
     var ideaContentRequired: String {
         language == .chinese
-            ? "飞光内容不能为空，修改仍保留在这里。"
-            : "Flylight content cannot be empty. Your edit is still here."
+            ? "记录内容不能为空，修改仍保留在这里。"
+            : "Entry content cannot be empty. Your edit is still here."
     }
 
     // MARK: - Sticky Note projection
@@ -311,7 +283,7 @@ extension AppCopy {
     // MARK: - Global Flylight Capture
 
     var ideaCaptureCommand: String {
-        language == .chinese ? "记录飞光…" : "Capture Flylight…"
+        language == .chinese ? "写下记录…" : "Capture an entry…"
     }
 
     var ideaCapturePanelTitle: String {

@@ -323,8 +323,7 @@ private struct IdeaComposer: View {
             placeholder: store.copy.ideaComposerPlaceholder,
             onSubmit: {
                 _ = store.appendIdeaFromComposer()
-            },
-            onSecondary: session.dismiss
+            }
         )
     }
 }

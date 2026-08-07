@@ -107,12 +107,26 @@ struct PlannedSubtaskRow: View {
     let plannedSubtask: PlannedSubtask
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: SubtaskRowMetrics.controlSpacing) {
             RoundedRectangle(cornerRadius: 5)
                 .fill(Theme.panel)
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.line2, lineWidth: 1.5))
                 .frame(width: 15, height: 15)
                 .frame(width: 28, height: 28)
+
+            SubtaskDifficultyDotMenu(
+                difficulty: plannedSubtask.difficulty,
+                copy: store.copy,
+                isEnabled: true,
+                accessibilityIdentifier:
+                "pool.subtask.\(plannedSubtask.id.description).difficulty"
+            ) { difficulty in
+                store.setPoolPlannedSubtaskDifficulty(
+                    chainID: chainID,
+                    plannedSubtaskID: plannedSubtask.id,
+                    difficulty: difficulty
+                )
+            }
 
             EditableSubtaskTitle(
                 title: plannedSubtask.title,
@@ -127,42 +141,6 @@ struct PlannedSubtaskRow: View {
             }
             .foregroundStyle(Theme.text1)
             .lineLimit(1)
-
-            Spacer()
-
-            Menu {
-                ForEach(SubtaskDifficulty.allCases, id: \.self) { difficulty in
-                    Button {
-                        store.setPoolPlannedSubtaskDifficulty(
-                            chainID: chainID,
-                            plannedSubtaskID: plannedSubtask.id,
-                            difficulty: difficulty
-                        )
-                    } label: {
-                        Label(
-                            difficultyMenuTitle(difficulty),
-                            systemImage: difficulty == plannedSubtask.difficulty ? "checkmark.circle.fill" : "circle"
-                        )
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.noonmarkSystem(size: 9, weight: .semibold))
-                    Text(store.copy.subtaskDifficulty(plannedSubtask.difficulty, compact: true))
-                    MicroLabel(
-                        systemImage: "chevron.down",
-                        color: plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2
-                    )
-                }
-                .font(.noonmarkSystem(size: 9, weight: .bold))
-                .foregroundStyle(plannedSubtask.difficulty == .hard ? Theme.warn : Theme.text2)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(plannedSubtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
-                .overlay(Capsule().stroke(Theme.line2))
-            }
-            .buttonStyle(.plain)
 
             Button {
                 store.removePoolPlannedSubtask(chainID: chainID, plannedSubtaskID: plannedSubtask.id)
@@ -188,10 +166,6 @@ struct PlannedSubtaskRow: View {
                 identifier: "pool.subtask.\(plannedSubtask.id.description).row"
             )
         }
-    }
-
-    private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
-        store.copy.subtaskDifficulty(difficulty)
     }
 }
 

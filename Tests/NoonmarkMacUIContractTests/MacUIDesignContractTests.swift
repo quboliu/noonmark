@@ -433,8 +433,7 @@ final class MacUIDesignContractTests: XCTestCase {
                 .singleFilterIndicatorVisualUnit
             ]
         )
-        XCTAssertEqual(MacUIIdeasPageLayout.composerIdleHeight, 64)
-        XCTAssertEqual(MacUIIdeasPageLayout.composerExpandedMinimumHeight, 112)
+        XCTAssertEqual(MacUIIdeasPageLayout.composerMinimumHeight, 112)
         XCTAssertEqual(MacUIIdeasPageLayout.composerMaximumHeight, 220)
         XCTAssertEqual(MacUIIdeasPageLayout.composerCornerRadius, 12)
         XCTAssertEqual(MacUIIdeasPageLayout.composerActionBarHeight, 42)

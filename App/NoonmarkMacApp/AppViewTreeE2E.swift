@@ -236,6 +236,24 @@ enum AppViewTreeE2E {
         return nil
     }
 
+    static func hasVisibleVerificationText(
+        _ expectedText: String,
+        confinedTo frame: NSRect,
+        in window: NSWindow
+    ) -> Bool {
+        guard let root = window.contentView?.superview ?? window.contentView else {
+            return false
+        }
+        return allViews(from: root).contains { view in
+            guard isVisible(view, in: [window]),
+                  verificationText(for: view) == expectedText
+            else {
+                return false
+            }
+            return frame.contains(frameInWindow(for: view))
+        }
+    }
+
     static func visibleButtonLabels() -> Set<String> {
         Set(currentVisibleViews().compactMap { view in
             guard let button = view as? NSButton else { return nil }

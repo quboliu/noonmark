@@ -4821,7 +4821,8 @@ run_subtask_layout_probe() {
       ON trace.id = subtask.trace_id
     WHERE subtask.title = '$expected_title'
       AND trace.date = '2026-07-28'
-      AND trace.status = 'pending';
+      AND trace.status = 'pending'
+      AND subtask.difficulty = 3;
   ")"
   if [[ "$persisted" != "1" ]]; then
     echo "subtask inline edit SQLite probe failed: ${persisted:-missing}" >&2

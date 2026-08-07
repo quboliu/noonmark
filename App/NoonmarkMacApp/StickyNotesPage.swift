@@ -29,6 +29,12 @@ struct StickyNotesPage: View {
                     )
                 }
             }
+            .background {
+                AppE2EViewAnchor(
+                    identifier: "sticky-notes.subtitle",
+                    verificationText: store.copy.stickyNotesSubtitle
+                )
+            }
 
             if store.stickyNoteIdeas.isEmpty {
                 StickyNotesEmptyState()

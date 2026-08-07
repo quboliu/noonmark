@@ -1054,6 +1054,10 @@ enum SubtaskRowSurface {
         "\(accessibilityPrefix(for: subtaskID)).delete"
     }
 
+    func difficultyIdentifier(for subtaskID: SubtaskID) -> String {
+        "\(accessibilityPrefix(for: subtaskID)).difficulty"
+    }
+
     func newEditorIdentifier(for traceID: DayTraceID) -> String {
         "\(accessibilityNamespace).subtask.\(traceID.description).new"
     }
@@ -1081,7 +1085,7 @@ struct SubtaskRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: SubtaskRowMetrics.controlSpacing) {
             Button {
                 store.toggleSubtask(subtask.id)
             } label: {
@@ -1103,6 +1107,21 @@ struct SubtaskRow: View {
             )
             .accessibilityIdentifier(surface.completionIdentifier(for: subtask.id))
             .disabled(canToggle == false)
+            .background {
+                AppE2EViewAnchor(
+                    identifier: surface.completionIdentifier(for: subtask.id)
+                )
+            }
+
+            SubtaskDifficultyDotMenu(
+                difficulty: subtask.difficulty,
+                copy: store.copy,
+                isEnabled: canEdit,
+                accessibilityIdentifier:
+                surface.difficultyIdentifier(for: subtask.id)
+            ) { difficulty in
+                store.setSubtaskDifficulty(subtask.id, difficulty: difficulty)
+            }
 
             EditableSubtaskTitle(
                 title: subtask.title,
@@ -1121,45 +1140,11 @@ struct SubtaskRow: View {
             )
             .strikethrough(subtask.status == .completed)
 
-            Spacer()
-
             if subtask.completedAt != nil && canEdit == false {
                 Image(systemName: "lock.fill")
                     .font(.noonmarkSystem(size: 9))
                     .foregroundStyle(Theme.text3)
             }
-
-            Menu {
-                ForEach(SubtaskDifficulty.allCases, id: \.self) { difficulty in
-                    Button {
-                        store.setSubtaskDifficulty(subtask.id, difficulty: difficulty)
-                    } label: {
-                        Label(
-                            difficultyMenuTitle(difficulty),
-                            systemImage: difficulty == subtask.difficulty ? "checkmark.circle.fill" : "circle"
-                        )
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.noonmarkSystem(size: 9, weight: .semibold))
-                    Text(store.copy.subtaskDifficulty(subtask.difficulty, compact: true))
-                    MicroLabel(
-                        systemImage: "chevron.down",
-                        color: subtask.difficulty == .hard ? Theme.warn : Theme.text2
-                    )
-                }
-                .font(.noonmarkSystem(size: 9, weight: .bold))
-                .foregroundStyle(subtask.difficulty == .hard ? Theme.warn : Theme.text2)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(subtask.difficulty == .hard ? Theme.warnSoft : Theme.chip))
-                .overlay(Capsule().stroke(Theme.line2))
-            }
-            .buttonStyle(.plain)
-            .disabled(canEdit == false)
-            .help(store.copy.subtaskDifficultyHelp(canMutate: canEdit))
 
             if canEdit {
                 Button {
@@ -1189,10 +1174,6 @@ struct SubtaskRow: View {
                 identifier: "\(accessibilityPrefix).row"
             )
         }
-    }
-
-    private func difficultyMenuTitle(_ difficulty: SubtaskDifficulty) -> String {
-        store.copy.subtaskDifficulty(difficulty)
     }
 }
 
@@ -1232,10 +1213,12 @@ struct EditableSubtaskTitle: View {
             )
             .font(.noonmarkSystem(size: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
         } else {
             MarkdownInlineText(title)
                 .font(.noonmarkSystem(size: 12))
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
         }
     }
 }

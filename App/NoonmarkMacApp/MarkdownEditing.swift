@@ -6,7 +6,6 @@ import SwiftUI
 enum MarkdownEditorStyle {
     case title
     case body
-    case flylightCollapsed
     case flylight
     case detailBody
     case compact
@@ -17,7 +16,7 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystemFont(ofSize: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystemFont(ofSize: 12)
-        case .flylightCollapsed, .flylight:
+        case .flylight:
             .noonmarkSystemFont(ofSize: 14)
         case .compact, .subtask:
             .systemFont(ofSize: NoonmarkVisualMetrics.compactEditorPointSize, weight: .medium)
@@ -30,7 +29,7 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: .noonmarkSystem(size: 14, weight: .semibold)
         case .body, .detailBody: .noonmarkSystem(size: 12)
-        case .flylightCollapsed, .flylight:
+        case .flylight:
             .noonmarkSystem(size: 14)
         case .compact, .subtask:
             .noonmarkRenderedSystem(
@@ -46,7 +45,6 @@ enum MarkdownEditorStyle {
         switch self {
         case .title: NoonmarkVisualMetrics.detailTitleMinimumHeight
         case .body: 54
-        case .flylightCollapsed: 22
         case .flylight: 70
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMinimumHeight
         case .compact, .subtask: 32
@@ -59,7 +57,6 @@ enum MarkdownEditorStyle {
         case .title: NoonmarkVisualMetrics.detailTitleMaximumHeight
         case .detailBody: NoonmarkVisualMetrics.detailDescriptionMaximumHeight
         case .body: 132
-        case .flylightCollapsed: 22
         case .flylight: 178
         case .compact: 32
         case .subtask: 120
@@ -76,22 +73,20 @@ enum MarkdownEditorStyle {
             )
         case .body:
             NSSize(width: 5, height: 6)
-        case .flylightCollapsed:
-            NSSize(
-                width: NoonmarkVisualMetrics
-                    .ideasComposerHorizontalTextInset - 5,
-                height: 2
-            )
         case .flylight:
             NSSize(
                 width: NoonmarkVisualMetrics
                     .ideasComposerHorizontalTextInset - 5,
                 height: NoonmarkVisualMetrics.ideasComposerTopTextInset
             )
-        case .compact, .subtask:
+        case .compact:
             // Keep the first 15 pt insertion caret centred in a 32 pt line.
-            // Subtask editors reuse this first-line rhythm as they grow.
             NSSize(width: 5, height: NoonmarkVisualMetrics.compactEditorVerticalInset)
+        case .subtask:
+            // Inline subtask titles have no surrounding field surface. Keep
+            // their vertical rhythm while giving every horizontal point back
+            // to the task text.
+            NSSize(width: 0, height: NoonmarkVisualMetrics.compactEditorVerticalInset)
         case .conversation:
             NSSize(
                 width: NoonmarkVisualMetrics.zhulongConversationComposerHorizontalInset - 5,
@@ -104,15 +99,17 @@ enum MarkdownEditorStyle {
         switch self {
         case .title, .detailBody:
             NoonmarkVisualMetrics.detailLineFragmentPadding
-        case .body, .flylightCollapsed, .flylight,
-             .compact, .subtask, .conversation:
+        case .subtask:
+            0
+        case .body, .flylight,
+             .compact, .conversation:
             5
         }
     }
 
     var showsVerticalScroller: Bool {
         switch self {
-        case .flylightCollapsed, .compact:
+        case .compact:
             false
         case .title, .body, .flylight, .detailBody,
              .subtask, .conversation:

@@ -38,6 +38,10 @@ VoiceOver 把整段「记录一条飞光，支持 Markdown……」placeholder �
 
 为共享 MarkdownEditor 增加独立、可选的 accessibility label；现有调用者默认兼容 placeholder，FlylightComposerSurface 显式传入本地化「飞光正文」。AppKit scroll view 与 NSTextView 共用稳定 label，原生 value 继续由 NSTextView 正文提供。
 
+## 后续词汇调整（2026-08-06）
+
+「飞光」现只作为模块入口名，编辑器稳定名称相应从「飞光正文／Flylight body」调整为「记录正文／Entry body」。名称与 placeholder 分离、原生动态 value 和真实 App AX 门禁保持不变。
+
 ## 验证结果
 
 - `swift build` 通过。

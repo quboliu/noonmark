@@ -87,12 +87,12 @@ FAIL-2026-08-04-13	fast	scripts/test-unit	scripts/check	IdeaComposerSession 与 
 FAIL-2026-08-04-13	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理保存新飞光与旧飞光时必须出现可截图的 saving frame
 FAIL-2026-08-04-14	fast	scripts/test-notes-ui-contract	scripts/check	年度 Demo manifest 必须声明飞光物理编辑与全局候选两条交互已验证
 FAIL-2026-08-04-14	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo App 物理双击、取消、保存、恢复正文，并在全局面板选择工程分组候选
-FAIL-2026-08-04-15	fast	scripts/test-notes-ui-contract	scripts/check	强制脏草稿明确收起优先于非空正文，并保留年度 Demo 物理交互断言
-FAIL-2026-08-04-15	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理输入脏草稿、点击收起、对账紧凑几何与原文，再重新展开
+FAIL-2026-08-04-15	fast	scripts/test-notes-ui-contract	scripts/check	禁止飞光 Composer 恢复收起状态、紧凑样式或收起／展开文案，并保留年度 Demo 初始展开断言
+FAIL-2026-08-04-15	symptom	scripts/test-e2e	scripts/test-all	真实 App 打开飞光时验证完整编辑面初始可见，且无收起／展开第二操作
 FAIL-2026-08-04-16	fast	scripts/test-notes-ui-contract	scripts/check	分类与 Sticky Note 来源导航必须保留一等浏览位置快照及恢复动作
 FAIL-2026-08-04-16	symptom	scripts/test-e2e	scripts/test-all	真实 App 从过滤集合打开 Sticky Note 来源并物理恢复过滤、选择与可见集合
 FAIL-2026-08-04-17	fast	scripts/test-notes-ui-contract	scripts/check	飞光编辑器必须显式提供稳定 accessibility label，禁止继续从 placeholder 派生
-FAIL-2026-08-04-17	symptom	scripts/test-e2e	scripts/test-all	真实 NSTextView 在空态与脏草稿态分别对账飞光正文 label 与动态 value
+FAIL-2026-08-04-17	symptom	scripts/test-e2e	scripts/test-all	真实 NSTextView 在空态与脏草稿态分别对账记录正文 label 与动态 value
 FAIL-2026-08-04-18	fast	scripts/test-runtime-profile-isolation	scripts/check	Demo 验收与交互入口必须在构建前强制稳定 Apple Development UI 签名
 FAIL-2026-08-04-18	symptom	scripts/test-interactive-demo-fixture	scripts/test-all	真实 Demo App 每次重建后仍可取得 WindowServer event-posting 权限并完成物理交互
 FAIL-2026-08-04-19	fast	scripts/test-notes-ui-contract	scripts/check	飞光回看刷新按钮必须在应用拥有的触发器边界保留稳定物理输入锚点
@@ -124,3 +124,7 @@ FAIL-2026-08-05-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 路径�
 FAIL-2026-08-05-03	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 dmg-validation 安装/退出/重启的菜单强证据串对账
 FAIL-2026-08-06-01	fast	scripts/test-unit	scripts/check	CurrentSyncRecordMergerTests 固定子任务改名／撤回改写按 LWW 合并，lineage／createdAt 身份冲突继续 fail-closed，可变字段被重新身份化即判红
 FAIL-2026-08-06-01	symptom	scripts/test-integration	scripts/check	SQLiteLocalFirstSyncCoordinatorTests 真实协调器走首版上传→改名→再上传→远端收敛→journal 清空，修复前确定性 251 毒记录循环
+FAIL-2026-08-06-02	fast	scripts/test-subtask-difficulty-ui-contract	scripts/check	固定待办方框右侧可见圆点、12 pt 难度列、4 ± 0.5 pt 间距、三档深浅、零水平文字 inset 与四个共享调用面
+FAIL-2026-08-06-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 以三档截图像素、精确布局和 WindowServer 菜单选择验证难度圆点、标题宽度、SQLite 与重启难度回读
+FAIL-2026-08-06-03	fast	scripts/test-notes-ui-contract	scripts/check	固定 Sticky Note 中英文 slogan，拒绝飞光模块名的量词化／复数化／单条化残留，并要求页头与记录正文证据锚点
+FAIL-2026-08-06-03	symptom	scripts/test-e2e	scripts/test-all	真实 App 物理打开 Sticky Note 后必须显示语义正确的 slogan，年度 Demo 对账同一共享文案

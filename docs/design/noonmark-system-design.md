@@ -1714,7 +1714,7 @@ E2E 会通过真实 `AXUIElement` 树、物理输入和 screenshot 验证，而�
 
 | Workflow | 触发与 runner | 作用 |
 |---|---|---|
-| `ci.yml` check | PR、main push、手动；GitHub hosted `macos-15` | 执行 `scripts/check`，无论成功失败上传 check evidence，保留 14 天 |
+| `ci.yml` check | PR 与 main push；GitHub hosted `macos-15` | 执行 `scripts/check`，无论成功失败上传 check evidence，保留 14 天；不提供手动重跑入口 |
 | `nightly-deterministic-sim.yml` | 每日或手动；hosted `macos-15` | 固定 seed 默认运行 512 次深度确定性仿真 |
 | `release-publish.yml` | 仅版本 tag 推送；hosted `macos-15` | 验证精确 commit 的 `ci.yml` 已成功，不重跑 `scripts/check`；然后打包签名、静态验证 DMG 并创建公开 GitHub Release |
 

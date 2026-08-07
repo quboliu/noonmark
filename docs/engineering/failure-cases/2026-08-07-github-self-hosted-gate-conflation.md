@@ -36,7 +36,7 @@ source commit `92c92fdc` 的 `.github/workflows/ci.yml` 明确声明 `runs-on: [
 
 ## 根因修复
 
-删除普通 CI 的 self-hosted E2E job，删除两条 self-hosted 专用 workflow 与无用 runner label 配置，但保留所有本地全集脚本。`push-release-tag` 不再读取本地 evidence。GitHub 只保留三条职责单一的 hosted workflow，每条恰好一个 job：main CI 跑子集，nightly 跑深度仿真，tag release 验证精确 main CI 结果后打包发布。tag release 不再重跑 `scripts/check`。
+删除普通 CI 的 self-hosted E2E job 与手动重跑入口，删除两条 self-hosted 专用 workflow 与无用 runner label 配置，但保留所有本地全集脚本。`push-release-tag` 不再读取本地 evidence。GitHub 只保留三条职责单一的 hosted workflow，每条恰好一个 job：main CI 只因 main push 跑一次子集，nightly 跑深度仿真，tag release 验证精确 main CI 结果后打包发布。tag release 不再重跑 `scripts/check`。
 
 ## 验证结果
 
@@ -48,7 +48,7 @@ source commit `92c92fdc` 的 `.github/workflows/ci.yml` 明确声明 `runs-on: [
 ## 永久门禁
 
 - fast：`scripts/test-github-hosted-workflow-boundary`，由 `scripts/check` 强制调用；拒绝任何 workflow 出现 `self-hosted`，固定三条单职责 workflow 和单 job 边界，并禁止 tag release 重跑 `scripts/check`。
-- symptom：`scripts/verify-github-hosted-ci`，由 `scripts/push-release-tag` 强制调用；精确 commit 必须只有一次 main push CI，且唯一 job 必须是首次成功的 `macos-15` hosted job。
+- symptom：`scripts/verify-github-hosted-ci`，由 `scripts/push-release-tag` 强制调用；精确 commit 在所有 event 中必须只有一次 CI run，该 run 必须是 main push，且唯一 job 必须是首次成功的 `macos-15` hosted job。
 - release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；tag run 必须只有一个 `macos-15` package job，并建立唯一 DMG 与 checksum asset。
 
 ## 发行与回滚

@@ -50,6 +50,10 @@ while IFS= read -r workflow; do
   [[ "$(grep -Fc 'runs-on: macos-15' "$workflow")" -eq 1 ]] ||
     fail "$workflow must contain exactly one macos-15 runner"
 done <<<"$workflow_inventory"
+
+if rg -F 'workflow_dispatch:' "$ci_workflow" >/dev/null; then
+  fail "ordinary CI exposes a duplicate manual execution entry"
+fi
 for local_only_entry in \
   scripts/test-data-root-process-lease-e2e \
   scripts/test-e2e \

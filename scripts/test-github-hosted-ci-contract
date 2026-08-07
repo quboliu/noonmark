@@ -32,7 +32,7 @@ printf '%s\n' \
 chmod 0700 "$fake_gh"
 
 commit="0123456789abcdef0123456789abcdef01234567"
-good_run=$'123\tcompleted\tsuccess\t1'
+good_run=$'123\tpush\tmain\tcompleted\tsuccess\t1'
 good_job=$'1\tBuild · Lint · UT · IT · ST · DST\tmacos-15\tcompleted\tsuccess'
 
 run_fixture() {
@@ -47,11 +47,14 @@ run_fixture() {
 
 run_fixture "$good_run" "$good_job" >/dev/null ||
   fail "verifier rejected one successful GitHub-hosted CI run"
-if run_fixture $'123\tcompleted\tsuccess\t1\n124\tcompleted\tsuccess\t1' "$good_job" >/dev/null 2>&1; then
+if run_fixture $'123\tpush\tmain\tcompleted\tsuccess\t1\n124\tworkflow_dispatch\tmain\tcompleted\tsuccess\t1' "$good_job" >/dev/null 2>&1; then
   fail "verifier accepted duplicate CI runs"
 fi
-if run_fixture $'123\tcompleted\tfailure\t1' "$good_job" >/dev/null 2>&1; then
+if run_fixture $'123\tpush\tmain\tcompleted\tfailure\t1' "$good_job" >/dev/null 2>&1; then
   fail "verifier accepted a failed CI run"
+fi
+if run_fixture $'123\tworkflow_dispatch\tmain\tcompleted\tsuccess\t1' "$good_job" >/dev/null 2>&1; then
+  fail "verifier accepted a manual CI run"
 fi
 if run_fixture "$good_run" $'1\tBuild · Lint · UT · IT · ST · DST\tself-hosted,macOS\tcompleted\tsuccess' >/dev/null 2>&1; then
   fail "verifier accepted a self-hosted job"

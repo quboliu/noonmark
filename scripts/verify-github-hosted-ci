@@ -25,13 +25,15 @@ run_rows="$(
     "repos/${repo}/actions/workflows/ci.yml/runs" \
     -f head_sha="$commit" \
     -F per_page=100 \
-    --jq '.workflow_runs[] | select(.event == "push" and .head_branch == "main") | [.id, .status, (.conclusion // ""), .run_attempt] | @tsv'
+    --jq '.workflow_runs[] | [.id, .event, .head_branch, .status, (.conclusion // ""), .run_attempt] | @tsv'
 )"
 [[ "$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$run_rows")" -eq 1 ]] ||
-  fail "expected exactly one main push CI run for ${commit}"
+  fail "expected exactly one CI run of any event for ${commit}"
 
-IFS=$'\t' read -r run_id run_status run_conclusion run_attempt <<<"$run_rows"
-[[ "$run_id" =~ ^[0-9]+$ && "$run_status" == "completed" &&
+IFS=$'\t' read -r \
+  run_id run_event run_branch run_status run_conclusion run_attempt <<<"$run_rows"
+[[ "$run_id" =~ ^[0-9]+$ && "$run_event" == "push" &&
+  "$run_branch" == "main" && "$run_status" == "completed" &&
   "$run_conclusion" == "success" && "$run_attempt" == "1" ]] ||
   fail "CI run is not a first-attempt success: ${run_rows}"
 

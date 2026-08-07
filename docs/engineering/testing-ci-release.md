@@ -193,7 +193,7 @@ scripts/test-visual-regression
 - 运行 `scripts/check`。
 - 不在默认 push / PR 中运行 live AI provider smoke；它需要人工或受保护的 secret 环境显式触发。
 
-合并到 `main` 或在 `main` ref 上手动触发：
+合并或 push 到 `main`：
 
 - 只在 GitHub-hosted Mac 运行单一 `scripts/check` job。
 - GitHub workflow 不得声明 `self-hosted` runner，不调度本机真实 App E2E，不上传本地 evidence。

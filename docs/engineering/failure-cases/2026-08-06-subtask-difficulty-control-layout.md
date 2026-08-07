@@ -1,13 +1,13 @@
 # FAIL-2026-08-06-02：子任务难度入口不可见并挤压标题
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-06T22:43:06-04:00
 - 影响版本／构建：`73e2c597499359f05093b0beb40894a4ab4cba4f` 上尚未提交的工作树构建
 - 引入提交：无；故障来自当前任务中尚未提交的工作树变更
 - Git author／committer：无；故障变更尚未形成 Git commit
 - 实际修改者：当前 Codex agent；由本次 agent session 与工作树 diff 确认
-- 修复提交：待回填
+- 修复提交：`2b2bd75d22ae3ff6d74fe8c5760201646a7eb293` `feat(ui): simplify flylight and subtask surfaces`
 
 ## 用户症状与影响
 
@@ -50,8 +50,8 @@ SwiftUI `Menu` 在当前 macOS 原生 `SwiftUIPopupButton` 路径中没有绘制
 - 收紧门禁前，真实 App 在标题到删除按钮为 `8 pt` 时按预期判红。
 - 修复后 `NOONMARK_E2E_SUBTASK_LAYOUT_ONLY=1 scripts/test-e2e` 通过：截图像素证明简、中、难三颗圆点逐级加深，难度列不超过 `14.5 pt`，标题取得至少 `63%` 行宽，标题到删除按钮保持 `4 ± 0.5 pt`，水平 inset 与 line-fragment padding 均不超过 `0.5 pt`。
 - 同一路径经 WindowServer 物理点击圆点，观察原生菜单开始 tracking，选择「难」后对账领域模型、SQLite `difficulty = 3` 与重启回读仍为 `.hard`；随后完成标题行内编辑。
-- `make run-demo-app` 已重建并打开隔离 Demo，fixture manifest 生成成功。
-- 完整 `make check` 待修复提交确定后回填。
+- `make run-demo-app` 已基于精确修复提交重建并打开隔离 Demo，fixture manifest 生成成功。
+- 完整 `make check` 通过；证据清单 `artifacts/audit-final/make-check/manifest.txt` 记录 `suite_exit_status=0`，fast gate、真实 App symptom gate、故障案例聚合、DMG、签名、诊断边界与格式门禁全部完成。
 
 ## 永久门禁
 

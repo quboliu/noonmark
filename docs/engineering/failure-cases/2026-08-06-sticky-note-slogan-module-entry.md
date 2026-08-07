@@ -1,13 +1,13 @@
 # FAIL-2026-08-06-03：Sticky Note slogan 把模块名当成条目名
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-06T23:35:46-04:00
 - 影响版本／构建：`73e2c597499359f05093b0beb40894a4ab4cba4f` 上尚未提交的工作树构建
 - 引入提交：`20061243f96782862dcca8fc3a932e3e7f26e778` `feat(notes): build the Feiguang and Sticky Note multi-view experience`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同一 identity
 - 实际修改者：无法由现有 Git 证据确认
-- 修复提交：待回填
+- 修复提交：`2b2bd75d22ae3ff6d74fe8c5760201646a7eb293` `feat(ui): simplify flylight and subtask surfaces`
 
 ## 用户症状与影响
 
@@ -46,7 +46,9 @@ Sticky Note 页头写着「把值得反复看见的飞光留在这里」。但�
 ## 验证结果
 
 - 修复前 fast gate 与真实 App symptom gate 均按预期判红。
-- 修复后的定向 E2E、Demo 与完整 `make check` 待修复提交确定后回填。
+- 修复后 `NOONMARK_E2E_IDEA_CAPTURE_ONLY=1 scripts/test-e2e` 通过：真实 App 物理打开 Sticky Note 后对账中英文新 slogan，并继续覆盖飞光编辑、删除、取消不变量、隐藏 tombstone、全局面板、热键、SQLite 与重启。
+- `make run-demo-app` 已基于精确修复提交重建并打开隔离 Demo，年度 fixture 对账相同共享文案与稳定页头锚点。
+- 完整 `make check` 通过；证据清单 `artifacts/audit-final/make-check/manifest.txt` 记录 `suite_exit_status=0`，fast gate、真实 App symptom gate、故障案例聚合、DMG、签名、诊断边界与格式门禁全部完成。
 
 ## 永久门禁
 

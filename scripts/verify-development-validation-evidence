@@ -435,6 +435,15 @@ require_install_process_log() {
   local identity_rows
   local identity_count
   local identity_row
+  local cached_observation_rows
+  local cached_target_process_observation_rows
+  local cached_identity_seed_rows
+  local cached_identity_seed_count
+  local cached_identity_asn_rows
+  local cached_identity_asn_row_count
+  local cached_identity_asns
+  local cached_identity_asn_count
+  local cached_identity_asn
   local cached_identity_rows
   local cached_identity_count
   local cached_identity_row
@@ -479,21 +488,18 @@ require_install_process_log() {
     awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
       <<<"$identity_rows"
   )"
-  cached_identity_rows="$(
+  cached_observation_rows="$(
     grep -E \
-      "^[0-9]{4}-[0-9]{2}-[0-9]{2} .* NoonmarkMacAppDMGValidation\\[$expected_pid:[^]]+\\] \\[com[.]apple[.]launchservices:cas\\] information in shared memory .*cached info \\{" \
+      "^[0-9]{4}-[0-9]{2}-[0-9]{2} .* \\[com[.]apple[.]launchservices:cas\\] information in shared memory .*cached info \\{" \
       "$path" || true
   )"
-  cached_identity_count="$(
-    awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
-      <<<"$cached_identity_rows"
+  cached_target_process_observation_rows="$(
+    grep -E \
+      " NoonmarkMacAppDMGValidation\\[$expected_pid:[^]]+\\] \\[com[.]apple[.]launchservices:cas\\] " \
+      <<<"$cached_observation_rows" || true
   )"
   if ((identity_count > 1)); then
     echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
-    return 1
-  fi
-  if [[ "$identity_count" == "0" && "$cached_identity_count" == "0" ]]; then
-    echo "DMG install $mode system runtime log lacks PID-bound App identity" >&2
     return 1
   fi
   if [[ "$identity_count" == "1" ]]; then
@@ -507,6 +513,12 @@ require_install_process_log() {
       echo "DMG install $mode system runtime log has duplicate or contradictory App identity" >&2
       return 1
     fi
+    if [[ ! "$identity_row" =~ LSASN\"=ASN:(0x[0-9a-f]+-0x[0-9a-f]+): ]]; then
+      echo "DMG install $mode system runtime log lacks a canonical App ASN" >&2
+      return 1
+    fi
+    cached_identity_asn="${BASH_REMATCH[1]}"
+    [[ "$identity_row" =~ LSAuditToken\"=\$([0-9A-F]{64}) ]]
     audit_token="${BASH_REMATCH[1]}"
     audit_pid_hex="${audit_token:40:8}"
     audit_pid="$(
@@ -516,6 +528,63 @@ require_install_process_log() {
       echo "DMG install $mode visible PID disagrees with its kernel audit token" >&2
       return 1
     fi
+  else
+    cached_identity_seed_rows="$(
+      while IFS= read -r cached_identity_row; do
+        if [[ "$cached_identity_row" == \
+            *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] &&
+          [[ "$cached_identity_row" == \
+            *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]]; then
+          printf '%s\n' "$cached_identity_row"
+        fi
+      done <<<"$cached_target_process_observation_rows"
+    )"
+    cached_identity_seed_count="$(
+      awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+        <<<"$cached_identity_seed_rows"
+    )"
+    cached_identity_asn_rows="$(
+      sed -nE \
+        's/.*information in shared memory for (0x[0-9a-f]+-0x[0-9a-f]+) .*cached info \{.*/\1/p' \
+        <<<"$cached_identity_seed_rows"
+    )"
+    cached_identity_asn_row_count="$(
+      awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+        <<<"$cached_identity_asn_rows"
+    )"
+    if [[ "$cached_identity_seed_count" != "$cached_identity_asn_row_count" ]]; then
+      echo "DMG install $mode system runtime log has an unparseable cached App subject" >&2
+      return 1
+    fi
+    cached_identity_asns="$(
+      sort -u <<<"$cached_identity_asn_rows"
+    )"
+    cached_identity_asn_count="$(
+      awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+        <<<"$cached_identity_asns"
+    )"
+    if [[ "$cached_identity_asn_count" == "0" ]]; then
+      echo "DMG install $mode system runtime log lacks subject-ASN-bound App identity" >&2
+      return 1
+    fi
+    if [[ "$cached_identity_asn_count" != "1" ]]; then
+      echo "DMG install $mode system runtime log has contradictory cached App subjects" >&2
+      return 1
+    fi
+    cached_identity_asn="$cached_identity_asns"
+  fi
+  cached_identity_rows="$(
+    grep -F \
+      "information in shared memory for $cached_identity_asn " \
+      <<<"$cached_observation_rows" || true
+  )"
+  cached_identity_count="$(
+    awk 'length($0) > 0 { count += 1 } END { print count + 0 }' \
+      <<<"$cached_identity_rows"
+  )"
+  if [[ "$identity_count" == "0" && "$cached_identity_count" == "0" ]]; then
+    echo "DMG install $mode system runtime log lacks subject-ASN-bound App identity" >&2
+    return 1
   fi
   if ((cached_identity_count > 0)); then
     while IFS= read -r cached_identity_row; do
@@ -523,9 +592,10 @@ require_install_process_log() {
           *"\"CFBundleExecutablePath\"=\"$expected_executable_path\""* ]] ||
         [[ "$cached_identity_row" != \
           *"\"CFBundleIdentifier\"=\"$expected_bundle_identifier\""* ]] ||
-        [[ "$cached_identity_row" != \
-          *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]]; then
-        echo "DMG install $mode system runtime log has contradictory PID-bound App identity" >&2
+        { [[ "$cached_identity_row" == *'"LSBundlePath"='* ]] &&
+          [[ "$cached_identity_row" != \
+            *"\"LSBundlePath\"=\"$expected_bundle_path\""* ]]; }; then
+        echo "DMG install $mode system runtime log has contradictory subject-ASN-bound App identity" >&2
         return 1
       fi
     done <<<"$cached_identity_rows"

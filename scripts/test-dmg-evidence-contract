@@ -720,12 +720,12 @@ fixture_diagnostic_process_timestamp="$(
 )"
 cat >"$fixture_root/artifacts/dmg-install/exercise-console.log" <<EOF
 runtime_evidence_capture_started=2026-07-17T12:00:00Z
-$fixture_process_timestamp.100 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=201 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSAuditToken"=\$0000000000000000000000000000000000000000C90000000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
+$fixture_process_timestamp.100 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=201 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSASN"=ASN:0x0-0xa1a1a1:, "LSAuditToken"=\$0000000000000000000000000000000000000000C90000000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
 $fixture_process_timestamp.200 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] fixture process launch
 EOF
 cat >"$fixture_root/artifacts/dmg-install/restart-console.log" <<EOF
 runtime_evidence_capture_started=2026-07-17T12:00:01Z
-$fixture_restart_process_timestamp.300 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=301 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSAuditToken"=\$00000000000000000000000000000000000000002D0100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
+$fixture_restart_process_timestamp.300 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=301 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSASN"=ASN:0x0-0xb2b2b2:, "LSAuditToken"=\$00000000000000000000000000000000000000002D0100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
 $fixture_restart_process_timestamp.400 I  NoonmarkMacAppDMGValidation[301:def] [com.apple.launchservices:cas] fixture process restart
 EOF
 cat >"$fixture_root/artifacts/dmg-install/task-row-before-restart.txt" <<'EOF'
@@ -1092,7 +1092,7 @@ pixel_size=1024x1024
 EOF
 cat >"$diagnostic_console" <<EOF
 runtime_evidence_capture_started=2026-07-17T12:00:03Z
-$fixture_diagnostic_process_timestamp.500 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=501 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSAuditToken"=\$0000000000000000000000000000000000000000F50100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
+$fixture_diagnostic_process_timestamp.500 I  CoreServicesUIAgent[51:abc] [com.apple.launchservices:cas] notifying server side, pid=501 appInfo={ "CFBundleExecutablePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation", "CFBundleIdentifier"="app.noonmark.mac.dmg-validation", "LSASN"=ASN:0x0-0xc3c3c3:, "LSAuditToken"=\$0000000000000000000000000000000000000000F50100000000000000000000, "LSBundlePath"="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" }
 $fixture_diagnostic_process_timestamp.600 I  NoonmarkMacAppDMGValidation[501:def] [com.apple.launchservices:cas] fixture diagnostic export
 EOF
 cat >"$diagnostic_package_report" <<EOF
@@ -2713,9 +2713,10 @@ cp "$restart_window" "$restart_window_pristine"
 cp "$exercise_console" "$exercise_console_pristine"
 cp "$restart_console" "$restart_console_pristine"
 
-sed -i '' '/pid=201 appInfo=/d' "$exercise_console"
 printf '%s\n' \
-  "$fixture_process_timestamp.250 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSBundlePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app\" }" \
+  "$fixture_process_timestamp.225 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutable\"=\"NoonmarkMacAppDMGValidation\", \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSApplicationHasRegistered\"=tr<…>" \
+  "$fixture_process_timestamp.227 I  ContextStoreAgent[381:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSApplicationHasRegistered\"=tr<…>" \
+  "$fixture_process_timestamp.230 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xd4d4d4 with seed 43 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/System/Library/CoreServices/ViewBridgeAuxiliary.app/Contents/MacOS/ViewBridgeAuxiliary\", \"CFBundleIdentifier\"=\"com.apple.ViewBridgeAuxiliary\", \"LSBundlePath\"=\"/System/Library/CoreServices/ViewBridgeAuxiliary.app\" }" \
   >>"$exercise_console"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
 (
@@ -2725,27 +2726,98 @@ refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
     artifacts/e2e-data-root-process-lease/manifest.txt \
     dist/Noonmark.dmg.manifest \
     artifacts/dmg-install/runtime-manifest.txt
-) >"$fixture_root/cross-validator-pid-bound-cached-identity.stdout" \
-  2>"$fixture_root/cross-validator-pid-bound-cached-identity.stderr"
+) >"$fixture_root/cross-validator-authoritative-asn-with-foreign-observation.stdout" \
+  2>"$fixture_root/cross-validator-authoritative-asn-with-foreign-observation.stderr"
 
 printf '%s\n' \
-  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  "$fixture_process_timestamp.235 I  ContextStoreAgent[381:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
   >>"$exercise_console"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
 expect_install_semantic_mutation_rejected \
-  contradictory-pid-bound-cached-identity \
-  "DMG install exercise system runtime log has contradictory PID-bound App identity"
+  contradictory-same-asn-foreign-observer \
+  "DMG install exercise system runtime log has contradictory subject-ASN-bound App identity"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' '/pid=201 appInfo=/d' "$exercise_console"
+printf '%s\n' \
+  "$fixture_process_timestamp.250 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutable\"=\"NoonmarkMacAppDMGValidation\", \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSApplicationHasRegistered\"=tr<…>" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/cross-validator-subject-asn-cached-identity.stdout" \
+  2>"$fixture_root/cross-validator-subject-asn-cached-identity.stderr"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xd4d4d4 with seed 43 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+(
+  cd "$fixture_root"
+  scripts/verify-development-validation-evidence \
+    artifacts/e2e-runtime/manifest.txt \
+    artifacts/e2e-data-root-process-lease/manifest.txt \
+    dist/Noonmark.dmg.manifest \
+    artifacts/dmg-install/runtime-manifest.txt
+) >"$fixture_root/cross-validator-unrelated-cached-observation.stdout" \
+  2>"$fixture_root/cross-validator-unrelated-cached-observation.stderr"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.265 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for malformed-subject with seed 44 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  unparseable-cached-identity-subject \
+  "DMG install exercise system runtime log has an unparseable cached App subject"
+sed -i '' '$d' "$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.267 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xe5e5e5 with seed 45 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  contradictory-cached-identity-subjects \
+  "DMG install exercise system runtime log has contradictory cached App subjects"
+sed -i '' '$d' "$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+
+printf '%s\n' \
+  "$fixture_process_timestamp.270 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutable\"=\"NoonmarkMacAppDMGValidation\", \"CFBundleExecutablePath\"=\"$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation\", \"CFBundleIdentifier\"=\"app.noonmark.mac.dmg-validation\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  >>"$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  contradictory-subject-asn-cached-identity \
+  "DMG install exercise system runtime log has contradictory subject-ASN-bound App identity"
+cp "$exercise_console_pristine" "$exercise_console"
+cp "$install_inventory_pristine" "$install_inventory"
+cp "$install_manifest_pristine" "$install_manifest"
+
+sed -i '' \
+  's/, "LSASN"=ASN:0x0-0xa1a1a1://' \
+  "$exercise_console"
+refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
+expect_install_semantic_mutation_rejected \
+  missing-canonical-app-asn \
+  "DMG install exercise system runtime log lacks a canonical App ASN"
 cp "$exercise_console_pristine" "$exercise_console"
 cp "$install_inventory_pristine" "$install_inventory"
 cp "$install_manifest_pristine" "$install_manifest"
 
 printf '%s\n' \
-  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for fixture was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
+  "$fixture_process_timestamp.260 I  NoonmarkMacAppDMGValidation[201:def] [com.apple.launchservices:cas] information in shared memory for 0x0-0xa1a1a1 with seed 42 was still valid, so using cached info { \"CFBundleExecutablePath\"=\"/tmp/Forged.app/Contents/MacOS/Forged\", \"CFBundleIdentifier\"=\"forged.bundle\", \"LSBundlePath\"=\"/tmp/Forged.app\" }" \
   >>"$exercise_console"
 refresh_install_manifest_binding "artifacts/dmg-install/exercise-console.log"
 expect_install_semantic_mutation_rejected \
   contradictory-cached-identity-beside-app-info \
-  "DMG install exercise system runtime log has contradictory PID-bound App identity"
+  "DMG install exercise system runtime log has contradictory subject-ASN-bound App identity"
 cp "$exercise_console_pristine" "$exercise_console"
 cp "$install_inventory_pristine" "$install_inventory"
 cp "$install_manifest_pristine" "$install_manifest"

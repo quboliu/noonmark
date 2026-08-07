@@ -17,14 +17,14 @@
 
 - 2026-07-18：`3d5cc9e` 新增运行身份对账，要求每个阶段的 unified log 恰好包含一条 `CoreServicesUIAgent ... appInfo=` 事件。
 - 2026-08-07：0.2.4 (10) 候选完整发行链中，initial 与 restart 启动取得该事件，exercise 启动没有取得；同一 PID 的 App 自身 LaunchServices cached-info、窗口与 helper ledger 均存在并一致。
-- 2026-08-07：fast contract 新增「`appInfo` 缺席但 PID-bound cached-info 一致」和「混入矛盾 cached-info」两向变体，修正证据消费边界。
+- 2026-08-07：fast contract 新增「`appInfo` 缺席但 subject-ASN-bound cached-info 一致」和「混入同 subject ASN 矛盾 cached-info」两向变体，修正证据消费边界。
 
 ## 复现与证据
 
 1. 运行同一 evidence run 的 `scripts/release-private-dmg`；DMG 打包、静态验证和 `scripts/test-dmg-install` 全部先通过，最终 `scripts/verify-development-validation-evidence --scope full` 判红。
 2. `artifacts/dmg-install/exercise-console.log` 对 exercise PID 的 `appInfo=` 计数为 0；同一日志包含多条由该 PID 输出的 `[com.apple.launchservices:cas] ... cached info`，其中 executable path、bundle identifier 与 bundle path 全部一致。
 3. `exercise-ledger.tsv`、窗口 metadata 与 unified log 的进程前缀使用同一 PID；WindowServer 已验证窗口 owner PID，helper 已验证 `NSRunningApplication` bundle identity 与精确路径。
-4. fixture 删除 `appInfo` 且不提供 PID-bound cached-info 时，修复后的验证器继续 fail-closed；提供一致 cached-info 时通过；再追加伪造 cached-info 时因身份矛盾判红。
+4. fixture 删除 `appInfo` 且不提供 subject-ASN-bound cached-info 时，修复后的验证器继续 fail-closed；提供一致 cached-info 时通过；再向同 subject ASN 追加伪造 cached-info 时因身份矛盾判红。
 
 ## 排除的假设
 
@@ -40,20 +40,21 @@
 ## 根因修复
 
 - 保留 `appInfo` 事件的首选强验证：事件存在时仍要求恰好一条、路径与 bundle 全匹配，并从 kernel audit token 反解 PID 对账。
-- 仅在 `appInfo` 缺席时，接受目标进程统一日志前缀绑定的 LaunchServices cached-info；要求至少一条，且每一条的 executable path、bundle identifier 与 bundle path 都完全一致。
-- 没有任何 PID-bound 身份行、存在多条 `appInfo`、audit token 不匹配或任一 cached-info 矛盾时继续 fail-closed。
+- 仅在 `appInfo` 缺席时，先从 executable path 与 bundle identifier 均完全一致的 LaunchServices cached-info 确定唯一 subject ASN，再对该 ASN 的全部 cached-info 做一致性校验。统一日志实际包含 `LSBundlePath` 时也必须完全一致，字段被系统截断时不得臆造缺失值。
+- `appInfo` 存在时直接使用其权威 LSASN；目标进程对其他 ASN 的 cached-info 查询不参与目标 App 身份判断，同一目标 ASN 的任一矛盾 payload 继续 fail-closed。该稳定语义由后续案例 `FAIL-2026-08-07-02` 补齐。
+- 没有任何 subject-ASN-bound 身份行、存在多条 `appInfo`、audit token 不匹配或同 subject ASN 的任一 cached-info 矛盾时继续 fail-closed。
 
 ## 验证结果
 
 - `scripts/test-dmg-evidence-contract`：通过；覆盖缺席事件的红转绿复现，以及混入伪造 cached-info 的拒绝。
 - `fix-fail-2026-08-07-01-20260807T061539Z`：从修复 commit 重建 release DMG，`scripts/verify-dmg` 与 `scripts/test-dmg-install` 全部通过；production App 未执行，受控派生 App 完成真实窗口、设置、Quick Entry、退出、重启、SQLite 恒等与诊断导出。
-- 该真实运行的 exercise／restart／diagnostic-export 分别归档 11／13／15 条 PID-bound LaunchServices cached-info；每条 executable path、bundle identifier 与 bundle path 均通过全集一致性检查。
+- 首次修复验证的真实运行已归档 LaunchServices cached-info；后续发行复跑揭示 macOS unified log 会截断 `LSBundlePath`，且 observer 进程可记录其他 App subject 的 cached-info。最终稳定语义与复跑结果见 `FAIL-2026-08-07-02`。
 
 ## 永久门禁
 
 - fast：`scripts/test-dmg-evidence-contract`（随 `scripts/check`）覆盖两种严格身份来源、事件全缺失、重复 `appInfo`、伪造 cached-info 与 audit-token/PID 不一致。
-- symptom：`scripts/test-dmg-install`（随 `scripts/release-private-dmg`）真实启动同一受控派生 App 的 initial、exercise、restart 与 diagnostic-export 阶段并归档统一日志。
-- release：`scripts/test-dmg-install` 与最终 `scripts/verify-development-validation-evidence --scope full` 必须在同一 release evidence run 内通过；production App 不得执行。
+- symptom：`scripts/release-private-dmg` 先由 `scripts/test-dmg-install` 真实启动同一受控派生 App 的各阶段并归档统一日志，再由 `scripts/verify-development-validation-evidence --scope full` 消费同一批证据；最终 consumer 是原始症状判红点。
+- release：本机 `scripts/test-dmg-install` 与最终 `scripts/verify-development-validation-evidence --scope full` 必须在同一 release evidence run 内通过；production App 不得执行。
 
 ## 发行与回滚
 

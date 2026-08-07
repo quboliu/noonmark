@@ -741,7 +741,9 @@ struct ClassificationManagementDialog: View {
         mutate(kind == .category
             ? .renameCategory(TaskCategoryID(id), to: name)
             : .renameLabel(TaskLabelID(id), to: name))
-        if message == nil { editingID = nil }
+        if message == nil {
+            editingID = nil
+        }
     }
 
     private func archive(_ item: ClassificationCatalogItemProjection) {

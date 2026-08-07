@@ -2,4 +2,4 @@
 --indent 4
 --maxwidth none
 --exclude .build,.swiftpm,DerivedData
---disable andOperator,consecutiveBlankLines,hoistTry,indent,noForceUnwrapInTests,preferCountWhere,preferKeyPath,redundantReturn,redundantSelf,redundantThrows,sortImports,spaceAroundOperators,trailingCommas,unusedArguments,wrapPropertyBodies
+--disable andOperator,consecutiveBlankLines,hoistTry,indent,noForceUnwrapInTests,preferCountWhere,preferKeyPath,redundantReturn,redundantSelf,redundantSwiftUIGroup,redundantThrows,sortImports,spaceAroundOperators,trailingCommas,unusedArguments,wrapPropertyBodies

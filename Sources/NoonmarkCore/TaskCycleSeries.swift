@@ -2297,8 +2297,12 @@ public extension NoonmarkEngine {
     ) -> TaskCycleTrackDayState {
         switch trace.status {
         case .pending:
-            if date < today { return .pendingPast }
-            if date == today { return .pendingToday }
+            if date < today {
+                return .pendingPast
+            }
+            if date == today {
+                return .pendingToday
+            }
             return .planned
         case .cancelledDraft:
             return cancelledState

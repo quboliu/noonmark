@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+swiftformat_version="0.62.1"
+swiftformat_sha256="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+swiftformat_url="https://github.com/nicklockwood/SwiftFormat/releases/download/${swiftformat_version}/swiftformat.zip"
+tool_root="$repo_root/.build/noonmark-tools/swiftformat/$swiftformat_version"
+swiftformat_binary="$tool_root/swiftformat"
+
+if [[ -x "$swiftformat_binary" ]] &&
+  [[ "$("$swiftformat_binary" --version)" == "$swiftformat_version" ]]; then
+  printf '%s\n' "$swiftformat_binary"
+  exit 0
+fi
+
+for tool in curl ditto install mktemp mv shasum; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "missing required SwiftFormat installer tool: $tool" >&2
+    exit 1
+  }
+done
+
+download_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-swiftformat.XXXXXX")"
+cleanup() {
+  case "$download_root" in
+    "${TMPDIR:-/tmp}"/noonmark-swiftformat.*)
+      rm -R -- "$download_root"
+      ;;
+    *)
+      echo "refusing to remove unexpected SwiftFormat temporary directory" >&2
+      ;;
+  esac
+}
+trap cleanup EXIT
+
+archive="$download_root/swiftformat.zip"
+unpacked="$download_root/unpacked"
+curl \
+  --fail \
+  --location \
+  --proto '=https' \
+  --tlsv1.2 \
+  --retry 3 \
+  --silent \
+  --show-error \
+  "$swiftformat_url" \
+  --output "$archive"
+
+actual_sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
+if [[ "$actual_sha256" != "$swiftformat_sha256" ]]; then
+  echo "SwiftFormat archive checksum mismatch" >&2
+  exit 1
+fi
+
+mkdir -p "$unpacked"
+ditto -x -k "$archive" "$unpacked"
+candidate_binary="$unpacked/swiftformat"
+[[ -f "$candidate_binary" ]] || {
+  echo "SwiftFormat archive does not contain the expected binary" >&2
+  exit 1
+}
+chmod 0755 "$candidate_binary"
+if [[ "$("$candidate_binary" --version)" != "$swiftformat_version" ]]; then
+  echo "SwiftFormat binary version does not match the pinned release" >&2
+  exit 1
+fi
+
+mkdir -p "$tool_root"
+staged_binary="$tool_root/swiftformat.new"
+install -m 0755 "$candidate_binary" "$staged_binary"
+mv -f "$staged_binary" "$swiftformat_binary"
+
+actual_version="$("$swiftformat_binary" --version)"
+[[ "$actual_version" == "$swiftformat_version" ]] || {
+  echo "installed SwiftFormat binary failed version verification" >&2
+  exit 1
+}
+printf '%s\n' "$swiftformat_binary"

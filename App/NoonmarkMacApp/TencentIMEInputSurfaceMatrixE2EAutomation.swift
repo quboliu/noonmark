@@ -3134,7 +3134,9 @@ struct TencentIMEInputSurfaceMatrixE2EAutomation:
         condition: @escaping @MainActor () -> Bool
     ) async throws {
         for _ in 0 ..< 600 {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(for: .milliseconds(5))
         }
         throw Failure.failed(failure)

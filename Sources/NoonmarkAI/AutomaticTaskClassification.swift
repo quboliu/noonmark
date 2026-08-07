@@ -312,7 +312,9 @@ private struct StrictJSONDuplicateKeyValidator {
     private mutating func parseObject(depth: Int) throws {
         try consume(CharacterByte.leftBrace)
         skipWhitespace()
-        if consumeIfPresent(CharacterByte.rightBrace) { return }
+        if consumeIfPresent(CharacterByte.rightBrace) {
+            return
+        }
 
         var keys: Set<String> = []
         while true {
@@ -328,7 +330,9 @@ private struct StrictJSONDuplicateKeyValidator {
             skipWhitespace()
             try parseValue(depth: depth + 1)
             skipWhitespace()
-            if consumeIfPresent(CharacterByte.rightBrace) { return }
+            if consumeIfPresent(CharacterByte.rightBrace) {
+                return
+            }
             try consume(CharacterByte.comma)
             skipWhitespace()
         }
@@ -337,12 +341,16 @@ private struct StrictJSONDuplicateKeyValidator {
     private mutating func parseArray(depth: Int) throws {
         try consume(CharacterByte.leftBracket)
         skipWhitespace()
-        if consumeIfPresent(CharacterByte.rightBracket) { return }
+        if consumeIfPresent(CharacterByte.rightBracket) {
+            return
+        }
 
         while true {
             try parseValue(depth: depth + 1)
             skipWhitespace()
-            if consumeIfPresent(CharacterByte.rightBracket) { return }
+            if consumeIfPresent(CharacterByte.rightBracket) {
+                return
+            }
             try consume(CharacterByte.comma)
             skipWhitespace()
         }

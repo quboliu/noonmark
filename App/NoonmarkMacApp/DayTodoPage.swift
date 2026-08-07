@@ -144,14 +144,22 @@ struct DayTodoPage: View {
     }
 
     private var dayBadge: String {
-        if store.selectedDate == store.today { return store.copy.dayBadgeToday }
-        if store.isHistory { return store.copy.dayBadgeLocked }
+        if store.selectedDate == store.today {
+            return store.copy.dayBadgeToday
+        }
+        if store.isHistory {
+            return store.copy.dayBadgeLocked
+        }
         return store.copy.dayBadgeFuture
     }
 
     private var badgeColor: Color {
-        if store.selectedDate == store.today { return Theme.accent }
-        if store.isHistory { return Theme.text2 }
+        if store.selectedDate == store.today {
+            return Theme.accent
+        }
+        if store.isHistory {
+            return Theme.text2
+        }
         return Theme.accent
     }
 }
@@ -902,7 +910,9 @@ struct TaskRow: View {
                 )
             )
         }
-        if trace.status == .returnedToPool { parts.append(store.copy.returnedToPoolOnDay) }
+        if trace.status == .returnedToPool {
+            parts.append(store.copy.returnedToPoolOnDay)
+        }
         return parts.joined(separator: " · ")
     }
 

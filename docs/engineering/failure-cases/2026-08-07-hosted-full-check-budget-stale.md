@@ -43,7 +43,7 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 
 - Red（原始 hosted 症状）：run `31197305770` 在 DMG contract 中被 25 分钟外层预算取消。
 - Green（fast）：hosted budget contract 固定 ordinary CI 的 90 分钟预算；tag Release 不重跑 `scripts/check` 的单一 owner 收敛到 `FAIL-2026-08-07-10` 的 hosted workflow boundary。
-- 待 Green（原始 hosted 受害路径）：build 18 的单一 GitHub-hosted `scripts/check` job 必须完整返回成功；不再调度本机 E2E。
+- build 18 run `31203389558` 已越过旧 25 分钟边界，并在 32 分 17 秒进入最终 SwiftFormat；因此 90 分钟预算根修已由运行产物证明。该候选随后因独立 formatter 版本漂移判红。
 
 ## 永久门禁
 
@@ -53,7 +53,7 @@ run `31197305770`／job `92928600208` 的日志在 `16:32:47Z` 进入 `==> DMG e
 
 ## 发行与回滚
 
-build 16 与已取消的 build 17 均永久标记 `retired`，不得 rerun、复用或 tag；build 18 只经新的单一 `main` hosted CI 完整验证，再允许进入 tag。若真实 contract 出现死锁，90 分钟外层仍会终止并退役候选，随后必须修复具体子进程生命周期；不得继续加大预算。
+build 16 至 build 18 均永久标记 `retired`，不得 rerun、复用或 tag；build 19 只经新的单一 `main` hosted CI 完整验证，再允许进入 tag。若真实 contract 出现死锁，90 分钟外层仍会终止并退役候选，随后必须修复具体子进程生命周期；不得继续加大预算。
 
 ## 教训与永久约束
 

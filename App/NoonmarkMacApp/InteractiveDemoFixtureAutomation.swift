@@ -1128,7 +1128,9 @@ struct InteractiveDemoFixtureAutomation: LaunchAutomationRunnable {
         condition: () -> Bool
     ) async throws {
         for _ in 0 ..< 120 {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw InteractiveDemoFixtureError

@@ -28,7 +28,7 @@ evidence_append_snapshot "$check_manifest" "$source_start_fragment"
 
 run_check_suite() {
   local required_tools=(
-    swift xcodebuild xcrun actionlint rg swiftlint swiftformat sips iconutil
+    swift xcodebuild xcrun actionlint curl ditto rg shasum swiftlint sips iconutil
   )
 
   for tool in "${required_tools[@]}"; do
@@ -41,6 +41,9 @@ run_check_suite() {
   echo "==> Xcode"
   xcodebuild -version
   xcrun --find xctest >/dev/null
+
+  echo "==> Pinned SwiftFormat"
+  "$(scripts/install-pinned-swiftformat)" --version
 
   echo "==> App icon"
   scripts/test-app-icon
@@ -126,6 +129,9 @@ run_check_suite() {
 
   echo "==> Hosted Xcode toolchain contract"
   scripts/test-hosted-xcode-toolchain-contract
+
+  echo "==> SwiftFormat toolchain contract"
+  scripts/test-swiftformat-toolchain-contract
 
   echo "==> Hosted full-check budget contract"
   scripts/test-hosted-check-budget-contract

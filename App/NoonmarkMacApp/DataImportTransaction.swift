@@ -43,10 +43,14 @@ struct PreparedDataImport: Identifiable {
                 || $0.reviewTomorrowNote != nil
         }.count
         let completedTraceCount = visibleTraces.reduce(into: 0) {
-            if $1.status == .completed { $0 += 1 }
+            if $1.status == .completed {
+                $0 += 1
+            }
         }
         let unfinishedTraceCount = visibleTraces.reduce(into: 0) {
-            if $1.status == .unfinished || $1.status == .deferred { $0 += 1 }
+            if $1.status == .unfinished || $1.status == .deferred {
+                $0 += 1
+            }
         }
         summary = Summary(
             dayCount: meaningfulDayCount,

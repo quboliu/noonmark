@@ -214,7 +214,9 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
         }
         try await session.bindAccount(recordName: userRecordID.recordName)
 
-        if let syncEngine { return syncEngine }
+        if let syncEngine {
+            return syncEngine
+        }
         var configuration = await CKSyncEngine.Configuration(
             database: container.privateCloudDatabase,
             stateSerialization: try session.engineStateSerialization(),
@@ -228,7 +230,9 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     }
 
     private func resolvedContainer() throws -> CKContainer {
-        if let cloudContainer { return cloudContainer }
+        if let cloudContainer {
+            return cloudContainer
+        }
         runtimeEnvironment = try CloudKitEntitlementProbe.validateCurrentProcess(
             containerIdentifier: containerIdentifier
         )

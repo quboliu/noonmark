@@ -72,7 +72,9 @@ final class HarnessLedgerContractTests: XCTestCase {
         let content = try String(contentsOf: contractURL, encoding: .utf8)
         var result: [String: [String]] = [:]
         for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.isEmpty { continue }
+            if line.isEmpty {
+                continue
+            }
             let fields = line.split(
                 separator: "\t",
                 omittingEmptySubsequences: false

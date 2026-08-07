@@ -269,8 +269,12 @@ extension AppCopy {
     }
 
     func calendarScopeLabel(isToday: Bool, isHistory: Bool) -> String {
-        if isToday { return language == .chinese ? "今天" : "Today" }
-        if isHistory { return language == .chinese ? "历史" : "History" }
+        if isToday {
+            return language == .chinese ? "今天" : "Today"
+        }
+        if isHistory {
+            return language == .chinese ? "历史" : "History"
+        }
         return language == .chinese ? "未来" : "Future"
     }
 

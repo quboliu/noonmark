@@ -1477,10 +1477,18 @@ struct CurrentSyncRecordMerger {
     ) -> SyncRecordLWWOrder {
         let lhsSeconds = lhs.modifiedAt.timeIntervalSinceReferenceDate
         let rhsSeconds = rhs.modifiedAt.timeIntervalSinceReferenceDate
-        if lhsSeconds < rhsSeconds { return .before }
-        if lhsSeconds > rhsSeconds { return .after }
-        if lhsSeconds.bitPattern < rhsSeconds.bitPattern { return .before }
-        if lhsSeconds.bitPattern > rhsSeconds.bitPattern { return .after }
+        if lhsSeconds < rhsSeconds {
+            return .before
+        }
+        if lhsSeconds > rhsSeconds {
+            return .after
+        }
+        if lhsSeconds.bitPattern < rhsSeconds.bitPattern {
+            return .before
+        }
+        if lhsSeconds.bitPattern > rhsSeconds.bitPattern {
+            return .after
+        }
         if lhs.payload != rhs.payload {
             return lhs.payload.lexicographicallyPrecedes(rhs.payload) ? .before : .after
         }

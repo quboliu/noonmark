@@ -188,7 +188,9 @@ struct TaskClassificationEditor: View {
     private var categoryMenu: some View {
         Menu {
             Button(copy.noGroupAction) { selectCategory(nil) }
-            if activeCategories.isEmpty == false { Divider() }
+            if activeCategories.isEmpty == false {
+                Divider()
+            }
             ForEach(activeCategories) { category in
                 Button(category.name) { selectCategory(category.id) }
             }

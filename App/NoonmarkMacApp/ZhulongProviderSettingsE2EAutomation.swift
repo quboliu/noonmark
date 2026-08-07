@@ -580,7 +580,9 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
             let identified = visibleButtons.filter {
                 $0.identifier?.rawValue == identifier
             }
-            if identified.count == 1 { return identified[0] }
+            if identified.count == 1 {
+                return identified[0]
+            }
             let titled = visibleButtons.filter { $0.title == title }
             guard titled.count == 1 else { return nil }
             return titled[0]
@@ -663,7 +665,9 @@ enum ZhulongProviderSettingsE2EUIInteractionDriver {
             condition: @MainActor () -> Bool
         ) async throws {
             for _ in 0 ..< attempts {
-                if condition() { return }
+                if condition() {
+                    return
+                }
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
             throw Failure.missing("等待真实 UI 超时：\(step)")

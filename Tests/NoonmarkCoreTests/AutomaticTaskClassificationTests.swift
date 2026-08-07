@@ -1144,7 +1144,9 @@ final class AutomaticTaskClassificationTests: XCTestCase {
             redoneState.currentByChainID[chainID]
         )
         XCTAssertTrue(currentRelations.labels.allSatisfy {
-            if case .automaticAI = $0.source { return false }
+            if case .automaticAI = $0.source {
+                return false
+            }
             return true
         })
         XCTAssertTrue(redoneState.relationHistory.contains {

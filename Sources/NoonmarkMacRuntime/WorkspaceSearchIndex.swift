@@ -183,7 +183,9 @@ public struct WorkspaceSearchIndex: Sendable {
             return (entry, score)
         }
         .sorted { lhs, rhs in
-            if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+            if lhs.1 != rhs.1 {
+                return lhs.1 > rhs.1
+            }
             if lhs.0.recency != rhs.0.recency {
                 return lhs.0.recency > rhs.0.recency
             }

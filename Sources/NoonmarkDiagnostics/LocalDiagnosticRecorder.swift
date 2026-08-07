@@ -1904,7 +1904,9 @@ private final class DiagnosticDiskStore {
         let targets = managedRootFixedEntryNames
         return try rootDirectory.entryNames().filter { entryName in
             targets.contains { target in
-                if entryName == ".\(target).tmp" { return true }
+                if entryName == ".\(target).tmp" {
+                    return true
+                }
                 let prefix = ".\(target)."
                 guard entryName.hasPrefix(prefix),
                       entryName.hasSuffix(".tmp")
@@ -1936,7 +1938,9 @@ private final class DiagnosticDiskStore {
     }
 
     private func metricDirectoryStatus() -> ManagedDirectoryStatus {
-        if metricsDirectory != nil { return .ownedDirectory }
+        if metricsDirectory != nil {
+            return .ownedDirectory
+        }
         do {
             metricsDirectory = try rootDirectory.openChildDirectory(
                 named: metricsDirectoryName,

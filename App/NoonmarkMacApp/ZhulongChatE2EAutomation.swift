@@ -294,7 +294,9 @@ struct ZhulongChatE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw ZhulongChatE2EError.missing(step)
@@ -677,7 +679,9 @@ enum ZhulongChatE2EUIInteractionDriver {
             condition: @MainActor () -> Bool
         ) async throws {
             for _ in 0 ..< attempts {
-                if condition() { return }
+                if condition() {
+                    return
+                }
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
             throw ZhulongChatE2EError.missing("等待真实 UI 超时：\(step)")

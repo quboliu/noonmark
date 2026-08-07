@@ -6,6 +6,7 @@
 
 - **本地（发布前自测）**：开发机运行 `make check`、writer-lease E2E、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg`，覆盖真实 GUI／TCC／腾讯拼音／安装重启。这是 push 前的本地全集自测；其证据不上传、不被 tag publisher 消费，也不是线上发布的机器依赖。
 - **CI（发布门禁）**：所有 workflow 只使用 GitHub-hosted runner。main push 只运行一次 `scripts/check` 子集；tag workflow 只验证该精确 commit 的 main CI 结果，不重跑子集。验证成功后才继续 `scripts/package-dmg release`、`scripts/verify-dmg` 与 GitHub Release 发布。CI 不调度本机，也不读取本地自测产物。
+- **格式工具链**：`scripts/check` 与 CI 都只通过 `scripts/install-pinned-swiftformat` 使用 checksum 锁定的 SwiftFormat `0.62.1`；不得直接安装或调用 Homebrew 浮动版本。
 
 ## 前置条件：签名 secrets（一次性配置）
 

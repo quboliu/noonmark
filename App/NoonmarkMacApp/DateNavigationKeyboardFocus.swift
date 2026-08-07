@@ -221,11 +221,21 @@ final class HorizontalPageNavigationView: NSView {
     private static func navigationPhase(
         for phase: NSEvent.Phase
     ) -> HorizontalPageNavigationPhase {
-        if phase.contains(.cancelled) { return .cancelled }
-        if phase.contains(.ended) { return .ended }
-        if phase.contains(.began) { return .began }
-        if phase.contains(.changed) { return .changed }
-        if phase.contains(.mayBegin) { return .mayBegin }
+        if phase.contains(.cancelled) {
+            return .cancelled
+        }
+        if phase.contains(.ended) {
+            return .ended
+        }
+        if phase.contains(.began) {
+            return .began
+        }
+        if phase.contains(.changed) {
+            return .changed
+        }
+        if phase.contains(.mayBegin) {
+            return .mayBegin
+        }
         return .none
     }
 }

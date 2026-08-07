@@ -823,11 +823,21 @@ private final class MarkdownNSTextView: NSTextView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
 
-        if handleEscape(event, modifiers: modifiers) { return }
-        if handleSelectAll(key: key, modifiers: modifiers) { return }
-        if handleReturn(event, modifiers: modifiers) { return }
-        if handleFormattingShortcut(key: key, modifiers: modifiers) { return }
-        if handleTab(event, modifiers: modifiers) { return }
+        if handleEscape(event, modifiers: modifiers) {
+            return
+        }
+        if handleSelectAll(key: key, modifiers: modifiers) {
+            return
+        }
+        if handleReturn(event, modifiers: modifiers) {
+            return
+        }
+        if handleFormattingShortcut(key: key, modifiers: modifiers) {
+            return
+        }
+        if handleTab(event, modifiers: modifiers) {
+            return
+        }
         superStartedAt =
             ProcessInfo.processInfo.systemUptime
         super.keyDown(with: event)

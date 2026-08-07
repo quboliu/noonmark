@@ -804,21 +804,31 @@ extension NoonmarkStore {
             let providerDirective = await reconcileAutomaticClassificationProvider(
                 contentionAttempt: &contentionAttempt
             )
-            if providerDirective == .stop { return }
-            if providerDirective == .restartLoop { continue }
+            if providerDirective == .stop {
+                return
+            }
+            if providerDirective == .restartLoop {
+                continue
+            }
 
             let executionDirective = await reconcileAutomaticClassificationExecution(
                 repository: automaticClassificationJobRepository,
                 contentionAttempt: &contentionAttempt
             )
-            if executionDirective == .stop { return }
-            if executionDirective == .restartLoop { continue }
+            if executionDirective == .stop {
+                return
+            }
+            if executionDirective == .restartLoop {
+                continue
+            }
 
             let dispatchDirective = await runNextAutomaticClassificationDispatch(
                 repository: automaticClassificationJobRepository,
                 contentionAttempt: &contentionAttempt
             )
-            if dispatchDirective == .stop { return }
+            if dispatchDirective == .stop {
+                return
+            }
         }
     }
 

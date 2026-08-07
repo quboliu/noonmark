@@ -169,7 +169,9 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
         for _ in 0 ..< 120 {
             if NSApp.isActive && window.isMainWindow && window.isKeyWindow {
                 consecutiveActiveSamples += 1
-                if consecutiveActiveSamples >= 4 { return }
+                if consecutiveActiveSamples >= 4 {
+                    return
+                }
             } else {
                 consecutiveActiveSamples = 0
                 requestMainWindowActivation(window)
@@ -229,7 +231,9 @@ struct SelectionFocusVisualE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () throws -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
-            if try condition() { return }
+            if try condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw Failure.failed(failure)

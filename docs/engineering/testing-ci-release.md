@@ -189,7 +189,7 @@ scripts/test-visual-regression
 
 每次 pull request：
 
-- 安装 SwiftLint / SwiftFormat。
+- 安装 SwiftLint，并由 `scripts/install-pinned-swiftformat` 以固定版本与 SHA-256 安装 SwiftFormat；不得消费 Homebrew 浮动版本。
 - 运行 `scripts/check`。
 - 不在默认 push / PR 中运行 live AI provider smoke；它需要人工或受保护的 secret 环境显式触发。
 

@@ -342,7 +342,9 @@ actor CloudKitSyncSession {
     }
 
     private func loadedState() async throws -> State {
-        if let state { return state }
+        if let state {
+            return state
+        }
         let snapshot = try await persistence.load()
         let loaded = State(
             scope: snapshot.scope,

@@ -256,12 +256,20 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
 
     private func chooseTrace(_ values: [DayTrace], engine: NoonmarkEngine, rng: inout SeededGenerator) -> DayTrace? {
         choose(values.sorted { lhs, rhs in
-            if lhs.date != rhs.date { return lhs.date < rhs.date }
-            if lhs.priority != rhs.priority { return lhs.priority < rhs.priority }
+            if lhs.date != rhs.date {
+                return lhs.date < rhs.date
+            }
+            if lhs.priority != rhs.priority {
+                return lhs.priority < rhs.priority
+            }
             let lhsTitle = engine.definitions[lhs.definitionID]?.title ?? ""
             let rhsTitle = engine.definitions[rhs.definitionID]?.title ?? ""
-            if lhsTitle != rhsTitle { return lhsTitle < rhsTitle }
-            if lhs.continuationSeq != rhs.continuationSeq { return lhs.continuationSeq < rhs.continuationSeq }
+            if lhsTitle != rhsTitle {
+                return lhsTitle < rhsTitle
+            }
+            if lhs.continuationSeq != rhs.continuationSeq {
+                return lhs.continuationSeq < rhs.continuationSeq
+            }
             return lhs.createdAt < rhs.createdAt
         }, rng: &rng)
     }
@@ -270,9 +278,15 @@ final class NoonmarkDeterministicSimulationTests: XCTestCase {
         choose(values.sorted { lhs, rhs in
             let lhsTrace = engine.traces[lhs.traceID]
             let rhsTrace = engine.traces[rhs.traceID]
-            if lhsTrace?.date != rhsTrace?.date { return (lhsTrace?.date ?? LocalDate("0001-01-01")) < (rhsTrace?.date ?? LocalDate("0001-01-01")) }
-            if lhs.position != rhs.position { return lhs.position < rhs.position }
-            if lhs.title != rhs.title { return lhs.title < rhs.title }
+            if lhsTrace?.date != rhsTrace?.date {
+                return (lhsTrace?.date ?? LocalDate("0001-01-01")) < (rhsTrace?.date ?? LocalDate("0001-01-01"))
+            }
+            if lhs.position != rhs.position {
+                return lhs.position < rhs.position
+            }
+            if lhs.title != rhs.title {
+                return lhs.title < rhs.title
+            }
             return lhs.createdAt < rhs.createdAt
         }, rng: &rng)
     }

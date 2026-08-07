@@ -169,7 +169,9 @@ public actor ZhulongDraftPersistenceLane {
         from source: ZhulongTodoDiffDraft,
         drafts: [ZhulongTodoDiffDraft]
     ) -> Bool {
-        if current.id == source.id { return true }
+        if current.id == source.id {
+            return true
+        }
         let byID = Dictionary(
             uniqueKeysWithValues: drafts.map { ($0.id, $0) }
         )

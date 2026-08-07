@@ -163,12 +163,16 @@ struct FlylightComposerSurface: View {
 
     private var canSubmit: Bool {
         guard normalizedText.isEmpty == false else { return false }
-        if state == .failed { return true }
+        if state == .failed {
+            return true
+        }
         return issueMessage == nil && state == .dirty
     }
 
     private var primaryTitle: String {
-        if state == .failed { return store.copy.ideaRetryAction }
+        if state == .failed {
+            return store.copy.ideaRetryAction
+        }
         return switch mode {
         case .pageCreate, .globalCapture:
             state == .saving
@@ -190,7 +194,9 @@ struct FlylightComposerSurface: View {
     }
 
     private var message: String? {
-        if let issueMessage { return issueMessage }
+        if let issueMessage {
+            return issueMessage
+        }
         switch state {
         case .invalid:
             return store.copy.ideaContentRequired

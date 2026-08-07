@@ -570,9 +570,15 @@ private struct IdeaCardView: View {
     }
 
     private var rowBackground: Color {
-        if isEditing { return Theme.accentSoftWash }
-        if isSelected { return Theme.accentSoftMuted }
-        if isHovering { return Theme.listRowHover }
+        if isEditing {
+            return Theme.accentSoftWash
+        }
+        if isSelected {
+            return Theme.accentSoftMuted
+        }
+        if isHovering {
+            return Theme.listRowHover
+        }
         return .clear
     }
 }

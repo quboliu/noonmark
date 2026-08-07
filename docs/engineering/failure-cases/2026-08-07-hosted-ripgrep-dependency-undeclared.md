@@ -60,7 +60,7 @@ scripts/check-ui-localization: line 122: rg: command not found
 
 ## 发行与回滚
 
-build 13 至 build 17 均已退役。build 18 继续验证单一 hosted check 与 package 路径。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
+build 13 至 build 18 均已退役。build 19 继续验证单一 hosted check 与 package 路径。若 Homebrew 无法提供 ripgrep，workflow 必须在 Toolchain step fail-closed 并退役该 build；不得忽略 `rg` 错误、伪造 baseline 输出或从 check 删除 localization guard。
 
 ## 教训与永久约束
 

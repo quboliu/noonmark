@@ -52,7 +52,9 @@ enum TaskClassificationDisplay: Equatable {
     }
 
     var isHistorical: Bool {
-        if case .historical = self { return true }
+        if case .historical = self {
+            return true
+        }
         return false
     }
 
@@ -235,7 +237,11 @@ struct NoonmarkRootView: View {
         }
         .sheet(item: Binding(
             get: { store.preparedDataImport },
-            set: { if $0 == nil { store.cancelPreparedDataImport() } }
+            set: {
+                if $0 == nil {
+                    store.cancelPreparedDataImport()
+                }
+            }
         )) { preview in
             DataImportConfirmationSheet(preview: preview)
                 .environmentObject(store)

@@ -18,9 +18,15 @@ for workflow in .github/workflows/ci.yml .github/workflows/release-publish.yml; 
     fail "$workflow does not fail closed on the selected Xcode version"
 done
 
-[[ "$(grep -Fc 'brew install actionlint ripgrep swiftlint swiftformat' \
+[[ "$(grep -Fc 'brew install actionlint ripgrep swiftlint' \
   .github/workflows/ci.yml)" -eq 1 ]] ||
   fail "ordinary CI does not install the complete hosted check toolset"
+[[ "$(grep -Fc 'scripts/install-pinned-swiftformat >/dev/null' \
+  .github/workflows/ci.yml)" -eq 1 ]] ||
+  fail "ordinary CI does not install the pinned SwiftFormat toolchain"
+if rg -n 'brew install[^\n]*swiftformat' .github/workflows/ci.yml >/dev/null; then
+  fail "ordinary CI still installs a floating SwiftFormat version"
+fi
 [[ "$(grep -Fc 'brew install ripgrep' \
   .github/workflows/release-publish.yml)" -eq 1 ]] ||
   fail "release packaging does not install its ripgrep dependency"
@@ -29,9 +35,9 @@ if rg -F 'swiftlint swiftformat' \
   fail "release packaging reinstalls tools owned by the prior hosted check"
 fi
 
-rg -F 'swift xcodebuild xcrun actionlint rg swiftlint swiftformat sips iconutil' \
+rg -F 'swift xcodebuild xcrun actionlint curl ditto rg shasum swiftlint sips iconutil' \
   scripts/check >/dev/null ||
-  fail "scripts/check does not fail fast when ripgrep is unavailable"
+  fail "scripts/check does not fail fast when a hosted dependency is unavailable"
 
 rg -F 'NOONMARK_EVIDENCE_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}' \
   .github/workflows/ci.yml >/dev/null ||

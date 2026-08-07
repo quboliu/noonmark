@@ -283,7 +283,9 @@ struct HorizontalPageNavigationE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () throws -> Bool
     ) async throws {
         for _ in 0..<attempts {
-            if try condition() { return }
+            if try condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw Failure.failed(failure)

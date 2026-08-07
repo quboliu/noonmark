@@ -158,3 +158,6 @@ FAIL-2026-08-07-09	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-10	fast	scripts/test-github-hosted-workflow-boundary	scripts/check	拒绝任何 self-hosted workflow、重复 CI job、tag 重跑 scripts/check 或 tag publisher 消费本地 evidence
 FAIL-2026-08-07-10	symptom	scripts/verify-github-hosted-ci	scripts/push-release-tag	精确 commit 在所有 event 只接受单一 CI run，必须为 main push、首次成功且唯一 macos-15 job
 FAIL-2026-08-07-10	release	scripts/verify-github-release-publication	scripts/push-release-tag	tag run 只接受唯一 macos-15 package job 与唯一 DMG／checksum asset
+FAIL-2026-08-07-11	fast	scripts/test-swiftformat-toolchain-contract	scripts/check	拒绝浮动 Homebrew SwiftFormat，并固定版本、官方资产 checksum、共享调用入口与 CI 安装边界
+FAIL-2026-08-07-11	symptom	scripts/format	scripts/check	全部 Swift source 必须由固定 SwiftFormat 0.62.1 全量 lint 且无格式漂移
+FAIL-2026-08-07-11	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布

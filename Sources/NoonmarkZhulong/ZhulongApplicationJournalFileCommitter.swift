@@ -148,14 +148,18 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
         fullSyncFile: { descriptor in
             while fcntl(descriptor, F_FULLFSYNC) != 0 {
                 let code = errno
-                if code == EINTR { continue }
+                if code == EINTR {
+                    continue
+                }
                 throw posixError(code)
             }
         },
         syncFile: { descriptor in
             while fsync(descriptor) != 0 {
                 let code = errno
-                if code == EINTR { continue }
+                if code == EINTR {
+                    continue
+                }
                 throw posixError(code)
             }
         },
@@ -193,7 +197,9 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
         syncDirectory: { descriptor in
             while fsync(descriptor) != 0 {
                 let code = errno
-                if code == EINTR { continue }
+                if code == EINTR {
+                    continue
+                }
                 throw posixError(code)
             }
         },
@@ -242,7 +248,9 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
                 mode: 0
             )
         } catch {
-            if isPOSIXError(error, code: ENOENT) { return nil }
+            if isPOSIXError(error, code: ENOENT) {
+                return nil
+            }
             throw error
         }
 
@@ -262,7 +270,9 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
         } catch {
             // A read or validation error is already the primary observation.
         }
-        if let primaryError { throw primaryError }
+        if let primaryError {
+            throw primaryError
+        }
         return data
     }
 
@@ -323,7 +333,9 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
                 .invalidFileSystemRepresentation
         }
         if result != 0 {
-            if errno == ENOENT { return false }
+            if errno == ENOENT {
+                return false
+            }
             throw posixError(errno)
         }
         return pathStatus.st_dev == descriptorStatus.st_dev
@@ -344,7 +356,9 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
                 .invalidFileSystemRepresentation
         }
         if result != 0 {
-            if errno == ENOENT { return false }
+            if errno == ENOENT {
+                return false
+            }
             throw posixError(errno)
         }
         return true
@@ -390,8 +404,12 @@ struct ZhulongJournalDarwinOperations: @unchecked Sendable {
                 data.append(contentsOf: buffer.prefix(count))
                 continue
             }
-            if count == 0 { return data }
-            if errno == EINTR { continue }
+            if count == 0 {
+                return data
+            }
+            if errno == EINTR {
+                continue
+            }
             throw posixError(errno)
         }
     }
@@ -1661,7 +1679,9 @@ struct ZhulongApplicationJournalFileCommitter: @unchecked Sendable {
         do {
             try operations.removeFile(url)
         } catch {
-            if Self.isPOSIXError(error, code: ENOENT) { return nil }
+            if Self.isPOSIXError(error, code: ENOENT) {
+                return nil
+            }
             do {
                 guard try operations.readFile(url) == nil else {
                     monitorTemporaryCleanupFailure(

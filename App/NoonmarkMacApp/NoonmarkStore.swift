@@ -138,7 +138,9 @@ enum StoreMutationGateError: LocalizedError {
     }
 
     var isPendingZhulongApplication: Bool {
-        if case .pendingZhulongApplication = self { return true }
+        if case .pendingZhulongApplication = self {
+            return true
+        }
         return false
     }
 }
@@ -280,7 +282,9 @@ final class NoonmarkStore: ObservableObject {
         )
 
         var isReady: Bool {
-            if case .ready = self { return true }
+            if case .ready = self {
+                return true
+            }
             return false
         }
 
@@ -586,7 +590,9 @@ final class NoonmarkStore: ObservableObject {
         }
 
         var allowsPastDates: Bool {
-            if case .gotoDay = self { return true }
+            if case .gotoDay = self {
+                return true
+            }
             return false
         }
 

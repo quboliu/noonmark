@@ -321,7 +321,9 @@ final class TaskCollectionPresentationTests: XCTestCase {
                 case .title:
                     lhs.title.localizedStandardCompare(rhs.title)
                 }
-                if comparison == .orderedSame { return lhs.id < rhs.id }
+                if comparison == .orderedSame {
+                    return lhs.id < rhs.id
+                }
                 return direction == .ascending
                     ? comparison == .orderedAscending
                     : comparison == .orderedDescending

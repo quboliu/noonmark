@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "SwiftFormat toolchain contract: $*" >&2
+  exit 1
+}
+
+installer="scripts/install-pinned-swiftformat"
+formatter="scripts/format"
+ci_workflow=".github/workflows/ci.yml"
+
+[[ -x "$installer" ]] || fail "pinned installer is missing or not executable"
+
+rg -F 'swiftformat_version="0.62.1"' "$installer" >/dev/null ||
+  fail "SwiftFormat version is not pinned to 0.62.1"
+rg -F 'swiftformat_sha256="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"' \
+  "$installer" >/dev/null || fail "official SwiftFormat archive checksum is not pinned"
+rg -F 'https://github.com/nicklockwood/SwiftFormat/releases/download/${swiftformat_version}/swiftformat.zip' \
+  "$installer" >/dev/null || fail "installer does not use the exact official release asset"
+rg -F 'shasum -a 256' "$installer" >/dev/null ||
+  fail "installer does not verify the downloaded archive"
+rg -F '"$swiftformat_binary" --version' "$installer" >/dev/null ||
+  fail "installer does not verify the extracted binary version"
+
+rg -F 'swiftformat_binary="$(scripts/install-pinned-swiftformat)"' \
+  "$formatter" >/dev/null || fail "format entry does not resolve the pinned binary"
+rg -F '"$swiftformat_binary" "${paths[@]}" --lint' "$formatter" >/dev/null ||
+  fail "format lint does not execute the pinned binary"
+rg -F '"$swiftformat_binary" "${paths[@]}"' "$formatter" >/dev/null ||
+  fail "format write does not execute the pinned binary"
+
+if rg -n 'brew install[^\n]*swiftformat' "$ci_workflow" >/dev/null; then
+  fail "ordinary CI still installs a floating Homebrew SwiftFormat"
+fi
+[[ "$(grep -Fc 'scripts/install-pinned-swiftformat >/dev/null' "$ci_workflow")" -eq 1 ]] ||
+  fail "ordinary CI does not provision the pinned formatter exactly once"
+
+echo "SwiftFormat toolchain contract passed"

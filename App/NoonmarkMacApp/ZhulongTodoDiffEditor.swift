@@ -255,7 +255,9 @@ private struct EditableTodoDiffItem: Identifiable {
     }
 
     var canSplit: Bool {
-        if case .createTask = kind { return true }
+        if case .createTask = kind {
+            return true
+        }
         return false
     }
 
@@ -351,7 +353,9 @@ private struct EditableTodoDiffItem: Identifiable {
     private func parseTargetDate() throws -> LocalDate? {
         let normalized = targetDateText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false else {
-            if requiresDate { throw ValidationError.invalidDate }
+            if requiresDate {
+                throw ValidationError.invalidDate
+            }
             return nil
         }
         let parts = normalized.split(separator: "-", omittingEmptySubsequences: false)

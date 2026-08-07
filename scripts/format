@@ -3,15 +3,16 @@ set -euo pipefail
 
 mode="${1:-}"
 paths=(Package.swift Sources Tests)
+swiftformat_binary="$(scripts/install-pinned-swiftformat)"
 
 if [[ -d App ]]; then
   paths+=(App)
 fi
 
 if [[ "$mode" == "--lint" ]]; then
-  swiftformat "${paths[@]}" --lint
+  "$swiftformat_binary" "${paths[@]}" --lint
 elif [[ "$mode" == "" ]]; then
-  swiftformat "${paths[@]}"
+  "$swiftformat_binary" "${paths[@]}"
 else
   echo "usage: scripts/format [--lint]" >&2
   exit 2

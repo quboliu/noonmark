@@ -1514,7 +1514,9 @@ extension NoonmarkStore {
         case .preserve:
             break
         case .snapshot, .snapshotIfAllowed:
-            if let undoEntry { pushUndoEntry(with: undoEntry) }
+            if let undoEntry {
+                pushUndoEntry(with: undoEntry)
+            }
         case .invalidate:
             clearUndoHistory()
         }

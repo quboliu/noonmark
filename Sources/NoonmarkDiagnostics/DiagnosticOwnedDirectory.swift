@@ -204,7 +204,9 @@ final class DiagnosticOwnedDirectory {
         var components = path.hasPrefix("/") ? [] : baseComponents
         for substring in path.split(separator: "/") {
             let component = String(substring)
-            if component == "." { continue }
+            if component == "." {
+                continue
+            }
             if component == ".." {
                 guard components.isEmpty == false else {
                     throw DiagnosticStorageError.invalidRoot
@@ -258,7 +260,9 @@ final class DiagnosticOwnedDirectory {
             &information,
             AT_SYMLINK_NOFOLLOW
         ) == 0 else {
-            if errno == ENOENT { return nil }
+            if errno == ENOENT {
+                return nil
+            }
             throw Self.currentPOSIXError()
         }
         var allocatedByteCount: Int64
@@ -383,7 +387,9 @@ final class DiagnosticOwnedDirectory {
             &information,
             AT_SYMLINK_NOFOLLOW
         ) == 0 else {
-            if errno == ENOENT { return nil }
+            if errno == ENOENT {
+                return nil
+            }
             throw Self.currentPOSIXError()
         }
         return Self.date(from: information.st_mtimespec)
@@ -407,9 +413,13 @@ final class DiagnosticOwnedDirectory {
             let count = buffer.withUnsafeMutableBytes { bytes in
                 Darwin.read(fileDescriptor, bytes.baseAddress, requested)
             }
-            if count == 0 { break }
+            if count == 0 {
+                break
+            }
             if count < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR {
+                    continue
+                }
                 throw Self.currentPOSIXError()
             }
             data.append(contentsOf: buffer.prefix(count))
@@ -451,7 +461,9 @@ final class DiagnosticOwnedDirectory {
     func removeEntryIfPresent(named name: String) throws {
         try Self.validateEntryName(name)
         guard unlinkat(descriptor, name, 0) == 0 else {
-            if errno == ENOENT { return }
+            if errno == ENOENT {
+                return
+            }
             throw Self.currentPOSIXError()
         }
     }
@@ -571,7 +583,9 @@ final class DiagnosticOwnedDirectory {
                     bytes.count - written
                 )
                 if count < 0 {
-                    if errno == EINTR { continue }
+                    if errno == EINTR {
+                        continue
+                    }
                     throw currentPOSIXError()
                 }
                 guard count > 0 else { throw POSIXError(.EIO) }
@@ -583,7 +597,9 @@ final class DiagnosticOwnedDirectory {
 
     private static func synchronizeDescriptor(_ descriptor: Int32) throws {
         while fsync(descriptor) != 0 {
-            if errno == EINTR { continue }
+            if errno == EINTR {
+                continue
+            }
             throw currentPOSIXError()
         }
     }

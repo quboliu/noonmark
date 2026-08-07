@@ -78,7 +78,9 @@ public struct ZhulongApplicationCommitOutcome {
     private static func isRecovered(
         _ outcome: ZhulongApplicationJournalCommitOutcome
     ) -> Bool {
-        if case .recoveredCommitted = outcome { return true }
+        if case .recoveredCommitted = outcome {
+            return true
+        }
         return false
     }
 }

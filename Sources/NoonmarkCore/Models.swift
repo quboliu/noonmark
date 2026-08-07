@@ -387,15 +387,25 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         else {
             return nil
         }
-        if lhsSeconds < rhsSeconds { return .orderedAscending }
-        if lhsSeconds > rhsSeconds { return .orderedDescending }
+        if lhsSeconds < rhsSeconds {
+            return .orderedAscending
+        }
+        if lhsSeconds > rhsSeconds {
+            return .orderedDescending
+        }
         let lhsBits = lhsSeconds.bitPattern
         let rhsBits = rhsSeconds.bitPattern
-        if lhsBits < rhsBits { return .orderedAscending }
-        if lhsBits > rhsBits { return .orderedDescending }
+        if lhsBits < rhsBits {
+            return .orderedAscending
+        }
+        if lhsBits > rhsBits {
+            return .orderedDescending
+        }
         let lhsBytes = Data(lhsWriterID.utf8)
         let rhsBytes = Data(rhsWriterID.utf8)
-        if lhsBytes == rhsBytes { return .orderedSame }
+        if lhsBytes == rhsBytes {
+            return .orderedSame
+        }
         return lhsBytes.lexicographicallyPrecedes(rhsBytes)
             ? .orderedAscending
             : .orderedDescending

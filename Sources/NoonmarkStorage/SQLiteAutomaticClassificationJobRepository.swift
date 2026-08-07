@@ -896,7 +896,9 @@ enum SQLiteAutomaticClassificationJobSQL {
                 )
             }
             let backlogCount = try pendingBacklogCount(in: database)
-            if backlogCount > 0 { return .backlogDecisionRequired(count: backlogCount) }
+            if backlogCount > 0 {
+                return .backlogDecisionRequired(count: backlogCount)
+            }
             return .idle(
                 nextWakeAt: try nextProviderWakeDate(
                     now: now,
@@ -1162,7 +1164,9 @@ enum SQLiteAutomaticClassificationJobSQL {
             )
         }
         let backlogCount = try pendingBacklogCount(in: database)
-        if backlogCount > 0 { return .backlogDecisionRequired(count: backlogCount) }
+        if backlogCount > 0 {
+            return .backlogDecisionRequired(count: backlogCount)
+        }
         let rows = try query(
             """
             SELECT COUNT(*)
@@ -2436,7 +2440,9 @@ enum SQLiteAutomaticClassificationJobSQL {
         _ statement: OpaquePointer?,
         _ index: Int32
     ) throws -> String? {
-        if sqlite3_column_type(statement, index) == SQLITE_NULL { return nil }
+        if sqlite3_column_type(statement, index) == SQLITE_NULL {
+            return nil
+        }
         return try string(statement, index)
     }
 
@@ -2472,7 +2478,9 @@ enum SQLiteAutomaticClassificationJobSQL {
         _ statement: OpaquePointer?,
         _ index: Int32
     ) throws -> Int? {
-        if sqlite3_column_type(statement, index) == SQLITE_NULL { return nil }
+        if sqlite3_column_type(statement, index) == SQLITE_NULL {
+            return nil
+        }
         return try int(statement, index)
     }
 
@@ -2495,7 +2503,9 @@ enum SQLiteAutomaticClassificationJobSQL {
         _ statement: OpaquePointer?,
         _ index: Int32
     ) throws -> Date? {
-        if sqlite3_column_type(statement, index) == SQLITE_NULL { return nil }
+        if sqlite3_column_type(statement, index) == SQLITE_NULL {
+            return nil
+        }
         return try date(statement, index)
     }
 

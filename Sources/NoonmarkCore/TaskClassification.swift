@@ -464,7 +464,9 @@ public enum ClassificationSource: Codable, Equatable, Sendable {
 
 private extension ClassificationSource {
     var categoryPresentationApproval: CategoryPresentationApproval {
-        if case .automaticAI = self { return .pendingAIReview }
+        if case .automaticAI = self {
+            return .pendingAIReview
+        }
         return .userApproved
     }
 }
@@ -2367,7 +2369,11 @@ public extension NoonmarkEngine {
         _ plan: ClassificationPlan,
         draft: TaskClassificationDraft
     ) throws {
-        let createsCategory = if case .new = draft.category { true } else { false }
+        let createsCategory = if case .new = draft.category {
+            true
+        } else {
+            false
+        }
         let expectedLabelKeys = Set(draft.labels.compactMap { choice -> String? in
             guard case let .new(name, _) = choice else { return nil }
             return classificationKey(name)
@@ -2758,7 +2764,11 @@ extension NoonmarkEngine {
             guard let category = classificationState.categories[id] else {
                 throw NoonmarkError.notFound("task category")
             }
-            let target: ClassificationLifecycle = if case .archiveCategory = intent { .archived } else { .active }
+            let target: ClassificationLifecycle = if case .archiveCategory = intent {
+                .archived
+            } else {
+                .active
+            }
             return .lifecycle(
                 kind: .category,
                 itemID: id.description,
@@ -2770,7 +2780,11 @@ extension NoonmarkEngine {
             guard let label = classificationState.labels[id] else {
                 throw NoonmarkError.notFound("task label")
             }
-            let target: ClassificationLifecycle = if case .archiveLabel = intent { .archived } else { .active }
+            let target: ClassificationLifecycle = if case .archiveLabel = intent {
+                .archived
+            } else {
+                .active
+            }
             return .lifecycle(
                 kind: .label,
                 itemID: id.description,
@@ -2889,7 +2903,9 @@ extension NoonmarkEngine {
         items.sorted {
             let lhsKey = ClassificationNameCanonicalizer.canonicalKey($0.name)
             let rhsKey = ClassificationNameCanonicalizer.canonicalKey($1.name)
-            if lhsKey != rhsKey { return lhsKey < rhsKey }
+            if lhsKey != rhsKey {
+                return lhsKey < rhsKey
+            }
             return ($0.id ?? "") < ($1.id ?? "")
         }
     }
@@ -2900,7 +2916,9 @@ extension NoonmarkEngine {
         items.sorted {
             let lhsKey = ClassificationNameCanonicalizer.canonicalKey($0.name)
             let rhsKey = ClassificationNameCanonicalizer.canonicalKey($1.name)
-            if lhsKey != rhsKey { return lhsKey < rhsKey }
+            if lhsKey != rhsKey {
+                return lhsKey < rhsKey
+            }
             return $0.id < $1.id
         }
     }

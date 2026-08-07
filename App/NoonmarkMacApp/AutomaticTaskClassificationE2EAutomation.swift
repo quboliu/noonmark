@@ -166,7 +166,9 @@ struct AutomaticTaskClassificationLiveE2EAutomation: LaunchAutomationRunnable {
               let current = persisted.classifications.currentByChainID[chainID],
               case .automaticAI = current.category?.source,
               current.labels.contains(where: {
-                  if case .automaticAI = $0.source { return true }
+                  if case .automaticAI = $0.source {
+                      return true
+                  }
                   return false
               })
         else { return false }

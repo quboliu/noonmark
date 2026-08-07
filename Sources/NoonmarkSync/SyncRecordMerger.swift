@@ -1589,7 +1589,9 @@ public struct SyncRecordMerger: Sendable {
         while let current = pending.popLast() {
             guard visited.insert(current).inserted else { continue }
             for edge in edges where edge.predecessor == current {
-                if edge.successor == target { return true }
+                if edge.successor == target {
+                    return true
+                }
                 pending.append(edge.successor)
             }
         }
@@ -1802,7 +1804,9 @@ public struct SyncRecordMerger: Sendable {
         let rhsCategories = rhs.delta.mutation.categoryMutations.compactMap(\.post.value)
         for left in lhsCategories {
             for right in rhsCategories {
-                if left.id == right.id, left != right { return false }
+                if left.id == right.id, left != right {
+                    return false
+                }
                 let reusesCanonicalName = Set(
                     left.nameVersions.map(\.canonicalKey) + [left.canonicalKey]
                 ).isDisjoint(with: Set(
@@ -1817,7 +1821,9 @@ public struct SyncRecordMerger: Sendable {
         let rhsLabels = rhs.delta.mutation.labelMutations.compactMap(\.post.value)
         for left in lhsLabels {
             for right in rhsLabels {
-                if left.id == right.id, left != right { return false }
+                if left.id == right.id, left != right {
+                    return false
+                }
                 let reusesCanonicalName = Set(
                     left.nameVersions.map(\.canonicalKey) + [left.canonicalKey]
                 ).isDisjoint(with: Set(
@@ -2838,7 +2844,9 @@ public struct SyncRecordMerger: Sendable {
             )
             return
         }
-        if order == .orderedAscending { return }
+        if order == .orderedAscending {
+            return
+        }
         if order == .orderedSame {
             guard envelope.theme == current.theme,
                   envelope.language == current.language
@@ -2897,7 +2905,9 @@ public struct SyncRecordMerger: Sendable {
         ) {
             let isExactDuplicate = existing.event == event
                 && existing.predecessorID == envelope.predecessorEventID
-            if isExactDuplicate { return }
+            if isExactDuplicate {
+                return
+            }
             rejectTraceClassificationEvent(
                 record,
                 message: "trace classification event identity collision",

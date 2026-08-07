@@ -107,7 +107,9 @@ private func compareDataArrays(
 ) -> SyncRecordLWWOrder {
     for (left, right) in zip(lhs, rhs) {
         let order = compareBytes(left, right)
-        if order != .equivalent { return order }
+        if order != .equivalent {
+            return order
+        }
     }
     return compare(lhs.count, rhs.count)
 }
@@ -122,14 +124,22 @@ public extension SyncRecord {
 }
 
 private func compareFiniteSeconds(_ lhs: Double, _ rhs: Double) -> SyncRecordLWWOrder {
-    if lhs < rhs { return .before }
-    if lhs > rhs { return .after }
+    if lhs < rhs {
+        return .before
+    }
+    if lhs > rhs {
+        return .after
+    }
     return .equivalent
 }
 
 private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> SyncRecordLWWOrder {
-    if lhs < rhs { return .before }
-    if lhs > rhs { return .after }
+    if lhs < rhs {
+        return .before
+    }
+    if lhs > rhs {
+        return .after
+    }
     return .equivalent
 }
 
@@ -138,6 +148,8 @@ private func compareUTF8(_ lhs: String, _ rhs: String) -> SyncRecordLWWOrder {
 }
 
 private func compareBytes(_ lhs: Data, _ rhs: Data) -> SyncRecordLWWOrder {
-    if lhs == rhs { return .equivalent }
+    if lhs == rhs {
+        return .equivalent
+    }
     return lhs.lexicographicallyPrecedes(rhs) ? .before : .after
 }

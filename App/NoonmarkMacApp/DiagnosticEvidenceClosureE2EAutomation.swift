@@ -430,7 +430,9 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () async throws -> Bool
     ) async throws {
         for _ in 0..<attempts {
-            if try await condition() { return }
+            if try await condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
         throw Failure.failed(message)

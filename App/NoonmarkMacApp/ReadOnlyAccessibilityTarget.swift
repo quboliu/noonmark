@@ -515,7 +515,9 @@ enum ReadOnlyAccessibilityTarget {
         var current = candidate
         var visited: [AXUIElement] = []
         for _ in 0 ..< 80 {
-            if CFEqual(current, windowRoot) { return true }
+            if CFEqual(current, windowRoot) {
+                return true
+            }
             guard visited.contains(where: { CFEqual($0, current) }) == false,
                   let parent = element(current, kAXParentAttribute)
             else {

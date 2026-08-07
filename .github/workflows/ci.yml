@@ -28,7 +28,8 @@ jobs:
           xcodebuild -version
           swift --version
           [[ "$(xcodebuild -version | sed -n '1p')" == "Xcode 26.2" ]]
-          brew install actionlint ripgrep swiftlint swiftformat
+          brew install actionlint ripgrep swiftlint
+          scripts/install-pinned-swiftformat >/dev/null
       - name: Check
         run: scripts/check
       - name: Upload check evidence

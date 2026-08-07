@@ -316,7 +316,11 @@ struct ZhulongSessionStreamPage: View {
         artifactAutosavingPage.sheet(
             isPresented: Binding(
                 get: { todoDiffBeingEdited != nil },
-                set: { if $0 == false { todoDiffBeingEdited = nil } }
+                set: {
+                    if $0 == false {
+                        todoDiffBeingEdited = nil
+                    }
+                }
             )
         ) {
             if let diff = todoDiffBeingEdited {

@@ -839,7 +839,9 @@ final class WindowServerInputDriver {
     ) async throws -> Bool {
         for _ in 0 ..< 30 {
             try validateContext()
-            if isLeftButtonDown == expectedDown { return true }
+            if isLeftButtonDown == expectedDown {
+                return true
+            }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         return false
@@ -861,7 +863,9 @@ final class WindowServerInputDriver {
         )
         await cancellationInsensitivePause()
         for attempt in 0 ..< 30 {
-            if isLeftButtonDown == false { return }
+            if isLeftButtonDown == false {
+                return
+            }
             if attempt > 0, attempt.isMultiple(of: 10) {
                 try postMouse(
                     type: .leftMouseUp,
@@ -1018,11 +1022,21 @@ final class WindowServerInputDriver {
         for modifiers: NSEvent.ModifierFlags
     ) -> CGEventFlags {
         var flags: CGEventFlags = []
-        if modifiers.contains(.command) { flags.insert(.maskCommand) }
-        if modifiers.contains(.shift) { flags.insert(.maskShift) }
-        if modifiers.contains(.option) { flags.insert(.maskAlternate) }
-        if modifiers.contains(.control) { flags.insert(.maskControl) }
-        if modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
+        if modifiers.contains(.command) {
+            flags.insert(.maskCommand)
+        }
+        if modifiers.contains(.shift) {
+            flags.insert(.maskShift)
+        }
+        if modifiers.contains(.option) {
+            flags.insert(.maskAlternate)
+        }
+        if modifiers.contains(.control) {
+            flags.insert(.maskControl)
+        }
+        if modifiers.contains(.function) {
+            flags.insert(.maskSecondaryFn)
+        }
         return flags
     }
 }

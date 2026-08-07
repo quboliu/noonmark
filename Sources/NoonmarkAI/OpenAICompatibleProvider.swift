@@ -111,7 +111,9 @@ public struct OpenAICompatibleProvider: AIProvider, AIProviderStreaming {
                                 dataLines: &dataLines,
                                 to: continuation
                             )
-                            if finished { break }
+                            if finished {
+                                break
+                            }
                         } else {
                             lineData.append(byte)
                         }

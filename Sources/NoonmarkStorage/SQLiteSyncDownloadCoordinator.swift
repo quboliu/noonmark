@@ -468,12 +468,16 @@ enum SQLiteSyncOutcomeProjector {
             index[sourceID] = incoming
             return
         }
-        if existing == incoming { return }
+        if existing == incoming {
+            return
+        }
         if existing.canonicalEvidenceID == sourceID {
             index[sourceID] = incoming
             return
         }
-        if incoming.canonicalEvidenceID == sourceID { return }
+        if incoming.canonicalEvidenceID == sourceID {
+            return
+        }
         throw SQLiteRepositoryError.invalidStoredValue(
             "sync evidence source has contradictory canonical provenance"
         )

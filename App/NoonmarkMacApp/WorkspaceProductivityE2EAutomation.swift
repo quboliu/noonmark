@@ -97,7 +97,9 @@ enum WorkspaceDragE2EDiagnostics {
 
     static func hasTargeted(_ traceID: DayTraceID) -> Bool {
         events.contains {
-            if case .target(traceID, true) = $0 { return true }
+            if case .target(traceID, true) = $0 {
+                return true
+            }
             return false
         }
     }
@@ -107,7 +109,9 @@ enum WorkspaceDragE2EDiagnostics {
         targetTraceID: DayTraceID
     ) -> Bool {
         guard let targetIndex = events.firstIndex(where: {
-            if case .target(targetTraceID, true) = $0 { return true }
+            if case .target(targetTraceID, true) = $0 {
+                return true
+            }
             return false
         }), let dropIndex = events[targetIndex...].firstIndex(where: {
             if case .drop(targetTraceID, [sourceTraceID], true) = $0 {
@@ -1777,7 +1781,9 @@ struct WorkspaceProductivityE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () throws -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
-            if try condition() { return }
+            if try condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw Failure.failed(failure)

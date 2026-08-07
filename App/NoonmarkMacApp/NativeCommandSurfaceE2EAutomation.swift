@@ -1958,7 +1958,9 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
         condition: @MainActor () -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw Failure.failed(failure)
@@ -2084,12 +2086,16 @@ struct NativeCommandSurfaceE2EAutomation: LaunchAutomationRunnable {
             by: Self.externalHelpProtocolPhaseDeadline
         )
         while clock.now < deadline {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(
                 nanoseconds: Self.externalHelpProtocolPollNanoseconds
             )
         }
-        if condition() { return }
+        if condition() {
+            return
+        }
         throw Failure.failed(failure)
     }
 

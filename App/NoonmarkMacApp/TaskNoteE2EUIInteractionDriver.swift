@@ -270,7 +270,9 @@ enum TaskNoteE2EUIInteractionDriver {
             condition: @MainActor () -> Bool
         ) async throws {
             for _ in 0 ..< attempts {
-                if condition() { return }
+                if condition() {
+                    return
+                }
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
             throw InteractionFailure.failed("等待真实 UI 超时：\(step)")

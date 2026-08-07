@@ -265,7 +265,9 @@ public final class MainWindowIdentityPublisher {
             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         )
         guard runtimeDescriptor >= 0 else {
-            if errno == ENOENT { return nil }
+            if errno == ENOENT {
+                return nil
+            }
             throw posixError()
         }
         do {
@@ -424,7 +426,9 @@ public final class MainWindowIdentityPublisher {
             let openError = nextDescriptor >= 0 ? 0 : errno
             _ = Darwin.close(descriptor)
             guard nextDescriptor >= 0 else {
-                if openError == ENOENT { return nil }
+                if openError == ENOENT {
+                    return nil
+                }
                 throw MainWindowIdentityPublicationError.posix(openError)
             }
             descriptor = nextDescriptor
@@ -485,7 +489,9 @@ public final class MainWindowIdentityPublisher {
             &pathInformation,
             AT_SYMLINK_NOFOLLOW
         ) == 0 else {
-            if errno == ENOENT { return nil }
+            if errno == ENOENT {
+                return nil
+            }
             throw posixError()
         }
         try validateOwnedRegularFile(
@@ -527,8 +533,12 @@ public final class MainWindowIdentityPublisher {
                 data.append(contentsOf: buffer.prefix(count))
                 continue
             }
-            if count == 0 { break }
-            if errno == EINTR { continue }
+            if count == 0 {
+                break
+            }
+            if errno == EINTR {
+                continue
+            }
             throw posixError()
         }
 
@@ -661,7 +671,9 @@ public final class MainWindowIdentityPublisher {
 
     private static func synchronize(_ descriptor: Int32) throws {
         while fsync(descriptor) != 0 {
-            if errno == EINTR { continue }
+            if errno == EINTR {
+                continue
+            }
             throw posixError()
         }
     }
@@ -743,7 +755,9 @@ public final class MainWindowIdentityPublisher {
                     offset += count
                     continue
                 }
-                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EINTR {
+                    continue
+                }
                 throw posixError()
             }
         }

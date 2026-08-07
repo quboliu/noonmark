@@ -217,7 +217,9 @@ public enum OpenPanelPhysicalInputProtocolFile {
         var descriptorIsOpen = true
         var temporaryIsPresent = true
         defer {
-            if descriptorIsOpen { _ = Darwin.close(descriptor) }
+            if descriptorIsOpen {
+                _ = Darwin.close(descriptor)
+            }
             if temporaryIsPresent {
                 temporary.withUnsafeFileSystemRepresentation { pointer in
                     guard let pointer else { return }
@@ -293,7 +295,9 @@ public enum OpenPanelPhysicalInputProtocolFile {
                     bytes.count - offset
                 )
             }
-            if count < 0, errno == EINTR { continue }
+            if count < 0, errno == EINTR {
+                continue
+            }
             guard count > 0 else {
                 throw count < 0
                     ? posixFailure("read open-panel protocol", errno)
@@ -377,7 +381,9 @@ public enum OpenPanelPhysicalInputProtocolFile {
                 }
                 return result
             }
-            if count < 0 { continue }
+            if count < 0 {
+                continue
+            }
             guard count > 0 else {
                 throw invalid("open-panel protocol write made no progress")
             }
@@ -387,7 +393,9 @@ public enum OpenPanelPhysicalInputProtocolFile {
 
     private static func synchronize(_ descriptor: Int32) throws {
         while fsync(descriptor) != 0 {
-            if errno == EINTR { continue }
+            if errno == EINTR {
+                continue
+            }
             throw posixFailure("synchronize open-panel protocol", errno)
         }
     }

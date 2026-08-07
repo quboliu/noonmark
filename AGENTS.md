@@ -50,7 +50,7 @@
   - `make check` 通过，覆盖 `swift build`、UT、IT、ST、确定性仿真测试、SwiftLint 和 SwiftFormat lint。
   - `swift test` 通过；测试数量以当前运行报告为准，不在本文固化陈旧计数。
   - 真实 `.app` E2E 是当前 Mac UI 的运行基线；归档 HTML 原型不得作为默认视觉 oracle。
-  - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`。
+  - 本机已安装 `swiftlint`、`swiftformat`、`xcbeautify`、`xcodegen`、`mas`、`xcodes` 和 `aria2`；仓库入口不使用浮动的全局 SwiftFormat，而由 `scripts/install-pinned-swiftformat` 下载并校验固定的 `0.62.1` 官方资产。
 - 项目级工具入口：
   - `make build`
   - `make build-app`

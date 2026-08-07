@@ -258,10 +258,16 @@ public struct TaskCollectionPresentationProjector: Sendable {
         if lhs.precedence != rhs.precedence {
             return lhs.precedence < rhs.precedence
         }
-        if lhs.category == nil { return false }
-        if rhs.category == nil { return true }
+        if lhs.category == nil {
+            return false
+        }
+        if rhs.category == nil {
+            return true
+        }
         let comparison = (lhs.title ?? "").localizedStandardCompare(rhs.title ?? "")
-        if comparison == .orderedSame { return lhs.id < rhs.id }
+        if comparison == .orderedSame {
+            return lhs.id < rhs.id
+        }
         return comparison == .orderedAscending
     }
 

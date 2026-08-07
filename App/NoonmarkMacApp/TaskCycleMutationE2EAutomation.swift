@@ -1716,7 +1716,9 @@ struct TaskCycleMutationRestartE2EAutomation:
             TaskCycleMutationE2EAutomation.skippedTitle
         ],
         skipped.cancellationFacts.contains(where: {
-            if case .occurrence = $0.scope { return true }
+            if case .occurrence = $0.scope {
+                return true
+            }
             return false
         }),
         seriesByTitle[

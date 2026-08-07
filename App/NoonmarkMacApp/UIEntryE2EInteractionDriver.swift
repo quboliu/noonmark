@@ -221,7 +221,9 @@ struct UIEntryE2EStartGate {
             if readResult.count == 0 {
                 throw Failure.failed("FIFO arm record 在结束换行前关闭")
             }
-            if readResult.errorCode == EINTR { continue }
+            if readResult.errorCode == EINTR {
+                continue
+            }
             throw posixFailure(
                 operation: "read FIFO",
                 code: readResult.errorCode

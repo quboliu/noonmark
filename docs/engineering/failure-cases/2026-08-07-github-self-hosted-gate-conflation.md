@@ -41,8 +41,8 @@ source commit `92c92fdc` 的 `.github/workflows/ci.yml` 明确声明 `runs-on: [
 ## 验证结果
 
 - Red：run `31199688018` 建立了 hosted check 与 self-hosted E2E 两个 job；后者在执行 step 前被取消。
-- Green（fast）：3 份 workflow 的 actionlint、hosted-only／单 job 边界、live CI 正反 fixture、90 分钟 hosted budget、Xcode 26.2、release readiness、build 18 version contract、63 个 failure-case registry、修改脚本的 Bash syntax 与 warning-level ShellCheck 全绿。没有重跑本地产品全集或 DMG 大矩阵。
-- 待 Green（symptom）：新 main run 必须只建立一个 `macos-15` CI job 并成功，不得建立 self-hosted job。
+- Green（fast）：3 份 workflow 的 actionlint、hosted-only／单 job 边界、live CI 正反 fixture、90 分钟 hosted budget、Xcode 26.2、release readiness、build version contract、failure-case registry、修改脚本的 Bash syntax 与 warning-level ShellCheck 全绿。没有重跑本地产品全集或 DMG 大矩阵。
+- Green（job 边界）：build 18 run `31203389558` 只建立一个 `macos-15` CI job，没有建立 self-hosted job；该 job 后续因独立 formatter 版本漂移判红。
 - 待 Green（release）：tag workflow 必须消费上述精确 CI 结果，只建立一个 hosted package job，并发布 DMG 与 checksum。
 
 ## 永久门禁

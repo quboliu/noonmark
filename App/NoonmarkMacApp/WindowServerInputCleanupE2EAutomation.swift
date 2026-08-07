@@ -56,7 +56,9 @@ struct WindowServerInputCleanupE2EAutomation {
         }
         let gestureNumber = input.nextMouseGestureNumber()
         for attempt in 0 ..< 60 {
-            if input.isLeftButtonDown == false { return }
+            if input.isLeftButtonDown == false {
+                return
+            }
             if attempt.isMultiple(of: 10) {
                 try input.postMouse(
                     type: .leftMouseUp,

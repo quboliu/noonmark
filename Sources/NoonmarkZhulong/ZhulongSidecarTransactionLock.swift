@@ -269,7 +269,9 @@ struct ZhulongSidecarDirectoryIdentities {
         var keys: Set<ZhulongSidecarDirectoryIdentity> = [
             .canonicalPath(canonicalPath)
         ]
-        if let inode { keys.insert(inode) }
+        if let inode {
+            keys.insert(inode)
+        }
         self.keys = keys
     }
 }

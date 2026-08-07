@@ -244,7 +244,9 @@ private final class WALFixture {
             nil
         )
         guard result == SQLITE_OK, let connection else {
-            if let connection { sqlite3_close_v2(connection) }
+            if let connection {
+                sqlite3_close_v2(connection)
+            }
             throw FixtureFailure.sqlite(result)
         }
         return connection

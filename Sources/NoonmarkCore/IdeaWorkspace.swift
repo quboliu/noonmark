@@ -132,7 +132,9 @@ public extension NoonmarkEngine {
             .sorted {
                 let lhs = Self.reviewRank(for: $0.id, seed: seed)
                 let rhs = Self.reviewRank(for: $1.id, seed: seed)
-                if lhs != rhs { return lhs < rhs }
+                if lhs != rhs {
+                    return lhs < rhs
+                }
                 return Self.ideaRecencyOrder($0, $1)
             }
             .prefix(count)

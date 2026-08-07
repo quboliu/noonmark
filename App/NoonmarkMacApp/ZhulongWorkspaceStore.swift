@@ -253,7 +253,9 @@ final class ZhulongWorkspaceStore: ObservableObject {
             }
             .map { record(for: $0, copy: copy) })
         return projected.sorted { lhs, rhs in
-            if lhs.occurredAt != rhs.occurredAt { return lhs.occurredAt < rhs.occurredAt }
+            if lhs.occurredAt != rhs.occurredAt {
+                return lhs.occurredAt < rhs.occurredAt
+            }
             if lhs.sortRank != rhs.sortRank {
                 return lhs.sortRank < rhs.sortRank
             }
@@ -276,8 +278,12 @@ final class ZhulongWorkspaceStore: ObservableObject {
 
     private var sessionState: ZhulongSessionStateCopyKey {
         guard let session = selectedSession else { return .noSelection }
-        if session.workspaceStatus == .paused { return .paused }
-        if session.workspaceStatus == .archived { return .archived }
+        if session.workspaceStatus == .paused {
+            return .paused
+        }
+        if session.workspaceStatus == .archived {
+            return .archived
+        }
         return switch session.phase {
         case .scopeReview: .scopeReview
         case .readyForProvider: .readyForProvider

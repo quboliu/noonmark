@@ -451,7 +451,9 @@ public enum TrajectoryTopologyValidator {
             return nil
         }
         for id in tracesByID.keys.sorted(by: traceIDComesBefore) {
-            if let cycle = visit(id) { return cycle }
+            if let cycle = visit(id) {
+                return cycle
+            }
         }
         return nil
     }
@@ -481,7 +483,9 @@ public enum TrajectoryTopologyValidator {
             return nil
         }
         for id in subtasksByID.keys.sorted(by: subtaskIDComesBefore) {
-            if let cycle = visit(id) { return cycle }
+            if let cycle = visit(id) {
+                return cycle
+            }
         }
         return nil
     }

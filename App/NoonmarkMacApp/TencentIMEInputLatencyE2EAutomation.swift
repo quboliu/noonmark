@@ -274,7 +274,9 @@ struct TencentIMEInputLatencyE2EAutomation: LaunchAutomationRunnable {
         condition: @escaping @MainActor () -> Bool
     ) async throws {
         for _ in 0 ..< 400 {
-            if condition() { return }
+            if condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         throw Failure.failed(failure)

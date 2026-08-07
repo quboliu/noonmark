@@ -196,7 +196,9 @@ struct AutomaticClassificationOperationalClockE2EAutomation:
               let current = persisted.classifications.currentByChainID[chainID],
               case .automaticAI = current.category?.source,
               current.labels.contains(where: {
-                  if case .automaticAI = $0.source { return true }
+                  if case .automaticAI = $0.source {
+                      return true
+                  }
                   return false
               })
         else { return false }
@@ -374,7 +376,9 @@ struct AutomaticClassificationCheckpointVerifyE2EAutomation:
               case .automaticAI = current.category?.source
         else { return false }
         return current.labels.contains(where: {
-            if case .automaticAI = $0.source { return true }
+            if case .automaticAI = $0.source {
+                return true
+            }
             return false
         })
     }
@@ -585,7 +589,9 @@ struct AutomaticClassificationContentionVerifyE2EAutomation:
               case .automaticAI = current.category?.source
         else { return false }
         return current.labels.contains(where: {
-            if case .automaticAI = $0.source { return true }
+            if case .automaticAI = $0.source {
+                return true
+            }
             return false
         })
     }
@@ -722,7 +728,9 @@ struct AutomaticClassificationProviderRaceE2EAutomation:
     private func waitForFile(_ url: URL, label: String) async throws {
         let deadline = Date().addingTimeInterval(30)
         while Date() < deadline {
-            if FileManager.default.fileExists(atPath: url.path) { return }
+            if FileManager.default.fileExists(atPath: url.path) {
+                return
+            }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         throw AutomaticClassificationDeterministicE2EError.failed(
@@ -741,7 +749,9 @@ struct AutomaticClassificationProviderRaceE2EAutomation:
               case .automaticAI = current.category?.source
         else { return false }
         return current.labels.contains(where: {
-            if case .automaticAI = $0.source { return true }
+            if case .automaticAI = $0.source {
+                return true
+            }
             return false
         })
     }
@@ -2384,7 +2394,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
               case .automaticAI = current.category?.source
         else { return false }
         return current.labels.contains {
-            if case .automaticAI = $0.source { return true }
+            if case .automaticAI = $0.source {
+                return true
+            }
             return false
         }
     }
@@ -2461,7 +2473,9 @@ struct ClassificationQueueE2EAutomation: LaunchAutomationRunnable {
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if try condition() { return }
+            if try condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         throw failure("\(label) timed out")
@@ -2703,7 +2717,9 @@ private enum AutomaticClassificationSettingsE2EInteraction {
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if try condition() { return }
+            if try condition() {
+                return
+            }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         throw failure("\(label) timed out")

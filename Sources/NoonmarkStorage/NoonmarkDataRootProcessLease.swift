@@ -179,7 +179,9 @@ public final class NoonmarkDataRootProcessLease: @unchecked Sendable {
     ) throws {
         while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
             let code = errno
-            if code == EINTR { continue }
+            if code == EINTR {
+                continue
+            }
             if code == EWOULDBLOCK || code == EAGAIN {
                 throw NoonmarkDataRootProcessLeaseError.alreadyHeld(
                     path: lockFileURL.path
@@ -257,8 +259,12 @@ public final class NoonmarkDataRootProcessLease: @unchecked Sendable {
                 let callResult = lstat(path, &status)
                 return (callResult, callResult == 0 ? 0 : errno)
             }
-        if result.callResult == 0 { return status }
-        if result.errorCode == ENOENT { return nil }
+        if result.callResult == 0 {
+            return status
+        }
+        if result.errorCode == ENOENT {
+            return nil
+        }
         throw posixFailure(
             operation: operation,
             code: result.errorCode,

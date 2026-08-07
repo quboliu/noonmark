@@ -70,6 +70,9 @@ run_check_suite() {
   echo "==> Deterministic simulation tests"
   scripts/test-deterministic-sim
 
+  echo "==> UI localization Han scalar contract"
+  scripts/test-ui-localization-han-contract
+
   echo "==> UI localization literal guard"
   scripts/check-ui-localization
 

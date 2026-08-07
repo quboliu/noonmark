@@ -149,3 +149,6 @@ FAIL-2026-08-07-06	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-07	fast	scripts/test-idea-success-transition-contract	scripts/check	两个共享飞光 session 必须保留并 await 实际 transition task，测试不得用固定 sleep 猜测完成
 FAIL-2026-08-07-07	symptom	scripts/test-unit	scripts/check	hosted Xcode 必须真实执行 composer 与 inline editor 的 saving 到 succeeded 完整状态顺序
 FAIL-2026-08-07-07	release	scripts/verify-github-release-publication	scripts/push-release-tag	canonical hosted check 与最终 DMG、checksum 未全部完成时不得发布失败候选
+FAIL-2026-08-07-08	fast	scripts/test-ui-localization-han-contract	scripts/check	localization scanner 必须使用明确 Han scalar，并以中点负例与中文正例拒绝跨运行时漂移
+FAIL-2026-08-07-08	symptom	scripts/check-ui-localization	scripts/check	真实 production UI inventory 必须在 hosted 与本机精确保持同一审核 baseline
+FAIL-2026-08-07-08	release	scripts/verify-github-release-publication	scripts/push-release-tag	canonical hosted check 未越过 localization guard 时不得发布 DMG 与 checksum

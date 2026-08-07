@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+scanner="scripts/check-ui-localization"
+
+fail() {
+  echo "UI localization Han contract: $*" >&2
+  exit 1
+}
+
+grep -Fq "my \$han_scalar = qr/[\\x{3400}-\\x{4DBF}\\x{4E00}-\\x{9FFF}\\x{F900}-\\x{FAFF}]/;" "$scanner" ||
+  fail "scanner no longer uses the explicit cross-runtime Han scalar set"
+if grep -Fq '\p{Han}' "$scanner"; then
+  fail "scanner restored the runtime-dependent bare Han property"
+fi
+
+scripts/check-ui-localization --self-test
+
+echo "UI localization Han contract passed"

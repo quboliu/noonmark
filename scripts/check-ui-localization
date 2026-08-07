@@ -35,6 +35,10 @@ my @ui_helper_scopes;
 my $pending_excluded = 0;
 my $pending_ui_helper = 0;
 
+# Keep the scanner independent of Unicode Script_Extensions differences.
+# U+00B7 is valid English UI punctuation and must not count as Han text.
+my $han_scalar = qr/[\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{F900}-\x{FAFF}]/;
+
 sub structural_line {
     my ($line) = @_;
     my $outside = '';
@@ -86,14 +90,14 @@ for my $index (0 .. $#lines) {
     }
 
     my $is_excluded = @excluded_scopes > 0;
-    my $has_han_literal = $line =~ /"(?:\\.|[^"\\])*\p{Han}(?:\\.|[^"\\])*"/;
-    my $direct_surface = $line =~ /\b(?:Text|Button|Label|TextField|SecureField|Toggle|Picker|Menu|Section|GroupBox|Link|HeaderButton|SmallActionButton|DetailSection|MarkdownText|MarkdownInlineText|ClassificationManagerButton)\s*\([^\n]*"[^"\n]*\p{Han}/
-        || $line =~ /\.(?:accessibilityLabel|help|navigationTitle)\s*\([^\n]*"[^"\n]*\p{Han}/
-        || $line =~ /\b(?:showToast|reportUIError)\s*\([^\n]*"[^"\n]*\p{Han}/
-        || $line =~ /\b(?:descriptionText|initialNoteBody|intent):\s*"[^"\n]*\p{Han}/
-        || $line =~ /\b(?:validationMessage|statusMessage|message|toast)\s*=\s*"[^"\n]*\p{Han}/
-        || $line =~ /\b[A-Za-z0-9_]+\.(?:title|messageText|informativeText|placeholderString|toolTip)\s*=(?!=)[^\n]*"[^"\n]*\p{Han}/
-        || $line =~ /\baddButton\s*\(\s*withTitle:[^\n]*"[^"\n]*\p{Han}/;
+    my $has_han_literal = $line =~ /"(?:\\.|[^"\\])*$han_scalar(?:\\.|[^"\\])*"/;
+    my $direct_surface = $line =~ /\b(?:Text|Button|Label|TextField|SecureField|Toggle|Picker|Menu|Section|GroupBox|Link|HeaderButton|SmallActionButton|DetailSection|MarkdownText|MarkdownInlineText|ClassificationManagerButton)\s*\([^\n]*"[^"\n]*$han_scalar/
+        || $line =~ /\.(?:accessibilityLabel|help|navigationTitle)\s*\([^\n]*"[^"\n]*$han_scalar/
+        || $line =~ /\b(?:showToast|reportUIError)\s*\([^\n]*"[^"\n]*$han_scalar/
+        || $line =~ /\b(?:descriptionText|initialNoteBody|intent):\s*"[^"\n]*$han_scalar/
+        || $line =~ /\b(?:validationMessage|statusMessage|message|toast)\s*=\s*"[^"\n]*$han_scalar/
+        || $line =~ /\b[A-Za-z0-9_]+\.(?:title|messageText|informativeText|placeholderString|toolTip)\s*=(?!=)[^\n]*"[^"\n]*$han_scalar/
+        || $line =~ /\baddButton\s*\(\s*withTitle:[^\n]*"[^"\n]*$han_scalar/;
     my $helper_surface = @ui_helper_scopes > 0 && $has_han_literal;
 
     if (!$is_excluded && ($direct_surface || $helper_surface)) {
@@ -125,10 +129,15 @@ if [[ "${1:-}" == "--self-test" ]]; then
 struct ProductionView: View {
     var body: some View {
         Text("直接中文")
+        Text("·")
     }
 
     var statusLabel: String {
         "帮助中文"
+    }
+
+    var separatorText: String {
+        " · "
     }
 
     func saveDefaults() {

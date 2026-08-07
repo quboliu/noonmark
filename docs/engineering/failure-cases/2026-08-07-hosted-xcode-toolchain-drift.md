@@ -47,7 +47,7 @@ GitHub run `31192298891` 的 Toolchain step 明确输出 Xcode 16.4、Swift 6.1.
 - Red：旧 hosted job 实际输出 Xcode 16.4，并在真实 clean build 对 MetricKit callback 稳定判红。
 - Green（既有基线）：本机 Xcode 26.2 隔离 target build 与 8 个 MetricKit subscriber test 全绿。
 - Green（原始 hosted 受害路径）：build 13 run `31194101256` 的 Toolchain step 精确选择 Xcode 26.2，随后完成干净编译、1527 个 XCTest、demo story test 与确定性仿真；原始 MetricKit unavailable 症状没有复现。
-- 待完成：同一 run 后来因独立的 `FAIL-2026-08-07-06` 缺少 `rg` 而中断；build 14 已证明 hosted 工具安装后又因独立的 `FAIL-2026-08-07-07` 测试同步竞态停止；build 15 必须完成剩余 hosted check、真实 App E2E 与 canonical DMG。
+- 待完成：后续候选依次暴露独立的缺少 `rg`、测试同步和 localization oracle 故障；build 15 已用 Xcode 26.2 完成 1527 项 XCTest、14 项 Demo 测试和确定性仿真，build 16 必须完成剩余 hosted check、真实 App E2E 与 canonical DMG。
 
 ## 永久门禁
 
@@ -57,7 +57,7 @@ GitHub run `31192298891` 的 Toolchain step 明确输出 Xcode 16.4、Swift 6.1.
 
 ## 发行与回滚
 
-build 12 已因本故障与独立 workflow 故障退役；build 13 证明 Xcode 根因修复后，因独立的工具依赖故障退役；build 14 又因独立的测试同步竞态退役。build 15 必须完成 Xcode 26.2 普通 CI 再建立 tag。若 GitHub image 不再提供固定路径，workflow 必须 fail-closed 并退役该 build，再由人工评估新的项目工具链；不得静默回到 image 默认值、删除产品能力或跳过 hosted build。
+build 12 至 build 15 均因本故障后续暴露的独立发行门禁问题退役。build 15 已再次完成 Xcode 26.2 编译与全部 XCTest；build 16 必须完成普通 CI 再建立 tag。若 GitHub image 不再提供固定路径，workflow 必须 fail-closed 并退役该 build，再由人工评估新的项目工具链；不得静默回到 image 默认值、删除产品能力或跳过 hosted build。
 
 ## 教训与永久约束
 

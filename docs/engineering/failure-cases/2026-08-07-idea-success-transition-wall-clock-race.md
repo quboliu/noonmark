@@ -7,7 +7,7 @@
 - 引入提交：`e9cc14d761e53b8ba7821dcd0aea35bb11daf541`（`fix(flylight): backfill edit restoration and real-interaction gates`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`a3df3f6b4af9ea0bfce8ee7dd1a9fc158221488c`（`fix(ci): await exact Flylight success transitions`）
 
 ## 用户症状与影响
 
@@ -43,7 +43,7 @@ run `31194926190`／job `92920698454` 的同步断言先证明持久化闭包收
 
 - Red（原始 hosted 症状）：run `31194926190` 在全量测试负载下稳定捕获一次完整的 pre-transition 状态并阻断 build 14。
 - Red（fast 结构）：旧代码没有 retained transition task，两个测试均含固定 `Task.sleep`，不满足新增 contract。
-- Green（fast）：待 build 15 提交前的针对性静态门禁回填。
+- Green（fast）：`scripts/test-idea-success-transition-contract`、failure-case registry、build 15 version contract、ShellCheck、SwiftFormat 与 `git diff --check` 全绿；没有重跑本地完整测试链。
 - 待 Green（原始 hosted 受害路径）：build 15 的新 GitHub run 必须完成同一 1527 项聚合测试，并继续完成真实 App E2E。
 
 ## 永久门禁

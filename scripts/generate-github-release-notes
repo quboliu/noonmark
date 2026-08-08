@@ -78,6 +78,10 @@ if [[ "$change_count" -eq 0 ]]; then
   printf '%s\n' \
     '- No user-facing changes were called out in conventional commits.' \
     >>"$temporary_output"
+else
+  printf '%s\n' \
+    '- This release includes the user-facing improvements listed above.' \
+    >>"$temporary_output"
 fi
 if [[ -n "$previous_tag" ]]; then
   printf '\n**Full Changelog**: https://github.com/quboliu/noonmark/compare/%s...%s\n' \
@@ -94,4 +98,3 @@ fi
 
 mv -f "$temporary_output" "$output"
 temporary_output=""
-

@@ -81,6 +81,7 @@ if [[ "$change_count" -eq 0 ]]; then
 else
   printf '%s\n' \
     '- This release includes the user-facing improvements listed above.' \
+    '- It improves daily planning, data reliability, and task synchronization while preserving a smooth experience.' \
     >>"$temporary_output"
 fi
 if [[ -n "$previous_tag" ]]; then

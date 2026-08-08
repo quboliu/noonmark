@@ -6,7 +6,7 @@
 - 引入提交：`d42bfbc4b43a78a3b05a1334d974dc7f36078d93`（`feat(app): improve local-first sync and UI experience`）；`28f261d969a70b58661a48dc07f7bd11eece3c55` 增加全 commit／mirror 修复，`e9d007f248b43dfe4b164ecdeac93e173a427912` 增加一轮内重复全量覆盖复核
 - Git author／committer：上述提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：待回填
+- 修复提交：`1f264ff9c38047c8ac959e9d0cd624c70d495116`（`fix(sync): replace full-history replication`）
 
 ## 用户症状与影响
 

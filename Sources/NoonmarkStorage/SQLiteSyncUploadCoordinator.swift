@@ -3,14 +3,39 @@ import NoonmarkCore
 import NoonmarkSync
 
 public struct SQLiteSyncUploadResult: Codable, Equatable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case pendingCount
+        case uploadedCount
+        case failedCount
+        case awaitingConfirmationCount
+    }
+
     public var pendingCount: Int
     public var uploadedCount: Int
     public var failedCount: Int
+    public var awaitingConfirmationCount: Int
 
-    public init(pendingCount: Int, uploadedCount: Int, failedCount: Int) {
+    public init(
+        pendingCount: Int,
+        uploadedCount: Int,
+        failedCount: Int,
+        awaitingConfirmationCount: Int = 0
+    ) {
         self.pendingCount = pendingCount
         self.uploadedCount = uploadedCount
         self.failedCount = failedCount
+        self.awaitingConfirmationCount = awaitingConfirmationCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pendingCount = try container.decode(Int.self, forKey: .pendingCount)
+        uploadedCount = try container.decode(Int.self, forKey: .uploadedCount)
+        failedCount = try container.decode(Int.self, forKey: .failedCount)
+        awaitingConfirmationCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .awaitingConfirmationCount
+        ) ?? 0
     }
 }
 
@@ -32,6 +57,7 @@ public final class SQLiteSyncUploadCoordinator {
     }
 
     public func uploadPending(limit: Int = 100) async throws -> SQLiteSyncUploadResult {
+        var confirmation = try await confirmPublishedEntries()
         let snapshot = try engineRepository.load().snapshot()
         let candidateUnits = try uploadCandidateUnits(
             limit: limit,
@@ -39,7 +65,8 @@ public final class SQLiteSyncUploadCoordinator {
         )
         let pendingEntries = candidateUnits.flatMap(\.entries)
         guard pendingEntries.isEmpty == false else {
-            return SQLiteSyncUploadResult(pendingCount: 0, uploadedCount: 0, failedCount: 0)
+            confirmation.failedCount = try blockedEntryCount()
+            return confirmation
         }
 
         let materialized = try materialize(
@@ -50,21 +77,89 @@ public final class SQLiteSyncUploadCoordinator {
             return SQLiteSyncUploadResult(
                 pendingCount: pendingEntries.count,
                 uploadedCount: 0,
-                failedCount: materialized.failedCount
+                failedCount: try blockedEntryCount(),
+                awaitingConfirmationCount:
+                confirmation.awaitingConfirmationCount
             )
         }
 
         do {
-            try await transport.push(materialized.records)
-            try syncRepository.markJournalEntriesUploaded(materialized.uploadedIDs)
-            try appendAuditLogs(for: materialized.records, action: "uploaded")
+            let receipt = try await transport.pushAccepting(
+                materialized.records
+            )
+            let state = receipt.confirmation
+            switch state {
+            case .confirmed:
+                try syncRepository.markJournalEntriesUploaded(
+                    materialized.uploadedIDs
+                )
+                try appendAuditLogs(
+                    for: materialized.records,
+                    action: "uploaded"
+                )
+                confirmation.uploadedCount += materialized.uploadedIDs.count
+            case .awaitingUploadConfirmation:
+                try syncRepository.markJournalEntriesPublishedLocal(
+                    materialized.uploadedIDs,
+                    receipt: try encodedReceipt(receipt)
+                )
+                confirmation.awaitingConfirmationCount +=
+                    materialized.uploadedIDs.count
+                try appendAuditLogs(
+                    for: materialized.records,
+                    action: "publishedLocal"
+                )
+            case .blockedUserAttention:
+                try markBlockedUserAttention(
+                    materialized.uploadableEntries,
+                    action: "uploadBlockedUserAttention",
+                    message: "transport acceptance requires user attention"
+                )
+            case .blockedCorruption:
+                try markBlockedCorruption(
+                    materialized.uploadableEntries,
+                    action: "uploadBlockedCorruption",
+                    message: "transport acceptance failed integrity validation"
+                )
+            }
             return SQLiteSyncUploadResult(
                 pendingCount: pendingEntries.count,
-                uploadedCount: materialized.records.count,
-                failedCount: materialized.failedCount
+                uploadedCount: confirmation.uploadedCount,
+                failedCount: try blockedEntryCount(),
+                awaitingConfirmationCount:
+                confirmation.awaitingConfirmationCount
+            )
+        } catch let error as SyncRecordTransportError {
+            try markBlockedCorruption(
+                materialized.uploadableEntries,
+                action: "uploadBlockedCorruption",
+                message: message(for: error)
+            )
+            return SQLiteSyncUploadResult(
+                pendingCount: pendingEntries.count,
+                uploadedCount: confirmation.uploadedCount,
+                failedCount: try blockedEntryCount(),
+                awaitingConfirmationCount:
+                confirmation.awaitingConfirmationCount
+            )
+        } catch let error as ICloudDriveSyncTransportError {
+            try markBlockedUserAttention(
+                materialized.uploadableEntries,
+                action: "uploadBlockedUserAttention",
+                message: message(for: error)
+            )
+            return SQLiteSyncUploadResult(
+                pendingCount: pendingEntries.count,
+                uploadedCount: confirmation.uploadedCount,
+                failedCount: try blockedEntryCount(),
+                awaitingConfirmationCount:
+                confirmation.awaitingConfirmationCount
             )
         } catch {
-            try markFailed(materialized.uploadableEntries, action: "uploadFailed", error: error)
+            try appendAuditLogs(
+                for: materialized.records,
+                action: "uploadRetryPending"
+            )
             throw error
         }
     }
@@ -74,12 +169,9 @@ public final class SQLiteSyncUploadCoordinator {
         snapshot: NoonmarkSnapshot
     ) throws -> [UploadCandidateUnit] {
         guard limit > 0 else { return [] }
-        var retryableEntries: [SyncJournalEntry] = []
-        for state in [SyncChangeState.pendingUpload, .failed] {
-            retryableEntries.append(
-                contentsOf: try syncRepository.journalEntries(state: state)
-            )
-        }
+        let retryableEntries = try syncRepository.journalEntries(
+            state: .pendingUpload
+        )
         let orderedEntries = retryableEntries.sorted(
             by: uploadCandidateComesBefore
         )
@@ -232,7 +324,6 @@ public final class SQLiteSyncUploadCoordinator {
         var records: [SyncRecord] = []
         var uploadedIDs: [UUID] = []
         var uploadableEntries: [SyncJournalEntry] = []
-        var failedCount = 0
 
         for unit in units {
             do {
@@ -245,11 +336,10 @@ public final class SQLiteSyncUploadCoordinator {
                 uploadedIDs.append(contentsOf: unit.entries.map(\.id))
                 uploadableEntries.append(contentsOf: unit.entries)
             } catch {
-                failedCount += unit.entries.count
-                try markFailed(
+                try markBlockedCorruption(
                     unit.entries,
                     action: "materializationFailed",
-                    error: error
+                    message: message(for: error)
                 )
             }
         }
@@ -257,22 +347,133 @@ public final class SQLiteSyncUploadCoordinator {
         return MaterializedUploadBatch(
             records: records,
             uploadedIDs: uploadedIDs,
-            uploadableEntries: uploadableEntries,
-            failedCount: failedCount
+            uploadableEntries: uploadableEntries
         )
     }
 
-    private func markFailed(_ entries: [SyncJournalEntry], action: String, error: Error) throws {
+    private func markBlockedCorruption(
+        _ entries: [SyncJournalEntry],
+        action: String,
+        message: String
+    ) throws {
         for entry in entries {
-            try syncRepository.markJournalEntryFailed(entry.id, error: message(for: error))
+            try syncRepository.markJournalEntryBlockedCorruption(
+                entry.id,
+                error: message
+            )
             try syncRepository.appendAuditLog(
                 SyncAuditLogEntry(
                     direction: .upload,
                     entityType: entry.entityType,
                     entityID: entry.entityID,
                     action: action,
-                    message: message(for: error)
+                    message: message
                 )
+            )
+        }
+    }
+
+    private func markBlockedUserAttention(
+        _ entries: [SyncJournalEntry],
+        action: String,
+        message: String
+    ) throws {
+        for entry in entries {
+            try syncRepository.markJournalEntriesBlockedUserAttention(
+                [entry.id],
+                error: message
+            )
+            try syncRepository.appendAuditLog(
+                SyncAuditLogEntry(
+                    direction: .upload,
+                    entityType: entry.entityType,
+                    entityID: entry.entityID,
+                    action: action,
+                    message: message
+                )
+            )
+        }
+    }
+
+    private func confirmPublishedEntries() async throws -> SQLiteSyncUploadResult {
+        let published = try syncRepository.journalEntries(
+            state: .publishedLocal
+        )
+        let grouped = Dictionary(grouping: published, by: \.transportReceipt)
+        var result = SQLiteSyncUploadResult(
+            pendingCount: 0,
+            uploadedCount: 0,
+            failedCount: 0,
+            awaitingConfirmationCount: 0
+        )
+        for (receiptData, entries) in grouped {
+            guard let receiptData else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "published sync entry has no receipt"
+                )
+            }
+            let receipt = try decodedReceipt(receiptData)
+            switch try await transport.confirmationStatus(for: receipt) {
+            case .confirmed:
+                try syncRepository.markJournalEntriesUploaded(
+                    entries.map(\.id)
+                )
+                try appendAuditLogs(
+                    for: entries,
+                    action: "uploadConfirmed"
+                )
+                result.uploadedCount += entries.count
+            case .awaitingUploadConfirmation:
+                result.awaitingConfirmationCount += entries.count
+            case .blockedUserAttention:
+                try syncRepository.markJournalEntriesBlockedUserAttention(
+                    entries.map(\.id),
+                    error: "transport upload confirmation requires user attention"
+                )
+                try appendAuditLogs(
+                    for: entries,
+                    action: "uploadConfirmationBlockedUserAttention"
+                )
+                result.failedCount += entries.count
+            case .blockedCorruption:
+                try markBlockedCorruption(
+                    entries,
+                    action: "uploadConfirmationCorrupt",
+                    message: "transport upload confirmation failed integrity validation"
+                )
+                result.failedCount += entries.count
+            }
+        }
+        return result
+    }
+
+    private func blockedEntryCount() throws -> Int {
+        try syncRepository.journalEntries(
+            state: .blockedUserAttention
+        ).count + syncRepository.journalEntries(
+            state: .blockedCorruption
+        ).count
+    }
+
+    private func encodedReceipt(
+        _ receipt: SyncTransportPushReceipt
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(receipt)
+    }
+
+    private func decodedReceipt(
+        _ data: Data
+    ) throws -> SyncTransportPushReceipt {
+        do {
+            return try JSONDecoder().decode(
+                SyncTransportPushReceipt.self,
+                from: data
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync transport receipt is invalid"
             )
         }
     }
@@ -284,6 +485,23 @@ public final class SQLiteSyncUploadCoordinator {
                     direction: .upload,
                     entityType: record.entityType,
                     entityID: record.entityID,
+                    action: action,
+                    message: nil
+                )
+            )
+        }
+    }
+
+    private func appendAuditLogs(
+        for entries: [SyncJournalEntry],
+        action: String
+    ) throws {
+        for entry in entries {
+            try syncRepository.appendAuditLog(
+                SyncAuditLogEntry(
+                    direction: .upload,
+                    entityType: entry.entityType,
+                    entityID: entry.entityID,
                     action: action,
                     message: nil
                 )
@@ -309,5 +527,4 @@ private struct MaterializedUploadBatch {
     var records: [SyncRecord]
     var uploadedIDs: [UUID]
     var uploadableEntries: [SyncJournalEntry]
-    var failedCount: Int
 }

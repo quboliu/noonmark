@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "incremental sync contract: $*" >&2
+  exit 1
+}
+
+protocol="Sources/NoonmarkSync/SyncRecordTransport.swift"
+coordinator="Sources/NoonmarkStorage/SQLiteLocalFirstSyncCoordinator.swift"
+folder="Sources/NoonmarkSync/LocalFolderSyncTransport.swift"
+cloudkit="Sources/NoonmarkSync/CloudKitSyncEngineTransport.swift"
+session="Sources/NoonmarkSync/CloudKitSyncSession.swift"
+download="Sources/NoonmarkStorage/SQLiteSyncDownloadCoordinator.swift"
+sync_repository="Sources/NoonmarkStorage/SQLiteSyncRepository.swift"
+
+rg -F 'func pushAccepting(' "$protocol" >/dev/null ||
+  fail "transport has no durable acceptance receipt"
+rg -F 'func pull(' "$protocol" >/dev/null ||
+  fail "transport has no frontier-based pull"
+rg -F 'func confirmationStatus(' "$protocol" >/dev/null ||
+  fail "transport has no separate upload confirmation"
+
+if rg -F 'transport.fetchAll' "$coordinator" >/dev/null; then
+  fail "steady-state coordinator still fetches the complete endpoint"
+fi
+rg -F 'unfinishedJournalEntryCount()' "$coordinator" >/dev/null ||
+  fail "steady-state coordinator still materializes the complete journal"
+if rg -F 'WHERE (? IS NULL OR sync_state = ?)' "$sync_repository" >/dev/null; then
+  fail "state-filtered outbox reads still defeat the journal state index"
+fi
+for legacy in recordsURL indexesURL latestRefURL storedRepositoryState repairDerivedArtifacts; do
+  if rg -F "$legacy" "$folder" >/dev/null; then
+    fail "Local Folder still contains legacy full-mirror primitive: $legacy"
+  fi
+done
+rg -F 'appendingPathComponent("heads", isDirectory: true)' "$folder" >/dev/null ||
+  fail "Local Folder has no per-producer head layout"
+rg -F 'appendingPathComponent("batches", isDirectory: true)' "$folder" >/dev/null ||
+  fail "Local Folder has no immutable batch layout"
+rg -F 'bodyHash' "$folder" >/dev/null ||
+  fail "paged batches have no pre-apply semantic integrity check"
+
+if rg -F 'return try await session.records()' "$cloudkit" >/dev/null; then
+  fail "CloudKit transport still returns its complete mirror"
+fi
+rg -F 'session.pullInbox(' "$cloudkit" >/dev/null ||
+  fail "CloudKit transport does not page its durable inbox"
+rg -F 'nextInboxSequence' "$session" >/dev/null ||
+  fail "CloudKit receipt cursor is not durable"
+rg -F 'deferredFetchEngineState' "$cloudkit" >/dev/null ||
+  fail "CloudKit can persist a fetch receipt before Inbox evidence"
+rg -F 'frontierMetadata:' "$download" >/dev/null ||
+  fail "download frontier is not committed with the domain merge"
+
+echo "Incremental sync contract passed"

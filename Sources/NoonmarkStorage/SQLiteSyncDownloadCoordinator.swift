@@ -24,6 +24,7 @@ public struct SQLiteSyncDownloadResult: Codable, Equatable, Sendable {
 struct SQLiteSyncDownloadObservation {
     var result: SQLiteSyncDownloadResult
     var fetchedRecords: [SyncRecord]
+    var hasMoreRemoteChanges: Bool
 }
 
 public final class SQLiteSyncDownloadCoordinator {
@@ -66,17 +67,39 @@ public final class SQLiteSyncDownloadCoordinator {
     }
 
     func downloadAndMergeObservingRecords(
-        detectedAt: Date
+        detectedAt: Date,
+        limit: Int = 100
     ) async throws -> SQLiteSyncDownloadObservation {
+        let frontier = try loadFrontier()
+        let page = try await transport.pull(
+            after: frontier,
+            limit: max(limit, 1)
+        )
+        let observation = try downloadAndMergeObservingPage(
+            page,
+            detectedAt: detectedAt
+        )
+        try await transport.acknowledge(page.frontier)
+        return observation
+    }
+
+    func downloadAndMergeObservingPage(
+        _ page: SyncTransportChangePage,
+        detectedAt: Date
+    ) throws -> SQLiteSyncDownloadObservation {
         let pending = try syncRepository.pendingDownloads()
         let terminalRejections = try syncRepository
             .terminalRejectionEvidence()
-        let fetchedRecords = try await transport.fetchAll()
         return try downloadAndMergeObservation(
             pending: pending,
             terminalRejections: terminalRejections,
-            fetchedRecords: fetchedRecords,
-            detectedAt: detectedAt
+            fetchedRecords: page.records,
+            detectedAt: detectedAt,
+            frontierMetadata: try frontierMetadata(
+                page.frontier,
+                updatedAt: detectedAt
+            ),
+            hasMoreRemoteChanges: page.hasMore
         )
     }
 
@@ -91,7 +114,9 @@ public final class SQLiteSyncDownloadCoordinator {
             pending: pending,
             terminalRejections: terminalRejections,
             fetchedRecords: fetchedRecords,
-            detectedAt: detectedAt
+            detectedAt: detectedAt,
+            frontierMetadata: nil,
+            hasMoreRemoteChanges: false
         )
     }
 
@@ -99,17 +124,21 @@ public final class SQLiteSyncDownloadCoordinator {
         pending: [SyncPendingDownloadRecord],
         terminalRejections: [SyncTerminalRejection],
         fetchedRecords: [SyncRecord],
-        detectedAt: Date
+        detectedAt: Date,
+        frontierMetadata: SyncMetadataEntry?,
+        hasMoreRemoteChanges: Bool
     ) throws -> SQLiteSyncDownloadObservation {
         let result = try downloadAndMerge(
             pending: pending,
             terminalRejections: terminalRejections,
             fetchedRecords: fetchedRecords,
-            detectedAt: detectedAt
+            detectedAt: detectedAt,
+            frontierMetadata: frontierMetadata
         )
         return SQLiteSyncDownloadObservation(
             result: result,
-            fetchedRecords: fetchedRecords
+            fetchedRecords: fetchedRecords,
+            hasMoreRemoteChanges: hasMoreRemoteChanges
         )
     }
 
@@ -117,16 +146,24 @@ public final class SQLiteSyncDownloadCoordinator {
         pending: [SyncPendingDownloadRecord],
         terminalRejections: [SyncTerminalRejection],
         fetchedRecords: [SyncRecord],
-        detectedAt: Date
+        detectedAt: Date,
+        frontierMetadata: SyncMetadataEntry?
     ) throws -> SQLiteSyncDownloadResult {
         let records = combinedRecords(
             pending: pending.map(\.record),
             fetched: fetchedRecords
         )
         guard records.isEmpty == false else {
-            try syncRepository.saveMetadata(
-                try downloadMetadata(fetchedCount: 0, detectedAt: detectedAt)
-            )
+            var metadata = [
+                try downloadMetadata(
+                    fetchedCount: 0,
+                    detectedAt: detectedAt
+                )
+            ]
+            if let frontierMetadata {
+                metadata.append(frontierMetadata)
+            }
+            try syncRepository.saveMetadata(metadata)
             return SQLiteSyncDownloadResult(
                 fetchedCount: 0,
                 appliedCount: 0,
@@ -193,6 +230,7 @@ public final class SQLiteSyncDownloadCoordinator {
                     fetchedCount: fetchedRecords.count,
                     detectedAt: detectedAt
                 ),
+                frontierMetadata: frontierMetadata,
                 attemptedAt: detectedAt
             )
         )
@@ -202,6 +240,39 @@ public final class SQLiteSyncDownloadCoordinator {
             appliedCount: mergeResult.appliedRecordIDs.count,
             waitingCount: durableWaitingCount,
             conflictCount: mergeResult.conflicts.count
+        )
+    }
+
+    private var frontierMetadataKey: String {
+        "generic.download.frontier.\(transport.frontierNamespace)"
+    }
+
+    private func loadFrontier() throws -> SyncTransportFrontier {
+        guard let metadata = try syncRepository.metadata(
+            for: frontierMetadataKey
+        ) else { return .origin }
+        do {
+            return try JSONDecoder().decode(
+                SyncTransportFrontier.self,
+                from: metadata.value
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync transport frontier is invalid"
+            )
+        }
+    }
+
+    private func frontierMetadata(
+        _ frontier: SyncTransportFrontier,
+        updatedAt: Date
+    ) throws -> SyncMetadataEntry {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return SyncMetadataEntry(
+            key: frontierMetadataKey,
+            value: try encoder.encode(frontier),
+            updatedAt: updatedAt
         )
     }
 

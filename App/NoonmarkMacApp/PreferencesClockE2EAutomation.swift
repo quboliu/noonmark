@@ -55,6 +55,10 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
+    private struct IncrementalRepositoryBatch: Decodable {
+        let records: [SyncRecord]
+    }
+
     private struct StoredRepositorySnapshot {
         let snapshot: SyncRepositorySnapshot
         let data: Data
@@ -502,7 +506,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         guard syncResult.upload.pendingCount == 2,
               syncResult.upload.uploadedCount == 2,
               syncResult.upload.failedCount == 0,
-              syncResult.download.fetchedCount == 1,
+              syncResult.download.fetchedCount == 2,
               syncResult.download.appliedCount == 0,
               syncResult.download.waitingCount == 0,
               syncResult.download.conflictCount == 0
@@ -527,7 +531,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                       && $0.lastError == nil
               }),
               try preferenceJournalEntries(state: .pendingUpload).isEmpty,
-              try preferenceJournalEntries(state: .failed).isEmpty
+              try preferenceJournalEntries(state: .blockedCorruption).isEmpty
         else {
             throw Failure.failed(
                 "preference journals remained pending or failed after one sync"
@@ -605,17 +609,17 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         let uploadAudit = preferenceAudit.filter {
             $0.direction == .upload && $0.action == "uploaded"
         }
-        guard preferenceAudit.count == 4,
+        guard preferenceAudit.count == 5,
               uploadAudit.count == 2,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "merged"
               }).count == 1,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "ignored"
-              }).count == 1
+              }).count == 2
         else {
             throw Failure.failed(
-                "preference sync audit did not record one merge, one replay ignore, "
+                "preference sync audit did not record one merge, two replay ignores, "
                     + "and two uploads"
             )
         }
@@ -677,9 +681,14 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         }
 
-        let transport = LocalFolderSyncTransport(rootURL: syncFolderURL)
-        let staleRecord = try await storedPreferenceRecord(
-            transport: transport,
+        let expectedStaleRecord = try preferenceRecord(
+            theme: Self.remoteTheme,
+            language: Self.remoteLanguage,
+            clock: date(from: state.remoteClockBits),
+            deviceID: Self.remoteDeviceID
+        )
+        let staleRecord = try storedExactPreferenceRecord(
+            expected: expectedStaleRecord,
             artifactName: "stale-remote-before-restart-sync.json"
         )
         guard staleRecord.sha256 == state.remoteRecordSHA256 else {
@@ -696,8 +705,8 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
 
         let syncResult = try await synchronize(store)
-        guard syncResult.upload.pendingCount == 1,
-              syncResult.upload.uploadedCount == 1,
+        guard syncResult.upload.pendingCount == 0,
+              syncResult.upload.uploadedCount == 0,
               syncResult.upload.failedCount == 0,
               syncResult.download.fetchedCount == 1,
               syncResult.download.appliedCount == 0,
@@ -719,33 +728,29 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         )
         entries = try preferenceJournalEntries()
-        try assertFinalJournal(
-            entries,
-            state: state,
-            expectedCount: 3
-        )
+        try assertFinalJournal(entries, state: state)
 
         let preferenceAudit = try appPreferencesAuditEntries()
-        guard preferenceAudit.count == final.auditCountAfterExercise + 2,
+        guard preferenceAudit.count == final.auditCountAfterExercise + 1,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "ignored"
-              }).count == 2,
+              }).count == 3,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "merged"
               }).count == 1,
               preferenceAudit.filter({
                   $0.direction == .upload
-              }).count == 3
+              }).count == 2
         else {
             throw Failure.failed(
-                "restart stale remote was not replaced by one complete "
-                    + "baseline upload and one ignored download"
+                "restart stale remote did not remain an ignored "
+                    + "incremental fact"
             )
         }
         try appendTrace(
             "restart stale=\(state.remoteClockBits) "
                 + "winner=\(final.languageClockBits) "
-                + "journal=uploaded,uploaded baseline=republished "
+                + "journal=uploaded,uploaded baseline=retained "
                 + "local-only=retained"
         )
         try await assertFailClosedBaselineWarning(on: store)
@@ -1507,18 +1512,15 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
 
     private func assertFinalJournal(
         _ entries: [SyncJournalEntry],
-        state: ProbeState,
-        expectedCount: Int = 2
+        state: ProbeState
     ) throws {
         let final = try validateExerciseState(state)
-        guard [2, 3].contains(expectedCount),
-              entries.count == expectedCount,
+        guard entries.count == 2,
               try preferenceJournalEntries(state: .pendingUpload).isEmpty,
-              try preferenceJournalEntries(state: .failed).isEmpty
+              try preferenceJournalEntries(state: .blockedCorruption).isEmpty
         else {
             throw Failure.failed(
-                "final preference journal did not contain "
-                    + "\(expectedCount) uploaded rows"
+                "final preference journal did not contain two uploaded rows"
             )
         }
         let themeEntries = entries.filter {
@@ -1554,24 +1556,6 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             clock: date(from: final.languageClockBits),
             state: .uploaded
         )
-        if expectedCount == 3 {
-            let baselineEntries = entries.filter {
-                $0.id != themeEntry.id && $0.id != languageEntry.id
-            }
-            guard baselineEntries.count == 1 else {
-                throw Failure.failed(
-                    "republished preference baseline was not unique"
-                )
-            }
-            let baselineEntry = baselineEntries[0]
-            _ = try assertPreferenceJournalEntry(
-                baselineEntry,
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: date(from: final.languageClockBits),
-                state: .uploaded
-            )
-        }
     }
 
     private func uniqueJournalEntry(
@@ -1635,35 +1619,28 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         }
 
-        let recordsURL = syncFolderURL.appendingPathComponent(
-            "records",
-            isDirectory: true
+        return try storedExactPreferenceRecord(
+            expected: fetchedRecord,
+            artifactName: artifactName
         )
-        let files = try FileManager.default.contentsOfDirectory(
-            at: recordsURL,
-            includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "json" }
-        let decoder = JSONDecoder()
-        let matches = try files.compactMap { url -> StoredPreferenceRecord? in
-            let data = try Data(contentsOf: url)
-            let record = try decoder.decode(SyncRecord.self, from: data)
-            guard record.id == SyncRecordID("preferences:default") else {
-                return nil
-            }
-            return StoredPreferenceRecord(record: record, data: data)
+    }
+
+    private func storedExactPreferenceRecord(
+        expected: SyncRecord,
+        artifactName: String
+    ) throws -> StoredPreferenceRecord {
+        let matches = try repositoryPreferenceRecords().filter {
+            $0.exactlyMatches(expected)
         }
-        guard matches.count == 1, let stored = matches.first,
-              stored.record == fetchedRecord,
-              hasSameBits(
-                  stored.record.modifiedAt,
-                  fetchedRecord.modifiedAt
-              )
-        else {
+        guard let storedRecord = matches.first else {
             throw Failure.failed(
-                "real local-folder record bytes diverged from fetchAll"
+                "incremental repository does not contain exact preference evidence"
             )
         }
-
+        let stored = StoredPreferenceRecord(
+            record: storedRecord,
+            data: try canonicalTransportRecordData(storedRecord)
+        )
         let artifactURL = resultURL.deletingLastPathComponent()
             .appendingPathComponent(artifactName)
         try FileManager.default.createDirectory(
@@ -1674,54 +1651,64 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         return stored
     }
 
+    private func repositoryPreferenceRecords() throws -> [SyncRecord] {
+        let batchRoot = syncFolderURL.appendingPathComponent(
+            "batches",
+            isDirectory: true
+        )
+        let producerDirectories = try FileManager.default
+            .contentsOfDirectory(
+                at: batchRoot,
+                includingPropertiesForKeys: nil
+            )
+        let batchFiles = try producerDirectories.flatMap { producer in
+            try FileManager.default.contentsOfDirectory(
+                at: producer,
+                includingPropertiesForKeys: nil
+            ).filter { $0.pathExtension == "json" }
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let seconds = Double(
+                bitPattern: try container.decode(UInt64.self)
+            )
+            guard seconds.isFinite else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "non-finite incremental date"
+                )
+            }
+            return Date(timeIntervalSinceReferenceDate: seconds)
+        }
+        return try batchFiles.flatMap { file in
+            try decoder.decode(
+                IncrementalRepositoryBatch.self,
+                from: Data(contentsOf: file)
+            ).records.filter {
+                $0.entityType == .appPreferences
+                    && $0.id == SyncRecordID("preferences:default")
+            }
+        }
+    }
+
     private func storedLatestSnapshot(
         transport: LocalFolderSyncTransport,
         artifactName: String
     ) async throws -> StoredRepositorySnapshot {
         let fetchedSnapshots = try await transport.fetchSnapshots()
-        let latestRefURL = syncFolderURL
-            .appendingPathComponent("refs", isDirectory: true)
-            .appendingPathComponent("latest")
-        let latestID = try String(
-            contentsOf: latestRefURL,
-            encoding: .utf8
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let fetched = fetchedSnapshots.filter { $0.id == latestID }
-        guard fetched.count == 1, let fetchedSnapshot = fetched.first else {
+        guard let fetchedSnapshot = fetchedSnapshots.last else {
             throw Failure.failed(
-                "local-folder latest ref did not resolve to one snapshot"
+                "local-folder incremental repository has no snapshot evidence"
             )
         }
-
-        let indexesURL = syncFolderURL.appendingPathComponent(
-            "indexes",
-            isDirectory: true
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let stored = StoredRepositorySnapshot(
+            snapshot: fetchedSnapshot,
+            data: try encoder.encode(fetchedSnapshot)
         )
-        let files = try FileManager.default.contentsOfDirectory(
-            at: indexesURL,
-            includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "json" }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let matches = try files.compactMap { url -> StoredRepositorySnapshot? in
-            let data = try Data(contentsOf: url)
-            let snapshot = try decoder.decode(
-                SyncRepositorySnapshot.self,
-                from: data
-            )
-            guard snapshot.id == latestID else { return nil }
-            return StoredRepositorySnapshot(
-                snapshot: snapshot,
-                data: data
-            )
-        }
-        guard matches.count == 1, let stored = matches.first,
-              stored.snapshot == fetchedSnapshot
-        else {
-            throw Failure.failed(
-                "real local-folder latest snapshot bytes diverged from fetchSnapshots"
-            )
-        }
 
         let artifactURL = resultURL.deletingLastPathComponent()
             .appendingPathComponent(artifactName)
@@ -1729,24 +1716,42 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         return stored
     }
 
+    private func canonicalTransportRecordData(
+        _ record: SyncRecord
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(
+                date.timeIntervalSinceReferenceDate.bitPattern
+            )
+        }
+        return try encoder.encode(record)
+    }
+
     private func replaceTransportWithStaleRemote(
         expectedSHA256: String
     ) async throws {
         try validateSyncFolderForReplacement()
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: syncFolderURL.path) {
-            try fileManager.removeItem(at: syncFolderURL)
-        }
         let remoteRecord = try preferenceRecord(
             theme: Self.remoteTheme,
             language: Self.remoteLanguage,
             clock: try instant("2035-07-05T16:00:00Z"),
             deviceID: Self.remoteDeviceID
         )
-        let transport = LocalFolderSyncTransport(rootURL: syncFolderURL)
+        guard let remoteProducerEpoch = UUID(
+            uuidString: "E0000000-0000-0000-0000-000000000005"
+        ) else {
+            throw Failure.failed("invalid remote producer fixture identity")
+        }
+        let transport = LocalFolderSyncTransport(
+            rootURL: syncFolderURL,
+            producerEpochID: remoteProducerEpoch
+        )
         try await transport.push([remoteRecord])
-        let stored = try await storedPreferenceRecord(
-            transport: transport,
+        let stored = try storedExactPreferenceRecord(
+            expected: remoteRecord,
             artifactName: "stale-remote-reintroduced.json"
         )
         guard stored.sha256 == expectedSHA256 else {

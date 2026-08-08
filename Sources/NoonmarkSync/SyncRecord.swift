@@ -331,8 +331,10 @@ public struct SyncDeviceIdentity: Codable, Equatable, Sendable {
 
 public enum SyncChangeState: String, Codable, Hashable, Sendable {
     case pendingUpload
+    case publishedLocal
     case uploaded
-    case failed
+    case blockedUserAttention
+    case blockedCorruption
 }
 
 public struct SyncJournalEntry: Codable, Equatable, Sendable {
@@ -347,6 +349,7 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         case retryCount
         case lastError
         case recordPayload
+        case transportReceipt
     }
 
     public var id: UUID
@@ -363,6 +366,10 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
     /// app-preferences 每一次 mutation 当时的 ordinary current-record payload。
     /// 这项 journal 约束不等于 transport immutable CAS 约束。
     public var recordPayload: Data?
+    /// Opaque canonical `SyncTransportPushReceipt` bytes. Storage owns the
+    /// state transition; domain and diagnostics must never inspect payload or
+    /// repository paths through this field.
+    public var transportReceipt: Data?
 
     public init(
         id: UUID = UUID(),
@@ -374,7 +381,8 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         state: SyncChangeState = .pendingUpload,
         retryCount: Int = 0,
         lastError: String? = nil,
-        recordPayload: Data? = nil
+        recordPayload: Data? = nil,
+        transportReceipt: Data? = nil
     ) {
         precondition(
             Self.hasValidJournalPayloadShape(
@@ -382,6 +390,13 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
                 recordPayload: recordPayload
             ),
             "sync journal record payload shape is invalid"
+        )
+        precondition(
+            Self.hasValidTransportReceiptShape(
+                state: state,
+                transportReceipt: transportReceipt
+            ),
+            "published sync journal receipt is missing"
         )
         self.id = id
         self.entityType = entityType
@@ -393,6 +408,7 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         self.retryCount = retryCount
         self.lastError = lastError
         self.recordPayload = recordPayload
+        self.transportReceipt = transportReceipt
     }
 
     public init(from decoder: Decoder) throws {
@@ -415,10 +431,29 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
         operation = try container.decode(SyncOperation.self, forKey: .operation)
         changedAt = try container.decode(Date.self, forKey: .changedAt)
         deviceID = try container.decode(SyncDeviceID.self, forKey: .deviceID)
-        state = try container.decode(SyncChangeState.self, forKey: .state)
+        let state = try container.decode(
+            SyncChangeState.self,
+            forKey: .state
+        )
         retryCount = try container.decode(Int.self, forKey: .retryCount)
         lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
         self.recordPayload = recordPayload
+        let transportReceipt = try container.decodeIfPresent(
+            Data.self,
+            forKey: .transportReceipt
+        )
+        guard Self.hasValidTransportReceiptShape(
+            state: state,
+            transportReceipt: transportReceipt
+        ) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .transportReceipt,
+                in: container,
+                debugDescription: "published sync journal receipt is missing"
+            )
+        }
+        self.state = state
+        self.transportReceipt = transportReceipt
     }
 
     var hasValidJournalPayloadInvariant: Bool {
@@ -439,5 +474,12 @@ public struct SyncJournalEntry: Codable, Equatable, Sendable {
             return recordPayload == nil || recordPayload?.isEmpty == false
         }
         return recordPayload == nil
+    }
+
+    private static func hasValidTransportReceiptShape(
+        state: SyncChangeState,
+        transportReceipt: Data?
+    ) -> Bool {
+        state != .publishedLocal || transportReceipt?.isEmpty == false
     }
 }

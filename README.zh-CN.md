@@ -190,11 +190,11 @@ Sticky Note 是飞光条目的精选投影，不是副本：加入不复制正�
 | 捕获与导航 | 应用内 `⌘N`、全局任务速记 `⌃⇧N`、全局飞光速记 `⌃⇧I`、原生菜单、搜索、日期键盘导航与滑动 |
 | 数据 | SQLite、canonical JSON 数据包、写后回读、事务性导入与失败回滚 |
 | 诊断 | 有界本机诊断（4 MiB／7 天）、MetricKit 摘要、隐私过滤、用户主动导出 `.noonmarkdiagnostics`（单个导出包硬上限 8 MiB） |
-| 同步 | 显式启用的 iCloud Drive／本地文件夹逐记录同步、冲突与等待状态、真实任务变化计数、最近同步与最近有效同步时间 |
+| 同步 | 显式启用的 iCloud Drive／本地文件夹增量批次同步、上传确认、冲突与等待状态、真实任务变化计数、最近同步与最近有效同步时间 |
 | AI | OpenAI-compatible／本地／自定义 HTTP Provider seam、连接测试、流式会话、结构化产物、授权与回执 |
 | 国际化与外观 | 中文／English、冷灰／微暖纸感、macOS 原生亮色界面 |
 
-> 同步边界：S3 与 WebDAV 目前仍是规划中的端点；CloudKit `CKSyncEngine` adapter 已有实现边界，但在 provisioning、Production schema 和双物理设备 live 门禁完成前不作为默认用户路径。当前可用的 Apple 云路径是显式启用的 iCloud Drive 逐记录仓库。
+> 同步边界：S3 与 WebDAV 目前仍是规划中的端点；CloudKit `CKSyncEngine` adapter 已有实现边界，但在 provisioning、Production schema 和双物理设备 live 门禁完成前不作为默认用户路径。当前可用的 Apple 云路径是显式启用、以 immutable batch／head 和 durable frontier 运行的 iCloud Drive 增量仓库。
 
 ## 数据、隐私与 AI 边界
 

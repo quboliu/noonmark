@@ -3,6 +3,7 @@ set -euo pipefail
 
 scripts/test-unit
 scripts/test-integration
+scripts/test-incremental-sync-symptom
 scripts/test-system
 scripts/test-deterministic-sim
 scripts/test-e2e

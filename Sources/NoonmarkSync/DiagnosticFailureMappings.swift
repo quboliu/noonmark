@@ -17,6 +17,12 @@ extension SyncRecordTransportError: DiagnosticFailureProviding {
         case .immutableRecordCollision: 201
         case let .invalidCurrentRecordMerge(_, reason):
             reason.diagnosticCode
+        case .invalidFrontier: 203
+        case .frontierDidNotAdvance: 204
+        case .repositoryFormatMismatch: 205
+        case .producerFork: 206
+        case .missingBatch: 207
+        case .invalidBatchHash: 208
         }
         return DiagnosticFailure(domain: .syncProtocol, code: code)
     }

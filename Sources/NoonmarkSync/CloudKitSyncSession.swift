@@ -97,6 +97,9 @@ private actor CloudKitSyncSessionAccessGate {
 }
 
 actor CloudKitSyncSession {
+    nonisolated static let inboxProducerID = "cloudkit-inbox"
+    nonisolated static let inboxPositionHash = "cloudkit-receipt"
+
     private struct State {
         var scope: CloudKitSyncScopeIdentity?
         var mirror: CloudKitSyncMirror
@@ -104,6 +107,8 @@ actor CloudKitSyncSession {
         var accountRecordName: String?
         var zoneIsProvisioned: Bool
         var blockReason: CloudKitSyncBlockReason?
+        var nextInboxSequence: UInt64
+        var inbox: [CloudKitSyncInboxEntry]
     }
 
     private let persistence: any CloudKitSyncPersistence
@@ -143,6 +148,10 @@ actor CloudKitSyncSession {
             }
             var candidate = try await loadedState()
             let result = try candidate.mirror.mergeServer(mirrored)
+            try appendToInbox(
+                mirrored.map(\.record),
+                state: &candidate
+            )
             try await commit(candidate)
             return result.recordIDsNeedingUpload.map(codec.recordID(for:))
         }
@@ -168,6 +177,92 @@ actor CloudKitSyncSession {
     func records() async throws -> [SyncRecord] {
         try await withExclusiveAccess {
             try await loadedState().mirror.records
+        }
+    }
+
+    func pullInbox(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        try await withExclusiveAccess {
+            var candidate = try await loadedState()
+            let unknown = frontier.positions.keys.filter {
+                $0 != Self.inboxProducerID
+            }
+            guard unknown.isEmpty else {
+                throw SyncRecordTransportError.invalidFrontier
+            }
+            let position = frontier.position(for: Self.inboxProducerID)
+            let appliedSequence = position?.sequence ?? 0
+            let (nextRequestedSequence, overflow) = appliedSequence
+                .addingReportingOverflow(1)
+            let lowestAvailableSequence = candidate.inbox.first?.sequence
+                ?? candidate.nextInboxSequence
+            guard appliedSequence < candidate.nextInboxSequence,
+                  overflow == false,
+                  nextRequestedSequence >= lowestAvailableSequence,
+                  position == nil
+                    || appliedSequence > 0
+                    && position?.contentHash == Self.inboxPositionHash
+            else {
+                throw SyncRecordTransportError.invalidFrontier
+            }
+            let retained = candidate.inbox.filter {
+                $0.sequence > appliedSequence
+            }
+            if retained.count != candidate.inbox.count {
+                candidate.inbox = retained
+                try await commit(candidate)
+            }
+            let entries = Array(retained.prefix(max(limit, 1)))
+            let nextFrontier: SyncTransportFrontier
+            if let last = entries.last {
+                nextFrontier = frontier.advancing(
+                    producerID: Self.inboxProducerID,
+                    to: SyncTransportPosition(
+                        sequence: last.sequence,
+                        contentHash: Self.inboxPositionHash
+                    )
+                )
+            } else {
+                nextFrontier = frontier
+            }
+            return SyncTransportChangePage(
+                records: entries.map(\.record),
+                frontier: nextFrontier,
+                hasMore: retained.count > entries.count,
+                observedProducerCount: candidate.nextInboxSequence > 1
+                    ? 1
+                    : 0,
+                openedBatchCount: entries.count
+            )
+        }
+    }
+
+    func acknowledgeInbox(
+        _ frontier: SyncTransportFrontier
+    ) async throws {
+        try await withExclusiveAccess {
+            guard frontier.positions.keys.allSatisfy({
+                $0 == Self.inboxProducerID
+            }) else {
+                throw SyncRecordTransportError.invalidFrontier
+            }
+            guard let position = frontier.position(
+                for: Self.inboxProducerID
+            ) else { return }
+            var candidate = try await loadedState()
+            guard position.contentHash == Self.inboxPositionHash,
+                  position.sequence < candidate.nextInboxSequence
+            else {
+                throw SyncRecordTransportError.invalidFrontier
+            }
+            let retained = candidate.inbox.filter {
+                $0.sequence > position.sequence
+            }
+            guard retained.count != candidate.inbox.count else { return }
+            candidate.inbox = retained
+            try await commit(candidate)
         }
     }
 
@@ -204,7 +299,9 @@ actor CloudKitSyncSession {
                   candidate.accountRecordName == nil,
                   candidate.zoneIsProvisioned == false,
                   candidate.blockReason == nil,
-                  candidate.mirror.records.isEmpty
+                  candidate.mirror.records.isEmpty,
+                  candidate.nextInboxSequence == 1,
+                  candidate.inbox.isEmpty
             else {
                 throw CloudKitSyncPersistenceError.invalidSnapshot
             }
@@ -352,7 +449,9 @@ actor CloudKitSyncSession {
             engineState: snapshot.engineState,
             accountRecordName: snapshot.accountRecordName,
             zoneIsProvisioned: snapshot.zoneIsProvisioned,
-            blockReason: snapshot.blockReason
+            blockReason: snapshot.blockReason,
+            nextInboxSequence: snapshot.nextInboxSequence,
+            inbox: snapshot.inbox
         )
         state = loaded
         return loaded
@@ -364,9 +463,39 @@ actor CloudKitSyncSession {
             engineState: candidate.engineState,
             accountRecordName: candidate.accountRecordName,
             zoneIsProvisioned: candidate.zoneIsProvisioned,
-            blockReason: candidate.blockReason
+            blockReason: candidate.blockReason,
+            nextInboxSequence: candidate.nextInboxSequence,
+            inbox: candidate.inbox
         )
         try await persistence.save(snapshot)
         state = candidate
+    }
+
+    private func appendToInbox(
+        _ records: [SyncRecord],
+        state: inout State
+    ) throws {
+        var knownEvidence = Set(
+            state.inbox.map {
+                SyncRecordEvidenceID(record: $0.record)
+            }
+        )
+        for record in records {
+            guard knownEvidence.insert(
+                SyncRecordEvidenceID(record: record)
+            ).inserted else { continue }
+            let sequence = state.nextInboxSequence
+            let (next, overflow) = sequence.addingReportingOverflow(1)
+            guard sequence > 0, overflow == false else {
+                throw CloudKitSyncPersistenceError.invalidSnapshot
+            }
+            state.inbox.append(
+                CloudKitSyncInboxEntry(
+                    sequence: sequence,
+                    record: record
+                )
+            )
+            state.nextInboxSequence = next
+        }
     }
 }

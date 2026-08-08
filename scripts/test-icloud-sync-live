@@ -49,8 +49,10 @@ if [[ "$sync_metadata_count" -ne 1 ]]; then
 fi
 
 icloud_repository="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Noonmark-E2E/SyncRepository"
-if [[ ! -s "$icloud_repository/refs/latest" ]]; then
-  echo "real App iCloud repository latest ref is missing" >&2
+head_count="$(find "$icloud_repository/heads" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
+batch_count="$(find "$icloud_repository/batches" -mindepth 2 -maxdepth 2 -type f -name '*.json' | wc -l | tr -d ' ')"
+if [[ "$head_count" -lt 1 || "$batch_count" -lt 1 ]]; then
+  echo "real App iCloud incremental head or batch is missing" >&2
   exit 1
 fi
 
@@ -60,4 +62,4 @@ if ! grep -q "all items are now uploaded" "$upload_log"; then
   exit 1
 fi
 
-echo "Live iCloud sync: coordinator merge, real App path, persisted status, and CloudDocs upload confirmed"
+echo "Live iCloud sync: incremental merge, real App path, persisted status, and CloudDocs batch/head upload confirmed"

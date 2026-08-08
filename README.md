@@ -190,11 +190,11 @@ Privacy settings spell out Provider requests, remote send scopes, Todo write con
 | Capture and navigation | In-app `⌘N`, global task capture `⌃⇧N`, global Flylight capture `⌃⇧I`, native menus, search, keyboard date navigation and swipes |
 | Data | SQLite, canonical JSON packages, read-after-write verification, transactional import with rollback |
 | Diagnostics | Bounded on-device diagnostics (4 MiB / 7 days), MetricKit summaries, privacy filtering, user-initiated `.noonmarkdiagnostics` export (8 MiB hard cap per package) |
-| Sync | Explicitly enabled iCloud Drive / local-folder per-record sync, conflict and waiting states, real task change counts, last-sync and last-good-sync times |
+| Sync | Explicitly enabled iCloud Drive / local-folder incremental batches, upload confirmation, conflict and waiting states, real task change counts, last-sync and last-good-sync times |
 | AI | OpenAI-compatible / local / custom HTTP Provider seam, connection test, streaming sessions, structured artifacts, authorization and receipts |
 | i18n and appearance | Chinese / English, cool gray / warm paper, native light-mode macOS UI |
 
-> Sync boundary: S3 and WebDAV remain planned endpoints; the CloudKit `CKSyncEngine` adapter has an implementation boundary but is not a default user path until provisioning, the Production schema, and a dual-device live gate are complete. The Apple cloud path available today is the explicitly enabled iCloud Drive per-record repository.
+> Sync boundary: S3 and WebDAV remain planned endpoints; the CloudKit `CKSyncEngine` adapter has an implementation boundary but is not a default user path until provisioning, the Production schema, and a dual-device live gate are complete. The Apple cloud path available today is the explicitly enabled iCloud Drive incremental repository built from immutable batches, per-producer heads, and durable frontiers.
 
 ## Data, privacy, and AI boundaries
 

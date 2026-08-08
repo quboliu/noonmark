@@ -1,4 +1,5 @@
 import CloudKit
+import CryptoKit
 import Foundation
 
 enum CloudKitRecordSaveFailureDisposition: Equatable {
@@ -49,6 +50,7 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
 
     public let containerIdentifier: String
     public let zoneID: CKRecordZone.ID
+    public nonisolated let frontierNamespace: String
 
     private let session: CloudKitSyncSession
     private let automaticallySync: Bool
@@ -56,6 +58,10 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     private var runtimeEnvironment: CloudKitSyncEnvironment?
     private var syncEngine: CKSyncEngine?
     private var operationFailure: (any Error)?
+    private var fetchIsInProgress = false
+    private var deferredFetchEngineState:
+        CKSyncEngine.State.Serialization?
+    private var fetchPersistenceFailed = false
 
     public init(
         containerIdentifier: String,
@@ -80,6 +86,9 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
 
         self.containerIdentifier = trimmedContainerID
         zoneID = CKRecordZone.ID(zoneName: trimmedZoneName)
+        frontierNamespace = "cloudkit-" + SHA256.hash(
+            data: Data("\(trimmedContainerID)/\(trimmedZoneName)".utf8)
+        ).map { String(format: "%02x", $0) }.joined()
         self.automaticallySync = automaticallySync
         session = CloudKitSyncSession(
             persistence: persistence,
@@ -96,8 +105,15 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
         }
     }
 
-    public func push(_ records: [SyncRecord]) async throws {
-        guard records.isEmpty == false else { return }
+    public func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        guard records.isEmpty == false else {
+            return SyncTransportPushReceipt(
+                batches: [],
+                confirmation: .confirmed
+            )
+        }
         let engine = try await preparedEngine()
         let recordIDs = try await session.stageLocal(records)
         try await enqueueZoneIfNeeded(on: engine)
@@ -123,9 +139,16 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
                 "one or more records remain pending after manual send"
             )
         }
+        return SyncTransportPushReceipt(
+            batches: [],
+            confirmation: .confirmed
+        )
     }
 
-    public func fetchAll() async throws -> [SyncRecord] {
+    public func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
         let engine = try await preparedEngine()
         try await enqueueZoneIfNeeded(on: engine)
         operationFailure = nil
@@ -135,16 +158,30 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
                     scope: .zoneIDs([zoneID])
                 )
             )
+            beginFetchEventSequence()
             try await engine.fetchChanges(
                 CKSyncEngine.FetchChangesOptions(
                     scope: .zoneIDs([zoneID])
                 )
             )
+            if fetchIsInProgress {
+                try await finishFetchEventSequence()
+            }
         } catch {
+            discardDeferredFetchState()
             throw translatedCloudKitError(error)
         }
         try throwOperationFailureIfPresent()
-        return try await session.records()
+        return try await session.pullInbox(
+            after: frontier,
+            limit: max(limit, 1)
+        )
+    }
+
+    public func acknowledge(
+        _ frontier: SyncTransportFrontier
+    ) async throws {
+        try await session.acknowledgeInbox(frontier)
     }
 
     public func deleteLiveValidationZone() async throws {
@@ -266,6 +303,9 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
     }
 
     private func recordOperationFailure(_ error: Error) {
+        if fetchIsInProgress {
+            fetchPersistenceFailed = true
+        }
         if let error = error as? CloudKitSyncEngineTransportError {
             operationFailure = error
         } else if error is SyncRecordTransportError {
@@ -278,6 +318,40 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
                 String(describing: error)
             )
         }
+    }
+
+    private func beginFetchEventSequence() {
+        fetchIsInProgress = true
+        deferredFetchEngineState = nil
+        fetchPersistenceFailed = false
+    }
+
+    private func recordEngineState(
+        _ serialization: CKSyncEngine.State.Serialization
+    ) async throws {
+        guard fetchIsInProgress else {
+            try await session.updateEngineState(serialization)
+            return
+        }
+        deferredFetchEngineState = serialization
+    }
+
+    private func finishFetchEventSequence() async throws {
+        let deferredState = deferredFetchEngineState
+        let canAdvanceReceipt = fetchPersistenceFailed == false
+        discardDeferredFetchState()
+        if canAdvanceReceipt, let deferredState {
+            // Every fetched record has already entered the durable Inbox.
+            // Persisting the CKSyncEngine receipt afterwards makes a crash
+            // replay changes instead of skipping unapplied evidence.
+            try await session.updateEngineState(deferredState)
+        }
+    }
+
+    private func discardDeferredFetchState() {
+        fetchIsInProgress = false
+        deferredFetchEngineState = nil
+        fetchPersistenceFailed = false
     }
 
     private func translatedCloudKitError(
@@ -305,7 +379,7 @@ extension CloudKitSyncEngineTransport: CKSyncEngineDelegate {
         do {
             switch event {
             case let .stateUpdate(event):
-                try await session.updateEngineState(event.stateSerialization)
+                try await recordEngineState(event.stateSerialization)
             case let .accountChange(event):
                 try await handleAccountChange(event, syncEngine: syncEngine)
             case let .fetchedDatabaseChanges(event):
@@ -322,9 +396,13 @@ extension CloudKitSyncEngineTransport: CKSyncEngineDelegate {
                     event,
                     syncEngine: syncEngine
                 )
-            case .willFetchChanges, .willFetchRecordZoneChanges,
-                 .didFetchRecordZoneChanges, .didFetchChanges,
-                 .willSendChanges, .didSendChanges:
+            case .willFetchChanges:
+                beginFetchEventSequence()
+            case .didFetchChanges:
+                try await finishFetchEventSequence()
+            case .willFetchRecordZoneChanges,
+                 .didFetchRecordZoneChanges, .willSendChanges,
+                 .didSendChanges:
                 break
             @unknown default:
                 recordOperationFailure(

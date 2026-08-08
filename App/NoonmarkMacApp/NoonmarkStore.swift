@@ -1079,6 +1079,7 @@ final class NoonmarkStore: ObservableObject {
     )
     let toastScheduler = LatestTransientMessageScheduler()
     var localFirstSyncAutomationTask: Task<Void, Never>?
+    var localFirstSyncConfirmationRetryCount = 0
     var automaticClassificationWorkerTask: Task<Void, Never>?
     var automaticClassificationWorkerRestartRequested = false
     var pendingAutomaticClassificationProviderReconciliation:

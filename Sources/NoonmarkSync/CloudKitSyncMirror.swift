@@ -84,7 +84,9 @@ public struct CloudKitSyncMirror {
         engineState: Data?,
         accountRecordName: String?,
         zoneIsProvisioned: Bool = false,
-        blockReason: CloudKitSyncBlockReason? = nil
+        blockReason: CloudKitSyncBlockReason? = nil,
+        nextInboxSequence: UInt64 = 1,
+        inbox: [CloudKitSyncInboxEntry] = []
     ) throws -> CloudKitSyncPersistenceSnapshot {
         try CloudKitSyncPersistenceSnapshot(
             scope: scope,
@@ -92,6 +94,8 @@ public struct CloudKitSyncMirror {
             accountRecordName: accountRecordName,
             zoneIsProvisioned: zoneIsProvisioned,
             blockReason: blockReason,
+            nextInboxSequence: nextInboxSequence,
+            inbox: inbox,
             records: Array(recordsByID.values)
         )
     }

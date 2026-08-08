@@ -92,6 +92,35 @@ final class SQLiteCloudKitSyncPersistenceTests: XCTestCase {
         }
     }
 
+    func testSnapshotRejectsAGapInDurableCloudKitInbox() {
+        XCTAssertThrowsError(
+            try CloudKitSyncPersistenceSnapshot(
+                nextInboxSequence: 4,
+                inbox: [
+                    CloudKitSyncInboxEntry(
+                        sequence: 1,
+                        record: makeRecord(
+                            id: "trace:first",
+                            seconds: 1
+                        )
+                    ),
+                    CloudKitSyncInboxEntry(
+                        sequence: 3,
+                        record: makeRecord(
+                            id: "trace:third",
+                            seconds: 3
+                        )
+                    )
+                ]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CloudKitSyncPersistenceError,
+                .invalidSnapshot
+            )
+        }
+    }
+
     func testInvalidatedLeaseBlocksAnOldTransportFromReadingOrWriting() async throws {
         let databaseURL = temporaryDatabaseURL()
         defer { removeDatabase(at: databaseURL) }

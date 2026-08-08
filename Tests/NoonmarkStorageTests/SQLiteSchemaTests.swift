@@ -67,7 +67,7 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 17)
+        XCTAssertEqual(SQLiteSchema.version, 18)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
@@ -173,6 +173,15 @@ final class SQLiteSchemaTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS change_journal"))
         XCTAssertTrue(schema.contains("theme_language_writer_id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("record_payload BLOB"))
+        XCTAssertTrue(schema.contains("transport_receipt BLOB"))
+        XCTAssertTrue(compactChangeJournalTable.contains(
+            "sync_state IN ( 'pendingUpload', 'publishedLocal', 'uploaded', "
+                + "'blockedUserAttention', 'blockedCorruption' )"
+        ))
+        XCTAssertTrue(compactChangeJournalTable.contains(
+            "sync_state != 'publishedLocal' OR ( transport_receipt IS NOT NULL "
+                + "AND length(transport_receipt) > 0 )"
+        ))
         XCTAssertTrue(schema.contains(
             "changed_at_bits INTEGER NOT NULL CHECK (typeof(changed_at_bits) = 'integer')"
         ))
@@ -475,7 +484,7 @@ final class SQLiteSchemaTests: XCTestCase {
         )
     }
 
-    func testVersion15StoreMigratesInPlaceWithoutLosingDataOrSyncJournal() throws {
+    func testVersion15StorePreservesDomainDataAndCleanCutsSyncRuntime() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("noonmark-v15-upgrade-\(UUID().uuidString)")
@@ -511,13 +520,106 @@ final class SQLiteSchemaTests: XCTestCase {
             try integerScalar("PRAGMA user_version", at: databaseURL),
             SQLiteSchema.version
         )
-        XCTAssertEqual(try syncRepository.journalEntries(), [journalEntry])
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'idea_entries'",
                 at: databaseURL
             ),
             1
+        )
+    }
+
+    func testVersion17StorePreservesDomainAndDeviceIdentityWhileCleanCuttingSyncRuntime()
+        throws
+    {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-v17-upgrade-\(UUID().uuidString)"
+            )
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "v17 升级后必须保留的任务",
+            now: now
+        )
+        try repository.save(engine)
+
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let identity = SyncDeviceIdentity(
+            deviceID: SyncDeviceID("v17-device"),
+            displayName: "v17 Mac",
+            createdAt: now
+        )
+        try syncRepository.saveDeviceIdentity(identity)
+        try syncRepository.appendJournalEntry(
+            SyncJournalEntry(
+                entityType: .taskChain,
+                entityID: chainID.description,
+                changedAt: now,
+                deviceID: identity.deviceID
+            )
+        )
+        try syncRepository.saveMetadata(
+            SyncMetadataEntry(
+                key: "legacy.sync.runtime",
+                value: Data("old-format".utf8),
+                updatedAt: now
+            )
+        )
+        let conflictID = UUID().uuidString
+        let rejectedEntityID = UUID().uuidString
+        try executeSQL(
+            """
+            INSERT INTO sync_conflicts(
+                id, conflict_type, entity_type, entity_id,
+                remote_record_id, remote_payload, detected_at, resolution
+            ) VALUES (
+                '\(conflictID)', 'identityCollision',
+                'classificationCommit', '\(rejectedEntityID)',
+                'legacy-record', X'01', '2027-01-15T08:00:00Z',
+                'unresolved'
+            );
+            INSERT INTO sync_terminal_rejections(
+                entity_type, entity_id, conflict_id
+            ) VALUES (
+                'classificationCommit', '\(rejectedEntityID)',
+                '\(conflictID)'
+            );
+            """,
+            at: databaseURL
+        )
+        try downgradeDatabaseToVersion17(at: databaseURL)
+
+        let upgraded = try repository.load()
+
+        XCTAssertEqual(upgraded.snapshot(), engine.snapshot())
+        XCTAssertEqual(
+            try integerScalar("PRAGMA user_version", at: databaseURL),
+            SQLiteSchema.version
+        )
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
+        XCTAssertNil(
+            try syncRepository.metadata(for: "legacy.sync.runtime")
+        )
+        XCTAssertEqual(try syncRepository.loadDeviceIdentity(), identity)
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM sync_terminal_rejections",
+                at: databaseURL
+            ),
+            0
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM sync_conflicts",
+                at: databaseURL
+            ),
+            0
         )
     }
 
@@ -1836,10 +1938,8 @@ private func executeSQL(_ sql: String, at databaseURL: URL) throws {
 }
 
 private func downgradeDatabaseToVersion15(at databaseURL: URL) throws {
-    let changeJournal = try schemaStatement(
-        containing: "CREATE TABLE IF NOT EXISTS change_journal"
-    )
-    let legacyChangeJournal = changeJournal.replacingOccurrences(
+    let legacyChangeJournal = try version17ChangeJournalSchema()
+        .replacingOccurrences(
         of: "'dayTrace', 'subtask', 'ideaEntry', 'appPreferences'",
         with: "'dayTrace', 'subtask', 'appPreferences'"
     )
@@ -1871,7 +1971,7 @@ private func downgradeDatabaseToVersion15(at databaseURL: URL) throws {
             RENAME TO sync_pending_download_records_current;
         ALTER TABLE change_journal RENAME TO change_journal_current;
         \(legacyChangeJournal);
-        INSERT INTO change_journal SELECT * FROM change_journal_current;
+        \(copyLegacyChangeJournalRowsSQL);
         DROP TABLE change_journal_current;
         \(changeJournalIndex);
         \(legacyPendingRecords);
@@ -1889,6 +1989,79 @@ private func downgradeDatabaseToVersion15(at databaseURL: URL) throws {
         """,
         at: databaseURL
     )
+}
+
+private func downgradeDatabaseToVersion17(at databaseURL: URL) throws {
+    let legacyChangeJournal = try version17ChangeJournalSchema()
+    let changeJournalIndex = try schemaStatement(
+        containing: "CREATE INDEX IF NOT EXISTS idx_change_journal_state_changed_at"
+    )
+    try executeSQL(
+        """
+        PRAGMA foreign_keys = OFF;
+        DROP INDEX IF EXISTS idx_change_journal_state_changed_at;
+        ALTER TABLE change_journal RENAME TO change_journal_current;
+        \(legacyChangeJournal);
+        \(copyLegacyChangeJournalRowsSQL);
+        DROP TABLE change_journal_current;
+        \(changeJournalIndex);
+        PRAGMA user_version = 17;
+        PRAGMA foreign_keys = ON;
+        """,
+        at: databaseURL
+    )
+}
+
+private let copyLegacyChangeJournalRowsSQL = """
+INSERT INTO change_journal (
+    id, entity_type, entity_id, operation, changed_at, changed_at_bits,
+    device_id, sync_state, retry_count, last_error, record_payload
+)
+SELECT
+    id, entity_type, entity_id, operation, changed_at, changed_at_bits,
+    device_id, sync_state, retry_count, last_error, record_payload
+FROM change_journal_current
+"""
+
+private func version17ChangeJournalSchema() throws -> String {
+    let current = try schemaStatement(
+        containing: "CREATE TABLE IF NOT EXISTS change_journal"
+    )
+    let currentPublicationState = """
+        sync_state TEXT NOT NULL CHECK (
+            sync_state IN (
+                'pendingUpload', 'publishedLocal', 'uploaded',
+                'blockedUserAttention', 'blockedCorruption'
+            )
+        ),
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        record_payload BLOB,
+        transport_receipt BLOB,
+        CHECK (
+            sync_state != 'publishedLocal'
+            OR (
+                transport_receipt IS NOT NULL
+                AND length(transport_receipt) > 0
+            )
+        ),
+    """
+    let version17PublicationState = """
+        sync_state TEXT NOT NULL CHECK (sync_state IN ('pendingUpload', 'uploaded', 'failed')),
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        record_payload BLOB,
+    """
+    let legacy = current.replacingOccurrences(
+        of: currentPublicationState,
+        with: version17PublicationState
+    )
+    guard legacy != current else {
+        throw SQLiteRepositoryError.invalidStoredValue(
+            "test could not derive the v17 change journal"
+        )
+    }
+    return legacy
 }
 
 private func schemaStatement(containing declaration: String) throws -> String {

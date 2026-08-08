@@ -14,9 +14,12 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         temporaryURLs = []
     }
 
-    func testFetchRecordsLockWaitAndSafeRepositoryProgress() async throws {
+    func testPushWaitsForLocalPublisherLockAndReportsSafeProgress() async throws {
         let rootURL = makeFolderURL()
-        let record = try SyncRecordMapper().record(
+        let epochID = UUID(
+            uuidString: "D0000000-0000-0000-0000-000000000001"
+        )!
+        let firstRecord = try SyncRecordMapper().record(
             for: AppPreferencesEnvelope(
                 theme: .coolGray,
                 language: .chinese,
@@ -24,7 +27,18 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             ),
             modifiedBy: SyncDeviceID("diagnostics-fixture")
         )
-        try await LocalFolderSyncTransport(rootURL: rootURL).push([record])
+        try await LocalFolderSyncTransport(
+            rootURL: rootURL,
+            producerEpochID: epochID
+        ).push([firstRecord])
+        let secondRecord = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_001)
+            ),
+            modifiedBy: SyncDeviceID("diagnostics-fixture")
+        )
 
         let descriptor = try lockRepository(at: rootURL)
         defer { close(descriptor) }
@@ -33,17 +47,17 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             kind: .localFirstSync,
             endpoint: .iCloudDrive
         )
-        let fetchTask = Task {
+        let pushTask = Task {
             try await LocalFolderSyncTransport(
                 rootURL: rootURL,
+                producerEpochID: epochID,
                 diagnosticOperation: operation
-            ).fetchAll()
+            ).push([secondRecord])
         }
 
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertEqual(flock(descriptor, LOCK_UN), 0)
-        let fetched = try await fetchTask.value
-        XCTAssertEqual(fetched, [record])
+        try await pushTask.value
 
         let events = recorder.snapshot().map(\.event)
         let wait = try XCTUnwrap(events.first {
@@ -57,16 +71,16 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             acquired.durationMilliseconds ?? 0,
             20
         )
-        let fetchedEvidence = try XCTUnwrap(events.last {
-            $0.stage == .transportFetch && $0.progress != nil
+        let uploadEvidence = try XCTUnwrap(events.last {
+            $0.stage == .upload && $0.progress != nil
         })
-        XCTAssertEqual(fetchedEvidence.progress?.recordCount, 1)
+        XCTAssertEqual(uploadEvidence.progress?.recordCount, 1)
         XCTAssertGreaterThanOrEqual(
-            fetchedEvidence.progress?.fileCount ?? 0,
-            1
+            uploadEvidence.progress?.fileCount ?? 0,
+            2
         )
         XCTAssertGreaterThan(
-            fetchedEvidence.progress?.byteCount ?? 0,
+            uploadEvidence.progress?.byteCount ?? 0,
             0
         )
         XCTAssertFalse(

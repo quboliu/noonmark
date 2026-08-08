@@ -2,6 +2,8 @@
 
 **Status**: Accepted
 
+本 ADR 只保留“显式启用 iCloud Drive、SQLite 仍是本机事实源、CloudKit 尚非默认”的产品边界。旧 record／snapshot／ref layout、`localFirst.sync.baselineManifest` key、每轮完整 coverage audit、端点清空后自动猜测重建和旧成功语义，均由 ADR-0046 的增量 batch／head、namespaced frontier、显式 clean cut 与上传确认状态取代；下文相关条目仅是历史记录，不是当前实现契约。
+
 晷迹在 CloudKit entitlement、container 与 `CKSyncEngine` adapter 完成前，先把既有平台无关 `SyncRecord` 仓库接到用户的 iCloud Drive。这个端点用于当前 Mac 开发版本的同 Apple Account 数据交换，不是最终原生 CloudKit 架构。
 
 ## Context

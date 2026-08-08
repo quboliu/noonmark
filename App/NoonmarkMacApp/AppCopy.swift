@@ -350,8 +350,9 @@ struct AppCopy {
 
     var localFolderSyncReady: String {
         language == .chinese
-            ? "本地文件夹端点已接入：会上传本机变更、下载远端记录并在仓库生成快照索引。"
-            : "The local folder endpoint is active: it uploads local changes, downloads remote records, and writes snapshot indexes."
+            ? "本地文件夹端点已接入：会发布增量批次，并从持久进度继续下载远端变化。"
+            : "The local folder endpoint publishes incremental batches "
+                + "and resumes remote changes from a durable frontier."
     }
 
     var iCloudSyncReady: String {
@@ -483,6 +484,13 @@ struct AppCopy {
         _ result: SQLiteLocalFirstSyncResult,
         unresolvedConflictCount: Int? = nil
     ) -> String {
+        if result.isAwaitingUploadConfirmation {
+            let count = result.upload.awaitingConfirmationCount
+            return language == .chinese
+                ? "等待 iCloud 上传确认：本机已安全发布 \(count) 条记录。"
+                : "Awaiting iCloud upload confirmation: "
+                    + "\(count) records are safely published locally."
+        }
         let conflictCount = unresolvedConflictCount ?? result.download.conflictCount
         let attentionIssues = syncAttentionIssues(
             result,

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Privacy-safe classification of why a current-record merge was rejected.
@@ -40,6 +41,12 @@ public enum SyncRecordTransportError: Error, Equatable, Sendable {
         recordID: SyncRecordID,
         reason: SyncRecordMergeFailureReason
     )
+    case invalidFrontier
+    case frontierDidNotAdvance
+    case repositoryFormatMismatch
+    case producerFork(producerID: String, sequence: UInt64)
+    case missingBatch(producerID: String, sequence: UInt64)
+    case invalidBatchHash(producerID: String, sequence: UInt64)
 }
 
 extension SyncRecordTransportError: LocalizedError {
@@ -50,13 +57,251 @@ extension SyncRecordTransportError: LocalizedError {
         case let .invalidCurrentRecordMerge(recordID, reason):
             "Current sync records cannot be merged for id \(recordID.rawValue)"
                 + " (reason: \(reason.rawValue))"
+        case .invalidFrontier:
+            "The sync frontier is invalid for this endpoint."
+        case .frontierDidNotAdvance:
+            "The sync endpoint returned more changes without advancing its frontier."
+        case .repositoryFormatMismatch:
+            "The sync repository uses an incompatible format."
+        case let .producerFork(producerID, sequence):
+            "The sync producer \(producerID) forked at sequence \(sequence)."
+        case let .missingBatch(producerID, sequence):
+            "The sync producer \(producerID) is missing sequence \(sequence)."
+        case let .invalidBatchHash(producerID, sequence):
+            "The sync producer \(producerID) failed hash validation at sequence \(sequence)."
         }
     }
 }
 
+public struct SyncTransportPosition: Codable, Equatable, Sendable {
+    public let sequence: UInt64
+    public let contentHash: String
+
+    public init(sequence: UInt64, contentHash: String) {
+        self.sequence = sequence
+        self.contentHash = contentHash
+    }
+}
+
+public struct SyncTransportFrontier: Codable, Equatable, Sendable {
+    public static let origin = SyncTransportFrontier(positions: [:])
+
+    public let positions: [String: SyncTransportPosition]
+
+    public init(positions: [String: SyncTransportPosition]) {
+        self.positions = positions
+    }
+
+    public func position(for producerID: String) -> SyncTransportPosition? {
+        positions[producerID]
+    }
+
+    public func advancing(
+        producerID: String,
+        to position: SyncTransportPosition
+    ) -> Self {
+        var advanced = positions
+        advanced[producerID] = position
+        return Self(positions: advanced)
+    }
+}
+
+public struct SyncTransportBatchReference: Codable, Equatable, Sendable {
+    public let producerID: String
+    public let sequence: UInt64
+    public let contentHash: String
+    /// Repository-relative artifact paths only. Absolute user paths must never
+    /// cross the transport or diagnostic boundary.
+    public let artifactPaths: [String]
+
+    public init(
+        producerID: String,
+        sequence: UInt64,
+        contentHash: String,
+        artifactPaths: [String] = []
+    ) {
+        self.producerID = producerID
+        self.sequence = sequence
+        self.contentHash = contentHash
+        self.artifactPaths = artifactPaths
+    }
+}
+
+public enum SyncTransportConfirmation: String, Codable, Equatable, Sendable {
+    case confirmed
+    case awaitingUploadConfirmation
+    case blockedUserAttention
+    case blockedCorruption
+}
+
+public struct SyncTransportPushReceipt: Codable, Equatable, Sendable {
+    public let batches: [SyncTransportBatchReference]
+    public let confirmation: SyncTransportConfirmation
+
+    public init(
+        batches: [SyncTransportBatchReference],
+        confirmation: SyncTransportConfirmation
+    ) {
+        self.batches = batches
+        self.confirmation = confirmation
+    }
+
+    public func replacingConfirmation(
+        _ confirmation: SyncTransportConfirmation
+    ) -> Self {
+        Self(batches: batches, confirmation: confirmation)
+    }
+}
+
+public struct SyncTransportChangePage: Equatable, Sendable {
+    public let records: [SyncRecord]
+    public let frontier: SyncTransportFrontier
+    public let hasMore: Bool
+    public let batches: [SyncTransportBatchReference]
+    public let observedProducerCount: Int
+    public let openedBatchCount: Int
+    public let openedByteCount: Int64
+
+    public init(
+        records: [SyncRecord],
+        frontier: SyncTransportFrontier,
+        hasMore: Bool,
+        batches: [SyncTransportBatchReference] = [],
+        observedProducerCount: Int = 0,
+        openedBatchCount: Int = 0,
+        openedByteCount: Int64 = 0
+    ) {
+        self.records = records
+        self.frontier = frontier
+        self.hasMore = hasMore
+        self.batches = batches
+        self.observedProducerCount = observedProducerCount
+        self.openedBatchCount = openedBatchCount
+        self.openedByteCount = openedByteCount
+    }
+}
+
 public protocol SyncRecordTransport: Sendable {
+    /// Stable local namespace used to isolate durable apply frontiers when the
+    /// configured endpoint changes. It must not expose a user path or account.
+    var frontierNamespace: String { get }
     func push(_ records: [SyncRecord]) async throws
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage
+    func confirmationStatus(
+        for receipt: SyncTransportPushReceipt
+    ) async throws -> SyncTransportConfirmation
+    func acknowledge(
+        _ frontier: SyncTransportFrontier
+    ) async throws
     func fetchAll() async throws -> [SyncRecord]
+}
+
+public extension SyncRecordTransport {
+    var frontierNamespace: String {
+        String(reflecting: Self.self)
+    }
+
+    func confirmationStatus(
+        for receipt: SyncTransportPushReceipt
+    ) async throws -> SyncTransportConfirmation {
+        receipt.confirmation
+    }
+
+    func acknowledge(_: SyncTransportFrontier) async throws {}
+
+    func push(_ records: [SyncRecord]) async throws {
+        _ = try await pushAccepting(records)
+    }
+
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        try await push(records)
+        return SyncTransportPushReceipt(
+            batches: [],
+            confirmation: .confirmed
+        )
+    }
+
+    /// Compatibility seam for deterministic test transports. Shipping
+    /// transports implement `pull` directly; the production coordinator never
+    /// calls `fetchAll`.
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        let producerID = "compatibility-snapshot"
+        guard frontier.positions.keys.allSatisfy({ $0 == producerID }) else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let records = try await fetchAll()
+        let evidence = records.map {
+            SyncRecordEvidenceID(record: $0).rawValue
+        }.sorted().joined(separator: "\u{0}")
+        let contentHash = SHA256.hash(data: Data(evidence.utf8)).map {
+            String(format: "%02x", $0)
+        }.joined()
+        if let position = frontier.position(for: producerID),
+           position.contentHash == contentHash
+        {
+            return SyncTransportChangePage(
+                records: [],
+                frontier: frontier,
+                hasMore: false,
+                observedProducerCount: 1
+            )
+        }
+        let previousSequence = frontier.position(
+            for: producerID
+        )?.sequence ?? 0
+        let (sequence, overflow) = previousSequence
+            .addingReportingOverflow(1)
+        guard overflow == false else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let advanced = frontier.advancing(
+            producerID: producerID,
+            to: SyncTransportPosition(
+                sequence: sequence,
+                contentHash: contentHash
+            )
+        )
+        return SyncTransportChangePage(
+            records: records,
+            frontier: advanced,
+            hasMore: false,
+            observedProducerCount: 1,
+            openedBatchCount: records.isEmpty ? 0 : 1
+        )
+    }
+
+    /// Explicit bootstrap/debug helper. Steady-state coordinators must persist
+    /// and reuse the frontier returned by `pull` instead of calling this API.
+    func fetchAll() async throws -> [SyncRecord] {
+        var frontier = SyncTransportFrontier.origin
+        var fetched: [SyncRecord] = []
+        while true {
+            let page = try await pull(after: frontier, limit: 512)
+            fetched.append(contentsOf: page.records)
+            if page.hasMore == false {
+                break
+            }
+            guard page.frontier != frontier else {
+                throw SyncRecordTransportError.frontierDidNotAdvance
+            }
+            frontier = page.frontier
+        }
+        return try CurrentSyncRecordMerger().prepareTransportBatch(
+            existingRecords: [],
+            incomingRecords: fetched
+        ).records
+    }
 }
 
 /// Ordinary current records use this total order for monotonic LWW replacement.

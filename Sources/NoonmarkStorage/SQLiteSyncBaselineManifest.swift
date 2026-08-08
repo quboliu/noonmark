@@ -53,6 +53,7 @@ struct SQLiteSyncBaselineJournalExpectation:
 struct SQLiteSyncBaselineManifest: Codable, Equatable {
     let id: UUID
     let createdAt: Date
+    let transportNamespace: String?
     let expectations: [SQLiteSyncBaselineJournalExpectation]
     let state: SQLiteSyncBaselineManifestState
     let establishedAt: Date?
@@ -60,10 +61,12 @@ struct SQLiteSyncBaselineManifest: Codable, Equatable {
     init(
         id: UUID = UUID(),
         createdAt: Date,
-        entries: [SyncJournalEntry]
+        entries: [SyncJournalEntry],
+        transportNamespace: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
+        self.transportNamespace = transportNamespace
         expectations = entries
             .map(SQLiteSyncBaselineJournalExpectation.init)
             .sorted {
@@ -77,12 +80,14 @@ struct SQLiteSyncBaselineManifest: Codable, Equatable {
     private init(
         id: UUID,
         createdAt: Date,
+        transportNamespace: String?,
         expectations: [SQLiteSyncBaselineJournalExpectation],
         state: SQLiteSyncBaselineManifestState,
         establishedAt: Date?
     ) {
         self.id = id
         self.createdAt = createdAt
+        self.transportNamespace = transportNamespace
         self.expectations = expectations
         self.state = state
         self.establishedAt = establishedAt
@@ -92,26 +97,62 @@ struct SQLiteSyncBaselineManifest: Codable, Equatable {
         Self(
             id: id,
             createdAt: createdAt,
+            transportNamespace: transportNamespace,
             expectations: expectations,
             state: .established,
             establishedAt: date
         )
     }
 
+    func binding(to namespace: String) -> Self? {
+        guard namespace.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty == false else { return nil }
+        if let transportNamespace {
+            return transportNamespace == namespace ? self : nil
+        }
+        return Self(
+            id: id,
+            createdAt: createdAt,
+            transportNamespace: namespace,
+            expectations: expectations,
+            state: state,
+            establishedAt: establishedAt
+        )
+    }
+
+    var hasValidStructure: Bool {
+        let transportNamespaceIsValid = transportNamespace.map {
+            $0.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false
+        } ?? true
+        return createdAt.timeIntervalSinceReferenceDate.isFinite
+            && transportNamespaceIsValid
+            && expectations.isEmpty == false
+            && Set(expectations.map(\.journalEntryID)).count
+            == expectations.count
+            && expectations == expectations.sorted(by: {
+                $0.journalEntryID.uuidString
+                    < $1.journalEntryID.uuidString
+            })
+            && expectations.allSatisfy {
+                $0.evidenceDigest.utf8.count == 64
+                    && $0.evidenceDigest.utf8.allSatisfy {
+                        ($0 >= 48 && $0 <= 57)
+                            || ($0 >= 97 && $0 <= 102)
+                    }
+            }
+            && (establishedAt?.timeIntervalSinceReferenceDate
+                .isFinite ?? true)
+            && (state == .established
+                ? establishedAt != nil
+                : establishedAt == nil)
+    }
+
     func validate(against entries: [SyncJournalEntry]) -> Bool {
-        guard createdAt.timeIntervalSinceReferenceDate.isFinite,
-              expectations.isEmpty == false,
-              Set(expectations.map(\.journalEntryID)).count
-              == expectations.count,
-              expectations == expectations.sorted(by: {
-                  $0.journalEntryID.uuidString
-                      < $1.journalEntryID.uuidString
-              }),
-              establishedAt?.timeIntervalSinceReferenceDate
-              .isFinite ?? true,
-              state == .established
-              ? establishedAt != nil
-              : establishedAt == nil
+        guard hasValidStructure,
+              Set(entries.map(\.id)).count == entries.count
         else {
             return false
         }

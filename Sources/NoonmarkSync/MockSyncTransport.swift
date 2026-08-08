@@ -1,11 +1,15 @@
 import Foundation
 
 public actor InMemorySyncTransport: SyncRecordTransport {
+    private static let producerID = "in-memory"
+
     private var records: [SyncRecordID: SyncRecord]
+    private var batches: [[SyncRecord]]
     private let currentRecordMerger: CurrentSyncRecordMerger
 
     public init() {
         records = [:]
+        batches = []
         currentRecordMerger = CurrentSyncRecordMerger()
     }
 
@@ -34,11 +38,19 @@ public actor InMemorySyncTransport: SyncRecordTransport {
             }
         }
         self.records = staged
+        batches = batch.records.isEmpty ? [] : [batch.records]
         currentRecordMerger = merger
     }
 
-    public func push(_ records: [SyncRecord]) async throws {
-        guard records.isEmpty == false else { return }
+    public func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        guard records.isEmpty == false else {
+            return SyncTransportPushReceipt(
+                batches: [],
+                confirmation: .confirmed
+            )
+        }
         let existingRecords = Array(self.records.values)
         try ImmutableSyncRecordCASPreflight.validate(
             existing: existingRecords.map {
@@ -59,6 +71,7 @@ public actor InMemorySyncTransport: SyncRecordTransport {
             incomingRecords: records
         )
         var staged = self.records
+        var published: [SyncRecord] = []
 
         for record in batch.records {
             if let existing = staged[record.id] {
@@ -73,11 +86,15 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                     continue
                 }
                 do {
-                    staged[record.id] = try currentRecordMerger.merge(
+                    let merged = try currentRecordMerger.merge(
                         existing: existing,
                         incoming: record,
                         context: batch.mergeContext
                     )
+                    if merged.exactlyMatches(existing) == false {
+                        staged[record.id] = merged
+                        published.append(merged)
+                    }
                 } catch {
                     throw SyncRecordTransportError.invalidCurrentRecordMerge(
                         recordID: record.id,
@@ -87,8 +104,90 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                 continue
             }
             staged[record.id] = record
+            published.append(record)
         }
         self.records = staged
+        guard published.isEmpty == false else {
+            return SyncTransportPushReceipt(
+                batches: [],
+                confirmation: .confirmed
+            )
+        }
+        batches.append(published)
+        let sequence = UInt64(batches.count)
+        return SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: Self.producerID,
+                    sequence: sequence,
+                    contentHash: "memory-\(sequence)"
+                )
+            ],
+            confirmation: .confirmed
+        )
+    }
+
+    public func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        let unknownProducers = frontier.positions.keys.filter {
+            $0 != Self.producerID
+        }
+        guard unknownProducers.isEmpty else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let position = frontier.position(for: Self.producerID)
+        let sequence = position?.sequence ?? 0
+        guard sequence <= UInt64(batches.count),
+              position == nil
+                || position?.contentHash == "memory-\(sequence)"
+        else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let pageLimit = max(limit, 1)
+        var nextSequence = sequence
+        var pageRecords: [SyncRecord] = []
+        var references: [SyncTransportBatchReference] = []
+        while nextSequence < UInt64(batches.count) {
+            let candidateSequence = nextSequence + 1
+            let candidateRecords = batches[Int(candidateSequence - 1)]
+            if pageRecords.isEmpty == false,
+               pageRecords.count + candidateRecords.count > pageLimit
+            {
+                break
+            }
+            pageRecords.append(contentsOf: candidateRecords)
+            references.append(
+                SyncTransportBatchReference(
+                    producerID: Self.producerID,
+                    sequence: candidateSequence,
+                    contentHash: "memory-\(candidateSequence)"
+                )
+            )
+            nextSequence = candidateSequence
+            if pageRecords.count >= pageLimit {
+                break
+            }
+        }
+        let nextFrontier = nextSequence == 0
+            ? SyncTransportFrontier.origin
+            : SyncTransportFrontier(
+                positions: [
+                    Self.producerID: SyncTransportPosition(
+                        sequence: nextSequence,
+                        contentHash: "memory-\(nextSequence)"
+                    )
+                ]
+            )
+        return SyncTransportChangePage(
+            records: pageRecords,
+            frontier: nextFrontier,
+            hasMore: nextSequence < UInt64(batches.count),
+            batches: references,
+            observedProducerCount: batches.isEmpty ? 0 : 1,
+            openedBatchCount: references.count
+        )
     }
 
     public func fetchAll() async throws -> [SyncRecord] {
@@ -102,5 +201,6 @@ public actor InMemorySyncTransport: SyncRecordTransport {
 
     public func removeAll() {
         records.removeAll()
+        batches.removeAll()
     }
 }

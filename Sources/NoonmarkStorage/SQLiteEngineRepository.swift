@@ -8,9 +8,10 @@ enum SQLiteJournalCAS {
     private static let insertSQL = """
     INSERT INTO change_journal(
         id, entity_type, entity_id, operation, changed_at, changed_at_bits,
-        device_id, sync_state, retry_count, last_error, record_payload
+        device_id, sync_state, retry_count, last_error, record_payload,
+        transport_receipt
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING
     """
 
@@ -28,6 +29,7 @@ enum SQLiteJournalCAS {
       AND retry_count IS ?
       AND last_error IS ?
       AND record_payload IS ?
+      AND transport_receipt IS ?
     """
 
     static func insertOrValidateExact(
@@ -97,6 +99,7 @@ enum SQLiteJournalCAS {
         sqlite3_bind_int(statement, 9, Int32(entry.retryCount))
         bind(entry.lastError, to: 10, in: statement)
         bind(entry.recordPayload, to: 11, in: statement)
+        bind(entry.transportReceipt, to: 12, in: statement)
     }
 
     private static func bind(

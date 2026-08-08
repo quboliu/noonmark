@@ -56,6 +56,16 @@ public struct CloudKitMirroredSyncRecord: Codable, Equatable, Sendable {
     }
 }
 
+public struct CloudKitSyncInboxEntry: Codable, Equatable, Sendable {
+    public let sequence: UInt64
+    public let record: SyncRecord
+
+    public init(sequence: UInt64, record: SyncRecord) {
+        self.sequence = sequence
+        self.record = record
+    }
+}
+
 public enum CloudKitSyncEnvironment: String, Codable, Equatable, Sendable {
     case development = "Development"
     case production = "Production"
@@ -89,6 +99,8 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
         accountRecordName: nil,
         zoneIsProvisioned: false,
         blockReason: nil,
+        nextInboxSequence: 1,
+        inbox: [],
         canonicalRecords: []
     )
 
@@ -97,6 +109,8 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
     public let accountRecordName: String?
     public let zoneIsProvisioned: Bool
     public let blockReason: CloudKitSyncBlockReason?
+    public let nextInboxSequence: UInt64
+    public let inbox: [CloudKitSyncInboxEntry]
     public let records: [CloudKitMirroredSyncRecord]
 
     public init(
@@ -105,14 +119,22 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
         accountRecordName: String? = nil,
         zoneIsProvisioned: Bool = false,
         blockReason: CloudKitSyncBlockReason? = nil,
+        nextInboxSequence: UInt64 = 1,
+        inbox: [CloudKitSyncInboxEntry] = [],
         records: [CloudKitMirroredSyncRecord] = []
     ) throws {
+        let canonicalInbox = try Self.canonicalInbox(
+            inbox,
+            nextSequence: nextInboxSequence
+        )
         self.init(
             scope: scope,
             engineState: engineState,
             accountRecordName: accountRecordName,
             zoneIsProvisioned: zoneIsProvisioned,
             blockReason: blockReason,
+            nextInboxSequence: nextInboxSequence,
+            inbox: canonicalInbox,
             canonicalRecords: try Self.canonicalRecords(records)
         )
     }
@@ -123,6 +145,8 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
         accountRecordName: String?,
         zoneIsProvisioned: Bool,
         blockReason: CloudKitSyncBlockReason?,
+        nextInboxSequence: UInt64,
+        inbox: [CloudKitSyncInboxEntry],
         canonicalRecords: [CloudKitMirroredSyncRecord]
     ) {
         self.scope = scope
@@ -130,6 +154,8 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
         self.accountRecordName = accountRecordName
         self.zoneIsProvisioned = zoneIsProvisioned
         self.blockReason = blockReason
+        self.nextInboxSequence = nextInboxSequence
+        self.inbox = inbox
         records = canonicalRecords
     }
 
@@ -156,11 +182,49 @@ public struct CloudKitSyncPersistenceSnapshot: Codable, Equatable, Sendable {
                 CloudKitSyncBlockReason.self,
                 forKey: .blockReason
             ),
+            nextInboxSequence: try container.decodeIfPresent(
+                UInt64.self,
+                forKey: .nextInboxSequence
+            ) ?? 1,
+            inbox: try container.decodeIfPresent(
+                [CloudKitSyncInboxEntry].self,
+                forKey: .inbox
+            ) ?? [],
             records: try container.decode(
                 [CloudKitMirroredSyncRecord].self,
                 forKey: .records
             )
         )
+    }
+
+    private static func canonicalInbox(
+        _ inbox: [CloudKitSyncInboxEntry],
+        nextSequence: UInt64
+    ) throws -> [CloudKitSyncInboxEntry] {
+        let ordered = inbox.sorted { $0.sequence < $1.sequence }
+        let isContiguous = zip(ordered, ordered.dropFirst()).allSatisfy {
+            previous,
+            next in
+            previous.sequence < UInt64.max
+                && previous.sequence + 1 == next.sequence
+        }
+        let endsAtNextSequence = if let last = ordered.last {
+            last.sequence < UInt64.max
+                && last.sequence + 1 == nextSequence
+        } else {
+            true
+        }
+        guard nextSequence > 0,
+              Set(ordered.map(\.sequence)).count == ordered.count,
+              ordered.allSatisfy({
+                  $0.sequence > 0 && $0.sequence < nextSequence
+              }),
+              isContiguous,
+              endsAtNextSequence
+        else {
+            throw CloudKitSyncPersistenceError.invalidSnapshot
+        }
+        return ordered
     }
 
     private static func canonicalRecords(

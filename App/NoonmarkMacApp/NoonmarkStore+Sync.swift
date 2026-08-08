@@ -329,10 +329,17 @@ extension NoonmarkStore {
     }
 
     func syncLocalFolderNow() {
-        runLocalFolderSync(showToastOnSuccess: true)
+        localFirstSyncConfirmationRetryCount = 0
+        runLocalFolderSync(
+            showToastOnSuccess: true,
+            retriesUserAttentionBlocks: true
+        )
     }
 
-    private func runLocalFolderSync(showToastOnSuccess: Bool) {
+    private func runLocalFolderSync(
+        showToastOnSuccess: Bool,
+        retriesUserAttentionBlocks: Bool
+    ) {
         guard let naturalDay = prepareNaturalDayForUserMutation() else { return }
         guard engine.preferences.dataMode == .localFirst,
               engine.preferences.localFirstSyncPolicy.enabled,
@@ -363,6 +370,10 @@ extension NoonmarkStore {
                 databaseURL: databaseURL,
                 diagnosticOperation: diagnosticOperation
             )
+            if retriesUserAttentionBlocks {
+                try SQLiteSyncRepository(databaseURL: databaseURL)
+                    .requeueJournalEntriesBlockedForUserAttention()
+            }
             diagnosticOperation.stage(.persistenceCommit)
             try save(
                 engine,
@@ -407,6 +418,7 @@ extension NoonmarkStore {
                         detail: diagnosticFailure(for: error)
                     )
                 await MainActor.run {
+                    localFirstSyncConfirmationRetryCount = 0
                     finishLocalFirstSyncOperation(syncOperationID)
                     presentLocalFirstSyncFailure(
                         error,
@@ -452,12 +464,18 @@ extension NoonmarkStore {
                         onLanguageChange?()
                     }
                     finishLocalFirstSyncOperation(syncOperationID)
-                    resolveOperationFailure(.sync)
+                    if result.isAwaitingUploadConfirmation == false {
+                        localFirstSyncConfirmationRetryCount = 0
+                        resolveOperationFailure(.sync)
+                    }
                     localFirstSyncTimestamps = timestamps
                     localFirstSyncMessage = copy.localFirstSyncResult(
                         result,
                         unresolvedConflictCount: unresolvedConflictCount
                     )
+                    if result.isAwaitingUploadConfirmation {
+                        scheduleUploadConfirmationRetry()
+                    }
                     if showToastOnSuccess {
                         showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
                     }
@@ -484,6 +502,7 @@ extension NoonmarkStore {
                         at: failedAt
                     )
                 await MainActor.run {
+                    localFirstSyncConfirmationRetryCount = 0
                     finishLocalFirstSyncOperation(syncOperationID)
                     presentLocalFirstSyncFailure(
                         error,
@@ -493,6 +512,42 @@ extension NoonmarkStore {
                     )
                 }
             }
+        }
+    }
+
+    private func scheduleUploadConfirmationRetry() {
+        let retryExponent = min(
+            localFirstSyncConfirmationRetryCount,
+            5
+        )
+        let retryDelaySeconds = min(1 << retryExponent, 30)
+        localFirstSyncConfirmationRetryCount = min(
+            localFirstSyncConfirmationRetryCount + 1,
+            5
+        )
+        Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(
+                    for: .seconds(retryDelaySeconds)
+                )
+            } catch {
+                return
+            }
+            guard let self,
+                  isLocalFirstSyncing == false,
+                  let databaseURL,
+                  engine.preferences.dataMode == .localFirst,
+                  engine.preferences.localFirstSyncPolicy.enabled,
+                  supportsRunnableLocalFirstSync(
+                      engine.preferences.localFirstSyncPolicy.endpoint
+                  ),
+                  try SQLiteSyncRepository(databaseURL: databaseURL)
+                  .journalEntries(state: .publishedLocal).isEmpty == false
+            else { return }
+            runLocalFolderSync(
+                showToastOnSuccess: false,
+                retriesUserAttentionBlocks: false
+            )
         }
     }
 
@@ -598,6 +653,9 @@ extension NoonmarkStore {
         databaseURL: URL,
         diagnosticOperation: DiagnosticOperation
     ) throws -> any SyncRecordTransport {
+        let producerEpochID = try SQLiteSyncRepository(
+            databaseURL: databaseURL
+        ).loadOrCreateTransportProducerEpochID()
         switch endpoint {
         case .iCloud:
             if cloudKitSyncConfiguration != nil {
@@ -606,11 +664,13 @@ extension NoonmarkStore {
             return try ICloudDriveSyncTransport(
                 repositoryName: AppLaunchArguments.validatedRuntimeProfile
                     .iCloudRepositoryName,
+                producerEpochID: producerEpochID,
                 diagnosticOperation: diagnosticOperation
             )
         case .localFolder:
             return LocalFolderSyncTransport(
                 rootURL: Self.configuredSyncFolderURL(),
+                producerEpochID: producerEpochID,
                 diagnosticOperation: diagnosticOperation
             )
         case .s3, .webDAV:
@@ -688,7 +748,11 @@ extension NoonmarkStore {
         localFirstSyncAutomationTask = Task { [weak self] in
             while Task.isCancelled == false {
                 await MainActor.run {
-                    self?.runLocalFolderSync(showToastOnSuccess: false)
+                    self?.localFirstSyncConfirmationRetryCount = 0
+                    self?.runLocalFolderSync(
+                        showToastOnSuccess: false,
+                        retriesUserAttentionBlocks: false
+                    )
                 }
                 do {
                     try await Task.sleep(nanoseconds: intervalNanoseconds)
@@ -739,6 +803,12 @@ extension NoonmarkStore {
             case .idle:
                 localFirstSyncMessage = nil
                 resolveOperationFailure(.sync)
+            case let .awaitingUploadConfirmation(result, _):
+                localFirstSyncMessage = copy.localFirstSyncResult(
+                    result,
+                    unresolvedConflictCount: try syncRepository
+                        .unresolvedConflicts().count
+                )
             case let .succeeded(result):
                 localFirstSyncMessage = copy.localFirstSyncResult(
                     result,

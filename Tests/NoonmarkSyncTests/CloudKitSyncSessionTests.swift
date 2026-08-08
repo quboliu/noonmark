@@ -151,6 +151,57 @@ final class CloudKitSyncSessionTests: XCTestCase {
         )
     }
 
+    func testFetchedInboxSurvivesRestartUntilApplyFrontierAcknowledgesIt()
+        async throws
+    {
+        let persistence = SessionPersistence()
+        let codec = CloudKitSyncRecordCodec(zoneID: zoneID)
+        let fetched = try preferenceRecord(
+            theme: .warmPaper,
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 20),
+            deviceID: "mac-server"
+        )
+        let first = CloudKitSyncSession(
+            persistence: persistence,
+            codec: codec
+        )
+        _ = try await first.applyFetched([try codec.encode(fetched)])
+
+        let persistedBeforeApply = await persistence.current
+        XCTAssertEqual(persistedBeforeApply.inbox.map(\.record), [fetched])
+        XCTAssertEqual(persistedBeforeApply.nextInboxSequence, 2)
+
+        let restarted = CloudKitSyncSession(
+            persistence: persistence,
+            codec: codec
+        )
+        let page = try await restarted.pullInbox(
+            after: .origin,
+            limit: 1
+        )
+        XCTAssertEqual(page.records, [fetched])
+        XCTAssertFalse(page.hasMore)
+
+        let restartedBeforeAck = CloudKitSyncSession(
+            persistence: persistence,
+            codec: codec
+        )
+        let replay = try await restartedBeforeAck.pullInbox(
+            after: .origin,
+            limit: 1
+        )
+        XCTAssertEqual(replay.records, [fetched])
+
+        try await restartedBeforeAck.acknowledgeInbox(page.frontier)
+        let empty = try await restartedBeforeAck.pullInbox(
+            after: page.frontier,
+            limit: 1
+        )
+        let persistedAfterAck = await persistence.current
+        XCTAssertTrue(empty.records.isEmpty)
+        XCTAssertTrue(persistedAfterAck.inbox.isEmpty)
+    }
+
     func testRemoteDeletionBlockSurvivesSessionRestart() async throws {
         let persistence = SessionPersistence()
         let firstSession = CloudKitSyncSession(

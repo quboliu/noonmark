@@ -50,7 +50,7 @@ private final class SQLitePreparedStoreRegistry: @unchecked Sendable {
 }
 
 public enum SQLiteSchema {
-    public static let version = 17
+    public static let version = 18
 
     public static let statements: [String] = [
         """
@@ -2361,10 +2361,23 @@ public enum SQLiteSchema {
             device_id TEXT NOT NULL CHECK (
                 \(sqliteNonemptyInvariant("device_id"))
             ),
-            sync_state TEXT NOT NULL CHECK (sync_state IN ('pendingUpload', 'uploaded', 'failed')),
+            sync_state TEXT NOT NULL CHECK (
+                sync_state IN (
+                    'pendingUpload', 'publishedLocal', 'uploaded',
+                    'blockedUserAttention', 'blockedCorruption'
+                )
+            ),
             retry_count INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
             record_payload BLOB,
+            transport_receipt BLOB,
+            CHECK (
+                sync_state != 'publishedLocal'
+                OR (
+                    transport_receipt IS NOT NULL
+                    AND length(transport_receipt) > 0
+                )
+            ),
             CHECK (
                 (
                     entity_type IN (
@@ -2825,8 +2838,11 @@ extension SQLiteSchema {
             return
         }
 
-        if storedVersion == 15 {
-            try migrateVersion15ToCurrent(on: database)
+        if storedVersion == 15 || storedVersion == 17 {
+            try migratePreviousVersionToCurrent(
+                storedVersion: storedVersion,
+                on: database
+            )
             return
         }
 
@@ -2859,21 +2875,40 @@ extension SQLiteSchema {
         try validateCurrentSchema(on: database)
     }
 
-    /// The immediately previous private release used v15. The v17 feature
-    /// extends its schema only by adding `idea_entries` and accepting the new
-    /// entity type in two sync tables. Preserve every old row while replacing
-    /// only the check-constrained table definitions inside one transaction.
-    private static func migrateVersion15ToCurrent(
+    /// v18 preserves domain facts while clean-cutting sync runtime state. Old
+    /// journal rows describe publication into the incompatible full-mirror
+    /// repository and therefore cannot prove coverage in the new repository.
+    /// Dropping them makes the coordinator create one complete local baseline.
+    private static func migratePreviousVersionToCurrent(
+        storedVersion: Int,
         on database: OpaquePointer?
     ) throws {
         try enableConcurrentFileBackedReads(on: database)
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
-            try execute(currentSchemaStatement(
-                containing: "CREATE TABLE IF NOT EXISTS idea_entries"
-            ), on: database)
-            try migrateVersion15ChangeJournal(on: database)
-            try migrateVersion15PendingDownloads(on: database)
+            if storedVersion == 15 {
+                try execute(currentSchemaStatement(
+                    containing: "CREATE TABLE IF NOT EXISTS idea_entries"
+                ), on: database)
+            }
+            try migratePreviousChangeJournal(on: database)
+            if storedVersion == 15 {
+                try migrateVersion15PendingDownloads(on: database)
+            }
+            try execute(
+                "DELETE FROM sync_pending_download_dependencies",
+                on: database
+            )
+            try execute(
+                "DELETE FROM sync_pending_download_records",
+                on: database
+            )
+            try execute(
+                "DELETE FROM sync_terminal_rejections",
+                on: database
+            )
+            try execute("DELETE FROM sync_conflicts", on: database)
+            try execute("DELETE FROM sync_metadata", on: database)
             try execute("PRAGMA user_version = \(version)", on: database)
             try execute("COMMIT", on: database)
         } catch {
@@ -2883,7 +2918,7 @@ extension SQLiteSchema {
         try validateCurrentSchema(on: database)
     }
 
-    private static func migrateVersion15ChangeJournal(
+    private static func migratePreviousChangeJournal(
         on database: OpaquePointer?
     ) throws {
         try execute(
@@ -2891,28 +2926,13 @@ extension SQLiteSchema {
             on: database
         )
         try execute(
-            "ALTER TABLE change_journal RENAME TO change_journal_v15",
+            "ALTER TABLE change_journal RENAME TO change_journal_previous",
             on: database
         )
         try execute(currentSchemaStatement(
             containing: "CREATE TABLE IF NOT EXISTS change_journal"
         ), on: database)
-        try execute(
-            """
-            INSERT INTO change_journal (
-                id, entity_type, entity_id, operation, changed_at,
-                changed_at_bits, device_id, sync_state, retry_count,
-                last_error, record_payload
-            )
-            SELECT
-                id, entity_type, entity_id, operation, changed_at,
-                changed_at_bits, device_id, sync_state, retry_count,
-                last_error, record_payload
-            FROM change_journal_v15
-            """,
-            on: database
-        )
-        try execute("DROP TABLE change_journal_v15", on: database)
+        try execute("DROP TABLE change_journal_previous", on: database)
         try execute(currentSchemaStatement(
             containing: "CREATE INDEX IF NOT EXISTS idx_change_journal_state_changed_at"
         ), on: database)

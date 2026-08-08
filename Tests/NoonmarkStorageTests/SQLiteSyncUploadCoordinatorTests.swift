@@ -113,7 +113,9 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         XCTAssertEqual(result, SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 0, failedCount: 1))
         XCTAssertTrue(uploadedRecords.isEmpty)
 
-        let failed = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
+        let failed = try XCTUnwrap(
+            syncRepository.journalEntries(state: .blockedCorruption).first
+        )
         XCTAssertEqual(failed.id, missingDay.id)
         XCTAssertEqual(failed.retryCount, 1)
         XCTAssertTrue(failed.lastError?.contains("missingEntity") == true)
@@ -122,19 +124,21 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         let retryResult = try await coordinator.uploadPending()
         XCTAssertEqual(
             retryResult,
-            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 0, failedCount: 1)
+            SQLiteSyncUploadResult(pendingCount: 0, uploadedCount: 0, failedCount: 1)
         )
-        let failedAgain = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
+        let failedAgain = try XCTUnwrap(
+            syncRepository.journalEntries(state: .blockedCorruption).first
+        )
         XCTAssertEqual(failedAgain.id, missingDay.id)
-        XCTAssertEqual(failedAgain.retryCount, 2)
+        XCTAssertEqual(failedAgain.retryCount, 1)
         XCTAssertTrue(try syncRepository.journalEntries(state: .uploaded).isEmpty)
         XCTAssertEqual(
             try syncRepository.auditLog().filter { $0.action == "materializationFailed" }.count,
-            2
+            1
         )
     }
 
-    func testTransportFailureMarksUploadableEntriesFailedAndThrows() async throws {
+    func testTransientTransportFailureKeepsUploadPendingAndThrows() async throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
         let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
@@ -151,15 +155,22 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             _ = try await coordinator.uploadPending()
             XCTFail("uploadPending should throw when transport push fails")
         } catch TestSyncTransportError.unavailable {
-            let failed = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
-            XCTAssertEqual(failed.entityType, .day)
-            XCTAssertEqual(failed.retryCount, 1)
-            XCTAssertTrue(failed.lastError?.contains("unavailable") == true)
-            XCTAssertEqual(try syncRepository.auditLog(limit: 1).first?.action, "uploadFailed")
+            let pending = try XCTUnwrap(
+                syncRepository.journalEntries(
+                    state: .pendingUpload
+                ).first
+            )
+            XCTAssertEqual(pending.entityType, .day)
+            XCTAssertEqual(pending.retryCount, 0)
+            XCTAssertNil(pending.lastError)
+            XCTAssertEqual(
+                try syncRepository.auditLog(limit: 1).first?.action,
+                "uploadRetryPending"
+            )
         }
     }
 
-    func testTransientTransportFailureRetriesFailedJournalAndAuditsRecovery() async throws {
+    func testTransientTransportFailureRetriesPendingJournalAndAuditsRecovery() async throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
         let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
@@ -192,9 +203,11 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             XCTAssertEqual(error as? TestSyncTransportError, .unavailable)
         }
 
-        let failed = try XCTUnwrap(syncRepository.journalEntries(state: .failed).first)
-        XCTAssertEqual(failed.retryCount, 1)
-        XCTAssertTrue(failed.lastError?.contains("unavailable") == true)
+        let pending = try XCTUnwrap(
+            syncRepository.journalEntries(state: .pendingUpload).first
+        )
+        XCTAssertEqual(pending.retryCount, 0)
+        XCTAssertNil(pending.lastError)
 
         let recovered = try await coordinator.uploadPending()
 
@@ -202,20 +215,24 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             recovered,
             SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 0)
         )
-        XCTAssertTrue(try syncRepository.journalEntries(state: .failed).isEmpty)
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
+        )
         let uploaded = try XCTUnwrap(syncRepository.journalEntries(state: .uploaded).first)
-        XCTAssertEqual(uploaded.id, failed.id)
-        XCTAssertEqual(uploaded.retryCount, 1)
+        XCTAssertEqual(uploaded.id, pending.id)
+        XCTAssertEqual(uploaded.retryCount, 0)
         XCTAssertNil(uploaded.lastError)
         let pushAttemptCount = await transport.pushAttemptCount()
         XCTAssertEqual(pushAttemptCount, 2)
         XCTAssertEqual(
             Set(try syncRepository.auditLog().map(\.action)),
-            ["uploadFailed", "uploaded"]
+            ["uploadRetryPending", "uploaded"]
         )
     }
 
-    func testFailedClassificationParentKeepsGlobalPriorityAheadOfOlderPendingChild() async throws {
+    func testBlockedCorruptionDoesNotPreventHealthyPendingUpload() async throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
         let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
@@ -259,7 +276,10 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
         try engineRepository.save(engine.snapshot())
         try syncRepository.appendJournalEntry(parentEntry)
-        try syncRepository.markJournalEntryFailed(parentEntry.id, error: "transient")
+        try syncRepository.markJournalEntryBlockedCorruption(
+            parentEntry.id,
+            error: "deterministic"
+        )
         try syncRepository.appendJournalEntry(childEntry)
 
         let coordinator = SQLiteSyncUploadCoordinator(
@@ -270,17 +290,94 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             result,
-            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 0)
+            SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 1)
         )
         let uploadedTypes = try await transport.fetchAll().map(\.entityType)
-        XCTAssertEqual(uploadedTypes, [.classificationCommit])
+        XCTAssertEqual(uploadedTypes, [.dayTrace])
         XCTAssertEqual(
             try syncRepository.journalEntries(state: .pendingUpload).map(\.id),
-            [childEntry.id]
+            []
         )
         XCTAssertEqual(
             try syncRepository.journalEntries(state: .uploaded).map(\.id),
+            [childEntry.id]
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).map(\.id),
             [parentEntry.id]
+        )
+    }
+
+    func testPublishedLocalReceiptSurvivesRestartUntilTransportConfirms()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let transport = AwaitingConfirmationSyncTransport()
+        let deviceID = SyncDeviceID("mac-confirmation")
+        let engine = NoonmarkEngine()
+        try engineRepository.save(engine.snapshot())
+        engine.updateDailyReview(
+            date: today,
+            summary: "等待 iCloud 系统确认",
+            unfinishedReason: nil,
+            tomorrowNote: nil,
+            now: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+
+        let first = try await SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        ).uploadPending()
+        XCTAssertEqual(
+            first,
+            SQLiteSyncUploadResult(
+                pendingCount: 1,
+                uploadedCount: 0,
+                failedCount: 0,
+                awaitingConfirmationCount: 1
+            )
+        )
+        let published = try XCTUnwrap(
+            syncRepository.journalEntries(state: .publishedLocal).first
+        )
+        XCTAssertNotNil(published.transportReceipt)
+
+        let restarted = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        let stillWaiting = try await restarted.uploadPending()
+        XCTAssertEqual(stillWaiting.awaitingConfirmationCount, 1)
+        XCTAssertTrue(
+            try syncRepository.journalEntries(state: .uploaded).isEmpty
+        )
+
+        await transport.confirmUploads()
+        let confirmed = try await restarted.uploadPending()
+        XCTAssertEqual(
+            confirmed,
+            SQLiteSyncUploadResult(
+                pendingCount: 0,
+                uploadedCount: 1,
+                failedCount: 0
+            )
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).map(\.id),
+            [published.id]
+        )
+        XCTAssertEqual(
+            Set(try syncRepository.auditLog().map(\.action)),
+            ["publishedLocal", "uploadConfirmed"]
         )
     }
 
@@ -388,7 +485,9 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             try syncRepository.journalEntries(state: .pendingUpload).isEmpty
         )
         XCTAssertTrue(
-            try syncRepository.journalEntries(state: .failed).isEmpty
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
         )
         XCTAssertEqual(
             try syncRepository.journalEntries(state: .uploaded).count,
@@ -453,7 +552,9 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             try syncRepository.journalEntries(state: .pendingUpload).isEmpty
         )
         XCTAssertTrue(
-            try syncRepository.journalEntries(state: .failed).isEmpty
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
         )
         XCTAssertEqual(
             try syncRepository.journalEntries(state: .uploaded).count,
@@ -513,7 +614,9 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         let committedRecords = try await transport.fetchAll()
         XCTAssertEqual(committedRecords.count, 1)
         XCTAssertEqual(
-            try syncRepository.journalEntries(state: .failed).count,
+            try syncRepository.journalEntries(
+                state: .pendingUpload
+            ).count,
             2
         )
 
@@ -535,7 +638,9 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             2
         )
         XCTAssertTrue(
-            try syncRepository.journalEntries(state: .failed).isEmpty
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
         )
         XCTAssertEqual(envelope.language, .english)
         XCTAssertEqual(envelope.writerDeviceID, deviceID)
@@ -607,5 +712,41 @@ private actor FailingSyncTransport: SyncRecordTransport {
 
     func fetchAll() async throws -> [SyncRecord] {
         []
+    }
+}
+
+private actor AwaitingConfirmationSyncTransport: SyncRecordTransport {
+    private var isConfirmed = false
+    private var records: [SyncRecord] = []
+
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        self.records = records
+        return SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: "test-producer",
+                    sequence: 1,
+                    contentHash: String(repeating: "a", count: 64),
+                    artifactPaths: ["batches/test/0001.json"]
+                )
+            ],
+            confirmation: .awaitingUploadConfirmation
+        )
+    }
+
+    func confirmationStatus(
+        for _: SyncTransportPushReceipt
+    ) async throws -> SyncTransportConfirmation {
+        isConfirmed ? .confirmed : .awaitingUploadConfirmation
+    }
+
+    func fetchAll() async throws -> [SyncRecord] {
+        records
+    }
+
+    func confirmUploads() {
+        isConfirmed = true
     }
 }

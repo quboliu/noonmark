@@ -110,6 +110,10 @@ public struct SQLiteLocalFirstSyncResult: Codable, Equatable, Sendable {
     public var transferredData: Bool {
         upload.uploadedCount > 0 || download.appliedCount > 0
     }
+
+    public var isAwaitingUploadConfirmation: Bool {
+        upload.awaitingConfirmationCount > 0
+    }
 }
 
 public struct SQLiteLocalFirstSyncTimestamps: Codable, Equatable, Sendable {
@@ -143,6 +147,10 @@ public struct SQLiteLocalFirstSyncTimestamps: Codable, Equatable, Sendable {
 
 public enum SQLiteLocalFirstSyncStatus: Codable, Equatable, Sendable {
     case idle(since: Date)
+    case awaitingUploadConfirmation(
+        result: SQLiteLocalFirstSyncResult,
+        observedAt: Date
+    )
     case succeeded(SQLiteLocalFirstSyncResult)
     case failed(
         reason: SQLiteLocalFirstSyncFailureReason,
@@ -155,6 +163,8 @@ public enum SQLiteLocalFirstSyncStatus: Codable, Equatable, Sendable {
         switch self {
         case let .idle(since):
             since
+        case let .awaitingUploadConfirmation(_, observedAt):
+            observedAt
         case let .succeeded(result):
             result.syncedAt
         case let .failed(_, _, failedAt, _):
@@ -168,13 +178,13 @@ public final class SQLiteLocalFirstSyncCoordinator {
     public static let timestampsMetadataKey =
         "localFirst.sync.timestamps"
     public static let baselineManifestMetadataKey =
-        "localFirst.sync.baselineManifest"
+        "localFirst.sync.incrementalBaseline"
 
     private let uploadCoordinator: SQLiteSyncUploadCoordinator
     private let downloadCoordinator: SQLiteSyncDownloadCoordinator
     private let engineRepository: SQLiteEngineRepository
     private let syncRepository: SQLiteSyncRepository
-    private let transport: SyncRecordTransport
+    private let transportNamespace: String
     private let taskChangeAnalyzer: SQLiteSyncTaskChangeAnalyzer
     private let diagnosticOperation: DiagnosticOperation?
     private let completesDiagnosticOperationOnSuccess: Bool
@@ -233,7 +243,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
         downloadCoordinator = SQLiteSyncDownloadCoordinator(databaseURL: databaseURL, transport: transport)
         engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
         syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
-        self.transport = transport
+        transportNamespace = transport.frontierNamespace
         self.diagnosticOperation = diagnosticOperation
         self.completesDiagnosticOperationOnSuccess =
             completesDiagnosticOperationOnSuccess
@@ -253,24 +263,19 @@ public final class SQLiteLocalFirstSyncCoordinator {
         do {
             diagnosticOperation?.stage(.localLoad)
             let localBefore = try engineRepository.load().snapshot()
-            diagnosticOperation?.stage(.transportFetch)
-            let remoteBefore = try await transport.fetchAll()
             diagnosticOperation?.stage(
                 .baselinePrepare,
-                progress: DiagnosticProgress(
-                    recordCount: remoteBefore.count
-                )
+                progress: DiagnosticProgress(recordCount: 0)
             )
-            var pendingBaseline = try prepareCompleteLocalBaseline(
-                now: now,
-                remoteRecords: remoteBefore
+            let pendingBaseline = try prepareCompleteLocalBaseline(
+                now: now
             )
-            var observedRemoteRecords = remoteBefore
-            var remoteAfter = remoteBefore
+            var observedRemoteRecords: [SyncRecord] = []
             var upload = SQLiteSyncUploadResult(
                 pendingCount: 0,
                 uploadedCount: 0,
-                failedCount: 0
+                failedCount: 0,
+                awaitingConfirmationCount: 0
             )
             var download = SQLiteSyncDownloadResult(
                 fetchedCount: 0,
@@ -291,33 +296,46 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 )
                 accumulate(initialUpload, into: &upload)
                 try requireSuccessfulUpload(initialUpload)
+                if initialUpload.awaitingConfirmationCount > 0 {
+                    return try finishAwaitingUploadConfirmation(
+                        upload: upload,
+                        download: download,
+                        localBefore: localBefore,
+                        now: now,
+                        attempt: finalizationAttempt
+                    )
+                }
                 if let pendingBaseline {
                     try requireBaselineUploaded(pendingBaseline)
                 }
-                diagnosticOperation?.stage(
-                    .transportFetch,
-                    progress: DiagnosticProgress(
-                        attempt: finalizationAttempt
+
+                var pageHasMore = true
+                while pageHasMore {
+                    diagnosticOperation?.stage(
+                        .transportFetch,
+                        progress: DiagnosticProgress(
+                            attempt: finalizationAttempt
+                        )
                     )
-                )
-                let fetchedForDownload = try await transport.fetchAll()
-                observedRemoteRecords = retainingRemoteRecoveryEvidence(
-                    observedRemoteRecords,
-                    plus: fetchedForDownload
-                )
-                diagnosticOperation?.stage(
-                    .downloadMerge,
-                    progress: DiagnosticProgress(
-                        attempt: finalizationAttempt,
-                        recordCount: observedRemoteRecords.count
+                    let observation = try await downloadCoordinator
+                        .downloadAndMergeObservingRecords(
+                            detectedAt: now,
+                            limit: max(limit, 1)
+                        )
+                    observedRemoteRecords.append(
+                        contentsOf: observation.fetchedRecords
                     )
-                )
-                let downloadObservation = try downloadCoordinator
-                    .downloadAndMergeObservingRecords(
-                        fetchedRecords: observedRemoteRecords,
-                        detectedAt: now
+                    accumulate(observation.result, into: &download)
+                    pageHasMore = observation.hasMoreRemoteChanges
+                    diagnosticOperation?.observeHeartbeatProgress(
+                        DiagnosticProgress(
+                            attempt: finalizationAttempt,
+                            recordCount: download.fetchedCount,
+                            appliedCount: download.appliedCount,
+                            conflictCount: download.conflictCount
+                        )
                     )
-                accumulate(downloadObservation.result, into: &download)
+                }
 
                 diagnosticOperation?.stage(
                     .catchUpUpload,
@@ -331,6 +349,15 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 let catchUpUpload = try await uploadAllPending(limit: limit)
                 accumulate(catchUpUpload, into: &upload)
                 try requireSuccessfulUpload(catchUpUpload)
+                if catchUpUpload.awaitingConfirmationCount > 0 {
+                    return try finishAwaitingUploadConfirmation(
+                        upload: upload,
+                        download: download,
+                        localBefore: localBefore,
+                        now: now,
+                        attempt: finalizationAttempt
+                    )
+                }
                 if let pendingBaseline {
                     try requireBaselineUploaded(pendingBaseline)
                 }
@@ -341,55 +368,45 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         attempt: finalizationAttempt
                     )
                 )
-                remoteAfter = try await transport.fetchAll()
-                let remoteObservationIsStable =
-                    hasSameExactRemoteEvidence(
-                        fetchedForDownload,
-                        remoteAfter
+                let stabilityObservation = try await downloadCoordinator
+                    .downloadAndMergeObservingRecords(
+                        detectedAt: now,
+                        limit: max(limit, 1)
                     )
-                observedRemoteRecords = retainingRemoteRecoveryEvidence(
-                    observedRemoteRecords,
-                    plus: remoteAfter
+                observedRemoteRecords.append(
+                    contentsOf: stabilityObservation.fetchedRecords
                 )
+                accumulate(stabilityObservation.result, into: &download)
                 let localAfter = try engineRepository.load().snapshot()
-                let journalEntries = try syncRepository.journalEntries()
-                let endpointCoverageIsComplete =
-                    SyncSnapshotBaselineCoverageAuditor().isComplete(
-                        snapshot: localAfter,
-                        journalEntries: journalEntries,
-                        remoteRecords: remoteAfter
-                    )
+                let unfinishedJournalEntryCount = try syncRepository
+                    .unfinishedJournalEntryCount()
                 diagnosticOperation?.stage(
                     .coverageAndStability,
                     progress: DiagnosticProgress(
                         attempt: finalizationAttempt,
-                        recordCount: remoteAfter.count,
-                        pendingCount: journalEntries.filter {
-                            $0.state == .pendingUpload
-                        }.count,
+                        recordCount: stabilityObservation
+                            .fetchedRecords.count,
+                        pendingCount: unfinishedJournalEntryCount,
                         conflictCount: download.conflictCount
                     )
                 )
+                let remoteObservationIsStable =
+                    stabilityObservation.fetchedRecords.isEmpty
+                    && stabilityObservation.hasMoreRemoteChanges == false
+                let outboxIsDrained = unfinishedJournalEntryCount == 0
                 guard remoteObservationIsStable,
-                      endpointCoverageIsComplete
+                      outboxIsDrained,
+                      download.waitingCount == 0
                 else {
                     guard finalizationAttempt
                         < maximumFinalizationAttempts
                     else {
-                        throw endpointCoverageIsComplete
-                            ? SQLiteLocalFirstSyncError
-                                .remoteChangesPending
-                            : SQLiteLocalFirstSyncError
-                                .baselineUploadIncomplete
-                    }
-                    if endpointCoverageIsComplete == false,
-                       let recoveryBaseline =
-                       try prepareCompleteLocalBaseline(
-                           now: now,
-                           remoteRecords: remoteAfter
-                       )
-                    {
-                        pendingBaseline = recoveryBaseline
+                        if outboxIsDrained == false {
+                            throw SQLiteLocalFirstSyncError
+                                .uploadQueueNotDrained
+                        }
+                        throw SQLiteLocalFirstSyncError
+                            .remoteChangesPending
                     }
                     continue
                 }
@@ -397,8 +414,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 let taskChanges = taskChangeAnalyzer.changes(
                     localBefore: localBefore,
                     localAfter: localAfter,
-                    remoteBefore: remoteBefore,
-                    remoteAfter: remoteAfter
+                    remoteBefore: [],
+                    remoteAfter: []
                 )
                 let result = SQLiteLocalFirstSyncResult(
                     upload: upload,
@@ -422,7 +439,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     .successMetadata,
                     progress: DiagnosticProgress(
                         attempt: finalizationAttempt,
-                        recordCount: remoteAfter.count,
+                        recordCount: observedRemoteRecords.count,
                         pendingCount: upload.pendingCount,
                         appliedCount: download.appliedCount,
                         conflictCount: download.conflictCount
@@ -438,7 +455,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     if completesDiagnosticOperationOnSuccess {
                         diagnosticOperation?.succeed(
                             progress: DiagnosticProgress(
-                                recordCount: remoteAfter.count,
+                                recordCount: observedRemoteRecords.count,
                                 pendingCount: upload.pendingCount,
                                 appliedCount: download.appliedCount,
                                 conflictCount: download.conflictCount
@@ -469,6 +486,54 @@ public final class SQLiteLocalFirstSyncCoordinator {
             )
             throw error
         }
+    }
+
+    private func finishAwaitingUploadConfirmation(
+        upload: SQLiteSyncUploadResult,
+        download: SQLiteSyncDownloadResult,
+        localBefore: NoonmarkSnapshot,
+        now: Date,
+        attempt: Int
+    ) throws -> SQLiteLocalFirstSyncResult {
+        let localAfter = try engineRepository.load().snapshot()
+        let result = SQLiteLocalFirstSyncResult(
+            upload: upload,
+            download: download,
+            taskChanges: taskChangeAnalyzer.changes(
+                localBefore: localBefore,
+                localAfter: localAfter,
+                remoteBefore: [],
+                remoteAfter: []
+            ),
+            syncedAt: now
+        )
+        try syncRepository.saveMetadata(
+            try Self.statusMetadata(
+                .awaitingUploadConfirmation(
+                    result: result,
+                    observedAt: now
+                )
+            )
+        )
+        diagnosticOperation?.stage(
+            .successMetadata,
+            progress: DiagnosticProgress(
+                attempt: attempt,
+                pendingCount: upload.awaitingConfirmationCount,
+                appliedCount: download.appliedCount,
+                conflictCount: download.conflictCount
+            )
+        )
+        if completesDiagnosticOperationOnSuccess {
+            diagnosticOperation?.succeed(
+                progress: DiagnosticProgress(
+                    pendingCount: upload.awaitingConfirmationCount,
+                    appliedCount: download.appliedCount,
+                    conflictCount: download.conflictCount
+                )
+            )
+        }
+        return result
     }
 
     private func finishDiagnosticFailure(
@@ -522,46 +587,6 @@ public final class SQLiteLocalFirstSyncCoordinator {
         )
     }
 
-    private func retainingRemoteRecoveryEvidence(
-        _ existing: [SyncRecord],
-        plus additional: [SyncRecord]
-    ) -> [SyncRecord] {
-        let replacedCurrentRecordIDs = Set(
-            additional.compactMap { record in
-                record.entityType.requiresImmutableRecordPayload
-                    ? nil
-                    : record.id
-            }
-        )
-        var recordsByEvidenceID: [
-            SyncRecordEvidenceID: SyncRecord
-        ] = [:]
-        for record in existing
-        where record.entityType.requiresImmutableRecordPayload
-            || replacedCurrentRecordIDs.contains(record.id) == false
-        {
-            recordsByEvidenceID[
-                SyncRecordEvidenceID(record: record)
-            ] = record
-        }
-        for record in additional {
-            recordsByEvidenceID[
-                SyncRecordEvidenceID(record: record)
-            ] = record
-        }
-        return recordsByEvidenceID
-            .sorted { $0.key.rawValue < $1.key.rawValue }
-            .map(\.value)
-    }
-
-    private func hasSameExactRemoteEvidence(
-        _ lhs: [SyncRecord],
-        _ rhs: [SyncRecord]
-    ) -> Bool {
-        Set(lhs.map(SyncRecordEvidenceID.init(record:)))
-            == Set(rhs.map(SyncRecordEvidenceID.init(record:)))
-    }
-
     private func accumulate(
         _ next: SQLiteSyncUploadResult,
         into result: inout SQLiteSyncUploadResult
@@ -569,6 +594,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
         result.pendingCount += next.pendingCount
         result.uploadedCount += next.uploadedCount
         result.failedCount += next.failedCount
+        result.awaitingConfirmationCount =
+            next.awaitingConfirmationCount
     }
 
     private func accumulate(
@@ -597,7 +624,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
         var result = SQLiteSyncUploadResult(
             pendingCount: 0,
             uploadedCount: 0,
-            failedCount: 0
+            failedCount: 0,
+            awaitingConfirmationCount: 0
         )
 
         while true {
@@ -607,6 +635,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
             result.pendingCount += batch.pendingCount
             result.uploadedCount += batch.uploadedCount
             result.failedCount += batch.failedCount
+            result.awaitingConfirmationCount =
+                batch.awaitingConfirmationCount
             diagnosticOperation?.observeHeartbeatProgress(
                 DiagnosticProgress(
                     recordCount: result.uploadedCount,
@@ -614,18 +644,18 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 )
             )
 
-            if batch.pendingCount == 0 || batch.failedCount > 0 {
+            if batch.pendingCount == 0
+                || batch.failedCount > 0
+                || batch.awaitingConfirmationCount > 0
+            {
                 return result
             }
         }
     }
 
     private func prepareCompleteLocalBaseline(
-        now: Date,
-        remoteRecords: [SyncRecord]
+        now: Date
     ) throws -> SQLiteSyncBaselineManifest? {
-        let snapshot = try engineRepository.load().snapshot()
-        let journalEntries = try syncRepository.journalEntries()
         let storedManifest: SQLiteSyncBaselineManifest?
         do {
             storedManifest = try syncRepository.metadata(
@@ -636,22 +666,52 @@ public final class SQLiteLocalFirstSyncCoordinator {
         }
 
         if let storedManifest,
-           storedManifest.validate(against: journalEntries) == false
+           storedManifest.state == .established
         {
-            throw SQLiteLocalFirstSyncError.baselineManifestInvalid
+            guard storedManifest.hasValidStructure,
+                  let boundManifest = storedManifest.binding(
+                      to: transportNamespace
+                  )
+            else {
+                throw SQLiteLocalFirstSyncError.baselineManifestInvalid
+            }
+            if boundManifest != storedManifest {
+                try syncRepository.saveMetadata(
+                    try boundManifest.metadata(
+                        key: Self.baselineManifestMetadataKey,
+                        updatedAt: now
+                    )
+                )
+            }
+            return nil
         }
-
+        let snapshot = try engineRepository.load().snapshot()
+        let journalEntries = try syncRepository.journalEntries()
+        if let storedManifest {
+            guard storedManifest.validate(against: journalEntries),
+                  let boundManifest = storedManifest.binding(
+                      to: transportNamespace
+                  )
+            else {
+                throw SQLiteLocalFirstSyncError.baselineManifestInvalid
+            }
+            if boundManifest != storedManifest {
+                try syncRepository.saveMetadata(
+                    try boundManifest.metadata(
+                        key: Self.baselineManifestMetadataKey,
+                        updatedAt: now
+                    )
+                )
+            }
+            return boundManifest
+        }
         let missingFactCount = SyncSnapshotBaselineCoverageAuditor()
             .missingFactCount(
                 snapshot: snapshot,
                 journalEntries: journalEntries,
-                remoteRecords: remoteRecords
+                remoteRecords: []
             )
-        if missingFactCount == 0 {
-            return storedManifest?.state == .pending
-                ? storedManifest
-                : nil
-        }
+        guard missingFactCount > 0 else { return nil }
         diagnosticOperation?.stage(
             .baselineCoverageGap,
             progress: DiagnosticProgress(
@@ -659,43 +719,6 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 pendingCount: journalEntries.count
             )
         )
-        if let storedManifest, storedManifest.state == .pending {
-            do {
-                try syncRepository
-                    .requeueJournalEntriesForBaselineRecovery(
-                        Set(journalEntries.map(\.id))
-                    )
-                let requeuedEntries = try syncRepository.journalEntries()
-                guard storedManifest.validate(
-                    against: requeuedEntries
-                ) else {
-                    throw SQLiteLocalFirstSyncError
-                        .baselineManifestInvalid
-                }
-                if SyncSnapshotBaselineCoverageAuditor()
-                    .isComplete(
-                        snapshot: snapshot,
-                        journalEntries: requeuedEntries,
-                        remoteRecords: remoteRecords
-                    )
-                {
-                    return storedManifest
-                }
-            } catch let error as SQLiteLocalFirstSyncError {
-                throw error
-            } catch {
-                throw SQLiteLocalFirstSyncError
-                    .baselinePreparationFailed
-            }
-            diagnosticOperation?.stage(
-                .baselineRecovery,
-                progress: DiagnosticProgress(
-                    recordCount: missingFactCount,
-                    pendingCount: journalEntries.count
-                )
-            )
-        }
-
         guard let identity = try syncRepository.loadDeviceIdentity() else {
             throw SQLiteLocalFirstSyncError
                 .baselineDeviceIdentityUnavailable
@@ -715,7 +738,8 @@ public final class SQLiteLocalFirstSyncCoordinator {
         }
         let manifest = SQLiteSyncBaselineManifest(
             createdAt: now,
-            entries: entries
+            entries: entries,
+            transportNamespace: transportNamespace
         )
         do {
             try syncRepository.saveBaselineJournal(

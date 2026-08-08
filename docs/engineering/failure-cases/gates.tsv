@@ -170,3 +170,5 @@ FAIL-2026-08-07-13	release	scripts/verify-github-release-publication	scripts/pus
 FAIL-2026-08-07-14	fast	scripts/test-github-release-readiness-contract	scripts/check	Release notes 只能从英文用户作用域 conventional commits 生成，并拒绝中文抽取路径与基础设施噪音
 FAIL-2026-08-07-14	symptom	scripts/verify-github-release-language	scripts/verify-github-release-publication	真实 GitHub Release 标题与正文必须由系统语言识别为英文，含完整 build、签名和 checksum 边界且不得含 Han 字符
 FAIL-2026-08-07-14	release	scripts/verify-github-release-publication	scripts/push-release-tag	公开 Release 未通过英文正文与唯一资产验证时不得宣告发布成功
+FAIL-2026-08-07-15	fast	scripts/test-incremental-sync-contract	scripts/check	拒绝稳态全端点／全 journal 扫描、旧全 mirror 文件仓库和无持久 Inbox 的 CloudKit 返回路径
+FAIL-2026-08-07-15	symptom	scripts/test-incremental-sync-symptom	scripts/test-all	双 SQLite 长历史完成 bootstrap 后，零变化只读 heads、单变化只打开一个 batch 并收敛领域状态

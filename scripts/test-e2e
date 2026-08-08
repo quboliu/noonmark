@@ -6166,7 +6166,10 @@ run_preferences_clock_probe() {
          AND length(record_payload) > 0),
       (SELECT count(*)
        FROM preference_journal
-       WHERE sync_state IN ('pendingUpload', 'failed')),
+       WHERE sync_state IN (
+         'pendingUpload', 'publishedLocal',
+         'blockedUserAttention', 'blockedCorruption'
+       )),
       (SELECT count(*)
        FROM preference_journal
        WHERE changed_at_bits = $theme_bits
@@ -6220,7 +6223,7 @@ run_preferences_clock_probe() {
        FROM preference_audit
        WHERE direction = 'download' AND action = 'ignored');
   ")"
-  if [[ "$sqlite_probe" != "1 1 3 3 0 1 2 10 3 1 6" ]]; then
+  if [[ "$sqlite_probe" != "1 1 2 2 0 1 1 6 2 1 3" ]]; then
     echo "preference SQLite/journal/audit exact-bit probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi

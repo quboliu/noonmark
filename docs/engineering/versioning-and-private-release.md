@@ -29,7 +29,8 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| `0.2.1 (6)` | 当前 schema `17` | 当前 format `7` | 受控 v15 SQLite 原地升级至 v17；严格 canonical v6 JSON 可导入，v7 继续可导入与导出 |
+| 开发中、未发行 | 当前 schema `18` | 当前 format `7` | 受控 v15／v17 SQLite 原地升级至 v18；保留领域事实和设备身份，clean cut 旧同步 runtime；用户先清空旧 iCloud repository 再首次同步新版 |
+| `0.2.4 (21)` | 已发行 schema `17` | 已发行 format `7` | 受控 v15 SQLite 原地升级至 v17；严格 canonical v6 JSON 可导入，v7 可导入与导出 |
 
 支持范围必须由源码、专项测试和真实 App 路径共同证明；未知非空 schema、未知 JSON format 与非 canonical 输入保持 fail-closed。下一版是否继续支持、扩展或移除任一旧格式，必须在编码前写入该版 release note 的兼容矩阵并由用户明确批准。开发／E2E／Demo 资料仍遵守 clean cut，不以生产用户升级规则替代。
 

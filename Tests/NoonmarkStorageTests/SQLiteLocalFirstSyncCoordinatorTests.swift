@@ -150,7 +150,9 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             try syncRepository.journalEntries(state: .pendingUpload).isEmpty
         )
         XCTAssertTrue(
-            try syncRepository.journalEntries(state: .failed).isEmpty
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
         )
         let remoteRecords = try await transport.fetchAll()
         let remoteSubtask = try XCTUnwrap(
@@ -225,7 +227,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
         XCTAssertTrue(
             try syncRepository.journalEntries(
-                state: .failed
+                state: .blockedCorruption
             ).isEmpty
         )
 
@@ -250,20 +252,14 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
-    func testEndpointClearedAfterUploadIsRebuiltBeforeSuccess()
+    func testEndpointResetDuringSyncFailsClosedInsteadOfInventingCoverage()
         async throws
     {
         let sourceURL = makeDatabaseURL(
             "endpoint-cleared-during-sync-source"
         )
-        let targetURL = makeDatabaseURL(
-            "endpoint-cleared-during-sync-target"
-        )
         let sourceRepository = SQLiteEngineRepository(
             databaseURL: sourceURL
-        )
-        let targetRepository = SQLiteEngineRepository(
-            databaseURL: targetURL
         )
         let sourceSyncRepository = SQLiteSyncRepository(
             databaseURL: sourceURL
@@ -272,8 +268,8 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             "endpoint-cleared-during-sync-source"
         )
         let source = NoonmarkEngine()
-        let chainID = try source.createPoolTask(
-            title: "同步中端点清空后仍须恢复",
+        _ = try source.createPoolTask(
+            title: "同步中端点重置必须阻断成功",
             now: now
         )
         try sourceRepository.save(
@@ -287,35 +283,37 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 createdAt: now
             )
         )
-        try targetRepository.save(NoonmarkEngine().snapshot())
         let transport =
             ClearAfterFirstPushBeforeNextFetchSyncTransport()
 
-        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
-            databaseURL: sourceURL,
-            transport: transport
-        ).sync(now: now.addingTimeInterval(1))
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: sourceURL,
+                transport: transport
+            ).sync(now: now.addingTimeInterval(1))
+            XCTFail("endpoint reset must fail the sync operation")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .repositoryFormatMismatch
+            )
+        }
         let didClearEndpoint = await transport.didClearEndpoint()
         let remoteRecords = try await transport.fetchAll()
 
         XCTAssertTrue(didClearEndpoint)
-        XCTAssertGreaterThan(sourceResult.upload.uploadedCount, 0)
-        XCTAssertTrue(
-            remoteRecords.contains {
-                $0.entityType == .taskChain
-                    && $0.entityID == chainID.description
-            },
-            "同步返回成功前必须确认被清空的端点已用完整本机事实重建"
+        XCTAssertTrue(remoteRecords.isEmpty)
+        let statusMetadata = try XCTUnwrap(
+            sourceSyncRepository.metadata(
+                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
+            )
         )
-
-        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
-            databaseURL: targetURL,
-            transport: transport
-        ).sync(now: now.addingTimeInterval(2))
-
-        XCTAssertEqual(targetResult.download.waitingCount, 0)
-        XCTAssertEqual(targetResult.download.conflictCount, 0)
-        XCTAssertNotNil(try targetRepository.load().chains[chainID])
+        guard case .failed = try JSONDecoder().decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: statusMetadata.value
+        ) else {
+            return XCTFail("endpoint reset must persist a failed status")
+        }
     }
 
     func testRemoteChangeArrivingDuringSyncIsMergedBeforeSuccess()
@@ -861,23 +859,17 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
-    func testPartiallyUploadedPendingBaselineCanReseedAnEmptyEndpoint()
+    func testPartiallyUploadedPendingBaselineRejectsEndpointReplacement()
         async throws
     {
         let sourceURL = makeDatabaseURL(
             "partially-uploaded-baseline-source"
-        )
-        let targetURL = makeDatabaseURL(
-            "partially-uploaded-baseline-target"
         )
         let sourceRepository = SQLiteEngineRepository(
             databaseURL: sourceURL
         )
         let sourceSyncRepository = SQLiteSyncRepository(
             databaseURL: sourceURL
-        )
-        let targetRepository = SQLiteEngineRepository(
-            databaseURL: targetURL
         )
         let imported = NoonmarkEngine()
         let chainID = try imported.createPoolTask(
@@ -913,47 +905,25 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             interruptedEntries.contains { $0.state == .uploaded }
         )
         XCTAssertTrue(
-            interruptedEntries.contains { $0.state == .failed }
-        )
-
-        let changed = try sourceRepository.load()
-        let secondChainID = try changed.createPoolTask(
-            title: "pending 期间上传到旧端点的新事实",
-            now: now.addingTimeInterval(1.5)
-        )
-        try sourceRepository.save(
-            changed.snapshot(),
-            recordingChangesFor: SyncDeviceID(
-                "partially-uploaded-baseline-source"
-            ),
-            changedAt: now.addingTimeInterval(1.5)
-        )
-        let originalEntryIDs = Set(interruptedEntries.map(\.id))
-        let newEntryIDs = Set(
-            try sourceSyncRepository.journalEntries()
-                .map(\.id)
-        ).subtracting(originalEntryIDs)
-        XCTAssertFalse(newEntryIDs.isEmpty)
-        try sourceSyncRepository.markJournalEntriesUploaded(
-            Array(newEntryIDs)
+            interruptedEntries.contains { $0.state == .pendingUpload }
         )
 
         let emptyEndpoint = InMemorySyncTransport()
-        let retryResult = try await SQLiteLocalFirstSyncCoordinator(
-            databaseURL: sourceURL,
-            transport: emptyEndpoint
-        ).sync(limit: 1, now: now.addingTimeInterval(2))
-        try targetRepository.save(NoonmarkEngine().snapshot())
-        _ = try await SQLiteLocalFirstSyncCoordinator(
-            databaseURL: targetURL,
-            transport: emptyEndpoint
-        ).sync(now: now.addingTimeInterval(3))
-
-        XCTAssertGreaterThan(retryResult.upload.uploadedCount, 0)
-        XCTAssertNotNil(try targetRepository.load().chains[chainID])
-        XCTAssertNotNil(
-            try targetRepository.load().chains[secondChainID]
-        )
+        do {
+            _ = try await SQLiteLocalFirstSyncCoordinator(
+                databaseURL: sourceURL,
+                transport: emptyEndpoint
+            ).sync(limit: 1, now: now.addingTimeInterval(2))
+            XCTFail("pending baseline must not reuse another endpoint's receipts")
+        } catch {
+            XCTAssertEqual(
+                error as? SQLiteLocalFirstSyncError,
+                .baselineManifestInvalid
+            )
+        }
+        let replacementEndpointRecords = try await emptyEndpoint.fetchAll()
+        XCTAssertTrue(replacementEndpointRecords.isEmpty)
+        XCTAssertNotNil(try sourceRepository.load().chains[chainID])
     }
 
     func testInvalidBaselineManifestFailsClosedAndPersistsFailure()
@@ -1230,7 +1200,9 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             try syncRepository.journalEntries(state: .pendingUpload).isEmpty
         )
         XCTAssertTrue(
-            try syncRepository.journalEntries(state: .failed).isEmpty
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
         )
     }
 
@@ -2645,12 +2617,27 @@ private actor ClearAfterFirstPushBeforeNextFetchSyncTransport:
     }
 
     func fetchAll() async throws -> [SyncRecord] {
+        await clearEndpointIfNeeded()
+        return try await backing.fetchAll()
+    }
+
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        if shouldClearOnNextFetch {
+            await clearEndpointIfNeeded()
+            throw SyncRecordTransportError.repositoryFormatMismatch
+        }
+        return try await backing.pull(after: frontier, limit: limit)
+    }
+
+    private func clearEndpointIfNeeded() async {
         if shouldClearOnNextFetch {
             shouldClearOnNextFetch = false
             clearedEndpoint = true
             await backing.removeAll()
         }
-        return try await backing.fetchAll()
     }
 
     func didClearEndpoint() -> Bool {

@@ -179,6 +179,72 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertNil(try repository.metadata(for: "missing"))
     }
 
+    func testTransportProducerEpochIsInstallationLocalAndDurable() throws {
+        let firstDatabase = makeDatabaseURL()
+        let firstRepository = SQLiteSyncRepository(
+            databaseURL: firstDatabase
+        )
+        let first = try firstRepository
+            .loadOrCreateTransportProducerEpochID()
+        let restarted = try SQLiteSyncRepository(
+            databaseURL: firstDatabase
+        ).loadOrCreateTransportProducerEpochID()
+        let second = try SQLiteSyncRepository(
+            databaseURL: makeDatabaseURL()
+        ).loadOrCreateTransportProducerEpochID()
+
+        XCTAssertEqual(restarted, first)
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(
+            try firstRepository.metadata(
+                for: SQLiteSyncRepository
+                    .transportProducerEpochMetadataKey
+            )?.value,
+            Data(first.uuidString.lowercased().utf8)
+        )
+    }
+
+    func testExplicitUserRetryRequeuesOnlyUserAttentionBlocks() throws {
+        let repository = SQLiteSyncRepository(
+            databaseURL: makeDatabaseURL()
+        )
+        let attention = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "attention",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let corruption = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "corruption",
+            changedAt: now.addingTimeInterval(1),
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(attention)
+        try repository.appendJournalEntry(corruption)
+        try repository.markJournalEntriesBlockedUserAttention(
+            [attention.id],
+            error: "accountUnavailable"
+        )
+        try repository.markJournalEntryBlockedCorruption(
+            corruption.id,
+            error: "invalidBatchHash"
+        )
+
+        try repository.requeueJournalEntriesBlockedForUserAttention()
+
+        XCTAssertEqual(
+            try repository.journalEntries(state: .pendingUpload).map(\.id),
+            [attention.id]
+        )
+        XCTAssertEqual(
+            try repository.journalEntries(
+                state: .blockedCorruption
+            ).map(\.id),
+            [corruption.id]
+        )
+    }
+
     func testSuccessMetadataIsRejectedWhenANewJournalEntryIsPending()
         throws
     {
@@ -263,10 +329,15 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.journalEntries(state: .pendingUpload, limit: 1).map(\.id), [firstID])
 
         try repository.markJournalEntriesUploaded([firstID])
-        try repository.markJournalEntryFailed(secondID, error: "network unavailable")
+        try repository.markJournalEntryBlockedCorruption(
+            secondID,
+            error: "deterministic"
+        )
 
         let uploaded = try XCTUnwrap(repository.journalEntries(state: .uploaded).first)
-        let failed = try XCTUnwrap(repository.journalEntries(state: .failed).first)
+        let failed = try XCTUnwrap(
+            repository.journalEntries(state: .blockedCorruption).first
+        )
 
         XCTAssertEqual(uploaded.id, firstID)
         XCTAssertNil(uploaded.lastError)
@@ -1667,6 +1738,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
                     observedPending: baselinePending,
                     auditEntries: auditEntries,
                     metadata: replacementMetadata,
+                    frontierMetadata: nil,
                     attemptedAt: now.addingTimeInterval(2)
                 )
             )

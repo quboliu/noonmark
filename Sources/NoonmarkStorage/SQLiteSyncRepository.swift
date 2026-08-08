@@ -38,10 +38,14 @@ struct SQLiteSyncDownloadCommit {
     let observedPending: [SyncPendingDownloadRecord]
     let auditEntries: [SyncAuditLogEntry]
     let metadata: SyncMetadataEntry
+    let frontierMetadata: SyncMetadataEntry?
     let attemptedAt: Date
 }
 
 public final class SQLiteSyncRepository {
+    public static let transportProducerEpochMetadataKey =
+        "sync.transport.producerEpoch.v1"
+
     private let databaseURL: URL
     private let storeRuntime: SQLiteStoreRuntime
 
@@ -129,7 +133,10 @@ public final class SQLiteSyncRepository {
                 """
                 SELECT count(*)
                 FROM change_journal
-                WHERE sync_state != 'uploaded'
+                WHERE sync_state IN (
+                    'pendingUpload', 'publishedLocal',
+                    'blockedUserAttention', 'blockedCorruption'
+                )
                 """,
                 on: database
             ) { statement in
@@ -167,6 +174,56 @@ public final class SQLiteSyncRepository {
                 updatedAt: try date(statement, 2)
             )
         }.first
+    }
+
+    /// Returns the installation-local transport epoch. Data-package import
+    /// clears sync metadata, so imported facts can never inherit another
+    /// installation's producer chain identity.
+    public func loadOrCreateTransportProducerEpochID() throws -> UUID {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            let storedValues: [Data] = try query(
+                "SELECT value FROM sync_metadata WHERE key = ?",
+                on: database
+            ) { statement in
+                bind(
+                    Self.transportProducerEpochMetadataKey,
+                    to: 1,
+                    in: statement
+                )
+            } row: { statement in
+                data(statement, 0)
+            }
+            if let stored = storedValues.first {
+                guard let value = String(data: stored, encoding: .utf8),
+                      let epochID = UUID(uuidString: value),
+                      epochID.uuidString.lowercased() == value
+                else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "transport producer epoch is invalid"
+                    )
+                }
+                try execute("COMMIT", on: database)
+                return epochID
+            }
+            let epochID = UUID()
+            try saveMetadata(
+                SyncMetadataEntry(
+                    key: Self.transportProducerEpochMetadataKey,
+                    value: Data(epochID.uuidString.lowercased().utf8)
+                ),
+                into: database
+            )
+            try execute("COMMIT", on: database)
+            return epochID
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
     }
 
     public func appendJournalEntry(_ entry: SyncJournalEntry) throws {
@@ -220,21 +277,50 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
-        let sql = """
+        let projection = """
         SELECT id, entity_type, entity_id, operation, changed_at, changed_at_bits,
-            device_id, sync_state, retry_count, last_error, record_payload
+            device_id, sync_state, retry_count, last_error, record_payload,
+            transport_receipt
         FROM change_journal
-        WHERE (? IS NULL OR sync_state = ?)
         """
-        let entries = try query(sql, on: database) { statement in
-            bind(state?.rawValue, to: 1, in: statement)
-            bind(state?.rawValue, to: 2, in: statement)
-        } row: { statement in
-            try journalEntry(from: statement)
+        let entries: [SyncJournalEntry]
+        if let state {
+            entries = try query(
+                projection + " WHERE sync_state = ?",
+                on: database
+            ) { statement in
+                bind(state.rawValue, to: 1, in: statement)
+            } row: { statement in
+                try journalEntry(from: statement)
+            }
+        } else {
+            entries = try query(projection, on: database) { statement in
+                try journalEntry(from: statement)
+            }
         }
         let ordered = entries.sorted(by: journalEntryComesBefore)
         guard let limit, limit >= 0 else { return ordered }
         return Array(ordered.prefix(limit))
+    }
+
+    func unfinishedJournalEntryCount() throws -> Int {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        return try query(
+            """
+            SELECT COUNT(*)
+            FROM change_journal
+            WHERE sync_state IN (
+                'pendingUpload', 'publishedLocal',
+                'blockedUserAttention', 'blockedCorruption'
+            )
+            """,
+            on: database
+        ) { statement in
+            try int(statement, 0)
+        }.first ?? 0
     }
 
     private func journalEntryComesBefore(
@@ -258,12 +344,92 @@ public final class SQLiteSyncRepository {
     public func markJournalEntriesUploaded(_ ids: [UUID]) throws {
         try updateJournalEntries(ids) { database, id in
             try run(
-                "UPDATE change_journal SET sync_state = 'uploaded', last_error = NULL WHERE id = ?",
+                """
+                UPDATE change_journal
+                SET sync_state = 'uploaded', last_error = NULL
+                WHERE id = ?
+                """,
                 on: database
             ) { statement in
                 bind(id, to: 1, in: statement)
             }
         }
+    }
+
+    public func markJournalEntriesPublishedLocal(
+        _ ids: [UUID],
+        receipt: Data
+    ) throws {
+        guard receipt.isEmpty == false else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "published sync receipt is empty"
+            )
+        }
+        try updateJournalEntries(ids) { database, id in
+            try run(
+                """
+                UPDATE change_journal
+                SET sync_state = 'publishedLocal',
+                    transport_receipt = ?, last_error = NULL
+                WHERE id = ? AND sync_state = 'pendingUpload'
+                """,
+                on: database
+            ) { statement in
+                bind(receipt, to: 1, in: statement)
+                bind(id, to: 2, in: statement)
+            }
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "sync outbox entry cannot enter publishedLocal"
+                )
+            }
+        }
+    }
+
+    public func markJournalEntriesBlockedUserAttention(
+        _ ids: [UUID],
+        error: String
+    ) throws {
+        try updateJournalEntries(ids) { database, id in
+            try run(
+                """
+                UPDATE change_journal
+                SET sync_state = 'blockedUserAttention',
+                    retry_count = retry_count + 1,
+                    last_error = ?
+                WHERE id = ?
+                  AND sync_state IN ('pendingUpload', 'publishedLocal')
+                """,
+                on: database
+            ) { statement in
+                bind(error, to: 1, in: statement)
+                bind(id, to: 2, in: statement)
+            }
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "sync outbox entry cannot enter blockedUserAttention"
+                )
+            }
+        }
+    }
+
+    /// A user-triggered retry is the explicit acknowledgement that an
+    /// account, Drive, or permission problem may have been repaired. Automatic
+    /// timers must not call this method and spin on the same blocked evidence.
+    public func requeueJournalEntriesBlockedForUserAttention() throws {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try run(
+            """
+            UPDATE change_journal
+            SET sync_state = 'pendingUpload', last_error = NULL,
+                transport_receipt = NULL
+            WHERE sync_state = 'blockedUserAttention'
+            """,
+            on: database
+        )
     }
 
     func requeueJournalEntriesForBaselineRecovery(
@@ -276,7 +442,8 @@ public final class SQLiteSyncRepository {
             try run(
                 """
                 UPDATE change_journal
-                SET sync_state = 'pendingUpload', last_error = NULL
+                SET sync_state = 'pendingUpload', last_error = NULL,
+                    transport_receipt = NULL
                 WHERE id = ?
                 """,
                 on: database
@@ -291,14 +458,17 @@ public final class SQLiteSyncRepository {
         }
     }
 
-    public func markJournalEntryFailed(_ id: UUID, error: String) throws {
+    public func markJournalEntryBlockedCorruption(
+        _ id: UUID,
+        error: String
+    ) throws {
         try updateJournalEntries([id]) { database, id in
             try run(
                 """
                 UPDATE change_journal
-                SET sync_state = 'failed',
+                SET sync_state = 'blockedCorruption',
                     retry_count = retry_count + 1,
-                    last_error = ?
+                    last_error = ?, transport_receipt = NULL
                 WHERE id = ?
                 """,
                 on: database
@@ -405,6 +575,9 @@ public final class SQLiteSyncRepository {
                 try appendAuditLog(entry, into: database)
             }
             try saveMetadata(commit.metadata, into: database)
+            if let frontierMetadata = commit.frontierMetadata {
+                try saveMetadata(frontierMetadata, into: database)
+            }
             let durableWaitingCount = try pendingDownloads(from: database).count
             try execute("COMMIT", on: database)
             return durableWaitingCount
@@ -1521,7 +1694,8 @@ private extension SQLiteSyncRepository {
             state: state,
             retryCount: try int(statement, 8),
             lastError: try optionalString(statement, 9),
-            recordPayload: recordPayload
+            recordPayload: recordPayload,
+            transportReceipt: optionalData(statement, 11)
         )
     }
 

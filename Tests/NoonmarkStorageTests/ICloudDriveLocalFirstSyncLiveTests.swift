@@ -60,11 +60,17 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             transport: ICloudDriveSyncTransport(rootURL: rootURL)
         )
 
-        let macResult = try await macSync.sync(now: now.addingTimeInterval(10))
+        let macResult = try await syncUntilConfirmed(
+            macSync,
+            now: now.addingTimeInterval(10)
+        )
         XCTAssertGreaterThan(macResult.upload.uploadedCount, 0)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: rootURL.appendingPathComponent("refs/latest").path))
+        XCTAssertFalse(try repositoryHeadFiles(rootURL).isEmpty)
 
-        let phoneResult = try await phoneSync.sync(now: now.addingTimeInterval(20))
+        let phoneResult = try await syncUntilConfirmed(
+            phoneSync,
+            now: now.addingTimeInterval(20)
+        )
         let restoredPhone = try phoneRepository.load()
 
         XCTAssertGreaterThan(phoneResult.download.appliedCount, 0)
@@ -162,14 +168,22 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
         )
         try targetRepository.save(NoonmarkEngine().snapshot())
 
-        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+        let sourceCoordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: sourceURL,
             transport: ICloudDriveSyncTransport(rootURL: rootURL)
-        ).sync(now: now.addingTimeInterval(10))
-        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+        )
+        let targetCoordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: targetURL,
             transport: ICloudDriveSyncTransport(rootURL: rootURL)
-        ).sync(now: now.addingTimeInterval(20))
+        )
+        let sourceResult = try await syncUntilConfirmed(
+            sourceCoordinator,
+            now: now.addingTimeInterval(10)
+        )
+        let targetResult = try await syncUntilConfirmed(
+            targetCoordinator,
+            now: now.addingTimeInterval(20)
+        )
         let restored = try targetRepository.load().snapshot()
 
         XCTAssertGreaterThan(sourceResult.upload.uploadedCount, 0)
@@ -197,13 +211,7 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
                 preferences: importedSnapshot.preferences
             )
         )
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: rootURL.appendingPathComponent(
-                    "refs/latest"
-                ).path
-            )
-        )
+        XCTAssertFalse(try repositoryHeadFiles(rootURL).isEmpty)
 
         let sourceSyncRepository = SQLiteSyncRepository(
             databaseURL: sourceURL
@@ -224,7 +232,7 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             try SQLiteLocalFirstSyncCoordinator.timestamps(
                 in: sourceSyncRepository
             )?.lastEffectiveSyncedAt,
-            now.addingTimeInterval(10)
+            sourceResult.syncedAt
         )
     }
 
@@ -255,6 +263,35 @@ final class ICloudDriveLocalFirstSyncLiveTests: XCTestCase {
             confirmation: .user(decisionID: decisionID),
             now: now
         )
+    }
+
+    private func syncUntilConfirmed(
+        _ coordinator: SQLiteLocalFirstSyncCoordinator,
+        now: Date
+    ) async throws -> SQLiteLocalFirstSyncResult {
+        let deadline = Date().addingTimeInterval(60)
+        var attempt = 0
+        while true {
+            let result = try await coordinator.sync(
+                now: now.addingTimeInterval(TimeInterval(attempt))
+            )
+            if result.isAwaitingUploadConfirmation == false {
+                return result
+            }
+            guard Date() < deadline else {
+                XCTFail("iCloud did not confirm batch and covering head upload")
+                return result
+            }
+            attempt += 1
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    private func repositoryHeadFiles(_ rootURL: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: rootURL.appendingPathComponent("heads"),
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "json" }
     }
 
     private func makeDatabaseURL(_ name: String) -> URL {

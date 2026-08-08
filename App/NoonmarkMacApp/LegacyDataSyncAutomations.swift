@@ -391,6 +391,17 @@ struct ICloudSyncE2EAutomation: LaunchAutomationRunnable {
                     finish("ok")
                     return
                 }
+                let awaitingConfirmation = store.isLocalFirstSyncing == false
+                    && (
+                        store.localFirstSyncMessage?
+                            .hasPrefix("等待 iCloud 上传确认") == true
+                            || store.localFirstSyncMessage?
+                            .hasPrefix("Awaiting iCloud upload confirmation")
+                            == true
+                    )
+                if awaitingConfirmation {
+                    store.syncLocalFolderNow()
+                }
             }
             finish(
                 "failed: \(store.localFirstSyncMessage ?? "iCloud sync timed out without a status")"

@@ -47,6 +47,52 @@ final class DiagnosticFailureMappingTests: XCTestCase {
         )
     }
 
+    func testIncrementalTransportFailuresHaveStableSafeCodes() {
+        let producerCanary = "PRIVATE-ACCOUNT-NAME-7Q9X"
+        let expected: [(SyncRecordTransportError, Int)] = [
+            (.invalidFrontier, 203),
+            (.frontierDidNotAdvance, 204),
+            (.repositoryFormatMismatch, 205),
+            (
+                .producerFork(
+                    producerID: producerCanary,
+                    sequence: 7
+                ),
+                206
+            ),
+            (
+                .missingBatch(
+                    producerID: producerCanary,
+                    sequence: 8
+                ),
+                207
+            ),
+            (
+                .invalidBatchHash(
+                    producerID: producerCanary,
+                    sequence: 9
+                ),
+                208
+            )
+        ]
+
+        for (error, code) in expected {
+            let failure = error.diagnosticFailure
+            XCTAssertEqual(
+                failure,
+                DiagnosticFailure(domain: .syncProtocol, code: code)
+            )
+            let evidence = EvidenceEvent.persistenceFailed(
+                failure: failure,
+                incidentID: DiagnosticIncidentID()
+            )
+            XCTAssertFalse(
+                DiagnosticEvidenceTextRenderer.render([evidence])
+                    .contains(producerCanary)
+            )
+        }
+    }
+
     func testMergeFailureReasonsHaveStableSafeCodes() {
         let expected: [SyncRecordMergeFailureReason: Int] = [
             .unknown: 202,

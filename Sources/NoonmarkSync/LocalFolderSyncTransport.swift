@@ -6,74 +6,86 @@ import NoonmarkDiagnostics
 enum LocalFolderSyncPublicationPoint: Equatable {
     case willPublishBatch
     case didPublishBatch
+    case willPublishHead
+    case didPublishHead
 }
 
+/// Append-only incremental repository used by Local Folder and iCloud Drive.
+///
+/// Each installation owns one producer epoch and therefore one immutable hash
+/// chain. Producers never update each other's files. A reader enumerates only
+/// `heads/`, then opens the exact sequences after its durable frontier.
 public actor LocalFolderSyncTransport: SyncRecordTransport {
-    private struct StoredRecordFile {
-        var url: URL
-        var data: Data
-        var record: SyncRecord
+    public nonisolated static let formatVersion = 1
+
+    private struct RepositoryBatch: Codable {
+        let formatVersion: Int
+        let epochID: String
+        let sequence: UInt64
+        let previousHash: String?
+        let records: [SyncRecord]
+        /// Hash of the canonical semantic body. The exact-file hash remains
+        /// the chain link and receipt; this body hash lets a paged reader
+        /// reject corruption before applying a non-tip batch.
+        let bodyHash: String
     }
 
-    private struct RepositoryCommit: Codable {
-        var id: UUID
-        var parentIDs: [UUID]
-        var records: [SyncRecord]
-        var publishedRecords: [SyncRecord]
-        var snapshot: SyncRepositorySnapshot
+    private struct RepositoryBatchBody: Codable {
+        let formatVersion: Int
+        let epochID: String
+        let sequence: UInt64
+        let previousHash: String?
+        let records: [SyncRecord]
     }
 
-    private struct StoredRepositoryState {
-        var commits: [RepositoryCommit]
-        var headIDs: [UUID]
-        var recordFiles: [StoredRecordFile]
+    private struct RepositoryHead: Codable {
+        let tipSequence: UInt64
+        let tipHash: String
     }
 
-    private struct AppliedRecordBatch {
-        var currentRecords: [SyncRecord]
-        var publishedRecords: [SyncRecord]
+    private struct ObservedHead {
+        let epochID: String
+        let value: RepositoryHead
     }
 
-    private struct StoredRecordsObservation {
-        var records: [SyncRecord]
-        var fileCount: Int
-        var byteCount: Int64
+    public nonisolated let rootURL: URL
+    public nonisolated let producerEpochID: UUID
+    public nonisolated let frontierNamespace: String
+
+    public nonisolated static func frontierNamespace(
+        for rootURL: URL
+    ) -> String {
+        "folder-" + sha256Hex(
+            Data(rootURL.standardizedFileURL.path.utf8)
+        )
     }
 
-    private let rootURL: URL
     private let fileManager: FileManager
-    private let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return encoder
-    }()
-
-    private let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
-
-    private let currentRecordMerger = CurrentSyncRecordMerger()
     private let diagnosticOperation: DiagnosticOperation?
     private let publicationFault: @Sendable (
         LocalFolderSyncPublicationPoint
     ) throws -> Void
+    private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
 
     public init(
         rootURL: URL,
+        producerEpochID: UUID = UUID(),
         fileManager: FileManager = .default,
         diagnosticOperation: DiagnosticOperation? = nil
     ) {
         self.rootURL = rootURL
+        self.producerEpochID = producerEpochID
+        frontierNamespace = Self.frontierNamespace(for: rootURL)
         self.fileManager = fileManager
         self.diagnosticOperation = diagnosticOperation
         publicationFault = { _ in }
+        (encoder, decoder) = Self.canonicalCodecs()
     }
 
     init(
         rootURL: URL,
+        producerEpochID: UUID = UUID(),
         fileManager: FileManager = .default,
         diagnosticOperation: DiagnosticOperation? = nil,
         publicationFault: @escaping @Sendable (
@@ -81,444 +93,580 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         ) throws -> Void
     ) {
         self.rootURL = rootURL
+        self.producerEpochID = producerEpochID
+        frontierNamespace = Self.frontierNamespace(for: rootURL)
         self.fileManager = fileManager
         self.diagnosticOperation = diagnosticOperation
         self.publicationFault = publicationFault
+        (encoder, decoder) = Self.canonicalCodecs()
     }
 
-    public func push(_ records: [SyncRecord]) async throws {
+    public func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        try prepareRepository()
+        try prepareRepositoryForWriting()
         guard records.isEmpty == false else {
-            diagnosticOperation?.stage(
-                .upload,
-                progress: DiagnosticProgress(
-                    recordCount: 0,
-                    fileCount: 0,
-                    byteCount: 0
-                ),
-                durationMilliseconds: Self.durationMilliseconds(
-                    since: startedAt
-                )
+            return SyncTransportPushReceipt(
+                batches: [],
+                confirmation: .confirmed
             )
-            return
         }
-        let payloadByteCount = try records.reduce(into: Int64(0)) {
-            byteCount,
-            record in
-            let encodedCount = Int64(try encoder.encode(record).count)
-            let (sum, overflow) = byteCount.addingReportingOverflow(
-                encodedCount
-            )
-            byteCount = overflow ? Int64.max : sum
-        }
-
-        try withExclusiveRepositoryLock {
-            let repositoryState = try storedRepositoryState()
-            let storedFiles = repositoryState.recordFiles
-                + (try externalConflictRecordFiles())
-            let mirrorFiles = try recordMirrorFiles()
-            let existingRecords = try canonicalRecords(from: storedFiles)
-            try ImmutableSyncRecordCASPreflight.validate(
-                existing: [],
-                incoming: (storedFiles + mirrorFiles).map {
-                    ImmutableSyncRecordCASCandidate(
-                        record: $0.record,
-                        exactData: $0.data
+        let producerID = producerEpochID.uuidString.lowercased()
+        return try withExclusiveRepositoryLock {
+            let previousHead = try readHead(epochID: producerID)
+            let orderedRecords = sortedRecords(records)
+            if let previousHead {
+                let previousBatchData = try Data(
+                    contentsOf: batchURL(
+                        epochID: producerID,
+                        sequence: previousHead.tipSequence
                     )
-                } + records.map {
-                    ImmutableSyncRecordCASCandidate(
-                        record: $0,
-                        exactData: try encoder.encode($0)
+                )
+                let previousBatch = try decodeBatch(
+                    previousBatchData,
+                    producerID: producerID,
+                    sequence: previousHead.tipSequence
+                )
+                try validate(
+                    batch: previousBatch,
+                    hash: Self.sha256Hex(previousBatchData),
+                    expectedEpochID: producerID,
+                    expectedSequence: previousHead.tipSequence,
+                    expectedPreviousHash: previousBatch.previousHash,
+                    head: previousHead
+                )
+                if previousBatch.records == orderedRecords {
+                    return pushReceipt(
+                        producerID: producerID,
+                        sequence: previousHead.tipSequence,
+                        batchHash: previousHead.tipHash
                     )
                 }
-            )
-            let batch = try currentRecordMerger.prepareTransportBatch(
-                existingRecords: existingRecords,
-                incomingRecords: records
-            )
-
-            let applied = try applying(
-                batch.records,
-                to: existingRecords,
-                context: batch.mergeContext
-            )
-            guard applied.publishedRecords.isEmpty == false else {
-                try repairDerivedArtifacts(
-                    currentRecords: existingRecords,
-                    commits: repositoryState.commits
-                )
-                return
             }
-            let deviceID = records.first?.modifiedByDeviceID
-                ?? SyncDeviceID("unknown")
-            let snapshot = try SyncRepositorySnapshotBuilder().snapshot(
-                records: applied.publishedRecords,
-                deviceID: deviceID
+            let sequence = try nextSequence(after: previousHead)
+            let body = RepositoryBatchBody(
+                formatVersion: Self.formatVersion,
+                epochID: producerID,
+                sequence: sequence,
+                previousHash: previousHead?.tipHash,
+                records: orderedRecords
             )
-            let commit = repositoryCommit(
-                records: applied.currentRecords,
-                publishedRecords: applied.publishedRecords,
-                snapshot: snapshot,
-                parentIDs: repositoryState.headIDs
+            let batch = RepositoryBatch(
+                formatVersion: body.formatVersion,
+                epochID: body.epochID,
+                sequence: body.sequence,
+                previousHash: body.previousHash,
+                records: body.records,
+                bodyHash: Self.sha256Hex(try encoder.encode(body))
             )
-            try publishBatch(commit)
-            try repairDerivedArtifacts(
-                currentRecords: applied.currentRecords,
-                commits: repositoryState.commits + [commit]
+            let batchData = try encoder.encode(batch)
+            let batchHash = Self.sha256Hex(batchData)
+            let batchURL = self.batchURL(
+                epochID: producerID,
+                sequence: sequence
             )
-            let fileWriteCount = 1
-                + applied.currentRecords.count
-                + repositoryState.commits.count + 1
-                + 1
+            let headURL = self.headURL(epochID: producerID)
+
+            try publicationFault(.willPublishBatch)
+            try publishImmutable(data: batchData, to: batchURL)
+            try publicationFault(.didPublishBatch)
+
+            try publicationFault(.willPublishHead)
+            try publishHead(
+                RepositoryHead(
+                    tipSequence: sequence,
+                    tipHash: batchHash
+                ),
+                to: headURL
+            )
+            try publicationFault(.didPublishHead)
+
             diagnosticOperation?.stage(
                 .upload,
                 progress: DiagnosticProgress(
                     recordCount: records.count,
-                    fileCount: fileWriteCount,
-                    byteCount: payloadByteCount
+                    fileCount: 2,
+                    byteCount: Int64(batchData.count)
                 ),
                 durationMilliseconds: Self.durationMilliseconds(
                     since: startedAt
                 )
             )
+            return pushReceipt(
+                producerID: producerID,
+                sequence: sequence,
+                batchHash: batchHash
+            )
         }
     }
 
-    public func fetchAll() async throws -> [SyncRecord] {
-        try prepareRepository()
-        return try withExclusiveRepositoryLock {
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            let observation = try storedRecords()
-            let durationMilliseconds = Self.durationMilliseconds(
-                since: startedAt
-            )
-            diagnosticOperation?.stage(
-                .transportFetch,
-                progress: DiagnosticProgress(
-                    recordCount: observation.records.count,
-                    fileCount: observation.fileCount,
-                    byteCount: observation.byteCount
-                ),
-                durationMilliseconds: durationMilliseconds
-            )
-            return observation.records
-        }
-    }
-
-    private func storedRecords() throws -> StoredRecordsObservation {
-        let repositoryState = try storedRepositoryState()
-        let files = repositoryState.recordFiles
-            + (try externalConflictRecordFiles())
-        return try StoredRecordsObservation(
-            records: canonicalRecords(from: files),
-            fileCount: files.count,
-            byteCount: files.reduce(0) {
-                $0 + Int64($1.data.count)
-            }
-        )
-    }
-
-    private func storedRepositoryState() throws -> StoredRepositoryState {
-        guard fileManager.fileExists(atPath: batchesURL.path) else {
-            return StoredRepositoryState(
-                commits: [],
-                headIDs: [],
-                recordFiles: []
-            )
-        }
-        let commits = try fileManager.contentsOfDirectory(
-            at: batchesURL,
-            includingPropertiesForKeys: nil
-        )
-        .filter { $0.pathExtension == "json" }
-        .map { url -> (URL, RepositoryCommit) in
-            (
-                url,
-                try decoder.decode(
-                    RepositoryCommit.self,
-                    from: Data(contentsOf: url)
+    private func pushReceipt(
+        producerID: String,
+        sequence: UInt64,
+        batchHash: String
+    ) -> SyncTransportPushReceipt {
+        SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: producerID,
+                    sequence: sequence,
+                    contentHash: batchHash,
+                    artifactPaths: [
+                        relativeBatchPath(
+                            epochID: producerID,
+                            sequence: sequence
+                        ),
+                        relativeHeadPath(epochID: producerID)
+                    ]
                 )
-            )
-        }
-        let commitIDs = Set(commits.map { $0.1.id })
-        guard commitIDs.count == commits.count else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let parentIDs = Set(commits.flatMap { $0.1.parentIDs })
-        let heads = commits.filter {
-            parentIDs.contains($0.1.id) == false
-        }
-        guard commits.isEmpty || heads.isEmpty == false else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let recordFiles = try heads.flatMap {
-            url,
-            commit -> [StoredRecordFile] in
-            try commit.records.map {
-                StoredRecordFile(
-                    url: url,
-                    data: try encoder.encode($0),
-                    record: $0
+            ],
+            confirmation: .confirmed
+        )
+    }
+
+    public func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        try prepareRepositoryForReading()
+        let heads = try observedHeads()
+        try validate(frontier: frontier, against: heads)
+
+        let pageLimit = max(limit, 1)
+        var nextFrontier = frontier
+        var records: [SyncRecord] = []
+        var references: [SyncTransportBatchReference] = []
+        var byteCount: Int64 = 0
+
+        producerLoop: for head in heads {
+            var position = frontier.position(for: head.epochID)
+            var sequence = position?.sequence ?? 0
+            var previousHash = position?.contentHash
+            while sequence < head.value.tipSequence {
+                let nextSequence = sequence + 1
+                let url = batchURL(
+                    epochID: head.epochID,
+                    sequence: nextSequence
                 )
-            }
-        }
-        return StoredRepositoryState(
-            commits: commits.map(\.1).sorted {
-                $0.id.uuidString < $1.id.uuidString
-            },
-            headIDs: heads.map { $0.1.id }.sorted {
-                $0.uuidString < $1.uuidString
-            },
-            recordFiles: recordFiles
-        )
-    }
-
-    private func repositoryCommit(
-        records: [SyncRecord],
-        publishedRecords: [SyncRecord],
-        snapshot: SyncRepositorySnapshot,
-        parentIDs: [UUID]
-    ) -> RepositoryCommit {
-        RepositoryCommit(
-            id: UUID(),
-            parentIDs: parentIDs.sorted {
-                $0.uuidString < $1.uuidString
-            },
-            records: sortedRecords(records),
-            publishedRecords: sortedRecords(publishedRecords),
-            snapshot: snapshot
-        )
-    }
-
-    private func sortedRecords(_ records: [SyncRecord]) -> [SyncRecord] {
-        records.sorted {
-            if $0.entityType.rawValue != $1.entityType.rawValue {
-                return $0.entityType.rawValue < $1.entityType.rawValue
-            }
-            return $0.id.rawValue < $1.id.rawValue
-        }
-    }
-
-    private func recordMirrorFiles() throws -> [StoredRecordFile] {
-        guard fileManager.fileExists(atPath: recordsURL.path) else {
-            return []
-        }
-        return try fileManager.contentsOfDirectory(
-            at: recordsURL,
-            includingPropertiesForKeys: nil
-        )
-        .filter { $0.pathExtension == "json" }
-        .map {
-            let data = try Data(contentsOf: $0)
-            return StoredRecordFile(
-                url: $0,
-                data: data,
-                record: try decoder.decode(SyncRecord.self, from: data)
-            )
-        }
-    }
-
-    private func externalConflictRecordFiles() throws -> [StoredRecordFile] {
-        try recordMirrorFiles().filter {
-            isManagedRecordFileName($0) == false
-        }
-    }
-
-    private func canonicalRecords(
-        from storedFiles: [StoredRecordFile]
-    ) throws -> [SyncRecord] {
-        let grouped = Dictionary(grouping: storedFiles, by: { $0.record.id })
-        for (recordID, candidates) in grouped where candidates.count > 1 {
-            guard let first = candidates.first else { continue }
-            let requiresImmutableCAS = candidates.contains {
-                $0.record.entityType.requiresImmutableRecordPayload
-            }
-            if requiresImmutableCAS {
-                guard candidates.dropFirst().allSatisfy({ candidate in
-                    candidate.record.exactlyMatches(first.record)
-                        && candidate.data == first.data
-                }) else {
-                    throw SyncRecordTransportError.immutableRecordCollision(
-                        recordID: recordID
+                guard fileManager.fileExists(atPath: url.path) else {
+                    throw SyncRecordTransportError.missingBatch(
+                        producerID: head.epochID,
+                        sequence: nextSequence
                     )
                 }
-            }
-        }
-
-        let batch = try currentRecordMerger.prepareTransportBatch(
-            existingRecords: [],
-            incomingRecords: storedFiles.map(\.record)
-        )
-        var canonicalByID: [SyncRecordID: SyncRecord] = [:]
-        for record in batch.records {
-            guard let existing = canonicalByID[record.id] else {
-                canonicalByID[record.id] = record
-                continue
-            }
-            let requiresImmutableCAS = existing.entityType.requiresImmutableRecordPayload
-                || record.entityType.requiresImmutableRecordPayload
-            if requiresImmutableCAS {
-                continue
-            }
-            do {
-                canonicalByID[record.id] = try currentRecordMerger.merge(
-                    existing: existing,
-                    incoming: record,
-                    context: batch.mergeContext
+                let data = try Data(contentsOf: url)
+                let decoded = try decodeBatch(
+                    data,
+                    producerID: head.epochID,
+                    sequence: nextSequence
                 )
-            } catch {
-                throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: record.id,
-                    reason: SyncRecordMergeFailureReason(underlying: error)
+                let hash = Self.sha256Hex(data)
+                try validate(
+                    batch: decoded,
+                    hash: hash,
+                    expectedEpochID: head.epochID,
+                    expectedSequence: nextSequence,
+                    expectedPreviousHash: previousHash,
+                    head: head.value
                 )
-            }
-        }
-
-        return canonicalByID.values.sorted {
-            if $0.entityType.rawValue != $1.entityType.rawValue {
-                return $0.entityType.rawValue < $1.entityType.rawValue
-            }
-            return $0.id.rawValue < $1.id.rawValue
-        }
-    }
-
-    private func applying(
-        _ records: [SyncRecord],
-        to existingRecords: [SyncRecord],
-        context: CurrentSyncRecordMergeContext
-    ) throws -> AppliedRecordBatch {
-        var currentByID = Dictionary(
-            uniqueKeysWithValues: existingRecords.map { ($0.id, $0) }
-        )
-        var published: [SyncRecord] = []
-        for record in records {
-            guard let existing = currentByID[record.id] else {
-                currentByID[record.id] = record
-                published.append(record)
-                continue
-            }
-            if existing.entityType.requiresImmutableRecordPayload
-                || record.entityType.requiresImmutableRecordPayload
-            {
-                continue
-            }
-            let merged: SyncRecord
-            do {
-                merged = try currentRecordMerger.merge(
-                    existing: existing,
-                    incoming: record,
-                    context: context
-                )
-            } catch {
-                throw SyncRecordTransportError.invalidCurrentRecordMerge(
-                    recordID: record.id,
-                    reason: SyncRecordMergeFailureReason(underlying: error)
-                )
-            }
-            guard merged.exactlyMatches(existing) == false else {
-                continue
-            }
-            currentByID[record.id] = merged
-            published.append(merged)
-        }
-        return AppliedRecordBatch(
-            currentRecords: currentByID.values.sorted {
-                if $0.entityType.rawValue != $1.entityType.rawValue {
-                    return $0.entityType.rawValue
-                        < $1.entityType.rawValue
+                if records.isEmpty == false,
+                   records.count + decoded.records.count > pageLimit
+                {
+                    break producerLoop
                 }
-                return $0.id.rawValue < $1.id.rawValue
-            },
-            publishedRecords: published
-        )
-    }
-
-    private func publishBatch(_ commit: RepositoryCommit) throws {
-        try publicationFault(.willPublishBatch)
-        let batchURL = batchesURL
-            .appendingPathComponent(commit.id.uuidString)
-            .appendingPathExtension("json")
-        try encoder.encode(commit).write(
-            to: batchURL,
-            options: [.atomic]
-        )
-        try publicationFault(.didPublishBatch)
-    }
-
-    private func repairDerivedArtifacts(
-        currentRecords: [SyncRecord],
-        commits: [RepositoryCommit]
-    ) throws {
-        for record in currentRecords {
-            try encoder.encode(record).write(
-                to: recordURL(for: record.id),
-                options: [.atomic]
-            )
-        }
-
-        let orderedSnapshots = commits.map(\.snapshot).sorted {
-            if $0.createdAt != $1.createdAt {
-                return $0.createdAt < $1.createdAt
+                records.append(contentsOf: decoded.records)
+                references.append(
+                    SyncTransportBatchReference(
+                        producerID: head.epochID,
+                        sequence: nextSequence,
+                        contentHash: hash,
+                        artifactPaths: [
+                            relativeBatchPath(
+                                epochID: head.epochID,
+                                sequence: nextSequence
+                            )
+                        ]
+                    )
+                )
+                let (nextByteCount, overflow) = byteCount
+                    .addingReportingOverflow(Int64(data.count))
+                byteCount = overflow ? Int64.max : nextByteCount
+                let advancedPosition = SyncTransportPosition(
+                    sequence: nextSequence,
+                    contentHash: hash
+                )
+                nextFrontier = nextFrontier.advancing(
+                    producerID: head.epochID,
+                    to: advancedPosition
+                )
+                position = advancedPosition
+                sequence = nextSequence
+                previousHash = hash
+                if records.count >= pageLimit {
+                    break producerLoop
+                }
             }
-            return $0.id < $1.id
         }
-        for snapshot in orderedSnapshots {
-            let data = try encoder.encode(snapshot)
-            try data.write(
-                to: snapshotURL(for: snapshot.id),
-                options: [.atomic]
+
+        let hasMore = heads.contains { head in
+            (nextFrontier.position(for: head.epochID)?.sequence ?? 0)
+                < head.value.tipSequence
+        }
+        diagnosticOperation?.stage(
+            .transportFetch,
+            progress: DiagnosticProgress(
+                recordCount: records.count,
+                fileCount: heads.count + references.count,
+                byteCount: byteCount
+            ),
+            durationMilliseconds: Self.durationMilliseconds(
+                since: startedAt
             )
-        }
-        if let latestSnapshot = orderedSnapshots.last {
-            try latestSnapshot.id.write(
-                to: latestRefURL,
-                atomically: true,
-                encoding: .utf8
-            )
-        }
+        )
+        return SyncTransportChangePage(
+            records: records,
+            frontier: nextFrontier,
+            hasMore: hasMore,
+            batches: references,
+            observedProducerCount: heads.count,
+            openedBatchCount: references.count,
+            openedByteCount: byteCount
+        )
     }
 
+    /// Test and migration evidence helper. It is intentionally implemented in
+    /// terms of the incremental protocol and is not used by the coordinator.
     public func fetchSnapshots() async throws -> [SyncRepositorySnapshot] {
-        try prepareRepository()
-        return try withExclusiveRepositoryLock {
-            guard fileManager.fileExists(atPath: indexesURL.path)
-            else {
-                return []
-            }
-            return try fileManager.contentsOfDirectory(
-                at: indexesURL,
-                includingPropertiesForKeys: nil
-            )
-            .filter { $0.pathExtension == "json" }
-            .map {
-                try decoder.decode(
-                    SyncRepositorySnapshot.self,
-                    from: Data(contentsOf: $0)
+        var frontier = SyncTransportFrontier.origin
+        var snapshots: [SyncRepositorySnapshot] = []
+        var currentRecords: [SyncRecord] = []
+        while true {
+            let page = try await pull(after: frontier, limit: 512)
+            for reference in page.batches {
+                let url = batchURL(
+                    epochID: reference.producerID,
+                    sequence: reference.sequence
+                )
+                let batch = try decodeBatch(
+                    Data(contentsOf: url),
+                    producerID: reference.producerID,
+                    sequence: reference.sequence
+                )
+                let deviceID = batch.records.first?.modifiedByDeviceID
+                    ?? SyncDeviceID("unknown")
+                currentRecords = try CurrentSyncRecordMerger()
+                    .prepareTransportBatch(
+                        existingRecords: currentRecords,
+                        incomingRecords: batch.records
+                    ).records
+                snapshots.append(
+                    try SyncRepositorySnapshotBuilder().snapshot(
+                        records: currentRecords,
+                        deviceID: deviceID
+                    )
                 )
             }
-            .sorted { $0.createdAt < $1.createdAt }
+            guard page.hasMore else { return snapshots }
+            guard page.frontier != frontier else {
+                throw SyncRecordTransportError.frontierDidNotAdvance
+            }
+            frontier = page.frontier
         }
+    }
+
+    private func prepareRepositoryForReading() throws {
+        for legacyName in ["records", "indexes", "refs"] {
+            if fileManager.fileExists(
+                atPath: rootURL.appendingPathComponent(legacyName).path
+            ) {
+                throw SyncRecordTransportError.repositoryFormatMismatch
+            }
+        }
+        try fileManager.createDirectory(
+            at: headsURL,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: batchesURL,
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func prepareRepositoryForWriting() throws {
+        try prepareRepositoryForReading()
+        try fileManager.createDirectory(
+            at: producerBatchesURL(
+                epochID: producerEpochID.uuidString.lowercased()
+            ),
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func observedHeads() throws -> [ObservedHead] {
+        try fileManager.contentsOfDirectory(
+            at: headsURL,
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension == "json" }
+        .map { url in
+            let epochID = url.deletingPathExtension().lastPathComponent
+            guard let uuid = UUID(uuidString: epochID),
+                  uuid.uuidString.lowercased() == epochID
+            else {
+                throw SyncRecordTransportError.repositoryFormatMismatch
+            }
+            let head = try decodeHead(Data(contentsOf: url))
+            guard head.tipSequence > 0,
+                  Self.isSHA256Hex(head.tipHash)
+            else {
+                throw SyncRecordTransportError.repositoryFormatMismatch
+            }
+            return ObservedHead(epochID: epochID, value: head)
+        }
+        .sorted { $0.epochID < $1.epochID }
+    }
+
+    private func validate(
+        frontier: SyncTransportFrontier,
+        against heads: [ObservedHead]
+    ) throws {
+        let headsByEpoch = Dictionary(
+            uniqueKeysWithValues: heads.map { ($0.epochID, $0.value) }
+        )
+        for (producerID, position) in frontier.positions {
+            guard let head = headsByEpoch[producerID],
+                  position.sequence > 0,
+                  position.sequence <= head.tipSequence,
+                  Self.isSHA256Hex(position.contentHash)
+            else {
+                throw SyncRecordTransportError.invalidFrontier
+            }
+            if position.sequence == head.tipSequence,
+               position.contentHash != head.tipHash
+            {
+                throw SyncRecordTransportError.producerFork(
+                    producerID: producerID,
+                    sequence: position.sequence
+                )
+            }
+        }
+    }
+
+    private func validate(
+        batch: RepositoryBatch,
+        hash: String,
+        expectedEpochID: String,
+        expectedSequence: UInt64,
+        expectedPreviousHash: String?,
+        head: RepositoryHead
+    ) throws {
+        let previousHashShapeIsValid = if expectedSequence == 1 {
+            batch.previousHash == nil
+        } else if let previousHash = batch.previousHash {
+            Self.isSHA256Hex(previousHash)
+        } else {
+            false
+        }
+        guard batch.formatVersion == Self.formatVersion,
+              batch.epochID == expectedEpochID,
+              batch.sequence == expectedSequence,
+              batch.records.isEmpty == false,
+              batch.previousHash == expectedPreviousHash,
+              previousHashShapeIsValid
+        else {
+            throw SyncRecordTransportError.producerFork(
+                producerID: expectedEpochID,
+                sequence: expectedSequence
+            )
+        }
+        let body = RepositoryBatchBody(
+            formatVersion: batch.formatVersion,
+            epochID: batch.epochID,
+            sequence: batch.sequence,
+            previousHash: batch.previousHash,
+            records: batch.records
+        )
+        guard Self.isSHA256Hex(batch.bodyHash),
+              Self.sha256Hex(try encoder.encode(body)) == batch.bodyHash
+        else {
+            throw SyncRecordTransportError.invalidBatchHash(
+                producerID: expectedEpochID,
+                sequence: expectedSequence
+            )
+        }
+        guard expectedSequence != head.tipSequence
+                || hash == head.tipHash
+        else {
+            throw SyncRecordTransportError.invalidBatchHash(
+                producerID: expectedEpochID,
+                sequence: expectedSequence
+            )
+        }
+    }
+
+    private func readHead(epochID: String) throws -> RepositoryHead? {
+        let url = headURL(epochID: epochID)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let head = try decodeHead(Data(contentsOf: url))
+        guard head.tipSequence > 0,
+              Self.isSHA256Hex(head.tipHash)
+        else {
+            throw SyncRecordTransportError.repositoryFormatMismatch
+        }
+        let tipURL = batchURL(
+            epochID: epochID,
+            sequence: head.tipSequence
+        )
+        guard fileManager.fileExists(atPath: tipURL.path) else {
+            throw SyncRecordTransportError.missingBatch(
+                producerID: epochID,
+                sequence: head.tipSequence
+            )
+        }
+        let data = try Data(contentsOf: tipURL)
+        guard Self.sha256Hex(data) == head.tipHash else {
+            throw SyncRecordTransportError.invalidBatchHash(
+                producerID: epochID,
+                sequence: head.tipSequence
+            )
+        }
+        return head
+    }
+
+    private func nextSequence(
+        after head: RepositoryHead?
+    ) throws -> UInt64 {
+        guard let head else { return 1 }
+        let (next, overflow) = head.tipSequence.addingReportingOverflow(1)
+        guard overflow == false else {
+            throw SyncRecordTransportError.repositoryFormatMismatch
+        }
+        return next
+    }
+
+    private func decodeBatch(
+        _ data: Data,
+        producerID: String,
+        sequence: UInt64
+    ) throws -> RepositoryBatch {
+        do {
+            return try decoder.decode(RepositoryBatch.self, from: data)
+        } catch let error as SyncRecordTransportError {
+            throw error
+        } catch {
+            throw SyncRecordTransportError.invalidBatchHash(
+                producerID: producerID,
+                sequence: sequence
+            )
+        }
+    }
+
+    private func decodeHead(_ data: Data) throws -> RepositoryHead {
+        do {
+            return try decoder.decode(RepositoryHead.self, from: data)
+        } catch let error as SyncRecordTransportError {
+            throw error
+        } catch {
+            throw SyncRecordTransportError.repositoryFormatMismatch
+        }
+    }
+
+    private func publishImmutable(data: Data, to url: URL) throws {
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        do {
+            try data.write(to: url, options: [.withoutOverwriting])
+            try synchronizeFile(at: url)
+            try synchronizeDirectory(at: url.deletingLastPathComponent())
+        } catch let error as CocoaError
+            where error.code == .fileWriteFileExists
+        {
+            guard try Data(contentsOf: url) == data else {
+                let producerID = url.deletingLastPathComponent()
+                    .lastPathComponent
+                let sequence = UInt64(
+                    url.deletingPathExtension().lastPathComponent
+                ) ?? 0
+                throw SyncRecordTransportError.producerFork(
+                    producerID: producerID,
+                    sequence: sequence
+                )
+            }
+        }
+    }
+
+    private func publishHead(
+        _ head: RepositoryHead,
+        to destination: URL
+    ) throws {
+        let data = try encoder.encode(head)
+        let temporary = destination.deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(destination.lastPathComponent).\(UUID().uuidString).tmp"
+            )
+        defer { try? fileManager.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.withoutOverwriting])
+        try synchronizeFile(at: temporary)
+        let renameResult = temporary.withUnsafeFileSystemRepresentation {
+            sourcePath in
+            destination.withUnsafeFileSystemRepresentation {
+                destinationPath in
+                guard let sourcePath, let destinationPath else {
+                    errno = EINVAL
+                    return -1
+                }
+                return Darwin.rename(sourcePath, destinationPath)
+            }
+        }
+        guard renameResult == 0 else {
+            throw posixError(code: errno)
+        }
+        try synchronizeDirectory(at: destination.deletingLastPathComponent())
+    }
+
+    private func synchronizeFile(at url: URL) throws {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(path, O_RDONLY)
+        }
+        guard descriptor >= 0 else { throw posixError(code: errno) }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else { throw posixError(code: errno) }
+    }
+
+    private func synchronizeDirectory(at url: URL) throws {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(path, O_RDONLY)
+        }
+        guard descriptor >= 0 else { throw posixError(code: errno) }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else { throw posixError(code: errno) }
     }
 
     private func withExclusiveRepositoryLock<Result>(
         _ operation: () throws -> Result
     ) throws -> Result {
-        let descriptor = repositoryLockURL.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return Int32(-1) }
-            return open(path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
-        }
-        guard descriptor >= 0 else {
-            throw posixError(code: errno, path: repositoryLockURL.path)
-        }
+        let descriptor = repositoryLockURL
+            .withUnsafeFileSystemRepresentation { path in
+                guard let path else { return Int32(-1) }
+                return open(
+                    path,
+                    O_CREAT | O_RDWR,
+                    mode_t(S_IRUSR | S_IWUSR)
+                )
+            }
+        guard descriptor >= 0 else { throw posixError(code: errno) }
         defer { close(descriptor) }
 
         let waitStartedAt = ProcessInfo.processInfo.systemUptime
         diagnosticOperation?.stage(.transportLockWait)
         while flock(descriptor, LOCK_EX) != 0 {
-            guard errno == EINTR else {
-                throw posixError(code: errno, path: repositoryLockURL.path)
-            }
+            guard errno == EINTR else { throw posixError(code: errno) }
         }
         diagnosticOperation?.stage(
             .transportLockAcquired,
@@ -533,6 +681,51 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         return try operation()
     }
 
+    private static func canonicalCodecs() -> (JSONEncoder, JSONDecoder) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(
+                date.timeIntervalSinceReferenceDate.bitPattern
+            )
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let bits = try container.decode(UInt64.self)
+            let seconds = Double(bitPattern: bits)
+            guard seconds.isFinite else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "non-finite canonical date"
+                )
+            }
+            return Date(timeIntervalSinceReferenceDate: seconds)
+        }
+        return (encoder, decoder)
+    }
+
+    private func sortedRecords(_ records: [SyncRecord]) -> [SyncRecord] {
+        records.sorted {
+            let left = SyncRecordEvidenceID(record: $0).rawValue
+            let right = SyncRecordEvidenceID(record: $1).rawValue
+            return left < right
+        }
+    }
+
+    private nonisolated static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map {
+            String(format: "%02x", $0)
+        }.joined()
+    }
+
+    private nonisolated static func isSHA256Hex(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+
     private nonisolated static func durationMilliseconds(
         since startedAt: TimeInterval
     ) -> Int64 {
@@ -544,64 +737,53 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         return Int64(duration.rounded())
     }
 
-    private func posixError(code: Int32, path: String) -> NSError {
-        NSError(
-            domain: NSPOSIXErrorDomain,
-            code: Int(code),
-            userInfo: [NSFilePathErrorKey: path]
-        )
+    private func posixError(code: Int32) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(code))
     }
 
-    private func prepareRepository() throws {
-        try fileManager.createDirectory(at: recordsURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: batchesURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: indexesURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: refsURL, withIntermediateDirectories: true)
+    private var headsURL: URL {
+        rootURL.appendingPathComponent("heads", isDirectory: true)
     }
 
     private var batchesURL: URL {
         rootURL.appendingPathComponent("batches", isDirectory: true)
     }
 
-    private var recordsURL: URL {
-        rootURL.appendingPathComponent("records", isDirectory: true)
+    private func producerBatchesURL(epochID: String) -> URL {
+        batchesURL.appendingPathComponent(epochID, isDirectory: true)
     }
 
-    private var indexesURL: URL {
-        rootURL.appendingPathComponent("indexes", isDirectory: true)
+    private func headURL(epochID: String) -> URL {
+        headsURL.appendingPathComponent(epochID)
+            .appendingPathExtension("json")
     }
 
-    private var refsURL: URL {
-        rootURL.appendingPathComponent("refs", isDirectory: true)
+    private func batchURL(epochID: String, sequence: UInt64) -> URL {
+        producerBatchesURL(epochID: epochID)
+            .appendingPathComponent(Self.sequenceFileStem(sequence))
+            .appendingPathExtension("json")
     }
 
-    private var latestRefURL: URL {
-        refsURL.appendingPathComponent("latest")
+    private func relativeHeadPath(epochID: String) -> String {
+        "heads/\(epochID).json"
+    }
+
+    private func relativeBatchPath(
+        epochID: String,
+        sequence: UInt64
+    ) -> String {
+        "batches/\(epochID)/\(Self.sequenceFileStem(sequence)).json"
+    }
+
+    private nonisolated static func sequenceFileStem(
+        _ sequence: UInt64
+    ) -> String {
+        String(format: "%020llu", sequence)
     }
 
     private var repositoryLockURL: URL {
-        rootURL.appendingPathComponent(".repository.lock")
-    }
-
-    private func recordURL(for id: SyncRecordID) -> URL {
-        recordsURL.appendingPathComponent("\(stableFileName(for: id.rawValue)).json")
-    }
-
-    private func snapshotURL(for id: String) -> URL {
-        indexesURL.appendingPathComponent("\(stableFileName(for: id)).json")
-    }
-
-    private func stableFileName(for value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private func isManagedRecordFileName(
-        _ file: StoredRecordFile
-    ) -> Bool {
-        let stem = file.url.deletingPathExtension().lastPathComponent
-        return stem.count == 64
-            && stem.allSatisfy {
-                $0.isNumber || ("a" ... "f").contains($0)
-            }
+        producerBatchesURL(
+            epochID: producerEpochID.uuidString.lowercased()
+        ).appendingPathComponent(".writer.lock")
     }
 }

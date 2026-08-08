@@ -136,12 +136,36 @@ fi
 
 "$release_language_verifier" --self-test ||
   fail "GitHub Release language verifier self-test failed"
+notes_repository="$fixture_root/release-notes-repository"
+mkdir -p "$notes_repository/scripts"
+cp "$release_notes_generator" \
+  "$notes_repository/scripts/generate-github-release-notes"
+(
+  cd "$notes_repository"
+  git init -q
+  git config user.name "Release Notes Fixture"
+  git config user.email "release-notes@example.invalid"
+  printf 'baseline\n' >product.txt
+  git add product.txt scripts/generate-github-release-notes
+  git commit -qm 'chore(release): establish the prior release'
+  git tag -a v0.2.3 -m 'fixture v0.2.3'
+  printf 'feature\n' >>product.txt
+  git add product.txt
+  git commit -qm 'feat(ui): simplify flylight and subtask surfaces'
+  printf 'ci\n' >>product.txt
+  git add product.txt
+  git commit -qm 'fix(ci): pin the SwiftFormat toolchain'
+  git tag -a v0.2.4 -m 'fixture v0.2.4'
+)
 generated_notes="$fixture_root/generated-release-notes.md"
-"$release_notes_generator" \
-  v0.2.4 \
-  "$(git rev-list -n 1 v0.2.4)" \
-  21 \
-  "$generated_notes"
+(
+  cd "$notes_repository"
+  scripts/generate-github-release-notes \
+    v0.2.4 \
+    "$(git rev-list -n 1 v0.2.4)" \
+    21 \
+    "$generated_notes"
+)
 "$release_language_verifier" --file "$generated_notes" ||
   fail "generated GitHub Release notes are not English"
 grep -Fqx "## What's Changed" "$generated_notes" ||

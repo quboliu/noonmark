@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 repo="quboliu/noonmark"
+language_verifier_source="$repo_root/Tools/NoonmarkReleaseLanguageVerifier/main.swift"
 
 fail() {
   echo "GitHub Release language verification: $*" >&2
@@ -22,8 +24,13 @@ contains_han() {
   '
 }
 
+is_english() {
+  printf '%s' "$1" | /usr/bin/xcrun swift "$language_verifier_source"
+}
+
 verify_body() {
   local body="$1"
+  local change_summary
 
   [[ -n "$body" ]] || fail "release body is empty" || return 1
   grep -Fqx "## What's Changed" <<<"$body" ||
@@ -39,17 +46,36 @@ verify_body() {
   if contains_han "$body"; then
     fail "release body contains Han text" || return 1
   fi
+  change_summary="$(
+    awk '
+      $0 == "## What\x27s Changed" { changes=1; next }
+      changes && $0 == "---" { exit }
+      changes && $0 !~ /^\*\*Full Changelog\*\*/ { print }
+    ' <<<"$body"
+  )"
+  if ! is_english "$change_summary"; then
+    fail "release change summary is not English" || return 1
+  fi
 }
 
 if [[ "$#" -eq 1 && "$1" == "--self-test" ]]; then
   english_body=$'## What\x27s Changed\n\n- Simplify the Flylight rail.\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
   chinese_body=$'## What\x27s Changed\n\n- 收敛飞光右栏。\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
+  french_body=$'## What\x27s Changed\n\n- Cette version simplifie la barre latérale et améliore la saisie des tâches.\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
+  spanish_body=$'## What\x27s Changed\n\n- Esta versión simplifica la barra lateral y mejora la entrada de tareas.\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
+  japanese_body=$'## What\x27s Changed\n\n- このバージョンではサイドバーを簡素化しました。\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
   incomplete_body=$'## What\x27s Changed\n\n- Simplify the Flylight rail.'
   verify_body "$english_body" || exit 1
-  if verify_body "$chinese_body" >/dev/null 2>&1; then
-    echo "GitHub Release language verifier accepted Han text" >&2
-    exit 1
-  fi
+  for non_english_body in \
+    "$chinese_body" \
+    "$french_body" \
+    "$spanish_body" \
+    "$japanese_body"; do
+    if verify_body "$non_english_body" >/dev/null 2>&1; then
+      echo "GitHub Release language verifier accepted non-English text" >&2
+      exit 1
+    fi
+  done
   if verify_body "$incomplete_body" >/dev/null 2>&1; then
     echo "GitHub Release language verifier accepted missing provenance" >&2
     exit 1

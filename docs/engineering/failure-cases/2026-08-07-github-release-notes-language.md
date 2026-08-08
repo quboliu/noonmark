@@ -1,13 +1,13 @@
 # FAIL-2026-08-07-14：GitHub Release notes 错误发布为中文
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-07T20:32:00Z 至用户报告时间
 - 影响版本／构建：v0.2.4 build 21，source commit `a1a06490053245ec3b6d678709b9c2bbdf24d4b2`
 - 引入提交：`d10a9b2e4f53aedb7da57437d42cfc3dbf95b159`（`ci(release): publish tag-triggered GitHub Releases from the self-hosted runner`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`a8b52b5c7c212d728e039b6ed7781c46b7a375a4`（`fix(release): publish English GitHub notes`）
 
 ## 用户症状与影响
 
@@ -35,15 +35,15 @@ GitHub API 回读 v0.2.4 Release body，确认三条变化包含 Han 字符；�
 
 ## 根因修复
 
-新增 release notes generator，从上一个稳定 semver tag 到当前 tag 的英文 conventional commits 中提取 `feat`／`fix`／`perf`，过滤 CI、release、test、docs、e2e 等非用户作用域，生成简短英文变更、Full Changelog 与英文 provenance。新增独立语言 verifier，以固定 Han scalar 范围同时校验生成文件和真实 GitHub Release；publication verifier 将其纳入正式发行闭环。内部发行记录继续保持新加坡中文。
+新增 release notes generator，从上一个稳定 semver tag 到当前 tag 的英文 conventional commits 中提取 `feat`／`fix`／`perf`，过滤 CI、release、test、docs、e2e 等非用户作用域，生成简短英文变更、Full Changelog 与英文 provenance。新增独立语言 verifier，以系统 `NaturalLanguage` 判断变更摘要的 dominant language，并以固定 Han scalar 范围作为确定性安全网，同时校验生成文件和真实 GitHub Release；publication verifier 将其纳入正式发行闭环。内部发行记录继续保持新加坡中文。
 
 ## 验证结果
 
 - Red（真实 symptom）：v0.2.4 API body 含三条中文用户变化。
 - Red（fast）：新 readiness contract 在旧实现上报告缺少英文 notes generator。
-- Green（verifier self-test）：完整英文正文通过，含 Han 正文与缺失 provenance 正文均失败。
-- 待 Green（fast）：英文 generator、过滤结果、workflow 调用顺序与 failure-case registry 必须全部通过。
-- 待 Green（symptom）：编辑后的真实 v0.2.4 Release 必须通过 live language verifier，且资产 digest 不变。
+- Green（verifier self-test）：完整英文正文通过，中文、法文、西班牙文、日文与缺失 provenance 正文均失败。
+- Green（fast）：英文 generator 在隔离的 v0.2.3→v0.2.4 Git 历史中只保留用户作用域变化，过滤 SwiftFormat 基础设施提交；该 fixture 不依赖 CI checkout 附带历史 tag。workflow syntax、readiness contract、warning-level ShellCheck、diff check 与 67 案例 registry 全绿。
+- Green（symptom）：编辑后的真实 v0.2.4 Release 通过 live language verifier；DMG digest 仍为 `2f5ac9d4a432198a98bbaa1d9d5d6971e171515d879df87f81bc59329b98d484`，checksum asset digest 仍为 `67d0aa2507251d6578fba5405b09d8090597592e9b58eb2dd42ef1e2d9ad5446`，tag 仍指向 `a1a06490053245ec3b6d678709b9c2bbdf24d4b2`。
 
 ## 永久门禁
 

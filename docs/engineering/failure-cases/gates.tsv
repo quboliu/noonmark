@@ -168,5 +168,5 @@ FAIL-2026-08-07-13	fast	scripts/test-release-gate-contract	scripts/check	package
 FAIL-2026-08-07-13	symptom	scripts/test-dmg-evidence-contract	scripts/check	完整 package fixture 必须从不存在 dist 的 clean checkout 成功建立 DMG evidence manifest
 FAIL-2026-08-07-13	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 tag job 必须从 clean checkout 完成签名打包并建立唯一 DMG 与 checksum
 FAIL-2026-08-07-14	fast	scripts/test-github-release-readiness-contract	scripts/check	Release notes 只能从英文用户作用域 conventional commits 生成，并拒绝中文抽取路径与基础设施噪音
-FAIL-2026-08-07-14	symptom	scripts/verify-github-release-language	scripts/verify-github-release-publication	真实 GitHub Release 标题与正文必须含完整英文变更、build、签名和 checksum 边界且不得含 Han 字符
+FAIL-2026-08-07-14	symptom	scripts/verify-github-release-language	scripts/verify-github-release-publication	真实 GitHub Release 标题与正文必须由系统语言识别为英文，含完整 build、签名和 checksum 边界且不得含 Han 字符
 FAIL-2026-08-07-14	release	scripts/verify-github-release-publication	scripts/push-release-tag	公开 Release 未通过英文正文与唯一资产验证时不得宣告发布成功

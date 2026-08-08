@@ -6,7 +6,7 @@
 - 引入提交：`d42bfbc4b43a78a3b05a1334d974dc7f36078d93`（`feat(app): improve local-first sync and UI experience`）；`28f261d969a70b58661a48dc07f7bd11eece3c55` 增加全 commit／mirror 修复，`e9d007f248b43dfe4b164ecdeac93e173a427912` 增加一轮内重复全量覆盖复核
 - Git author／committer：上述提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：`12aec75`（增量 transport、frontier 与锁定根因修复）、`fd77ee7`（pending-recovery 夹具对齐）和 `d860487`（confirmed evidence 覆盖、快照证据与偏好重启夹具修复）
+- 修复提交：`12aec75db39c42dcca60de02e993d18a86682e6e`（增量 transport、frontier 与锁定根因修复）、`fd77ee795dccf73894bc9547c51234f0659f5183`（pending-recovery 夹具对齐）、`d8604874d602a307fe29904e18fa688d601e4c58`（首次基线覆盖修复）及本轮待提交的增量收口修复（提交后回填）
 
 ## 用户症状与影响
 
@@ -56,7 +56,11 @@ Linux 执行环境运行 `scripts/test-incremental-sync-symptom` 时，`scripts/
 
 最后，旧全量仓库夹具以替换整个受 guard 的临时 repository 制造“只剩一条过时远端事实”的重启场景；在 durable frontier 协议下，替换同一 endpoint 的历史会让本机 frontier 指向不存在的批次，运行产物正确 fail-closed 为 transport/storage failure，不能作为 ignored-only 的真实场景。夹具改为保留同一 endpoint，只以固定 remote producer 追加一个此前未见、字节保持一致的旧事实。
 
-该重启路径同时揭露了实际的稳态放大根因：baseline coverage auditor 错误排除了所有 `uploaded` journal，即使其 canonical payload 已能完整重建当前事实。首次同步把 pending journal 标为 uploaded 后未建立 baseline manifest；下次启动便把已确认的当前事实错判为缺失，额外生成、上传同一 appPreferences baseline。现允许 confirmed uploaded evidence 参与 current-fact coverage，同时保留 pending／published／blocked evidence 的原有处理；新增 uploaded preference journal 覆盖单测，并由真实重启 E2E 断言没有额外 upload。这样才真实证明重启后的增量 frontier、过时事实忽略、审计计数及本地胜者均正确。
+本轮复测揭露上一轮「uploaded journal 可证明远端覆盖」的推论并不成立：本地上传完成只能证明某次 transport 接受过资料，不能证明用户当前配置的 endpoint 仍保有该事实。该推论会在 endpoint 重置后掩盖缺失基线。修复改为在已有完整 pending outbox 时先持久化 pending manifest，只有上传确认且稳定 pull 后才建立；纯下载设备只在已观察的远端批次完整覆盖当前 snapshot 后建立空的 established manifest。已建立 manifest 切换到新 endpoint 时重新建立完整基线；仍 pending 的 manifest 一律 fail-closed，禁止复用另一 endpoint 的 receipt。
+
+同一轮真实双端序列还发现锁定日拒绝陈旧「完成撤销」时，权威 current store 虽保留 completed 事实，却没有重新发布这个 canonical winner；已经消费过旧 completed 事实的发起端因此可能永久停在 pending。权威 transport 现会在接到不同而被压制的 current evidence 时追加 canonical winner 作为收敛确认；直接复现的双 SQLite、锁定、陈旧撤销、四轮同步用例由红转绿。
+
+所有测试夹具同步改为 append-only producer batch：已消费 frontier 后的普通重跑返回空 page，重新传输必须显式追加新 batch；并发 pending CAS 用提交前注入而非 pull 前抢跑，避免用全量快照夹具伪造与生产协议不同的状态。
 
 无 baseline manifest 本身是合法状态，不能为了测试损坏 manifest 而先制造多余 baseline。夹具现会保存原 metadata（若存在），写入损坏值验证 fail-closed，然后精确还原原值或删除仅由夹具写入的 key；因此重启仍验证已持久化的 baseline-invalid 警告，而用户主动重试可回到原本的合法无 manifest 状态。
 
@@ -66,6 +70,7 @@ Linux 执行环境运行 `scripts/test-incremental-sync-symptom` 时，`scripts/
 
 - fast：`scripts/test-incremental-sync-contract` 静态拒绝协调器 `fetchAll()`、稳态全 journal 物化、破坏 outbox state index 的 optional-state SQL、旧 `records/`／`indexes/`／`refs/latest` 仓库和 CloudKit `session.records()` 全镜像返回，并要求增量协议与新 layout 存在。
 - symptom：`scripts/test-incremental-sync-symptom` 在两套 SQLite、128／256 条历史、零变化和单变化场景对账领域结果及实际 transport head／batch／bytes 访问量；零变化只读一个 head、零 batch、零 bytes，单变化只打开一个 batch 且 bytes 为正，证明稳态成本与旧历史无关。`scripts/test-all` 同时强制调用完整真实 App E2E，包括 Local Folder 同步及诊断锁等待闭环。
+- 本轮运行产物：`scripts/test-integration` 通过 260 个用例；其中锁定日陈旧撤销、endpoint 重置／切换、基线 manifest、typed merge rejection 与 SQLite pending CAS 受害路径均转绿。真实 iCloud Drive live 用例仍只在显式 `NOONMARK_LIVE_ICLOUD_SYNC=1` 时启用，未以 mock 代替。
 - 真实服务：`scripts/test-icloud-sync-live` 继续在 `e2e` profile 验证真实 App、batch/head ubiquitous upload confirmation 与双 SQLite；CloudKit 继续走 ADR-0019 的显式 live 门禁。
 
 ## 发行／回滚处置

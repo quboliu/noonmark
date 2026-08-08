@@ -70,6 +70,7 @@ public actor InMemorySyncTransport: SyncRecordTransport {
             existingRecords: existingRecords,
             incomingRecords: records
         )
+        let incomingEvidenceByID = Dictionary(grouping: records, by: \.id)
         var staged = self.records
         var published: [SyncRecord] = []
 
@@ -93,6 +94,16 @@ public actor InMemorySyncTransport: SyncRecordTransport {
                     )
                     if merged.exactlyMatches(existing) == false {
                         staged[record.id] = merged
+                        published.append(merged)
+                    } else if incomingEvidenceByID[record.id]?.contains(
+                        where: { $0.exactlyMatches(existing) == false }
+                    ) == true {
+                        // A stale writer must observe the canonical current
+                        // fact even when the authoritative state did not
+                        // change. Re-appending that fact is the incremental
+                        // protocol's convergence acknowledgement: a frontier
+                        // consumer may have already observed the older fact
+                        // before it made its now-rejected local change.
                         published.append(merged)
                     }
                 } catch {

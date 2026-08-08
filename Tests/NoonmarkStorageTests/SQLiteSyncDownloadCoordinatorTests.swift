@@ -606,8 +606,10 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         XCTAssertEqual(firstPending.record, initialChainRecord)
         XCTAssertEqual(firstPending.dependencies, [.currentSnapshotIntegrity])
 
-        await transport.removeAll()
-        try await transport.pushAccepting([newerChainRecord])
+        // Keep the immutable producer history intact. The durable frontier
+        // makes the first batch invisible on the next pull; truncating it
+        // would model an endpoint replacement, not an empty observation.
+        _ = try await transport.pushAccepting([newerChainRecord])
         let second = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -623,14 +625,14 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(secondPending.attemptCount, 2)
 
-        try await transport.pushAccepting([definitionRecord])
+        _ = try await transport.pushAccepting([definitionRecord])
         let third = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
         ).downloadAndMerge(detectedAt: now.addingTimeInterval(30))
         let restored = try engineRepository.load().snapshot()
 
-        XCTAssertEqual(third.fetchedCount, 2)
+        XCTAssertEqual(third.fetchedCount, 1)
         XCTAssertEqual(third.appliedCount, 2)
         XCTAssertEqual(third.waitingCount, 0)
         XCTAssertEqual(third.conflictCount, 0)
@@ -775,7 +777,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(first.waitingCount, 1)
-        XCTAssertEqual(second.fetchedCount, 1)
+        XCTAssertEqual(second.fetchedCount, 0)
         XCTAssertEqual(second.waitingCount, 1)
         XCTAssertEqual(
             try syncRepository.pendingDownloads().first?.attemptCount,
@@ -811,7 +813,8 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
         let firstPending = try XCTUnwrap(syncRepository.pendingDownloads().first)
 
-        await transport.removeAll()
+        // The prior batch remains behind the persisted frontier, so this is
+        // an empty pull without violating the append-only transport contract.
         let second = try await coordinator.downloadAndMerge(
             detectedAt: now.addingTimeInterval(20)
         )
@@ -839,7 +842,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
                 modifiedBy: SyncDeviceID("iphone-b")
             )
         ]
-        try await transport.pushAccepting(parentRecords)
+        _ = try await transport.pushAccepting(parentRecords)
 
         let third = try await coordinator.downloadAndMerge(
             detectedAt: now.addingTimeInterval(30)
@@ -957,7 +960,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
             [.classificationCommit(renameReceipt.changeRecordID)]
         )
 
-        await transport.removeAll()
+        // Do not truncate an append-only fixture to simulate an empty pull.
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -966,7 +969,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         XCTAssertEqual(afterRestart.waitingCount, 1)
         XCTAssertEqual(try syncRepository.pendingDownloads().first?.attemptCount, 2)
 
-        try await transport.pushAccepting([renameRecord])
+        _ = try await transport.pushAccepting([renameRecord])
         let resolved = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -997,15 +1000,29 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
         var collidingRecord = validRecord
         collidingRecord.payload = Data([0x00])
-        let transport = PendingInjectingTransport(
-            databaseURL: databaseURL,
-            waiting: waiting,
-            attemptedAt: now.addingTimeInterval(5),
-            fetched: [collidingRecord]
+        let transport = HostileFixtureSyncTransport(
+            uncheckedRecords: [collidingRecord]
         )
+        let replacementAttemptedAt = now.addingTimeInterval(5)
+        var didInjectReplacement = false
+        var injectionError: Error?
         let coordinator = SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
-            transport: transport
+            transport: transport,
+            auditEntryIDGenerator: {
+                guard didInjectReplacement == false else { return UUID() }
+                didInjectReplacement = true
+                do {
+                    try syncRepository.reconcilePendingDownloads(
+                        waiting: [waiting],
+                        terminal: [],
+                        attemptedAt: replacementAttemptedAt
+                    )
+                } catch {
+                    injectionError = error
+                }
+                return UUID()
+            }
         )
 
         let result = try await coordinator.downloadAndMerge(
@@ -1014,6 +1031,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(result.conflictCount, 1)
         XCTAssertEqual(result.waitingCount, 1)
+        XCTAssertNil(injectionError)
         XCTAssertEqual(try syncRepository.pendingDownloads().map(\.record), [validRecord])
     }
 
@@ -1079,17 +1097,31 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         let observedOldPending = try XCTUnwrap(
             syncRepository.pendingDownloads().first
         )
-        let transport = PendingInjectingTransport(
-            databaseURL: databaseURL,
-            waiting: newWaiting,
-            attemptedAt: now.addingTimeInterval(4),
-            fetched: []
-        )
+        let transport = HostileFixtureSyncTransport(uncheckedRecords: [])
+        let replacementAttemptedAt = now.addingTimeInterval(4)
+        var didInjectReplacement = false
+        var injectionError: Error?
 
         do {
             _ = try await SQLiteSyncDownloadCoordinator(
                 databaseURL: databaseURL,
-                transport: transport
+                transport: transport,
+                auditEntryIDGenerator: {
+                    guard didInjectReplacement == false else {
+                        return UUID()
+                    }
+                    didInjectReplacement = true
+                    do {
+                        try syncRepository.reconcilePendingDownloads(
+                            waiting: [newWaiting],
+                            terminal: [],
+                            attemptedAt: replacementAttemptedAt
+                        )
+                    } catch {
+                        injectionError = error
+                    }
+                    return UUID()
+                }
             ).downloadAndMerge(detectedAt: now.addingTimeInterval(5))
             XCTFail("expected the stale waiting replacement to fail closed")
         } catch {
@@ -1097,6 +1129,8 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
                 return XCTFail("expected invalid stored value, got \(error)")
             }
         }
+
+        XCTAssertNil(injectionError)
 
         let durablePending = try XCTUnwrap(
             syncRepository.pendingDownloads().first
@@ -1156,22 +1190,38 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
         var malformedFetchedRecord = oldRecord
         malformedFetchedRecord.payload = Data([0x00])
-        let transport = PendingInjectingTransport(
-            databaseURL: databaseURL,
-            waiting: SyncWaitingRecord(
-                record: newRecord,
-                dependencies: [.currentSnapshotIntegrity]
-            ),
-            attemptedAt: now.addingTimeInterval(4),
-            fetched: [malformedFetchedRecord]
+        let transport = HostileFixtureSyncTransport(
+            uncheckedRecords: [malformedFetchedRecord]
         )
+        let newWaiting = SyncWaitingRecord(
+            record: newRecord,
+            dependencies: [.currentSnapshotIntegrity]
+        )
+        let replacementAttemptedAt = now.addingTimeInterval(4)
+        var didInjectReplacement = false
+        var injectionError: Error?
 
         let detectedAt = now.addingTimeInterval(5)
         let result = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
-            transport: transport
+            transport: transport,
+            auditEntryIDGenerator: {
+                guard didInjectReplacement == false else { return UUID() }
+                didInjectReplacement = true
+                do {
+                    try syncRepository.reconcilePendingDownloads(
+                        waiting: [newWaiting],
+                        terminal: [],
+                        attemptedAt: replacementAttemptedAt
+                    )
+                } catch {
+                    injectionError = error
+                }
+                return UUID()
+            }
         ).downloadAndMerge(detectedAt: detectedAt)
 
+        XCTAssertNil(injectionError)
         let durablePending = try XCTUnwrap(
             syncRepository.pendingDownloads().first
         )
@@ -1648,42 +1698,5 @@ private struct OrderedSyncTransport: SyncRecordTransport {
         limit _: Int
     ) async throws -> SyncTransportChangePage {
         fixturePage(records: records, after: frontier)
-    }
-}
-
-private actor PendingInjectingTransport: SyncRecordTransport {
-    let databaseURL: URL
-    let waiting: SyncWaitingRecord
-    let attemptedAt: Date
-    let fetched: [SyncRecord]
-
-    init(
-        databaseURL: URL,
-        waiting: SyncWaitingRecord,
-        attemptedAt: Date,
-        fetched: [SyncRecord]
-    ) {
-        self.databaseURL = databaseURL
-        self.waiting = waiting
-        self.attemptedAt = attemptedAt
-        self.fetched = fetched
-    }
-
-    func pushAccepting(
-        _: [SyncRecord]
-    ) async throws -> SyncTransportPushReceipt {
-        fixturePushReceipt()
-    }
-
-    func pull(
-        after frontier: SyncTransportFrontier,
-        limit _: Int
-    ) async throws -> SyncTransportChangePage {
-        try SQLiteSyncRepository(databaseURL: databaseURL).reconcilePendingDownloads(
-            waiting: [waiting],
-            terminal: [],
-            attemptedAt: attemptedAt
-        )
-        return fixturePage(records: fetched, after: frontier)
     }
 }

@@ -127,9 +127,13 @@ struct SQLiteSyncBaselineManifest: Codable, Equatable {
                 in: .whitespacesAndNewlines
             ).isEmpty == false
         } ?? true
+        let hasValidExpectations = expectations.isEmpty == false
+            || (state == .established
+                && establishedAt != nil
+                && transportNamespace != nil)
         return createdAt.timeIntervalSinceReferenceDate.isFinite
             && transportNamespaceIsValid
-            && expectations.isEmpty == false
+            && hasValidExpectations
             && Set(expectations.map(\.journalEntryID)).count
             == expectations.count
             && expectations == expectations.sorted(by: {

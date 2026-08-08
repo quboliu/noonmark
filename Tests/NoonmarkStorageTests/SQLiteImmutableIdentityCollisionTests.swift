@@ -21,7 +21,9 @@ final class SQLiteImmutableIdentityCollisionTests: XCTestCase {
             try engineRepository.save(fixture.baseSnapshot)
             let coordinator = SQLiteSyncDownloadCoordinator(
                 databaseURL: databaseURL,
-                transport: ImmutableCollisionTransport(records: records)
+                transport: HostileFixtureSyncTransport(
+                    uncheckedRecords: records
+                )
             )
 
             let first = try await coordinator.downloadAndMerge(
@@ -70,10 +72,10 @@ final class SQLiteImmutableIdentityCollisionTests: XCTestCase {
             XCTAssertEqual(
                 replay,
                 SQLiteSyncDownloadResult(
-                    fetchedCount: 2,
+                    fetchedCount: 0,
                     appliedCount: 0,
                     waitingCount: 0,
-                    conflictCount: 2
+                    conflictCount: 0
                 )
             )
             XCTAssertEqual(
@@ -162,23 +164,6 @@ private struct SQLiteImmutableCollisionFixture {
     let parentChangeRecordID: UUID
     let firstVariant: SyncRecord
     let secondVariant: SyncRecord
-}
-
-private struct ImmutableCollisionTransport: SyncRecordTransport {
-    let records: [SyncRecord]
-
-    func pushAccepting(
-        _: [SyncRecord]
-    ) async throws -> SyncTransportPushReceipt {
-        fixturePushReceipt()
-    }
-
-    func pull(
-        after frontier: SyncTransportFrontier,
-        limit _: Int
-    ) async throws -> SyncTransportChangePage {
-        fixturePage(records: records, after: frontier)
-    }
 }
 
 private extension Array {

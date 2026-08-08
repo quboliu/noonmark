@@ -236,10 +236,16 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
     ) -> Set<EntityKey> {
         Set(
             entries.compactMap { entry in
-                guard let record = try? materializer.record(
-                    for: entry,
-                    in: snapshot
-                ),
+                // A local journal state is not evidence that the remote
+                // endpoint still contains the fact. In particular, an
+                // uploaded entry can outlive an endpoint replacement. Only
+                // pending/failed local work may cover a local baseline; an
+                // uploaded fact must be corroborated by remote evidence.
+                guard entry.state != .uploaded,
+                      let record = try? materializer.record(
+                          for: entry,
+                          in: snapshot
+                      ),
                       remoteRecordCoversCurrentFact(
                           record,
                           snapshot: snapshot

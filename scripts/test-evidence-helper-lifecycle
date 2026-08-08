@@ -52,9 +52,14 @@ wait_for_helper_roots_to_clear() {
   local temporary_root="$1"
   local label="$2"
   local remaining=""
+  local inspection_status=0
 
   for _ in $(seq 1 400); do
-    remaining="$(
+    # The custodian is deliberately racing this observer: it removes exactly
+    # the directory that find may have just enumerated. A disappearing child
+    # is not evidence of a retained helper root; retry the same owned parent
+    # and reserve failure for a root that remains observable at the deadline.
+    if remaining="$(
       find "$temporary_root" \
         -mindepth 1 \
         -maxdepth 1 \
@@ -64,10 +69,20 @@ wait_for_helper_roots_to_clear() {
           -o -name 'noonmark-evidence-helper-session.*' \
         \) \
         -print
-    )"
+    )"; then
+      inspection_status=0
+    else
+      inspection_status=$?
+      remaining=""
+      sleep 0.05
+      continue
+    fi
     [[ -z "$remaining" ]] && return 0
     sleep 0.05
   done
+  if [[ "$inspection_status" -ne 0 ]]; then
+    fail "$label could not inspect an evidence helper root after cleanup"
+  fi
   printf '%s\n' "$remaining" >&2
   fail "$label retained an evidence helper root"
 }

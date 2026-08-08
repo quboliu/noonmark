@@ -135,13 +135,12 @@ public final class SQLiteSyncUploadCoordinator {
                 action: "uploadBlockedCorruption",
                 message: message(for: error)
             )
-            return SQLiteSyncUploadResult(
-                pendingCount: pendingEntries.count,
-                uploadedCount: confirmation.uploadedCount,
-                failedCount: try blockedEntryCount(),
-                awaitingConfirmationCount:
-                confirmation.awaitingConfirmationCount
-            )
+            // The outbox remains durably blocked, but callers must receive
+            // the typed transport rejection. Collapsing it into a generic
+            // failed-count result loses the protocol reason in diagnostics
+            // and makes an integrity rejection indistinguishable from a
+            // local materialization error.
+            throw error
         } catch let error as ICloudDriveSyncTransportError {
             try markBlockedUserAttention(
                 materialized.uploadableEntries,

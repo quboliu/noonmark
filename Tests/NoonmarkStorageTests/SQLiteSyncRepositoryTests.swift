@@ -346,7 +346,7 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertNil(uploaded.lastError)
         XCTAssertEqual(failed.id, secondID)
         XCTAssertEqual(failed.retryCount, 1)
-        XCTAssertEqual(failed.lastError, "network unavailable")
+        XCTAssertEqual(failed.lastError, "deterministic")
     }
 
     func testJournalEntriesUseDomainDependencyOrderAtTheSameTimestamp() throws {

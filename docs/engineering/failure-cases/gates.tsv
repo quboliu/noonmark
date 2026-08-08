@@ -172,3 +172,5 @@ FAIL-2026-08-07-14	symptom	scripts/verify-github-release-language	scripts/verify
 FAIL-2026-08-07-14	release	scripts/verify-github-release-publication	scripts/push-release-tag	公开 Release 未通过英文正文与唯一资产验证时不得宣告发布成功
 FAIL-2026-08-07-15	fast	scripts/test-incremental-sync-contract	scripts/check	拒绝稳态全端点／全 journal 扫描、旧全 mirror 文件仓库和无持久 Inbox 的 CloudKit 返回路径
 FAIL-2026-08-07-15	symptom	scripts/test-incremental-sync-symptom	scripts/test-all	双 SQLite 在 128／256 条历史完成 bootstrap 后，零变化只读一个 head／零 batch／零 bytes，单变化只打开一个 batch 并收敛领域状态；聚合入口同时执行完整真实 App E2E
+FAIL-2026-08-08-01	fast	scripts/test-evidence-helper-lifecycle	scripts/check	custodian 清理与观察器并发时，已删除 helper 子目录不得使生命周期门禁误判失败
+FAIL-2026-08-08-01	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	真实 TERM、HUP、KILL、rollback、截断 transport 与并行 session 后，helper 根持续残留或无法稳定清理即判红

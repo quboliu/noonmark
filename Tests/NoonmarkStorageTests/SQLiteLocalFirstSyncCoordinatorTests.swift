@@ -23,6 +23,10 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             databaseURL: databaseURL,
             transport: transport
         )
+        try saveSyncIdentity(
+            SyncDeviceID("timestamp-device"),
+            databaseURL: databaseURL
+        )
         let firstSyncAt = now
         try engineRepository.save(NoonmarkEngine().snapshot())
 
@@ -109,6 +113,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             transport: transport
         )
         let deviceID = SyncDeviceID("subtask-rename-device")
+        try saveSyncIdentity(deviceID, databaseURL: databaseURL)
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(
             title: "同步改名 fixture",
@@ -308,7 +313,9 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
             )
         )
-        guard case .failed = try JSONDecoder().decode(
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard case .failed = try decoder.decode(
             SQLiteLocalFirstSyncStatus.self,
             from: statusMetadata.value
         ) else {
@@ -604,9 +611,13 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             SyncDeviceIdentity(deviceID: deviceID, createdAt: now)
         )
 
+        let firstEndpoint = ScopedInMemorySyncTransport(
+            namespace: "fixture-endpoint-a",
+            backing: InMemorySyncTransport()
+        )
         _ = try await SQLiteLocalFirstSyncCoordinator(
             databaseURL: sourceURL,
-            transport: InMemorySyncTransport()
+            transport: firstEndpoint
         ).sync(now: now.addingTimeInterval(1))
         XCTAssertTrue(
             try sourceSyncRepository.journalEntries(
@@ -614,7 +625,10 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             ).isEmpty
         )
 
-        let emptyEndpoint = InMemorySyncTransport()
+        let emptyEndpoint = ScopedInMemorySyncTransport(
+            namespace: "fixture-endpoint-b",
+            backing: InMemorySyncTransport()
+        )
         let reseedResult = try await SQLiteLocalFirstSyncCoordinator(
             databaseURL: sourceURL,
             transport: emptyEndpoint
@@ -669,7 +683,11 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             body: "不能被旧 journal 掩盖",
             now: now.addingTimeInterval(2)
         )
-        try sourceRepository.save(newerLocal.snapshot())
+        try sourceRepository.save(
+            newerLocal.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now.addingTimeInterval(2)
+        )
 
         let repaired = try await SQLiteLocalFirstSyncCoordinator(
             databaseURL: sourceURL,
@@ -1211,6 +1229,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         let transport = InMemorySyncTransport()
         let deviceID = SyncDeviceID("mac-recurring-task-summary")
+        try saveSyncIdentity(deviceID, databaseURL: databaseURL)
         let engine = NoonmarkEngine()
         let seriesID = try engine.createTaskCycleSeries(
             title: "连续三天复盘",
@@ -1277,6 +1296,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let repository = SQLiteEngineRepository(databaseURL: databaseURL)
         let transport = InMemorySyncTransport()
         let deviceID = SyncDeviceID("mac-recurring-conversion-summary")
+        try saveSyncIdentity(deviceID, databaseURL: databaseURL)
         let engine = NoonmarkEngine()
         let chainID = try engine.createPoolTask(
             title: "既有任务",
@@ -1398,7 +1418,6 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             recordingChangesFor: macDevice,
             changedAt: now.addingTimeInterval(41)
         )
-
         let updatedUpload = try await macSync.sync(
             now: now.addingTimeInterval(50)
         )
@@ -2581,29 +2600,111 @@ private actor SlowPushSyncTransport: SyncRecordTransport {
     }
 }
 
-private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
-    private var recordsByID: [SyncRecordID: SyncRecord]
+private struct ScopedInMemorySyncTransport: SyncRecordTransport {
+    let frontierNamespace: String
+    let backing: InMemorySyncTransport
 
-    init(records: [SyncRecord]) {
-        recordsByID = Dictionary(
-            uniqueKeysWithValues: records.map { ($0.id, $0) }
-        )
+    init(namespace: String, backing: InMemorySyncTransport) {
+        frontierNamespace = namespace
+        self.backing = backing
     }
 
     func pushAccepting(
         _ records: [SyncRecord]
     ) async throws -> SyncTransportPushReceipt {
-        for record in records {
-            recordsByID[record.id] = record
-        }
-        return fixturePushReceipt()
+        try await backing.pushAccepting(records)
     }
 
     func pull(
         after frontier: SyncTransportFrontier,
-        limit _: Int
+        limit: Int
     ) async throws -> SyncTransportChangePage {
-        fixturePage(records: Array(recordsByID.values), after: frontier)
+        try await backing.pull(after: frontier, limit: limit)
+    }
+}
+
+private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
+    private static let producerID = "raw-current-fixture"
+    private var batches: [[SyncRecord]]
+
+    init(records: [SyncRecord]) {
+        batches = records.isEmpty ? [] : [records]
+    }
+
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        guard records.isEmpty == false else { return fixturePushReceipt() }
+        batches.append(records)
+        let sequence = UInt64(batches.count)
+        return SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: Self.producerID,
+                    sequence: sequence,
+                    contentHash: "raw-current-\(sequence)"
+                )
+            ],
+            confirmation: .confirmed
+        )
+    }
+
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        guard frontier.positions.keys.allSatisfy({ $0 == Self.producerID })
+        else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let position = frontier.position(for: Self.producerID)
+        let sequence = position?.sequence ?? 0
+        guard sequence <= UInt64(batches.count),
+              position == nil
+                || position?.contentHash == "raw-current-\(sequence)"
+        else {
+            throw SyncRecordTransportError.invalidFrontier
+        }
+        let pageLimit = max(limit, 1)
+        var nextSequence = sequence
+        var records: [SyncRecord] = []
+        var references: [SyncTransportBatchReference] = []
+        while nextSequence < UInt64(batches.count) {
+            let candidateSequence = nextSequence + 1
+            let candidateRecords = batches[Int(candidateSequence - 1)]
+            if records.isEmpty == false,
+               records.count + candidateRecords.count > pageLimit {
+                break
+            }
+            records.append(contentsOf: candidateRecords)
+            references.append(
+                SyncTransportBatchReference(
+                    producerID: Self.producerID,
+                    sequence: candidateSequence,
+                    contentHash: "raw-current-\(candidateSequence)"
+                )
+            )
+            nextSequence = candidateSequence
+            if records.count >= pageLimit { break }
+        }
+        let nextFrontier = nextSequence == 0
+            ? SyncTransportFrontier.origin
+            : SyncTransportFrontier(
+                positions: [
+                    Self.producerID: SyncTransportPosition(
+                        sequence: nextSequence,
+                        contentHash: "raw-current-\(nextSequence)"
+                    )
+                ]
+            )
+        return SyncTransportChangePage(
+            records: records,
+            frontier: nextFrontier,
+            hasMore: nextSequence < UInt64(batches.count),
+            batches: references,
+            observedProducerCount: batches.isEmpty ? 0 : 1,
+            openedBatchCount: references.count
+        )
     }
 }
 
@@ -2698,7 +2799,7 @@ private actor InjectRemoteRecordsOnSecondPullSyncTransport:
     ) async throws -> SyncTransportChangePage {
         pullCount += 1
         if pullCount == 2 {
-            try await backing.pushAccepting(records)
+            _ = try await backing.pushAccepting(records)
             injectedRemoteRecords = true
         }
         return try await backing.pull(after: frontier, limit: limit)

@@ -271,6 +271,11 @@ public final class SQLiteLocalFirstSyncCoordinator {
             let pendingBaseline = try prepareCompleteLocalBaseline(
                 now: now
             )
+            // Capture the durable outbox before its state is advanced by this
+            // run. Incremental transports cannot reconstruct a full remote
+            // before/after mirror without violating their steady-state cost
+            // bound, so this is the authoritative outbound change evidence.
+            let journalEntriesBeforeSync = try syncRepository.journalEntries()
             var observedRemoteRecords: [SyncRecord] = []
             var upload = SQLiteSyncUploadResult(
                 pendingCount: 0,
@@ -323,6 +328,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                             detectedAt: now,
                             limit: max(limit, 1)
                         )
+                    diagnosticOperation?.stage(.downloadMerge)
                     observedRemoteRecords.append(
                         contentsOf: observation.fetchedRecords
                     )
@@ -374,6 +380,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         detectedAt: now,
                         limit: max(limit, 1)
                     )
+                diagnosticOperation?.stage(.downloadMerge)
                 observedRemoteRecords.append(
                     contentsOf: stabilityObservation.fetchedRecords
                 )
@@ -415,9 +422,18 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 let taskChanges = taskChangeAnalyzer.changes(
                     localBefore: localBefore,
                     localAfter: localAfter,
-                    remoteBefore: [],
-                    remoteAfter: []
+                    outboundJournalEntries: journalEntriesBeforeSync
                 )
+                let establishedBaseline: SQLiteSyncBaselineManifest?
+                if let pendingBaseline {
+                    establishedBaseline = pendingBaseline.established(at: now)
+                } else {
+                    establishedBaseline = try establishedRemoteBaselineIfComplete(
+                        snapshot: localAfter,
+                        observedRemoteRecords: observedRemoteRecords,
+                        at: now
+                    )
+                }
                 let result = SQLiteLocalFirstSyncResult(
                     upload: upload,
                     download: download,
@@ -449,9 +465,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 if try saveSuccessMetadata(
                     status: .succeeded(result),
                     timestamps: timestamps,
-                    establishedBaseline: pendingBaseline?.established(
-                        at: now
-                    )
+                    establishedBaseline: establishedBaseline
                 ) {
                     if completesDiagnosticOperationOnSuccess {
                         diagnosticOperation?.succeed(
@@ -666,6 +680,31 @@ public final class SQLiteLocalFirstSyncCoordinator {
             throw SQLiteLocalFirstSyncError.baselineManifestInvalid
         }
 
+        let snapshot = try engineRepository.load().snapshot()
+        let journalEntries = try syncRepository.journalEntries()
+
+        // A frontier and its coverage proof only apply to the endpoint that
+        // produced them. Switching endpoints is a fresh replication boundary:
+        // retain local data, but create a new complete baseline instead of
+        // treating the old endpoint's uploaded journal as remote coverage.
+        if let storedManifest,
+           let namespace = storedManifest.transportNamespace,
+           namespace != transportNamespace
+        {
+            // A partial baseline can have published evidence whose acceptance
+            // is still unknown. It must not be rebound or regenerated against
+            // another endpoint: that would silently treat an interrupted
+            // replication attempt as settled. The caller must finish or
+            // explicitly recover the original endpoint first.
+            guard storedManifest.state == .established else {
+                throw SQLiteLocalFirstSyncError.baselineManifestInvalid
+            }
+            return try reseedCompleteLocalBaseline(
+                from: snapshot,
+                at: now
+            )
+        }
+
         if let storedManifest,
            storedManifest.state == .established
         {
@@ -686,8 +725,6 @@ public final class SQLiteLocalFirstSyncCoordinator {
             }
             return nil
         }
-        let snapshot = try engineRepository.load().snapshot()
-        let journalEntries = try syncRepository.journalEntries()
         if let storedManifest {
             guard storedManifest.validate(against: journalEntries),
                   let boundManifest = storedManifest.binding(
@@ -712,7 +749,31 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 journalEntries: journalEntries,
                 remoteRecords: []
             )
-        guard missingFactCount > 0 else { return nil }
+        guard missingFactCount > 0 else {
+            // A normal local save already has a complete pending journal, but
+            // it has no manifest until the first transport round trip. Bind
+            // that exact evidence now and establish it only after this run's
+            // upload plus stable pull succeeds. Without this pending manifest
+            // the next sync would treat uploaded rows as local-only evidence
+            // and redundantly rebuild the entire baseline.
+            guard journalEntries.isEmpty == false else { return nil }
+            let manifest = SQLiteSyncBaselineManifest(
+                createdAt: now,
+                entries: journalEntries,
+                transportNamespace: transportNamespace
+            )
+            do {
+                try syncRepository.saveMetadata(
+                    try manifest.metadata(
+                        key: Self.baselineManifestMetadataKey,
+                        updatedAt: now
+                    )
+                )
+            } catch {
+                throw SQLiteLocalFirstSyncError.baselinePreparationFailed
+            }
+            return manifest
+        }
         diagnosticOperation?.stage(
             .baselineCoverageGap,
             progress: DiagnosticProgress(
@@ -720,6 +781,13 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 pendingCount: journalEntries.count
             )
         )
+        return try reseedCompleteLocalBaseline(from: snapshot, at: now)
+    }
+
+    private func reseedCompleteLocalBaseline(
+        from snapshot: NoonmarkSnapshot,
+        at now: Date
+    ) throws -> SQLiteSyncBaselineManifest {
         guard let identity = try syncRepository.loadDeviceIdentity() else {
             throw SQLiteLocalFirstSyncError
                 .baselineDeviceIdentityUnavailable
@@ -771,6 +839,30 @@ public final class SQLiteLocalFirstSyncCoordinator {
         }) else {
             throw SQLiteLocalFirstSyncError.baselineUploadIncomplete
         }
+    }
+
+    private func establishedRemoteBaselineIfComplete(
+        snapshot: NoonmarkSnapshot,
+        observedRemoteRecords: [SyncRecord],
+        at now: Date
+    ) throws -> SQLiteSyncBaselineManifest? {
+        guard observedRemoteRecords.isEmpty == false,
+              try syncRepository.metadata(
+                  for: Self.baselineManifestMetadataKey
+              ) == nil,
+              SyncSnapshotBaselineCoverageAuditor().isComplete(
+                  snapshot: snapshot,
+                  journalEntries: try syncRepository.journalEntries(),
+                  remoteRecords: observedRemoteRecords
+              )
+        else {
+            return nil
+        }
+        return SQLiteSyncBaselineManifest(
+            createdAt: now,
+            entries: [],
+            transportNamespace: transportNamespace
+        ).established(at: now)
     }
 
     public static func persistFailure(

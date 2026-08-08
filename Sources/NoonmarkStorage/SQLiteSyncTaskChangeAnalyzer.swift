@@ -23,6 +23,7 @@ public struct SQLiteSyncTaskChanges: Codable, Equatable, Sendable {
 
 struct SQLiteSyncTaskChangeAnalyzer {
     private let mapper = SyncRecordMapper()
+    private let materializer = SyncRecordMaterializer()
 
     func changes(
         localBefore: NoonmarkSnapshot,
@@ -55,6 +56,117 @@ struct SQLiteSyncTaskChangeAnalyzer {
                     inbound.recurringTaskIDs
                 )
             ).count
+        )
+    }
+
+    /// Computes the user-facing transfer summary without reading a complete
+    /// remote mirror. Outbox rows are the durable evidence of outbound user
+    /// mutations; the local snapshot delta captures inbound merges.
+    func changes(
+        localBefore: NoonmarkSnapshot,
+        localAfter: NoonmarkSnapshot,
+        outboundJournalEntries: [SyncJournalEntry]
+    ) -> SQLiteSyncTaskChanges {
+        let inbound = localChanges(before: localBefore, after: localAfter)
+        let outbound = outboundChanges(
+            snapshot: localBefore,
+            journalEntries: outboundJournalEntries
+        )
+        let newTaskIDs = inbound.newTaskIDs.union(outbound.newTaskIDs)
+        let updatedTaskIDs = inbound.updatedTaskIDs
+            .union(outbound.updatedTaskIDs)
+            .subtracting(newTaskIDs)
+        let recurringTaskIDs = inbound.recurringTaskIDs.union(
+            outbound.recurringTaskIDs
+        )
+        return SQLiteSyncTaskChanges(
+            newTaskCount: newTaskIDs.count,
+            updatedTaskCount: updatedTaskIDs.count,
+            newRecurringTaskCount: newTaskIDs.intersection(
+                recurringTaskIDs
+            ).count,
+            updatedRecurringTaskCount: updatedTaskIDs.intersection(
+                recurringTaskIDs
+            ).count
+        )
+    }
+
+    private func outboundChanges(
+        snapshot: NoonmarkSnapshot,
+        journalEntries: [SyncJournalEntry]
+    ) -> TaskChangeSet {
+        let pendingEntries = journalEntries.filter {
+            switch $0.state {
+            case .pendingUpload, .publishedLocal:
+                true
+            case .uploaded, .blockedUserAttention, .blockedCorruption:
+                false
+            }
+        }
+        guard pendingEntries.isEmpty == false else {
+            return TaskChangeSet(
+                newTaskIDs: [],
+                updatedTaskIDs: [],
+                recurringTaskIDs: []
+            )
+        }
+
+        let identity = taskIdentity(in: snapshot)
+        let traceOwners = Dictionary(
+            grouping: snapshot.traces,
+            by: \.id
+        ).mapValues { traces in
+            Set(traces.map(\.chainID))
+        }
+        let recurringTaskIDs = Set<TaskChainID>(
+            localTaskStates(in: snapshot).compactMap { chainID, state in
+                guard state.series != nil else { return nil }
+                return identity.taskIDByChainID[chainID]
+            }
+        )
+        var affectedTaskIDs: Set<TaskChainID> = []
+        var newTaskIDs: Set<TaskChainID> = []
+        let uploadedTaskIDs = Set(
+            journalEntries.compactMap { entry -> Set<TaskChainID>? in
+                guard entry.state == .uploaded,
+                      entry.entityType == .taskChain,
+                      let record = try? materializer.record(
+                          for: entry,
+                          in: snapshot
+                      )
+                else {
+                    return nil
+                }
+                return taskChainIDs(
+                    affectedBy: record,
+                    traceOwners: traceOwners,
+                    identity: identity
+                )
+            }.joined()
+        )
+        for entry in pendingEntries {
+            guard let record = try? materializer.record(
+                for: entry,
+                in: snapshot
+            ) else {
+                continue
+            }
+            let taskIDs = taskChainIDs(
+                affectedBy: record,
+                traceOwners: traceOwners,
+                identity: identity
+            )
+            affectedTaskIDs.formUnion(taskIDs)
+            if entry.entityType == .taskChain {
+                newTaskIDs.formUnion(
+                    taskIDs.subtracting(uploadedTaskIDs)
+                )
+            }
+        }
+        return TaskChangeSet(
+            newTaskIDs: newTaskIDs,
+            updatedTaskIDs: affectedTaskIDs.subtracting(newTaskIDs),
+            recurringTaskIDs: recurringTaskIDs
         )
     }
 
@@ -250,6 +362,24 @@ struct SQLiteSyncTaskChangeAnalyzer {
             {
                 taskIDByChainID[chain.id] = taskID
             }
+        }
+        return RemoteTaskIdentity(
+            taskIDByChainID: taskIDByChainID,
+            taskIDBySeriesID: anchorBySeriesID,
+            taskIDs: Set(taskIDByChainID.values),
+            recurringTaskIDs: Set(anchorBySeriesID.values)
+        )
+    }
+
+    private func taskIdentity(
+        in snapshot: NoonmarkSnapshot
+    ) -> RemoteTaskIdentity {
+        let anchorBySeriesID = recurringAnchorChainIDs(in: snapshot.chains)
+        var taskIDByChainID: [TaskChainID: TaskChainID] = [:]
+        for chain in snapshot.chains {
+            taskIDByChainID[chain.id] = chain.cycleMembership.flatMap {
+                anchorBySeriesID[$0.seriesID]
+            } ?? chain.id
         }
         return RemoteTaskIdentity(
             taskIDByChainID: taskIDByChainID,

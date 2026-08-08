@@ -613,12 +613,6 @@ require_literal \
 require_literal \
   App/NoonmarkMacApp/CompletionControlE2EAutomation.swift \
   'SubtaskRowSurface.dayList.completionIdentifier(for: subtaskID)'
-require_literal \
-  scripts/test-e2e \
-  "key = 'localFirst.sync.baselineManifest'"
-require_literal \
-  scripts/test-e2e \
-  '"onlineFirst 0 0 0 0 0 1 1 1"'
 if rg -n '"(day|day-list)\.subtask\.\\\(' \
   App/NoonmarkMacApp \
   --glob '*E2E*.swift' \

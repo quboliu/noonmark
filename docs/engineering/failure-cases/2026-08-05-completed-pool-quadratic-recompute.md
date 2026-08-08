@@ -7,7 +7,7 @@
 - 引入提交：`30fb2adee836909f71cfce7b6afd6b28bb9592f6` feat(core): Complete task trajectories in the completed pool（2026-07-05）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（历史已统一改写为该身份）
 - 实际修改者：未知
-- 修复提交：`874980047b45da44e0f3e5b9910cf71ff91b8824` fix(core): make the completed pool projection near-linear
+- 修复提交：`874980047b45da44e0f3e5b9910cf71ff91b8824` fix(core): make the completed pool projection near-linear；本轮门禁收口提交待创建后回填
 
 ## 用户症状与影响
 
@@ -17,6 +17,7 @@
 
 - 2026-07-05：`30fb2ade` 引入按链轨迹投影，`completedTrajectory(for:)` 对单条完成 trace 全表扫描 `traces.values` 并全扫 `subtasks.values`。
 - 2026-08-05：用户在 `make run-demo-app` 年度基线上复现 5-6 秒卡顿并报告；同日完成 sample 取证、根因定位、修复与 fast gate 红绿验证。
+- 2026-08-08：发布前 `make check` 再次在同一 1200→2400 链 fast gate 判红（两次运行耗时比分别为 3.04、2.88），确认不是单次机器抖动。
 
 ## 复现与证据
 
@@ -42,6 +43,7 @@
 ## 根因修复
 
 - 引擎（`Sources/NoonmarkCore/NoonmarkEngine.swift`）：`completedPool()` 一次性预分组历史 trace（按 chainID、按 traceChronology 排序）与可展示子任务（按 traceID），`completedTrajectory`／`completedSubtaskTrajectories` 改为消费预分组数据。公开行为零变化。
+- 本轮补齐：`completedTaskHierarchies()` 原本又先调用两个面向 UI 的已排序公开投影，再立即按 chain 重组；1200／2400 个独立链时这两次无用全局排序使规模倍率越过门禁。现以仅供层级投影使用的未排序内部集合分组，再只执行最终 hierarchy 的用户可见排序；`completedPool()` 与 `completedSubtaskRecords()` 的公开排序行为保持不变。
 - 视图层（`App/NoonmarkMacApp/NoonmarkStore.swift` 等 7 个文件）：store 新增按 `engineRevision` 备忘的 `completedPool()`／`completedTaskHierarchies()`／`unfinishedPool()` 共享入口，同一数据版本只计算一次；CompletedPoolPage、UnfinishedPoolPage、WorkspaceDetailRails、选择与会话撤销等全部调用点改走共享入口。引擎为 class 但所有变更经 mutation lane 赋值提交（didSet 递增 engineRevision），失效语义完整。
 
 ## 验证结果
@@ -49,6 +51,7 @@
 - `swift build` 通过。
 - `swift test --filter NoonmarkCoreTests`：285 个测试全部通过（行为保持）。
 - fast gate 红绿验证：旧引擎下新性能测试判红（耗时比 3.25 > 阈值 2.7），修复后判绿（约 2.1），单次运行约 1.9 秒。
+- 发布前复验：原始 1200→2400 层级测试在优化后连续两次通过（单次约 2.58 秒及 2.40 秒），保留原倍率与绝对上限，不放宽阈值。
 - 症状级验证（2026-08-05）：修复后重建 demo App，以 `--page completed` 直开已完成页，页面完整渲染 460 条链与右栏汇总（截图核验），8 秒主线程采样中投影栈（CompletedPoolPage／completedTaskHierarchies／completedPool／completedTrajectory）命中 0 次；修复前同路径 1857/12219 次。卡顿症状消除。
 
 ## 永久门禁

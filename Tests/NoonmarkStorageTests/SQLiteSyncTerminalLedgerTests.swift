@@ -28,8 +28,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertTrue(try syncRepository.pendingDownloads().isEmpty)
         XCTAssertEqual(try syncRepository.terminalRejections().count, 1)
 
-        await transport.removeAll()
-        try await transport.pushAccepting([fixture.childRecord])
+        // The durable frontier hides the already observed parent. Preserve
+        // the append-only log and append the child as new remote evidence.
+        _ = try await transport.pushAccepting([fixture.childRecord])
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -62,8 +63,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
                 .classifications.currentByChainID[fixture.chainID]?.categoryID
         )
 
-        await transport.removeAll()
-        try await transport.pushAccepting([fixture.parentRecord])
+        // Re-transmission is appended after the persisted frontier; clearing
+        // the fixture would instead model an endpoint replacement.
+        _ = try await transport.pushAccepting([fixture.parentRecord])
         let retransmittedParent = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -71,7 +73,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
 
         XCTAssertEqual(retransmittedParent.appliedCount, 0)
         XCTAssertEqual(retransmittedParent.waitingCount, 0)
-        XCTAssertEqual(retransmittedParent.conflictCount, 1)
+        // The in-memory append-only transport deduplicates an exact immutable
+        // fact before publication, so a later pull sees no new evidence.
+        XCTAssertEqual(retransmittedParent.conflictCount, 0)
         XCTAssertNil(
             try engineRepository.load().snapshot()
                 .classifications.currentByChainID[fixture.chainID]?.categoryID
@@ -141,8 +145,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertEqual(first.conflictCount, 2)
         XCTAssertEqual(try syncRepository.terminalRejections().count, 2)
 
-        await transport.removeAll()
-        try await transport.pushAccepting([childRecord])
+        // Preserve the append-only producer history; only the new child must
+        // be observed by this restart.
+        _ = try await transport.pushAccepting([childRecord])
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -225,8 +230,8 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
                 mapper: mapper
             )
         ]
-        await transport.removeAll()
-        try await transport.pushAccepting(events)
+        // Preserve prior immutable evidence behind the persisted frontier.
+        _ = try await transport.pushAccepting(events)
 
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
@@ -506,6 +511,9 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertEqual(first.conflictCount, 1)
         XCTAssertEqual(firstConflict.remoteRecord, remoteRecord)
 
+        // A second immutable delivery must be an explicit new batch. A plain
+        // repeat pull is correctly empty after its frontier was persisted.
+        _ = try await transport.pushAccepting([remoteRecord])
         let repeated = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport

@@ -1593,6 +1593,16 @@ public final class NoonmarkEngine {
     }
 
     public func completedPool() -> [CompletedPoolItem] {
+        completedPoolItems().sorted {
+            if $0.trace.date == $1.trace.date {
+                return ($0.trace.completedAt ?? $0.trace.createdAt)
+                    > ($1.trace.completedAt ?? $1.trace.createdAt)
+            }
+            return $0.trace.date > $1.trace.date
+        }
+    }
+
+    private func completedPoolItems() -> [CompletedPoolItem] {
         let historyTracesByChain = Dictionary(
             grouping: traces.values.filter { $0.formsDayHistory },
             by: \.chainID
@@ -1619,15 +1629,21 @@ public final class NoonmarkEngine {
                     )
                 )
             }
-            .sorted {
-                if $0.trace.date == $1.trace.date {
-                    return ($0.trace.completedAt ?? $0.trace.createdAt) > ($1.trace.completedAt ?? $1.trace.createdAt)
-                }
-                return $0.trace.date > $1.trace.date
-            }
     }
 
     public func completedSubtaskRecords() -> [CompletedSubtaskRecord] {
+        completedSubtaskRecordsUnsorted().sorted {
+            if $0.date != $1.date {
+                return $0.date > $1.date
+            }
+            if $0.subtask.position != $1.subtask.position {
+                return $0.subtask.position < $1.subtask.position
+            }
+            return $0.subtask.createdAt < $1.subtask.createdAt
+        }
+    }
+
+    private func completedSubtaskRecordsUnsorted() -> [CompletedSubtaskRecord] {
         subtasks.values
             .filter { $0.status == .completed }
             .compactMap { subtask -> CompletedSubtaskRecord? in
@@ -1646,24 +1662,15 @@ public final class NoonmarkEngine {
                     parentDefinition: definition
                 )
             }
-            .sorted {
-                if $0.date != $1.date {
-                    return $0.date > $1.date
-                }
-                if $0.subtask.position != $1.subtask.position {
-                    return $0.subtask.position < $1.subtask.position
-                }
-                return $0.subtask.createdAt < $1.subtask.createdAt
-            }
     }
 
     public func completedTaskHierarchies() -> [CompletedTaskHierarchy] {
         let parentCompletionsByChain = Dictionary(
-            grouping: completedPool(),
+            grouping: completedPoolItems(),
             by: \.trace.chainID
         )
         let childrenByChain = Dictionary(
-            grouping: completedSubtaskRecords(),
+            grouping: completedSubtaskRecordsUnsorted(),
             by: \.parentTrace.chainID
         )
         let chainIDs = Set(parentCompletionsByChain.keys)

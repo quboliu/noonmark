@@ -1759,7 +1759,7 @@ private extension SQLiteSyncRepository {
     func terminalRejectionEvidence(
         from database: Database?
     ) throws -> [SyncTerminalRejection] {
-        try query(
+        let candidates: [SyncTerminalRejection?] = try query(
             """
             SELECT conflict.id, conflict.conflict_type, conflict.entity_type,
                 conflict.entity_id, conflict.local_record_id, conflict.remote_record_id,
@@ -1776,17 +1776,22 @@ private extension SQLiteSyncRepository {
                 let conflict = try conflict(from: statement)
                 let storedEntityType = try string(statement, 10)
                 let storedEntityID = try string(statement, 11)
-                guard let rejection = SyncTerminalRejection(conflict: conflict),
-                      rejection.identity.entityType.rawValue == storedEntityType,
-                      rejection.identity.entityID == storedEntityID
+                guard conflict.entityType.rawValue == storedEntityType,
+                      conflict.entityID == storedEntityID
                 else {
                     throw SQLiteRepositoryError.invalidStoredValue(
-                        "terminal provider evidence does not match its anchored identity"
+                        "terminal provider evidence does not match its stored entity"
                     )
                 }
-                return rejection
+                // The terminal ledger anchors one canonical immutable fact per
+                // logical identity, while `sync_conflicts` keeps every remote
+                // variant. A malformed variant can share the logical columns
+                // but cannot be a terminal identity itself; it must remain a
+                // conflict without poisoning later downloads of this identity.
+                return SyncTerminalRejection(conflict: conflict)
             }
         )
+        return candidates.compactMap { $0 }
     }
 
     func conflict(from statement: Statement?) throws -> SyncConflict {

@@ -18,13 +18,6 @@ fi
 manifest="${1:-artifacts/e2e-tencent-ime-release-smoke/manifest.txt}"
 evidence_root="$(dirname "$manifest")"
 inventory="$evidence_root/artifact-inventory.sha256"
-result_relative="$(evidence_read "$manifest" result_path)"
-expected_result="artifacts/e2e-tencent-ime-termination/results.tsv"
-[[ "$result_relative" == "$expected_result" ]] || {
-  echo "Tencent IME release evidence uses an unexpected result path" >&2
-  exit 1
-}
-result_path="$repo_root/$result_relative"
 
 evidence_require_manifest \
   "$manifest" \
@@ -32,10 +25,41 @@ evidence_require_manifest \
   "suite=tencent-ime-release-smoke" \
   "evidence_run_id=$NOONMARK_EVIDENCE_RUN_ID" \
   "configuration=release" \
-  "suite_mode=full" \
   "source_tree_dirty=0" \
   "source_end_tree_dirty=0" \
   "suite_exit_status=0"
+
+input_source_available="$(evidence_read "$manifest" input_source_available)"
+result_relative="$(evidence_read "$manifest" result_path)"
+case "$input_source_available" in
+  true)
+    evidence_require_manifest \
+      "$manifest" \
+      "suite_mode=full" \
+      "skip_reason=none"
+    expected_result="artifacts/e2e-tencent-ime-termination/results.tsv"
+    [[ "$result_relative" == "$expected_result" ]] || {
+      echo "Tencent IME release evidence uses an unexpected result path" >&2
+      exit 1
+    }
+    ;;
+  false)
+    evidence_require_manifest \
+      "$manifest" \
+      "suite_mode=skipped" \
+      "skip_reason=tencent_input_source_not_enabled"
+    expected_result="artifacts/e2e-tencent-ime-release-smoke/result.txt"
+    [[ "$result_relative" == "$expected_result" ]] || {
+      echo "Tencent IME skip evidence uses an unexpected result path" >&2
+      exit 1
+    }
+    ;;
+  *)
+    echo "Tencent IME release evidence has an invalid input source state" >&2
+    exit 1
+    ;;
+esac
+result_path="$repo_root/$result_relative"
 
 for suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
   [[ "$(evidence_read "$manifest" "source_${suffix}")" == \
@@ -82,6 +106,15 @@ evidence_require_inventory_paths \
   "$result_path" \
   "$evidence_root/source-start.fragment" \
   "$evidence_root/source-end.fragment"
+
+if [[ "$input_source_available" == "false" ]]; then
+  if [[ "$(<"$result_path")" != $'status=SKIPPED\nreason=tencent_input_source_not_enabled' ]]; then
+    echo "Tencent IME skip evidence does not state the unavailable input source" >&2
+    exit 1
+  fi
+  echo "Tencent IME release smoke skipped with auditable unavailable-input evidence"
+  exit 0
+fi
 
 awk -F $'\t' '
   NR == 1 { next }

@@ -10,6 +10,7 @@ if [[ "${1:-}" == "--contract" && "$#" -eq 1 ]]; then
 surface=day-title
 input_source=com.tencent.inputmethod.wetype.pinyin
 behavior=composition-commit,immediate-exit,restart-sqlite-readback
+unavailable_input_source=skip-with-auditable-evidence
 EOF
   exit 0
 fi
@@ -38,6 +39,19 @@ summary_path="$repo_root/$summary_relative"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
 suite_status=0
 
+tencent_input_source_is_enabled() {
+  /usr/bin/defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null |
+    rg -Fq "com.tencent.inputmethod.wetype.pinyin"
+}
+
+if tencent_input_source_is_enabled; then
+  input_source_available=true
+  suite_mode=full
+else
+  input_source_available=false
+  suite_mode=skipped
+fi
+
 evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"
 evidence_capture_source "$repo_root" source "$source_start"
 evidence_begin_manifest \
@@ -45,8 +59,48 @@ evidence_begin_manifest \
   "tencent-ime-release-smoke" \
   "$evidence_run_id" \
   "$configuration" \
-  "full"
+  "$suite_mode"
 evidence_append_snapshot "$manifest" "$source_start"
+evidence_append "$manifest" input_source_available "$input_source_available"
+
+if [[ "$input_source_available" == "false" ]]; then
+  skip_relative="$evidence_relative/result.txt"
+  skip_path="$repo_root/$skip_relative"
+  printf 'status=SKIPPED\nreason=tencent_input_source_not_enabled\n' >"$skip_path"
+  evidence_append "$manifest" skip_reason tencent_input_source_not_enabled
+  evidence_capture_source "$repo_root" source_end "$source_end"
+  evidence_append_snapshot "$manifest" "$source_end"
+  evidence_append "$manifest" result_path "$skip_relative"
+  evidence_append \
+    "$manifest" \
+    result_sha256 \
+    "$(shasum -a 256 "$skip_path" | awk '{print $1}')"
+  evidence_inventory \
+    "$repo_root" \
+    "$inventory" \
+    "$skip_path" \
+    "$source_start" \
+    "$source_end"
+  evidence_append \
+    "$manifest" \
+    artifact_inventory_sha256 \
+    "$(shasum -a 256 "$inventory" | awk '{print $1}')"
+  evidence_finish_manifest \
+    "$manifest" \
+    0 \
+    source_head_commit \
+    source_worktree_tree_oid \
+    source_end_worktree_tree_oid \
+    input_source_available \
+    skip_reason \
+    result_path \
+    result_sha256 \
+    artifact_inventory_sha256
+  echo "Tencent IME release smoke skipped: input source is not enabled"
+  exit 0
+fi
+
+evidence_append "$manifest" skip_reason none
 
 # The release criterion is one stable user promise, not the whole coverage
 # catalog: real Tencent composition commits exact text, the app exits while the

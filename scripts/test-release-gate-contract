@@ -107,7 +107,7 @@ done
 rg -F 'closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"' \
   "$verifier" >/dev/null ||
   fail "full verifier does not require the release closure manifest"
-expected_ime_smoke_contract=$'surface=day-title\ninput_source=com.tencent.inputmethod.wetype.pinyin\nbehavior=composition-commit,immediate-exit,restart-sqlite-readback'
+expected_ime_smoke_contract=$'surface=day-title\ninput_source=com.tencent.inputmethod.wetype.pinyin\nbehavior=composition-commit,immediate-exit,restart-sqlite-readback\nunavailable_input_source=skip-with-auditable-evidence'
 if [[ "$("$ime_release_smoke" --contract)" != "$expected_ime_smoke_contract" ]]; then
   fail "Tencent IME release smoke contract changed"
 fi
@@ -220,6 +220,8 @@ evidence_begin_manifest \
   release \
   full
 evidence_append_snapshot "$ime_manifest" "$ime_source_start"
+evidence_append "$ime_manifest" input_source_available true
+evidence_append "$ime_manifest" skip_reason none
 evidence_capture_source "$repo_root" source_end "$ime_source_end"
 evidence_append_snapshot "$ime_manifest" "$ime_source_end"
 evidence_append "$ime_manifest" result_path \
@@ -240,6 +242,8 @@ evidence_finish_manifest \
   source_head_commit \
   source_worktree_tree_oid \
   source_end_worktree_tree_oid \
+  input_source_available \
+  skip_reason \
   result_path \
   result_sha256 \
   artifact_inventory_sha256

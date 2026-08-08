@@ -44,6 +44,7 @@
 - `scripts/release-private-dmg` 在诊断闭环后、打包前强制执行该 smoke；GitHub release workflow 不再另行拥有输入法步骤。
 - 53 面年度性能矩阵和 24 面退出／重启矩阵保留为 scheduled／manual 的质量工作流，不进入 DMG 发行对账。
 - `scripts/test-release-gate-contract` 只检查发布入口拥有 smoke 且顺序在 package 前，避免重建多方 manifest 依赖。
+- 2026-08-08：经发行负责人明确授权，若本机未安装或未启用腾讯输入源，smoke 产出带 source snapshot、hash 与原因的 `SKIPPED` 证据，发行继续；输入源可用时，原有真实路径仍是阻断门禁。此例外不把系统输入法或 mock 伪装成腾讯输入验证。
 
 ## 验证结果
 
@@ -56,13 +57,13 @@
 
 - Fast：`scripts/test-release-gate-contract` 由 `scripts/check` 强制执行，约束唯一发行入口在 package 前拥有 Tencent IME smoke。
 - Symptom：`scripts/test-tencent-ime-input-matrix` 由 `scripts/test-all` 强制执行，保持真实 53 面 WindowServer／腾讯拼音路径；scheduled／manual quality workflow 也运行它和完整退出矩阵。
-- Release：`scripts/test-tencent-ime-release-smoke` 由 `scripts/release-private-dmg` 强制执行，必须先于 package。
+- Release：`scripts/test-tencent-ime-release-smoke` 由 `scripts/release-private-dmg` 强制执行，必须先于 package；腾讯输入源不可用时只能留下可审计的 `SKIPPED` 证据，不得伪造通过。
 - 映射登记：`docs/engineering/failure-cases/gates.tsv`。
 
 ## 发行与回滚
 
-- 风险：真实 smoke 仍依赖腾讯拼音、稳定签名与 WindowServer；缺少它们会阻断该发布环境，但不把普通 hosted CI 伪装成真实输入验证。
-- 回滚：若 smoke 自身失真，阻断发行并修复该单一路径；不得将 smoke 改为 mock、系统输入法或 skip。
+- 风险：腾讯输入源缺席时，本次发行不再获得新的真实输入法运行证据；已有隔离 App 与持久化证据不能替代该专项覆盖。
+- 回滚：若需要恢复严格的环境要求，撤销 unavailable-input skip 分支；不得将 smoke 改为 mock 或系统输入法并宣称为真实腾讯输入验证。
 - 灰度：fast contract → 单一真实 smoke → release entry package → 两轮 exact DMG validation；完整矩阵独立产出质量报告。
 - 监控：每次发行保存 smoke 的真实 `results.tsv`；quality workflow 保存完整矩阵与退出矩阵证据。两者的失败都先按运行证据分类，不能直接放宽阈值。
 

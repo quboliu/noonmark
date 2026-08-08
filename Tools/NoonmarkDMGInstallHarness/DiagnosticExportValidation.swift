@@ -887,6 +887,12 @@ final class SQLiteByteRangeLockHolder {
             let registrationCode = errno
             let racedExit = waitpid(pid, &status, WNOHANG)
             if racedExit == pid { return status }
+            if registrationCode == ESRCH, racedExit == 0 {
+                return try waitForChildExitAfterRegistrationRace(
+                    pid,
+                    timeoutSeconds: timeoutSeconds
+                )
+            }
             throw posixFailure(
                 "register SQLite lock-holder exit",
                 code: registrationCode
@@ -903,6 +909,33 @@ final class SQLiteByteRangeLockHolder {
             }
         }
         return status
+    }
+
+    private static func waitForChildExitAfterRegistrationRace(
+        _ pid: pid_t,
+        timeoutSeconds: Int
+    ) throws -> Int32 {
+        let deadline = DispatchTime.now().uptimeNanoseconds
+            + UInt64(timeoutSeconds) * 1_000_000_000
+        var status: Int32 = 0
+
+        while true {
+            let reaped = waitpid(pid, &status, WNOHANG)
+            if reaped == pid { return status }
+            if reaped < 0 {
+                guard errno == EINTR else {
+                    throw posixFailure(
+                        "inspect SQLite lock-holder exit after registration race",
+                        code: errno
+                    )
+                }
+                continue
+            }
+            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                throw contract("SQLite lock-holder exit timed out")
+            }
+            usleep(10_000)
+        }
     }
 
     private static func terminateAndReap(

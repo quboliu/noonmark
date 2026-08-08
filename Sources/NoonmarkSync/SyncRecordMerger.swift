@@ -2375,8 +2375,7 @@ public struct SyncRecordMerger: Sendable {
                     .authorizedTraceReactivations
             )
         )
-        let merged = try mapper.decodeDayTrace(mergedRecord)
-        return merged
+        return try mapper.decodeDayTrace(mergedRecord)
     }
 
     private func traceMissingDependencies(

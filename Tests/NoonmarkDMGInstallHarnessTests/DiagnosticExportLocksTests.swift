@@ -59,6 +59,32 @@ final class DiagnosticExportLocksTests: XCTestCase {
         XCTAssertEqual(errno, ESRCH)
     }
 
+    func testRepeatedSpawnedHolderShutdownReapsEveryExactChild() throws {
+        let fixture = try WALFixture()
+        defer { fixture.remove() }
+        let descriptors = try fixture.boundDatabaseFiles()
+
+        for _ in 0 ..< 40 {
+            let holder = try SQLiteByteRangeLockHolder(
+                executablePath: fixture.helperExecutablePath,
+                databaseDescriptor: descriptors.database.descriptor,
+                databaseIdentity: try descriptors.database.identity(),
+                sharedMemoryDescriptor: descriptors.sharedMemory.descriptor,
+                sharedMemoryIdentity: try descriptors.sharedMemory.identity(),
+                watchdogSeconds: 10
+            )
+            let childPID = holder.childPIDForTesting
+
+            try holder.proveLocks(
+                databaseDescriptor: descriptors.database.descriptor,
+                sharedMemoryDescriptor: descriptors.sharedMemory.descriptor
+            )
+            try holder.shutdown()
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
     func testSpawnedHolderWatchdogReapsAStaleChildAndDropsLocks() throws {
         let fixture = try WALFixture()
         defer { fixture.remove() }

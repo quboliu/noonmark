@@ -2673,7 +2673,8 @@ private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
             let candidateSequence = nextSequence + 1
             let candidateRecords = batches[Int(candidateSequence - 1)]
             if records.isEmpty == false,
-               records.count + candidateRecords.count > pageLimit {
+               records.count + candidateRecords.count > pageLimit
+            {
                 break
             }
             records.append(contentsOf: candidateRecords)
@@ -2685,7 +2686,9 @@ private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
                 )
             )
             nextSequence = candidateSequence
-            if records.count >= pageLimit { break }
+            if records.count >= pageLimit {
+                break
+            }
         }
         let nextFrontier = nextSequence == 0
             ? SyncTransportFrontier.origin

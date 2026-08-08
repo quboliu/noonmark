@@ -424,11 +424,10 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     localAfter: localAfter,
                     outboundJournalEntries: journalEntriesBeforeSync
                 )
-                let establishedBaseline: SQLiteSyncBaselineManifest?
-                if let pendingBaseline {
-                    establishedBaseline = pendingBaseline.established(at: now)
+                let establishedBaseline: SQLiteSyncBaselineManifest? = if let pendingBaseline {
+                    pendingBaseline.established(at: now)
                 } else {
-                    establishedBaseline = try establishedRemoteBaselineIfComplete(
+                    try establishedRemoteBaselineIfComplete(
                         snapshot: localAfter,
                         observedRemoteRecords: observedRemoteRecords,
                         at: now

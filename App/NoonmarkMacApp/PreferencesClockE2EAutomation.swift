@@ -705,6 +705,13 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
 
         let syncResult = try await synchronize(store)
+        try appendTrace(
+            "restart sync uploaded=\(syncResult.upload.uploadedCount) "
+                + "fetched=\(syncResult.download.fetchedCount) "
+                + "applied=\(syncResult.download.appliedCount) "
+                + "waiting=\(syncResult.download.waitingCount) "
+                + "conflicts=\(syncResult.download.conflictCount)"
+        )
         guard syncResult.upload.pendingCount == 0,
               syncResult.upload.uploadedCount == 0,
               syncResult.upload.failedCount == 0,
@@ -768,14 +775,14 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         let timestampsBefore = try SQLiteLocalFirstSyncCoordinator.timestamps(
             in: repository
         )
-        let validBaselineMetadata = try requiredMetadata(
-            SQLiteLocalFirstSyncCoordinator.baselineManifestMetadataKey,
-            in: repository
+        let baselineMetadataKey = SQLiteLocalFirstSyncCoordinator
+            .baselineManifestMetadataKey
+        let validBaselineMetadata = try repository.metadata(
+            for: baselineMetadataKey
         )
         try repository.saveMetadata(
             SyncMetadataEntry(
-                key: SQLiteLocalFirstSyncCoordinator
-                    .baselineManifestMetadataKey,
+                key: baselineMetadataKey,
                 value: Data(#"{"invalid":"baseline"}"#.utf8),
                 updatedAt: Date()
             )
@@ -890,7 +897,11 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 + "timestamps=unchanged data=unchanged"
         )
 
-        try repository.saveMetadata(validBaselineMetadata)
+        if let validBaselineMetadata {
+            try repository.saveMetadata(validBaselineMetadata)
+        } else {
+            try repository.removeMetadata(for: baselineMetadataKey)
+        }
         try appendTrace(
             "sync failure persisted for restart with repairable baseline"
         )
@@ -2190,7 +2201,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
               finalSnapshotID.count == 64,
               finalSnapshotPayloadDigest.count == 64,
               finalSnapshotSHA256.count == 64,
-              auditCount == 4
+              auditCount == 5
         else {
             throw Failure.failed(
                 "preference-clock exercise state is incomplete or inconsistent"

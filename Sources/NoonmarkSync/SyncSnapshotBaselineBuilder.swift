@@ -236,11 +236,10 @@ public struct SyncSnapshotBaselineCoverageAuditor: Sendable {
     ) -> Set<EntityKey> {
         Set(
             entries.compactMap { entry in
-                guard entry.state != .uploaded,
-                      let record = try? materializer.record(
-                          for: entry,
-                          in: snapshot
-                      ),
+                guard let record = try? materializer.record(
+                    for: entry,
+                    in: snapshot
+                ),
                       remoteRecordCoversCurrentFact(
                           record,
                           snapshot: snapshot

@@ -177,6 +177,9 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.loadDeviceIdentity(), identity)
         XCTAssertEqual(try repository.metadata(for: "cksync.state"), metadata)
         XCTAssertNil(try repository.metadata(for: "missing"))
+
+        try repository.removeMetadata(for: metadata.key)
+        XCTAssertNil(try repository.metadata(for: metadata.key))
     }
 
     func testTransportProducerEpochIsInstallationLocalAndDurable() throws {

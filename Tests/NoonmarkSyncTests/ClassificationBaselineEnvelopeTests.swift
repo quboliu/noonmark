@@ -598,6 +598,15 @@ final class ClassificationBaselineEnvelopeTests: XCTestCase {
                 journalEntries: entries
             )
         )
+
+        var uploadedEntries = entries
+        uploadedEntries[0].state = .uploaded
+        XCTAssertTrue(
+            auditor.isComplete(
+                snapshot: snapshot,
+                journalEntries: uploadedEntries
+            )
+        )
     }
 
     private func commitClassification(

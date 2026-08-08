@@ -50,6 +50,16 @@ Linux 执行环境运行 `scripts/test-incremental-sync-symptom` 时，`scripts/
 
 真实 App 的烛龙 pending-recovery 夹具曾把 `localFirst.sync.baselineManifest` 当作空 Engine／应用恢复写围栏的前置条件。v18 clean cut 会在导入替换时清除旧同步运行态 metadata；该 metadata 与待恢复 journal、Engine、Session 的不变性无关。夹具现只断言这些真正受保护的资料事实，再在跨进程 SQLite writer lock 下验证启动、拒绝写入及所有受保护字节不变。
 
+偏好时钟真实 App 夹具随后揭露了增量批次证据读取的一个相邻错误：`fetchSnapshots()` 逐批把上次的 current winner 放入 `existingRecords`，却把 `prepareTransportBatch()` 的仅-incoming canonical 输出当作下一次 current state。若后遍历的 producer 提供较旧事实，快照证据会错误地显示该旧事实；生产 bootstrap 虽一次性折叠全部 immutable evidence，未走这条错误路径。现改为每轮以截至该批的完整 immutable evidence 重新 canonicalize，确保快照与 bootstrap 的 current winner 一致；新增双 producer、后遍历批次较旧的单测，并保留真实偏好 UI／SQLite／repository E2E 作为症状门禁。
+
+同一真实夹具在重启阶段还遗留了错误的审计计数 `4`：exercise 已明确要求一条 download merge、两条 replay ignore 和两条 upload，真实 SQLite 也如实记录 `5` 条，却在重启前被夹具自相矛盾地拒绝。现将重启状态契约与 exercise 的五条可解释审计事实对齐，避免以降低覆盖或跳过重启来掩盖问题。
+
+最后，旧全量仓库夹具以替换整个受 guard 的临时 repository 制造“只剩一条过时远端事实”的重启场景；在 durable frontier 协议下，替换同一 endpoint 的历史会让本机 frontier 指向不存在的批次，运行产物正确 fail-closed 为 transport/storage failure，不能作为 ignored-only 的真实场景。夹具改为保留同一 endpoint，只以固定 remote producer 追加一个此前未见、字节保持一致的旧事实。
+
+该重启路径同时揭露了实际的稳态放大根因：baseline coverage auditor 错误排除了所有 `uploaded` journal，即使其 canonical payload 已能完整重建当前事实。首次同步把 pending journal 标为 uploaded 后未建立 baseline manifest；下次启动便把已确认的当前事实错判为缺失，额外生成、上传同一 appPreferences baseline。现允许 confirmed uploaded evidence 参与 current-fact coverage，同时保留 pending／published／blocked evidence 的原有处理；新增 uploaded preference journal 覆盖单测，并由真实重启 E2E 断言没有额外 upload。这样才真实证明重启后的增量 frontier、过时事实忽略、审计计数及本地胜者均正确。
+
+无 baseline manifest 本身是合法状态，不能为了测试损坏 manifest 而先制造多余 baseline。夹具现会保存原 metadata（若存在），写入损坏值验证 fail-closed，然后精确还原原值或删除仅由夹具写入的 key；因此重启仍验证已持久化的 baseline-invalid 警告，而用户主动重试可回到原本的合法无 manifest 状态。
+
 当前 CloudKit transport 已不再向协调器返回完整 mirror，但显式 live-only 的 SQLite CloudKit persistence 仍会在 session commit 编码当前 mirror snapshot；这不是默认 iCloud Drive 路径的性能阻塞，却仍是 CloudKit 成为默认端点前必须消除的 `O(current records)` 残余。
 
 ## 回归测试

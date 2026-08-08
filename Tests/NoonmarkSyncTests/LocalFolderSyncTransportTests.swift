@@ -125,6 +125,37 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         XCTAssertEqual(try batchFiles(in: root).count, 3)
     }
 
+    func testSnapshotEvidenceKeepsCurrentWinnerWhenLaterProducerIsStale()
+        async throws
+    {
+        let root = makeFolderURL()
+        let currentProducer = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        )
+        let staleProducer = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochB
+        )
+        let current = try preferenceRecord(index: 2)
+        let stale = try preferenceRecord(index: 1)
+        _ = try await currentProducer.pushAccepting([current])
+        _ = try await staleProducer.pushAccepting([stale])
+
+        let snapshots = try await staleProducer.fetchSnapshots()
+        let snapshot = try XCTUnwrap(snapshots.last)
+        let expected = try SyncRepositorySnapshotBuilder().snapshot(
+            records: [current],
+            createdAt: snapshot.createdAt,
+            deviceID: snapshot.deviceID
+        )
+
+        XCTAssertEqual(snapshot.recordIDs, [current.id])
+        XCTAssertEqual(snapshot.recordCount, 1)
+        XCTAssertEqual(snapshot.payloadDigest, expected.payloadDigest)
+        XCTAssertEqual(snapshot.id, expected.id)
+    }
+
     func testCrashAfterBatchWriteRetriesExactSequenceAndPublishesHead()
         async throws
     {

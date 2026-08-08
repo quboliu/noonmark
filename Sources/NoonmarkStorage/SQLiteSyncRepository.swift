@@ -118,6 +118,19 @@ public final class SQLiteSyncRepository {
         }
     }
 
+    public func removeMetadata(for key: String) throws {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try run(
+            "DELETE FROM sync_metadata WHERE key = ?",
+            on: database
+        ) { statement in
+            bind(key, to: 1, in: statement)
+        }
+    }
+
     func saveMetadataIfJournalIsFullyUploaded(
         _ entries: [SyncMetadataEntry]
     ) throws -> Bool {

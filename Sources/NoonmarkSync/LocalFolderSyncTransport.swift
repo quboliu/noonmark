@@ -371,7 +371,11 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     public func fetchSnapshots() async throws -> [SyncRepositorySnapshot] {
         var frontier = SyncTransportFrontier.origin
         var snapshots: [SyncRepositorySnapshot] = []
-        var currentRecords: [SyncRecord] = []
+        // `prepareTransportBatch` canonicalizes its incoming evidence, but its
+        // result intentionally does not include an older persisted winner.
+        // Snapshot evidence must instead fold every immutable record observed
+        // so far; producer traversal order is not a causal order.
+        var observedRecords: [SyncRecord] = []
         while true {
             let page = try await pull(after: frontier, limit: 512)
             for reference in page.batches {
@@ -386,10 +390,11 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                 )
                 let deviceID = batch.records.first?.modifiedByDeviceID
                     ?? SyncDeviceID("unknown")
-                currentRecords = try CurrentSyncRecordMerger()
+                observedRecords.append(contentsOf: batch.records)
+                let currentRecords = try CurrentSyncRecordMerger()
                     .prepareTransportBatch(
-                        existingRecords: currentRecords,
-                        incomingRecords: batch.records
+                        existingRecords: [],
+                        incomingRecords: observedRecords
                     ).records
                 snapshots.append(
                     try SyncRepositorySnapshotBuilder().snapshot(

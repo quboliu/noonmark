@@ -7298,17 +7298,9 @@ run_zhulong_pending_gate_probe() (
                record_payload,
                '$.payload.writerDeviceID.rawValue'
              ) = 'noonmark.bootstrap'),
-      (SELECT count(*) FROM change_journal),
-      (SELECT count(*)
-       FROM sync_metadata
-       WHERE key = 'localFirst.sync.baselineManifest'
-         AND json_valid(value) = 1
-         AND json_extract(value, '$.state') = 'pending'
-         AND json_array_length(
-               json_extract(value, '$.expectations')
-             ) = 1);
+      (SELECT count(*) FROM change_journal);
   ")"
-  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 1 1 1" ]]; then
+  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 1 1" ]]; then
     echo "zhulong pending-gate setup lost its empty Engine or exact import baseline: ${sqlite_probe:-missing}" >&2
     exit 1
   fi

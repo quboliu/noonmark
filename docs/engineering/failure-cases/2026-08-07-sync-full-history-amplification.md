@@ -48,6 +48,8 @@ Linux 执行环境运行 `scripts/test-incremental-sync-symptom` 时，`scripts/
 
 本次复核也移除了 transport protocol 及测试夹具中的 `fetchAll()`／全量 push 兼容路；协调器只能消费 frontier 后的 page。Local Folder 在 page 刚好落在非 tip batch 时额外读取一个后继 batch，验证 hash 链边界，避免损坏的非 tip batch 因分页截断而被接受；实际读取的 bytes／batches 同步计入 metrics，不能以未返回 records 掩盖 I/O。
 
+真实 App 的烛龙 pending-recovery 夹具曾把 `localFirst.sync.baselineManifest` 当作空 Engine／应用恢复写围栏的前置条件。v18 clean cut 会在导入替换时清除旧同步运行态 metadata；该 metadata 与待恢复 journal、Engine、Session 的不变性无关。夹具现只断言这些真正受保护的资料事实，再在跨进程 SQLite writer lock 下验证启动、拒绝写入及所有受保护字节不变。
+
 当前 CloudKit transport 已不再向协调器返回完整 mirror，但显式 live-only 的 SQLite CloudKit persistence 仍会在 session commit 编码当前 mirror snapshot；这不是默认 iCloud Drive 路径的性能阻塞，却仍是 CloudKit 成为默认端点前必须消除的 `O(current records)` 残余。
 
 ## 回归测试

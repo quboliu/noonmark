@@ -7,7 +7,7 @@
 - 引入提交：`30fb2adee836909f71cfce7b6afd6b28bb9592f6` feat(core): Complete task trajectories in the completed pool（2026-07-05）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`（历史已统一改写为该身份）
 - 实际修改者：未知
-- 修复提交：`874980047b45da44e0f3e5b9910cf71ff91b8824` fix(core): make the completed pool projection near-linear；本轮门禁收口提交待创建后回填
+- 修复提交：`874980047b45da44e0f3e5b9910cf71ff91b8824` fix(core): make the completed pool projection near-linear；`16eeb13b3b4fc8d4d8820fdc01135a60cfed53e4` fix(sync): close release-blocking regressions
 
 ## 用户症状与影响
 

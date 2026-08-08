@@ -6,7 +6,7 @@
 - 引入提交：`d42bfbc4b43a78a3b05a1334d974dc7f36078d93`（`feat(app): improve local-first sync and UI experience`）；`28f261d969a70b58661a48dc07f7bd11eece3c55` 增加全 commit／mirror 修复，`e9d007f248b43dfe4b164ecdeac93e173a427912` 增加一轮内重复全量覆盖复核
 - Git author／committer：上述提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：`12aec75db39c42dcca60de02e993d18a86682e6e`（增量 transport、frontier 与锁定根因修复）、`fd77ee795dccf73894bc9547c51234f0659f5183`（pending-recovery 夹具对齐）、`d8604874d602a307fe29904e18fa688d601e4c58`（首次基线覆盖修复）及本轮待提交的增量收口修复（提交后回填）
+- 修复提交：`12aec75db39c42dcca60de02e993d18a86682e6e`（增量 transport、frontier 与锁定根因修复）、`fd77ee795dccf73894bc9547c51234f0659f5183`（pending-recovery 夹具对齐）、`d8604874d602a307fe29904e18fa688d601e4c58`（首次基线覆盖修复）及 `16eeb13b3b4fc8d4d8820fdc01135a60cfed53e4`（增量收口修复）
 
 ## 用户症状与影响
 

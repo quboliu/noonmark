@@ -1,13 +1,13 @@
 # FAIL-2026-08-08-01：evidence helper 清理观察器把已删除子目录误判为门禁失败
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-08T09:49:00-04:00
 - 影响版本／构建：v0.2.5 build 22 候选，未发行
 - 引入提交：`038e4e71f72b2d808e3327aae7b7f23f570f3850`（`fix(evidence): harden evidence paths and session lifecycle`）
 - Git author／committer：quboliu `<38942505+quboliu@users.noreply.github.com>`／quboliu `<38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git 资料不能证明实际操作者。
-- 修复提交：待回填
+- 修复提交：`16eeb13b3b4fc8d4d8820fdc01135a60cfed53e4`（`fix(sync): close release-blocking regressions`）
 
 ## 用户症状与影响
 

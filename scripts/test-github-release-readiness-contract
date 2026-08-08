@@ -27,9 +27,16 @@ readiness="scripts/verify-github-release-readiness"
 tag_publisher="scripts/push-release-tag"
 workflow=".github/workflows/release-publish.yml"
 release_guide=".github/RELEASING.md"
+release_notes_generator="scripts/generate-github-release-notes"
+release_language_verifier="scripts/verify-github-release-language"
+publication_verifier="scripts/verify-github-release-publication"
 
 [[ -x "$readiness" ]] || fail "missing executable readiness verifier"
 [[ -x "$tag_publisher" ]] || fail "missing executable tag publisher"
+[[ -x "$release_notes_generator" ]] ||
+  fail "missing executable English release-notes generator"
+[[ -x "$release_language_verifier" ]] ||
+  fail "missing executable GitHub Release language verifier"
 
 fixture_root="$(
   mktemp -d "${TMPDIR:-/tmp}/noonmark-github-release-readiness.XXXXXX"
@@ -127,6 +134,24 @@ if run_readiness "$complete_secrets" "$broad_policy" "$broad_output"; then
   fail "readiness verifier accepted an over-broad tag policy"
 fi
 
+"$release_language_verifier" --self-test ||
+  fail "GitHub Release language verifier self-test failed"
+generated_notes="$fixture_root/generated-release-notes.md"
+"$release_notes_generator" \
+  v0.2.4 \
+  "$(git rev-list -n 1 v0.2.4)" \
+  21 \
+  "$generated_notes"
+"$release_language_verifier" --file "$generated_notes" ||
+  fail "generated GitHub Release notes are not English"
+grep -Fqx "## What's Changed" "$generated_notes" ||
+  fail "generated release notes lack their English heading"
+grep -Fq 'Simplify flylight and subtask surfaces' "$generated_notes" ||
+  fail "generated release notes omit the user-facing feature commit"
+if grep -Fq 'Pin the SwiftFormat toolchain' "$generated_notes"; then
+  fail "generated release notes expose an infrastructure-only commit"
+fi
+
 rg -n 'uses: actions/checkout@[0-9a-f]{40}$' "$workflow" >/dev/null ||
   fail "release workflow does not pin checkout to a full commit SHA"
 rg -F 'persist-credentials: false' "$workflow" >/dev/null ||
@@ -164,6 +189,17 @@ require_order \
   "$workflow" \
   'name: Remove signing material' \
   'name: Checksum and release notes'
+rg -F 'scripts/generate-github-release-notes' "$workflow" >/dev/null ||
+  fail "release workflow does not use the English notes generator"
+rg -F 'scripts/verify-github-release-language --file RELEASE_NOTES.md' \
+  "$workflow" >/dev/null ||
+  fail "release workflow does not fail closed on non-English notes"
+if rg -F '用户可见变化' "$workflow" >/dev/null; then
+  fail "release workflow still extracts Chinese release notes"
+fi
+rg -F 'scripts/verify-github-release-language "$tag"' \
+  "$publication_verifier" >/dev/null ||
+  fail "publication verifier does not check the live Release language"
 
 require_order \
   "$tag_publisher" \

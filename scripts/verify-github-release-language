@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="quboliu/noonmark"
+
+fail() {
+  echo "GitHub Release language verification: $*" >&2
+  return 1
+}
+
+contains_han() {
+  printf '%s' "$1" | /usr/bin/perl -CSDA -e '
+    use strict;
+    use warnings;
+    use utf8;
+    local $/;
+    my $text = <STDIN> // q{};
+    if ($text =~ /[\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{F900}-\x{FAFF}]/) {
+      exit 0;
+    }
+    exit 1;
+  '
+}
+
+verify_body() {
+  local body="$1"
+
+  [[ -n "$body" ]] || fail "release body is empty" || return 1
+  grep -Fqx "## What's Changed" <<<"$body" ||
+    fail "release body lacks the English change heading" || return 1
+  grep -Eq '^- Build: [1-9][0-9]* · Commit: [0-9a-f]{40}$' <<<"$body" ||
+    fail "release body lacks the exact English build identity" || return 1
+  grep -Fqx -- \
+    '- Apple Development signed; not notarized. Install manually.' \
+    <<<"$body" || fail "release body lacks the English signing boundary" ||
+    return 1
+  grep -Fqx -- '- SHA-256: see Noonmark.dmg.sha256' <<<"$body" ||
+    fail "release body lacks the English checksum guidance" || return 1
+  if contains_han "$body"; then
+    fail "release body contains Han text" || return 1
+  fi
+}
+
+if [[ "$#" -eq 1 && "$1" == "--self-test" ]]; then
+  english_body=$'## What\x27s Changed\n\n- Simplify the Flylight rail.\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
+  chinese_body=$'## What\x27s Changed\n\n- 收敛飞光右栏。\n\n---\n- Build: 21 · Commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- Apple Development signed; not notarized. Install manually.\n- SHA-256: see Noonmark.dmg.sha256'
+  incomplete_body=$'## What\x27s Changed\n\n- Simplify the Flylight rail.'
+  verify_body "$english_body" || exit 1
+  if verify_body "$chinese_body" >/dev/null 2>&1; then
+    echo "GitHub Release language verifier accepted Han text" >&2
+    exit 1
+  fi
+  if verify_body "$incomplete_body" >/dev/null 2>&1; then
+    echo "GitHub Release language verifier accepted missing provenance" >&2
+    exit 1
+  fi
+  echo "GitHub Release language verifier self-test passed"
+  exit 0
+fi
+
+if [[ "$#" -eq 2 && "$1" == "--file" ]]; then
+  [[ -s "$2" && ! -L "$2" ]] || fail "release notes file is missing or unsafe" ||
+    exit 1
+  verify_body "$(<"$2")" || exit 1
+  echo "GitHub Release language verified: file=$2"
+  exit 0
+fi
+
+if [[ "$#" -ne 1 || "$1" != v* ]]; then
+  echo "usage: scripts/verify-github-release-language <tag> | --file <path> | --self-test" >&2
+  exit 64
+fi
+
+tag="$1"
+command -v gh >/dev/null 2>&1 || fail "GitHub CLI is unavailable" || exit 1
+release_name="$(
+  gh release view "$tag" --repo "$repo" --json name --jq '.name'
+)"
+release_body="$(
+  gh release view "$tag" --repo "$repo" --json body --jq '.body'
+)"
+[[ "$release_name" =~ ^Noonmark[[:space:]][0-9]+\.[0-9]+\.[0-9]+[[:space:]]\([1-9][0-9]*\)$ ]] ||
+  fail "release title is not the expected English version identity" || exit 1
+if contains_han "$release_name"; then
+  fail "release title contains Han text" || exit 1
+fi
+verify_body "$release_body" || exit 1
+echo "GitHub Release language verified: tag=$tag"

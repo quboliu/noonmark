@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "GitHub release notes generation: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 4 ]]; then
+  echo "usage: scripts/generate-github-release-notes <tag> <commit> <build> <output>" >&2
+  exit 64
+fi
+
+tag="$1"
+commit="$2"
+build="$3"
+output="$4"
+
+[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "tag must be a stable semantic version"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "commit must be a full SHA"
+git cat-file -e "${commit}^{commit}" 2>/dev/null ||
+  fail "commit does not exist"
+[[ "$build" =~ ^[1-9][0-9]*$ ]] || fail "build must be a positive integer"
+[[ -n "$output" && "$output" != *$'\n'* && "$output" != *$'\r'* ]] ||
+  fail "output path is invalid"
+if [[ "$output" != /* ]]; then
+  output="$repo_root/$output"
+fi
+[[ -d "$(dirname "$output")" && ! -L "$output" ]] ||
+  fail "output boundary is missing or unsafe"
+
+previous_tag="$(
+  git tag --merged "$commit" --sort=-version:refname |
+    awk -v current="$tag" '
+      /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $0 != current { print; exit }
+    '
+)"
+
+temporary_output="$(mktemp "${output}.XXXXXX")"
+cleanup() {
+  rm -f "$temporary_output"
+}
+trap cleanup EXIT
+
+printf "## What's Changed\n\n" >"$temporary_output"
+change_count=0
+conventional_pattern='^(feat|fix|perf)(\(([^)]+)\))?(!)?:[[:space:]]+(.+)$'
+if [[ -n "$previous_tag" ]]; then
+  while IFS=$'\t' read -r subject short_sha; do
+    [[ "$subject" =~ $conventional_pattern ]] || continue
+    scope="${BASH_REMATCH[3]:-}"
+    case "$scope" in
+      build | chore | ci | doc | docs | e2e | failure | failure-case | \
+        release | test | tests)
+        continue
+        ;;
+    esac
+    summary="${BASH_REMATCH[5]}"
+    first_character="$(
+      printf '%s' "${summary:0:1}" | tr '[:lower:]' '[:upper:]'
+    )"
+    summary="${first_character}${summary:1}"
+    printf -- '- %s (`%s`)\n' "$summary" "$short_sha" >>"$temporary_output"
+    change_count=$((change_count + 1))
+  done < <(
+    git log \
+      --reverse \
+      --format='%s%x09%h' \
+      "${previous_tag}..${commit}"
+  )
+fi
+
+if [[ "$change_count" -eq 0 ]]; then
+  printf '%s\n' \
+    '- No user-facing changes were called out in conventional commits.' \
+    >>"$temporary_output"
+fi
+if [[ -n "$previous_tag" ]]; then
+  printf '\n**Full Changelog**: https://github.com/quboliu/noonmark/compare/%s...%s\n' \
+    "$previous_tag" \
+    "$tag" >>"$temporary_output"
+fi
+{
+  printf '\n---\n'
+  printf -- '- Build: %s · Commit: %s\n' "$build" "$commit"
+  printf '%s\n' \
+    '- Apple Development signed; not notarized. Install manually.' \
+    '- SHA-256: see Noonmark.dmg.sha256'
+} >>"$temporary_output"
+
+mv -f "$temporary_output" "$output"
+temporary_output=""
+

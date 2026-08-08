@@ -98,6 +98,7 @@ for required_asset in Noonmark.dmg Noonmark.dmg.sha256; do
   [[ "$(grep -Fxc "$required_asset" <<<"$asset_names")" -eq 1 ]] ||
     fail "Release must contain exactly one ${required_asset}"
 done
+scripts/verify-github-release-language "$tag"
 
 release_url="$(
   gh release view "$tag" --repo "$repo" --json url --jq '.url'

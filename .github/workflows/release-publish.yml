@@ -174,22 +174,12 @@ jobs:
         run: |
           shasum -a 256 dist/Noonmark.dmg > dist/Noonmark.dmg.sha256
           shasum -a 256 -c dist/Noonmark.dmg.sha256
-          awk '
-            /^## 用户可见变化/ { grab=1; next }
-            grab && /^## / { exit }
-            grab { print }
-          ' "docs/releases/v${{ steps.ver.outputs.version }}.md" > RELEASE_NOTES.md
-          if [[ ! -s RELEASE_NOTES.md ]]; then
-            echo "Noonmark ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.build }})" \
-              > RELEASE_NOTES.md
-          fi
-          {
-            echo ""
-            echo "---"
-            echo "- Build: ${{ steps.ver.outputs.build }} · Commit: ${GITHUB_SHA}"
-            echo "- Apple Development signed; not notarized. Install manually."
-            echo "- SHA-256: see Noonmark.dmg.sha256"
-          } >> RELEASE_NOTES.md
+          scripts/generate-github-release-notes \
+            "${{ steps.ver.outputs.tag }}" \
+            "$GITHUB_SHA" \
+            "${{ steps.ver.outputs.build }}" \
+            RELEASE_NOTES.md
+          scripts/verify-github-release-language --file RELEASE_NOTES.md
           echo "---- release notes ----"; cat RELEASE_NOTES.md
 
       - name: Create immutable GitHub Release

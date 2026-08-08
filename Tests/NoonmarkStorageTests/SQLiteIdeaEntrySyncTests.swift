@@ -56,7 +56,7 @@ final class SQLiteIdeaEntrySyncTests: XCTestCase {
             upload,
             SQLiteSyncUploadResult(pendingCount: 3, uploadedCount: 3, failedCount: 0)
         )
-        let uploaded = try await transport.fetchAll()
+        let uploaded = try await transport.bootstrapRecords()
         XCTAssertEqual(uploaded.count, 3)
         XCTAssertTrue(uploaded.allSatisfy {
             $0.entityType == .ideaEntry

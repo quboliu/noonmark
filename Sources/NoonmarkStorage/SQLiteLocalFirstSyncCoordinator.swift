@@ -1,4 +1,5 @@
 import Foundation
+import NoonmarkCore
 import NoonmarkDiagnostics
 import NoonmarkSync
 

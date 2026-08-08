@@ -607,7 +607,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         XCTAssertEqual(firstPending.dependencies, [.currentSnapshotIntegrity])
 
         await transport.removeAll()
-        try await transport.push([newerChainRecord])
+        try await transport.pushAccepting([newerChainRecord])
         let second = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -623,7 +623,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(secondPending.attemptCount, 2)
 
-        try await transport.push([definitionRecord])
+        try await transport.pushAccepting([definitionRecord])
         let third = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -839,7 +839,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
                 modifiedBy: SyncDeviceID("iphone-b")
             )
         ]
-        try await transport.push(parentRecords)
+        try await transport.pushAccepting(parentRecords)
 
         let third = try await coordinator.downloadAndMerge(
             detectedAt: now.addingTimeInterval(30)
@@ -966,7 +966,7 @@ final class SQLiteSyncDownloadCoordinatorTests: XCTestCase {
         XCTAssertEqual(afterRestart.waitingCount, 1)
         XCTAssertEqual(try syncRepository.pendingDownloads().first?.attemptCount, 2)
 
-        try await transport.push([renameRecord])
+        try await transport.pushAccepting([renameRecord])
         let resolved = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -1637,10 +1637,17 @@ private struct DeleteRecreateFixture {
 private struct OrderedSyncTransport: SyncRecordTransport {
     let records: [SyncRecord]
 
-    func push(_: [SyncRecord]) async throws {}
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        records
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: records, after: frontier)
     }
 }
 
@@ -1662,14 +1669,21 @@ private actor PendingInjectingTransport: SyncRecordTransport {
         self.fetched = fetched
     }
 
-    func push(_: [SyncRecord]) async throws {}
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
         try SQLiteSyncRepository(databaseURL: databaseURL).reconcilePendingDownloads(
             waiting: [waiting],
             terminal: [],
             attemptedAt: attemptedAt
         )
-        return fetched
+        return fixturePage(records: fetched, after: frontier)
     }
 }

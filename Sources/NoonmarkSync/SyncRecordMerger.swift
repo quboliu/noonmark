@@ -288,10 +288,29 @@ public struct SyncRecordMerger: Sendable {
                 // typed merge failure reason is therefore intentionally not
                 // propagated into an operation-level diagnostic here; the
                 // conflict queue is the user-visible surface for this case.
-                let recordID: SyncRecordID = switch error {
+                let recordID: SyncRecordID? = switch error {
                 case let .invalidCurrentRecordMerge(invalidID, _),
                      let .immutableRecordCollision(invalidID):
                     invalidID
+                case .invalidFrontier,
+                     .frontierDidNotAdvance,
+                     .repositoryFormatMismatch,
+                     .producerFork,
+                     .missingBatch,
+                     .invalidBatchHash:
+                    nil
+                }
+                guard let recordID else {
+                    conflicts.append(contentsOf: remaining.map {
+                        conflict(
+                            .invalidRecordPayload,
+                            record: $0,
+                            detectedAt: detectedAt,
+                            message: "current record batch failed canonical validation"
+                        )
+                    })
+                    remaining.removeAll()
+                    break
                 }
                 let rejected = uniqueExactRecords(
                     remaining.filter { $0.id == recordID }

@@ -19,10 +19,10 @@ final class SyncRecordMergerTests: XCTestCase {
 
         let mapper = SyncRecordMapper()
         let transport = InMemorySyncTransport()
-        try await transport.push(try mapper.records(from: source.snapshot(), modifiedBy: SyncDeviceID("mac-a")))
+        try await transport.pushAccepting(try mapper.records(from: source.snapshot(), modifiedBy: SyncDeviceID("mac-a")))
 
         let target = NoonmarkEngine()
-        let result = try await SyncRecordMerger(mapper: mapper).merge(records: try transport.fetchAll(), into: target.snapshot(), detectedAt: now)
+        let result = try await SyncRecordMerger(mapper: mapper).merge(records: try transport.bootstrapRecords(), into: target.snapshot(), detectedAt: now)
         let restored = try NoonmarkEngine(snapshot: result.snapshot)
 
         XCTAssertTrue(result.conflicts.isEmpty)

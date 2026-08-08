@@ -212,9 +212,16 @@ private actor FailingFetchTransport: SyncRecordTransport {
         case offline
     }
 
-    func push(_ records: [SyncRecord]) async throws {}
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
+    func pull(
+        after _: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
         throw Failure.offline
     }
 }
@@ -228,14 +235,19 @@ private actor FailingPushTransport: SyncRecordTransport {
         self.remote = remote
     }
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         throw SyncRecordTransportError.invalidCurrentRecordMerge(
             recordID: Self.rejectedRecordID,
             reason: .invalidContentClock
         )
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        try await remote.fetchAll()
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        try await remote.pull(after: frontier, limit: limit)
     }
 }

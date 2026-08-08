@@ -30,7 +30,7 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         try await LocalFolderSyncTransport(
             rootURL: rootURL,
             producerEpochID: epochID
-        ).push([firstRecord])
+        ).pushAccepting([firstRecord])
         let secondRecord = try SyncRecordMapper().record(
             for: AppPreferencesEnvelope(
                 theme: .warmPaper,
@@ -40,8 +40,8 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             modifiedBy: SyncDeviceID("diagnostics-fixture")
         )
 
-        let descriptor = try lockRepository(at: rootURL)
-        defer { close(descriptor) }
+        let lockHolder = try RepositoryLockHolder(rootURL: rootURL)
+        defer { try? lockHolder.release() }
         let recorder = InMemoryDiagnosticRecorder()
         let operation = recorder.startOperation(
             kind: .localFirstSync,
@@ -52,11 +52,11 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
                 rootURL: rootURL,
                 producerEpochID: epochID,
                 diagnosticOperation: operation
-            ).push([secondRecord])
+            ).pushAccepting([secondRecord])
         }
 
         try await Task.sleep(for: .milliseconds(40))
-        XCTAssertEqual(flock(descriptor, LOCK_UN), 0)
+        try lockHolder.release()
         try await pushTask.value
 
         let events = recorder.snapshot().map(\.event)
@@ -108,7 +108,7 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         try await LocalFolderSyncTransport(
             rootURL: rootURL,
             diagnosticOperation: operation
-        ).push([record])
+        ).pushAccepting([record])
 
         let events = recorder.snapshot().map(\.event)
         let upload = try XCTUnwrap(events.last {
@@ -124,26 +124,6 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         )
     }
 
-    private func lockRepository(at rootURL: URL) throws -> Int32 {
-        let lockURL = rootURL.appendingPathComponent(".repository.lock")
-        let descriptor = lockURL.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return Int32(-1) }
-            return open(
-                path,
-                O_CREAT | O_RDWR,
-                mode_t(S_IRUSR | S_IWUSR)
-            )
-        }
-        guard descriptor >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        guard flock(descriptor, LOCK_EX) == 0 else {
-            close(descriptor)
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        return descriptor
-    }
-
     private func makeFolderURL() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -152,5 +132,49 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             )
         temporaryURLs.append(url)
         return url
+    }
+}
+
+private final class RepositoryLockHolder {
+    private let process: Process
+    private let releaseInput: FileHandle
+    private var released = false
+
+    init(rootURL: URL) throws {
+        let lockURL = rootURL.appendingPathComponent(".repository.lock")
+        let input = Pipe()
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        process.arguments = [
+            "-e",
+            "use Fcntl qw(:flock); $| = 1; open my $lock, '>>', $ARGV[0] or exit 2; flock($lock, LOCK_EX) or exit 3; print STDOUT '1'; read(STDIN, my $release, 1);",
+            lockURL.path,
+        ]
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        guard output.fileHandleForReading.readData(ofLength: 1) == Data([49]) else {
+            process.terminate()
+            process.waitUntilExit()
+            throw POSIXError(.EIO)
+        }
+        self.process = process
+        releaseInput = input.fileHandleForWriting
+    }
+
+    deinit {
+        try? release()
+    }
+
+    func release() throws {
+        guard released == false else { return }
+        releaseInput.write(Data([1]))
+        releaseInput.closeFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw POSIXError(.EIO)
+        }
+        released = true
     }
 }

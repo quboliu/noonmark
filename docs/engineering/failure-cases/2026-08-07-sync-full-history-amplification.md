@@ -6,7 +6,7 @@
 - 引入提交：`d42bfbc4b43a78a3b05a1334d974dc7f36078d93`（`feat(app): improve local-first sync and UI experience`）；`28f261d969a70b58661a48dc07f7bd11eece3c55` 增加全 commit／mirror 修复，`e9d007f248b43dfe4b164ecdeac93e173a427912` 增加一轮内重复全量覆盖复核
 - Git author／committer：上述提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：`1f264ff9c38047c8ac959e9d0cd624c70d495116`（`fix(sync): replace full-history replication`）
+- 修复提交：待本次完整回归门禁通过并提交后回填
 
 ## 用户症状与影响
 
@@ -46,12 +46,14 @@ Linux 执行环境运行 `scripts/test-incremental-sync-symptom` 时，`scripts/
 
 处理中。按 ADR-0046 直接改为 durable Outbox／Inbox／frontier、per-producer immutable batch chain、分页 pull 与分离上传确认；移除稳态 `fetchAll()`、全 current-set commit、mirror repair、完整 evidence-set 稳定性循环和成功收口时的全历史 journal 解码。outbox 状态查询与 unfinished count 使用 `(sync_state, changed_at)` index；established baseline 只校验 manifest 结构和 transport namespace，不再回读全部旧 journal。v18 迁移保留全部领域事实和设备身份，但清空只对旧仓库有意义的 journal／sync metadata，让新协调器从本机 snapshot 建立完整 baseline；baseline 禁止跨端点复用旧 receipt。
 
+本次复核也移除了 transport protocol 及测试夹具中的 `fetchAll()`／全量 push 兼容路；协调器只能消费 frontier 后的 page。Local Folder 在 page 刚好落在非 tip batch 时额外读取一个后继 batch，验证 hash 链边界，避免损坏的非 tip batch 因分页截断而被接受；实际读取的 bytes／batches 同步计入 metrics，不能以未返回 records 掩盖 I/O。
+
 当前 CloudKit transport 已不再向协调器返回完整 mirror，但显式 live-only 的 SQLite CloudKit persistence 仍会在 session commit 编码当前 mirror snapshot；这不是默认 iCloud Drive 路径的性能阻塞，却仍是 CloudKit 成为默认端点前必须消除的 `O(current records)` 残余。
 
 ## 回归测试
 
 - fast：`scripts/test-incremental-sync-contract` 静态拒绝协调器 `fetchAll()`、稳态全 journal 物化、破坏 outbox state index 的 optional-state SQL、旧 `records/`／`indexes/`／`refs/latest` 仓库和 CloudKit `session.records()` 全镜像返回，并要求增量协议与新 layout 存在。
-- symptom：`scripts/test-incremental-sync-symptom` 在两套 SQLite、长历史、零变化和单变化场景对账领域结果及 transport head／batch 访问量，证明稳态成本与旧历史无关；该门禁由本地自测全集强制调用。
+- symptom：`scripts/test-incremental-sync-symptom` 在两套 SQLite、128／256 条历史、零变化和单变化场景对账领域结果及实际 transport head／batch／bytes 访问量；零变化只读一个 head、零 batch、零 bytes，单变化只打开一个 batch 且 bytes 为正，证明稳态成本与旧历史无关。`scripts/test-all` 同时强制调用完整真实 App E2E，包括 Local Folder 同步及诊断锁等待闭环。
 - 真实服务：`scripts/test-icloud-sync-live` 继续在 `e2e` profile 验证真实 App、batch/head ubiquitous upload confirmation 与双 SQLite；CloudKit 继续走 ADR-0019 的显式 live 门禁。
 
 ## 发行／回滚处置

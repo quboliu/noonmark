@@ -190,15 +190,6 @@ public actor InMemorySyncTransport: SyncRecordTransport {
         )
     }
 
-    public func fetchAll() async throws -> [SyncRecord] {
-        records.values.sorted {
-            if $0.entityType.rawValue != $1.entityType.rawValue {
-                return $0.entityType.rawValue < $1.entityType.rawValue
-            }
-            return $0.id.rawValue < $1.id.rawValue
-        }
-    }
-
     public func removeAll() {
         records.removeAll()
         batches.removeAll()

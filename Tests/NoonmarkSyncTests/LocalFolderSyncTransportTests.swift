@@ -47,27 +47,53 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             producerEpochID: epochA
         )
         for index in 0 ..< 200 {
-            try await producer.push([try preferenceRecord(index: index)])
+            try await producer.pushAccepting([try preferenceRecord(index: index)])
         }
 
-        let bootstrap = try await producer.pull(after: .origin, limit: 10_000)
+        let bootstrap = try await producer.pull(after: .origin, limit: 10000)
         XCTAssertEqual(bootstrap.openedBatchCount, 200)
         let unchanged = try await producer.pull(
             after: bootstrap.frontier,
-            limit: 10_000
+            limit: 10000
         )
         XCTAssertTrue(unchanged.records.isEmpty)
         XCTAssertEqual(unchanged.openedBatchCount, 0)
         XCTAssertEqual(unchanged.observedProducerCount, 1)
 
-        try await producer.push([try preferenceRecord(index: 200)])
+        try await producer.pushAccepting([try preferenceRecord(index: 200)])
         let incremental = try await producer.pull(
             after: bootstrap.frontier,
-            limit: 10_000
+            limit: 10000
         )
         XCTAssertEqual(incremental.records.count, 1)
         XCTAssertEqual(incremental.openedBatchCount, 1)
         XCTAssertEqual(try batchFiles(in: root).count, 201)
+    }
+
+    func testPartialPageCountsTheReadButUnreturnedBatchBytes()
+        async throws
+    {
+        let root = makeFolderURL()
+        let transport = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        )
+        try await transport.pushAccepting([try preferenceRecord(index: 0)])
+        try await transport.pushAccepting([
+            try preferenceRecord(index: 1),
+            try preferenceRecord(index: 2),
+        ])
+        let batchBytes = try batchFiles(in: root).reduce(Int64(0)) {
+            total, url in
+            total + Int64(try Data(contentsOf: url).count)
+        }
+
+        let page = try await transport.pull(after: .origin, limit: 2)
+
+        XCTAssertEqual(page.records.count, 1)
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.openedBatchCount, 2)
+        XCTAssertEqual(page.openedByteCount, batchBytes)
     }
 
     func testIndependentProducerChainsInterleaveWithoutSharedHead() async throws {
@@ -80,9 +106,9 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             rootURL: root,
             producerEpochID: epochB
         )
-        try await first.push([try preferenceRecord(index: 1)])
-        try await second.push([try preferenceRecord(index: 2)])
-        try await first.push([try preferenceRecord(index: 3)])
+        try await first.pushAccepting([try preferenceRecord(index: 1)])
+        try await second.pushAccepting([try preferenceRecord(index: 2)])
+        try await first.pushAccepting([try preferenceRecord(index: 3)])
 
         var frontier = SyncTransportFrontier.origin
         var fetched: [SyncRecord] = []
@@ -112,9 +138,9 @@ final class LocalFolderSyncTransportTests: XCTestCase {
                 throw InjectedPublicationError.interrupted
             }
         }
-        await XCTAssertThrowsErrorAsync(
-            try await interrupted.push([record])
-        )
+        await XCTAssertThrowsErrorAsync {
+            try await interrupted.pushAccepting([record])
+        }
         XCTAssertEqual(try batchFiles(in: root).count, 1)
         XCTAssertTrue(try headFiles(in: root).isEmpty)
 
@@ -122,7 +148,7 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             rootURL: root,
             producerEpochID: epochA
         )
-        try await recovered.push([record])
+        try await recovered.pushAccepting([record])
         let page = try await recovered.pull(after: .origin, limit: 10)
         XCTAssertEqual(page.records, [record])
         XCTAssertEqual(try batchFiles(in: root).count, 1)
@@ -142,9 +168,9 @@ final class LocalFolderSyncTransportTests: XCTestCase {
                 throw InjectedPublicationError.interrupted
             }
         }
-        await XCTAssertThrowsErrorAsync(
-            try await interrupted.push([record])
-        )
+        await XCTAssertThrowsErrorAsync {
+            try await interrupted.pushAccepting([record])
+        }
         XCTAssertEqual(try batchFiles(in: root).count, 1)
         XCTAssertEqual(try headFiles(in: root).count, 1)
 
@@ -164,14 +190,14 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             rootURL: root,
             producerEpochID: epochA
         )
-        try await transport.push([try preferenceRecord(index: 1)])
-        try await transport.push([try preferenceRecord(index: 2)])
+        try await transport.pushAccepting([try preferenceRecord(index: 1)])
+        try await transport.pushAccepting([try preferenceRecord(index: 2)])
         let firstBatch = try XCTUnwrap(try batchFiles(in: root).first)
         try FileManager.default.removeItem(at: firstBatch)
 
-        await XCTAssertThrowsErrorAsync(
+        await XCTAssertThrowsErrorAsync({
             try await transport.pull(after: .origin, limit: 10)
-        ) { error in
+        }) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
                 .missingBatch(
@@ -188,15 +214,15 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             rootURL: root,
             producerEpochID: epochA
         )
-        try await transport.push([try preferenceRecord(index: 1)])
+        try await transport.pushAccepting([try preferenceRecord(index: 1)])
         let batch = try XCTUnwrap(try batchFiles(in: root).first)
         var bytes = try Data(contentsOf: batch)
         bytes.append(0x20)
         try bytes.write(to: batch)
 
-        await XCTAssertThrowsErrorAsync(
+        await XCTAssertThrowsErrorAsync({
             try await transport.pull(after: .origin, limit: 10)
-        ) { error in
+        }) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
                 .invalidBatchHash(
@@ -215,23 +241,18 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             rootURL: root,
             producerEpochID: epochA
         )
-        try await transport.push([try preferenceRecord(index: 0)])
-        try await transport.push([try preferenceRecord(index: 1)])
+        try await transport.pushAccepting([try preferenceRecord(index: 0)])
+        try await transport.pushAccepting([try preferenceRecord(index: 1)])
         let firstBatch = try XCTUnwrap(try batchFiles(in: root).first)
-        let original = try String(
-            decoding: Data(contentsOf: firstBatch),
-            as: UTF8.self
-        )
-        let tampered = original.replacingOccurrences(
-            of: "coolGray",
-            with: "warmPaper"
-        )
+        let original = try Data(contentsOf: firstBatch)
+        var tampered = original
+        tampered.append(0x20)
         XCTAssertNotEqual(tampered, original)
-        try Data(tampered.utf8).write(to: firstBatch)
+        try tampered.write(to: firstBatch)
 
-        await XCTAssertThrowsErrorAsync(
+        await XCTAssertThrowsErrorAsync({
             try await transport.pull(after: .origin, limit: 1)
-        ) { error in
+        }) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
                 .invalidBatchHash(
@@ -253,9 +274,9 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             producerEpochID: epochA
         )
 
-        await XCTAssertThrowsErrorAsync(
+        await XCTAssertThrowsErrorAsync({
             try await transport.pull(after: .origin, limit: 10)
-        ) { error in
+        }) { error in
             XCTAssertEqual(
                 error as? SyncRecordTransportError,
                 .repositoryFormatMismatch
@@ -282,12 +303,10 @@ final class LocalFolderSyncTransportTests: XCTestCase {
             ),
             modifiedBy: SyncDeviceID("exact-date")
         )
-        try await transport.push([record])
+        try await transport.pushAccepting([record])
 
-        let restored = try XCTUnwrap(
-            try await transport.pull(after: .origin, limit: 10)
-                .records.first
-        )
+        let page = try await transport.pull(after: .origin, limit: 10)
+        let restored = try XCTUnwrap(page.records.first)
         XCTAssertEqual(
             restored.modifiedAt.timeIntervalSinceReferenceDate.bitPattern,
             record.modifiedAt.timeIntervalSinceReferenceDate.bitPattern
@@ -352,8 +371,8 @@ private enum InjectedPublicationError: Error {
     case interrupted
 }
 
-private func XCTAssertThrowsErrorAsync<T>(
-    _ expression: @autoclosure () async throws -> T,
+private func XCTAssertThrowsErrorAsync(
+    _ expression: () async throws -> some Any,
     _ errorHandler: (Error) -> Void = { _ in },
     file: StaticString = #filePath,
     line: UInt = #line

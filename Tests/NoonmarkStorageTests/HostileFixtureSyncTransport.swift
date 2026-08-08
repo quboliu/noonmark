@@ -9,12 +9,18 @@ actor HostileFixtureSyncTransport: SyncRecordTransport {
         records = uncheckedRecords
     }
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         self.records.append(contentsOf: records)
+        return fixturePushReceipt()
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        records
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: records, after: frontier)
     }
 
     func removeAll() {

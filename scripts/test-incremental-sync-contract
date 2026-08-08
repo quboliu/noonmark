@@ -23,6 +23,12 @@ rg -F 'func pull(' "$protocol" >/dev/null ||
   fail "transport has no frontier-based pull"
 rg -F 'func confirmationStatus(' "$protocol" >/dev/null ||
   fail "transport has no separate upload confirmation"
+if rg -g '*.swift' 'func (push|fetchAll)\(' Sources Tests >/dev/null; then
+  fail "the removed full-mirror transport API still exists"
+fi
+if rg -g '*.swift' '\.fetchAll\(' Sources Tests >/dev/null; then
+  fail "the removed full-mirror transport API is still called"
+fi
 
 if rg -F 'transport.fetchAll' "$coordinator" >/dev/null; then
   fail "steady-state coordinator still fetches the complete endpoint"

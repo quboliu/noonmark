@@ -239,6 +239,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         var records: [SyncRecord] = []
         var references: [SyncTransportBatchReference] = []
         var byteCount: Int64 = 0
+        var openedBatchCount = 0
 
         producerLoop: for head in heads {
             var position = frontier.position(for: head.epochID)
@@ -257,6 +258,10 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                     )
                 }
                 let data = try Data(contentsOf: url)
+                openedBatchCount += 1
+                let (nextByteCount, overflow) = byteCount
+                    .addingReportingOverflow(Int64(data.count))
+                byteCount = overflow ? Int64.max : nextByteCount
                 let decoded = try decodeBatch(
                     data,
                     producerID: head.epochID,
@@ -290,9 +295,6 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                         ]
                     )
                 )
-                let (nextByteCount, overflow) = byteCount
-                    .addingReportingOverflow(Int64(data.count))
-                byteCount = overflow ? Int64.max : nextByteCount
                 let advancedPosition = SyncTransportPosition(
                     sequence: nextSequence,
                     contentHash: hash
@@ -305,6 +307,34 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                 sequence = nextSequence
                 previousHash = hash
                 if records.count >= pageLimit {
+                    if nextSequence < head.value.tipSequence {
+                        let successorURL = batchURL(
+                            epochID: head.epochID,
+                            sequence: nextSequence + 1
+                        )
+                        guard fileManager.fileExists(atPath: successorURL.path) else {
+                            throw SyncRecordTransportError.missingBatch(
+                                producerID: head.epochID,
+                                sequence: nextSequence + 1
+                            )
+                        }
+                        let successorData = try Data(contentsOf: successorURL)
+                        openedBatchCount += 1
+                        let successor = try decodeBatch(
+                            successorData,
+                            producerID: head.epochID,
+                            sequence: nextSequence + 1
+                        )
+                        guard successor.previousHash == hash else {
+                            throw SyncRecordTransportError.invalidBatchHash(
+                                producerID: head.epochID,
+                                sequence: nextSequence
+                            )
+                        }
+                        let (nextByteCount, overflow) = byteCount
+                            .addingReportingOverflow(Int64(successorData.count))
+                        byteCount = overflow ? Int64.max : nextByteCount
+                    }
                     break producerLoop
                 }
             }
@@ -331,7 +361,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             hasMore: hasMore,
             batches: references,
             observedProducerCount: heads.count,
-            openedBatchCount: references.count,
+            openedBatchCount: openedBatchCount,
             openedByteCount: byteCount
         )
     }
@@ -611,13 +641,13 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
         defer { try? fileManager.removeItem(at: temporary) }
         try data.write(to: temporary, options: [.withoutOverwriting])
         try synchronizeFile(at: temporary)
-        let renameResult = temporary.withUnsafeFileSystemRepresentation {
+        let renameResult: Int32 = temporary.withUnsafeFileSystemRepresentation {
             sourcePath in
             destination.withUnsafeFileSystemRepresentation {
                 destinationPath in
                 guard let sourcePath, let destinationPath else {
                     errno = EINVAL
-                    return -1
+                    return Int32(-1)
                 }
                 return Darwin.rename(sourcePath, destinationPath)
             }
@@ -782,8 +812,6 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
     }
 
     private var repositoryLockURL: URL {
-        producerBatchesURL(
-            epochID: producerEpochID.uuidString.lowercased()
-        ).appendingPathComponent(".writer.lock")
+        rootURL.appendingPathComponent(".repository.lock")
     }
 }

@@ -283,9 +283,8 @@ public final class SQLiteSyncRepository {
             transport_receipt
         FROM change_journal
         """
-        let entries: [SyncJournalEntry]
-        if let state {
-            entries = try query(
+        let entries: [SyncJournalEntry] = if let state {
+            try query(
                 projection + " WHERE sync_state = ?",
                 on: database
             ) { statement in
@@ -294,7 +293,7 @@ public final class SQLiteSyncRepository {
                 try journalEntry(from: statement)
             }
         } else {
-            entries = try query(projection, on: database) { statement in
+            try query(projection, on: database) { statement in
                 try journalEntry(from: statement)
             }
         }
@@ -429,7 +428,7 @@ public final class SQLiteSyncRepository {
             WHERE sync_state = 'blockedUserAttention'
             """,
             on: database
-        )
+        ) { _ in }
     }
 
     func requeueJournalEntriesForBaselineRecovery(

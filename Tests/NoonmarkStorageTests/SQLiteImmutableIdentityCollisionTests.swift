@@ -167,10 +167,17 @@ private struct SQLiteImmutableCollisionFixture {
 private struct ImmutableCollisionTransport: SyncRecordTransport {
     let records: [SyncRecord]
 
-    func push(_: [SyncRecord]) async throws {}
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        records
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: records, after: frontier)
     }
 }
 

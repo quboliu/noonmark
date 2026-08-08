@@ -29,7 +29,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertEqual(try syncRepository.terminalRejections().count, 1)
 
         await transport.removeAll()
-        try await transport.push([fixture.childRecord])
+        try await transport.pushAccepting([fixture.childRecord])
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -63,7 +63,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         )
 
         await transport.removeAll()
-        try await transport.push([fixture.parentRecord])
+        try await transport.pushAccepting([fixture.parentRecord])
         let retransmittedParent = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -142,7 +142,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
         XCTAssertEqual(try syncRepository.terminalRejections().count, 2)
 
         await transport.removeAll()
-        try await transport.push([childRecord])
+        try await transport.pushAccepting([childRecord])
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,
             transport: transport
@@ -226,7 +226,7 @@ final class SQLiteSyncTerminalLedgerTests: XCTestCase {
             )
         ]
         await transport.removeAll()
-        try await transport.push(events)
+        try await transport.pushAccepting(events)
 
         let afterRestart = try await SQLiteSyncDownloadCoordinator(
             databaseURL: databaseURL,

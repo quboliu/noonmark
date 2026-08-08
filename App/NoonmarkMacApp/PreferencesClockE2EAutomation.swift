@@ -227,7 +227,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             deviceID: Self.remoteDeviceID
         )
         let transport = LocalFolderSyncTransport(rootURL: syncFolderURL)
-        try await transport.push([remoteRecord])
+        try await transport.pushAccepting([remoteRecord])
         let storedRemote = try await storedPreferenceRecord(
             transport: transport,
             artifactName: "remote-future-preferences.json"
@@ -1608,7 +1608,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         transport: LocalFolderSyncTransport,
         artifactName: String
     ) async throws -> StoredPreferenceRecord {
-        let fetchedRecords = try await transport.fetchAll()
+        let fetchedRecords = try await transport.bootstrapRecords()
         let fetched = fetchedRecords.filter {
             $0.entityType == .appPreferences
                 && $0.id == SyncRecordID("preferences:default")
@@ -1749,7 +1749,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             rootURL: syncFolderURL,
             producerEpochID: remoteProducerEpoch
         )
-        try await transport.push([remoteRecord])
+        try await transport.pushAccepting([remoteRecord])
         let stored = try storedExactPreferenceRecord(
             expected: remoteRecord,
             artifactName: "stale-remote-reintroduced.json"

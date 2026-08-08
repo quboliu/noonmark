@@ -56,7 +56,7 @@ final class InMemorySyncTransportTests: XCTestCase {
                 ? [older, newer]
                 : [newer, older]
             let transport = try InMemorySyncTransport(records: records)
-            let fetched = try await transport.fetchAll()
+            let fetched = try await transport.bootstrapRecords()
             XCTAssertEqual(fetched, [newer])
             return
         }
@@ -115,10 +115,10 @@ final class InMemorySyncTransportTests: XCTestCase {
             payload: Data("collision".utf8)
         )
         let transport = try InMemorySyncTransport(records: [baseline])
-        let before = try await transport.fetchAll()
+        let before = try await transport.bootstrapRecords()
 
         do {
-            try await transport.push([independent, colliding])
+            try await transport.pushAccepting([independent, colliding])
             XCTFail("cross-type immutable collision must fail closed")
         } catch {
             XCTAssertEqual(
@@ -127,13 +127,13 @@ final class InMemorySyncTransportTests: XCTestCase {
             )
         }
 
-        let after = try await transport.fetchAll()
+        let after = try await transport.bootstrapRecords()
         XCTAssertEqual(after, before)
     }
 
     func testEmptyInitializerRemainsNonthrowing() async throws {
         let transport = InMemorySyncTransport()
-        let records = try await transport.fetchAll()
+        let records = try await transport.bootstrapRecords()
 
         XCTAssertTrue(records.isEmpty)
     }

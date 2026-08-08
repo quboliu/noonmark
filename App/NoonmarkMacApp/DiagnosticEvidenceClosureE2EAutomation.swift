@@ -173,6 +173,11 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
                 && store.operationFailureNotice?.diagnosticIncidentID?.rawValue
                 == state.failedIncidentID
         }
+        store.quickText = "E2E diagnostic lock-wait seed"
+        store.addQuickTask()
+        guard store.quickText.isEmpty else {
+            throw Failure.failed("diagnostic lock-wait seed was not committed")
+        }
         let snapshotBefore = store.engine.snapshot()
         store.syncLocalFolderNow()
         try await waitUntil("sync did not enter the external repository-lock wait") {

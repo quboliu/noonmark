@@ -1940,9 +1940,9 @@ private func executeSQL(_ sql: String, at databaseURL: URL) throws {
 private func downgradeDatabaseToVersion15(at databaseURL: URL) throws {
     let legacyChangeJournal = try version17ChangeJournalSchema()
         .replacingOccurrences(
-        of: "'dayTrace', 'subtask', 'ideaEntry', 'appPreferences'",
-        with: "'dayTrace', 'subtask', 'appPreferences'"
-    )
+            of: "'dayTrace', 'subtask', 'ideaEntry', 'appPreferences'",
+            with: "'dayTrace', 'subtask', 'appPreferences'"
+        )
     let pendingRecords = try schemaStatement(
         containing: "CREATE TABLE IF NOT EXISTS sync_pending_download_records"
     )

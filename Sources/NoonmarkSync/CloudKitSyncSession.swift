@@ -215,9 +215,8 @@ actor CloudKitSyncSession {
                 try await commit(candidate)
             }
             let entries = Array(retained.prefix(max(limit, 1)))
-            let nextFrontier: SyncTransportFrontier
-            if let last = entries.last {
-                nextFrontier = frontier.advancing(
+            let nextFrontier: SyncTransportFrontier = if let last = entries.last {
+                frontier.advancing(
                     producerID: Self.inboxProducerID,
                     to: SyncTransportPosition(
                         sequence: last.sequence,
@@ -225,7 +224,7 @@ actor CloudKitSyncSession {
                     )
                 )
             } else {
-                nextFrontier = frontier
+                frontier
             }
             return SyncTransportChangePage(
                 records: entries.map(\.record),

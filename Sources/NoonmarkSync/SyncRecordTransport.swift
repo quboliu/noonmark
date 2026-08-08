@@ -185,7 +185,6 @@ public protocol SyncRecordTransport: Sendable {
     /// Stable local namespace used to isolate durable apply frontiers when the
     /// configured endpoint changes. It must not expose a user path or account.
     var frontierNamespace: String { get }
-    func push(_ records: [SyncRecord]) async throws
     func pushAccepting(
         _ records: [SyncRecord]
     ) async throws -> SyncTransportPushReceipt
@@ -199,7 +198,6 @@ public protocol SyncRecordTransport: Sendable {
     func acknowledge(
         _ frontier: SyncTransportFrontier
     ) async throws
-    func fetchAll() async throws -> [SyncRecord]
 }
 
 public extension SyncRecordTransport {
@@ -215,79 +213,16 @@ public extension SyncRecordTransport {
 
     func acknowledge(_: SyncTransportFrontier) async throws {}
 
-    func push(_ records: [SyncRecord]) async throws {
-        _ = try await pushAccepting(records)
-    }
-
-    func pushAccepting(
-        _ records: [SyncRecord]
-    ) async throws -> SyncTransportPushReceipt {
-        try await push(records)
-        return SyncTransportPushReceipt(
-            batches: [],
-            confirmation: .confirmed
-        )
-    }
-
-    /// Compatibility seam for deterministic test transports. Shipping
-    /// transports implement `pull` directly; the production coordinator never
-    /// calls `fetchAll`.
-    func pull(
-        after frontier: SyncTransportFrontier,
-        limit _: Int
-    ) async throws -> SyncTransportChangePage {
-        let producerID = "compatibility-snapshot"
-        guard frontier.positions.keys.allSatisfy({ $0 == producerID }) else {
+    /// Explicit bootstrap helper. It pages from the origin and must never be
+    /// used by a steady-state coordinator, which persists its returned frontier.
+    func bootstrapRecords(pageLimit: Int = 512) async throws -> [SyncRecord] {
+        guard pageLimit > 0 else {
             throw SyncRecordTransportError.invalidFrontier
         }
-        let records = try await fetchAll()
-        let evidence = records.map {
-            SyncRecordEvidenceID(record: $0).rawValue
-        }.sorted().joined(separator: "\u{0}")
-        let contentHash = SHA256.hash(data: Data(evidence.utf8)).map {
-            String(format: "%02x", $0)
-        }.joined()
-        if let position = frontier.position(for: producerID),
-           position.contentHash == contentHash
-        {
-            return SyncTransportChangePage(
-                records: [],
-                frontier: frontier,
-                hasMore: false,
-                observedProducerCount: 1
-            )
-        }
-        let previousSequence = frontier.position(
-            for: producerID
-        )?.sequence ?? 0
-        let (sequence, overflow) = previousSequence
-            .addingReportingOverflow(1)
-        guard overflow == false else {
-            throw SyncRecordTransportError.invalidFrontier
-        }
-        let advanced = frontier.advancing(
-            producerID: producerID,
-            to: SyncTransportPosition(
-                sequence: sequence,
-                contentHash: contentHash
-            )
-        )
-        return SyncTransportChangePage(
-            records: records,
-            frontier: advanced,
-            hasMore: false,
-            observedProducerCount: 1,
-            openedBatchCount: records.isEmpty ? 0 : 1
-        )
-    }
-
-    /// Explicit bootstrap/debug helper. Steady-state coordinators must persist
-    /// and reuse the frontier returned by `pull` instead of calling this API.
-    func fetchAll() async throws -> [SyncRecord] {
         var frontier = SyncTransportFrontier.origin
         var fetched: [SyncRecord] = []
         while true {
-            let page = try await pull(after: frontier, limit: 512)
+            let page = try await pull(after: frontier, limit: pageLimit)
             fetched.append(contentsOf: page.records)
             if page.hasMore == false {
                 break

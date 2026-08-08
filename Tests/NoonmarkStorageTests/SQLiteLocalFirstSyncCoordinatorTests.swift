@@ -154,7 +154,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 state: .blockedCorruption
             ).isEmpty
         )
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
         let remoteSubtask = try XCTUnwrap(
             remoteRecords.first {
                 $0.entityType == .subtask
@@ -284,7 +284,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             )
         )
         let transport =
-            ClearAfterFirstPushBeforeNextFetchSyncTransport()
+            ClearAfterFirstPushBeforeNextPullSyncTransport()
 
         do {
             _ = try await SQLiteLocalFirstSyncCoordinator(
@@ -299,7 +299,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             )
         }
         let didClearEndpoint = await transport.didClearEndpoint()
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
 
         XCTAssertTrue(didClearEndpoint)
         XCTAssertTrue(remoteRecords.isEmpty)
@@ -367,7 +367,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             in: remote.snapshot()
         )
         let transport =
-            InjectRemoteRecordsOnSecondFetchSyncTransport(
+            InjectRemoteRecordsOnSecondPullSyncTransport(
                 records: remoteRecords
             )
 
@@ -743,7 +743,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         ).sync(now: now.addingTimeInterval(4))
 
         XCTAssertGreaterThan(result.upload.uploadedCount, 0)
-        let finalRecords = try await transport.fetchAll()
+        let finalRecords = try await transport.bootstrapRecords()
         let canonicalRecord = try XCTUnwrap(
             finalRecords.first {
                 $0.entityType == .taskChain
@@ -849,7 +849,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         ).sync(now: now.addingTimeInterval(3))
 
         XCTAssertGreaterThan(result.upload.uploadedCount, 0)
-        let finalRecords = await transport.fetchAll()
+        let finalRecords = try await transport.bootstrapRecords()
         XCTAssertTrue(
             finalRecords.contains {
                 $0.entityType == .classificationBaseline
@@ -921,7 +921,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 .baselineManifestInvalid
             )
         }
-        let replacementEndpointRecords = try await emptyEndpoint.fetchAll()
+        let replacementEndpointRecords = try await emptyEndpoint.bootstrapRecords()
         XCTAssertTrue(replacementEndpointRecords.isEmpty)
         XCTAssertNotNil(try sourceRepository.load().chains[chainID])
     }
@@ -975,7 +975,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             )
         }
 
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
         XCTAssertTrue(remoteRecords.isEmpty)
         let statusMetadata = try XCTUnwrap(
             syncRepository.metadata(
@@ -1588,7 +1588,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let failureAt = now
         let coordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: databaseURL,
-            transport: FailingFetchSyncTransport(),
+            transport: FailingPullSyncTransport(),
             failureClock: { failureAt }
         )
 
@@ -1597,7 +1597,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             XCTFail("致命传输失败必须向调用方抛出")
         } catch {
             XCTAssertEqual(
-                error as? FailingFetchSyncTransportError,
+                error as? FailingPullSyncTransportError,
                 .unavailable
             )
         }
@@ -1613,7 +1613,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             try decoder.decode(SQLiteLocalFirstSyncStatus.self, from: metadata.value),
             .failed(
                 reason: .transportOrStorage,
-                message: FailingFetchSyncTransportError.unavailable.localizedDescription,
+                message: FailingPullSyncTransportError.unavailable.localizedDescription,
                 failedAt: failureAt
             )
         )
@@ -1642,7 +1642,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             incidentID: DiagnosticIncidentID()
         )
         try SQLiteLocalFirstSyncCoordinator.persistFailure(
-            FailingFetchSyncTransportError.unavailable,
+            FailingPullSyncTransportError.unavailable,
             at: now,
             diagnosticCorrelation: olderCorrelation,
             in: repository
@@ -1694,7 +1694,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         let repository = SQLiteSyncRepository(databaseURL: databaseURL)
         let persistedAt = now.addingTimeInterval(30)
         try SQLiteLocalFirstSyncCoordinator.persistFailure(
-            FailingFetchSyncTransportError.unavailable,
+            FailingPullSyncTransportError.unavailable,
             at: persistedAt,
             diagnosticCorrelation: DiagnosticOperationCorrelation(
                 operationID: DiagnosticOperationID(),
@@ -1799,7 +1799,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
         let coordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: databaseURL,
-            transport: SlowFailingFetchSyncTransport(),
+            transport: SlowFailingPullSyncTransport(),
             diagnosticOperation: operation,
             completesDiagnosticOperationOnSuccess: true,
             completesDiagnosticOperationOnFailure: true,
@@ -1813,7 +1813,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             XCTFail("致命传输失败必须向调用方抛出")
         } catch {
             XCTAssertEqual(
-                error as? SlowFailingFetchSyncTransport.Failure,
+                error as? SlowFailingPullSyncTransport.Failure,
                 .unavailable
             )
         }
@@ -1885,7 +1885,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         for operation in [firstOperation, secondOperation] {
             let coordinator = SQLiteLocalFirstSyncCoordinator(
                 databaseURL: databaseURL,
-                transport: FailingFetchSyncTransport(),
+                transport: FailingPullSyncTransport(),
                 diagnosticOperation: operation,
                 completesDiagnosticOperationOnSuccess: true,
                 completesDiagnosticOperationOnFailure: true,
@@ -1897,7 +1897,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 XCTFail("同秒故障注入必须向调用方抛出")
             } catch {
                 XCTAssertEqual(
-                    error as? FailingFetchSyncTransportError,
+                    error as? FailingPullSyncTransportError,
                     .unavailable
                 )
             }
@@ -1946,7 +1946,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
         let coordinator = SQLiteLocalFirstSyncCoordinator(
             databaseURL: databaseURL,
-            transport: SlowFailingFetchSyncTransport(),
+            transport: SlowFailingPullSyncTransport(),
             diagnosticOperation: operation,
             completesDiagnosticOperationOnSuccess: false,
             completesDiagnosticOperationOnFailure: false,
@@ -1958,7 +1958,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             XCTFail("测试 transport 必须失败")
         } catch {
             XCTAssertEqual(
-                error as? SlowFailingFetchSyncTransport.Failure,
+                error as? SlowFailingPullSyncTransport.Failure,
                 .unavailable
             )
         }
@@ -2123,7 +2123,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             XCTAssertEqual(result.download.waitingCount, 0)
         }
 
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
         let remoteRecord = try XCTUnwrap(remoteRecords.first {
             $0.entityType == .taskChain
                 && $0.entityID == baselineChain.id.description
@@ -2257,7 +2257,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
                 XCTAssertEqual(result.download.waitingCount, 0)
             }
 
-            let remoteRecords = try await transport.fetchAll()
+            let remoteRecords = try await transport.bootstrapRecords()
             let remoteRecord = try XCTUnwrap(
                 remoteRecords.first {
                     $0.entityType == .taskChain
@@ -2394,7 +2394,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
             XCTAssertEqual(result.download.waitingCount, 0)
         }
 
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
         let mapper = SyncRecordMapper()
         let remoteDay = try mapper.decodeDay(
             XCTUnwrap(remoteRecords.first {
@@ -2520,7 +2520,7 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
     }
 }
 
-private enum FailingFetchSyncTransportError: LocalizedError {
+private enum FailingPullSyncTransportError: LocalizedError {
     case unavailable
 
     var errorDescription: String? {
@@ -2528,22 +2528,36 @@ private enum FailingFetchSyncTransportError: LocalizedError {
     }
 }
 
-private actor FailingFetchSyncTransport: SyncRecordTransport {
-    func push(_: [SyncRecord]) async throws {}
+private actor FailingPullSyncTransport: SyncRecordTransport {
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        throw FailingFetchSyncTransportError.unavailable
+    func pull(
+        after _: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        throw FailingPullSyncTransportError.unavailable
     }
 }
 
-private actor SlowFailingFetchSyncTransport: SyncRecordTransport {
+private actor SlowFailingPullSyncTransport: SyncRecordTransport {
     enum Failure: Error, Equatable {
         case unavailable
     }
 
-    func push(_: [SyncRecord]) async throws {}
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        fixturePushReceipt()
+    }
 
-    func fetchAll() async throws -> [SyncRecord] {
+    func pull(
+        after _: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
         try await Task.sleep(nanoseconds: 50_000_000)
         throw Failure.unavailable
     }
@@ -2552,13 +2566,18 @@ private actor SlowFailingFetchSyncTransport: SyncRecordTransport {
 private actor SlowPushSyncTransport: SyncRecordTransport {
     private let backing = InMemorySyncTransport()
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         try await Task.sleep(nanoseconds: 30_000_000)
-        try await backing.push(records)
+        return try await backing.pushAccepting(records)
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        try await backing.fetchAll()
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        try await backing.pull(after: frontier, limit: limit)
     }
 }
 
@@ -2571,14 +2590,20 @@ private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
         )
     }
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         for record in records {
             recordsByID[record.id] = record
         }
+        return fixturePushReceipt()
     }
 
-    func fetchAll() async -> [SyncRecord] {
-        Array(recordsByID.values)
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: Array(recordsByID.values), after: frontier)
     }
 }
 
@@ -2590,42 +2615,46 @@ private actor FailAfterFirstPushSyncTransport: SyncRecordTransport {
     private let backing = InMemorySyncTransport()
     private var completedPushCount = 0
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         guard completedPushCount == 0 else {
             throw Failure.interrupted
         }
-        try await backing.push(records)
+        let receipt = try await backing.pushAccepting(records)
         completedPushCount += 1
-    }
-
-    func fetchAll() async throws -> [SyncRecord] {
-        try await backing.fetchAll()
-    }
-}
-
-private actor ClearAfterFirstPushBeforeNextFetchSyncTransport:
-    SyncRecordTransport
-{
-    private let backing = InMemorySyncTransport()
-    private var shouldClearOnNextFetch = false
-    private var clearedEndpoint = false
-
-    func push(_ records: [SyncRecord]) async throws {
-        try await backing.push(records)
-        guard clearedEndpoint == false else { return }
-        shouldClearOnNextFetch = true
-    }
-
-    func fetchAll() async throws -> [SyncRecord] {
-        await clearEndpointIfNeeded()
-        return try await backing.fetchAll()
+        return receipt
     }
 
     func pull(
         after frontier: SyncTransportFrontier,
         limit: Int
     ) async throws -> SyncTransportChangePage {
-        if shouldClearOnNextFetch {
+        try await backing.pull(after: frontier, limit: limit)
+    }
+}
+
+private actor ClearAfterFirstPushBeforeNextPullSyncTransport:
+    SyncRecordTransport
+{
+    private let backing = InMemorySyncTransport()
+    private var shouldClearOnNextPull = false
+    private var clearedEndpoint = false
+
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        let receipt = try await backing.pushAccepting(records)
+        guard clearedEndpoint == false else { return receipt }
+        shouldClearOnNextPull = true
+        return receipt
+    }
+
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        if shouldClearOnNextPull {
             await clearEndpointIfNeeded()
             throw SyncRecordTransportError.repositoryFormatMismatch
         }
@@ -2633,8 +2662,8 @@ private actor ClearAfterFirstPushBeforeNextFetchSyncTransport:
     }
 
     private func clearEndpointIfNeeded() async {
-        if shouldClearOnNextFetch {
-            shouldClearOnNextFetch = false
+        if shouldClearOnNextPull {
+            shouldClearOnNextPull = false
             clearedEndpoint = true
             await backing.removeAll()
         }
@@ -2645,29 +2674,34 @@ private actor ClearAfterFirstPushBeforeNextFetchSyncTransport:
     }
 }
 
-private actor InjectRemoteRecordsOnSecondFetchSyncTransport:
+private actor InjectRemoteRecordsOnSecondPullSyncTransport:
     SyncRecordTransport
 {
     private let backing = InMemorySyncTransport()
     private let records: [SyncRecord]
-    private var fetchCount = 0
+    private var pullCount = 0
     private var injectedRemoteRecords = false
 
     init(records: [SyncRecord]) {
         self.records = records
     }
 
-    func push(_ records: [SyncRecord]) async throws {
-        try await backing.push(records)
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        try await backing.pushAccepting(records)
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        fetchCount += 1
-        if fetchCount == 2 {
-            try await backing.push(records)
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        pullCount += 1
+        if pullCount == 2 {
+            try await backing.pushAccepting(records)
             injectedRemoteRecords = true
         }
-        return try await backing.fetchAll()
+        return try await backing.pull(after: frontier, limit: limit)
     }
 
     func didInjectRemoteRecords() -> Bool {
@@ -2680,7 +2714,7 @@ private actor DownloadMutationInjectingTransport:
 {
     private let backing = InMemorySyncTransport()
     private let injectMutation: @Sendable () throws -> Void
-    private var fetchCount = 0
+    private var pullCount = 0
 
     init(
         injectMutation: @escaping @Sendable () throws -> Void
@@ -2688,15 +2722,20 @@ private actor DownloadMutationInjectingTransport:
         self.injectMutation = injectMutation
     }
 
-    func push(_ records: [SyncRecord]) async throws {
-        try await backing.push(records)
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        try await backing.pushAccepting(records)
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        fetchCount += 1
-        if fetchCount == 2 {
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        pullCount += 1
+        if pullCount == 2 {
             try injectMutation()
         }
-        return try await backing.fetchAll()
+        return try await backing.pull(after: frontier, limit: limit)
     }
 }

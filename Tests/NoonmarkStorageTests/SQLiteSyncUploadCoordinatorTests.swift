@@ -24,7 +24,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
         let coordinator = SQLiteSyncUploadCoordinator(databaseURL: databaseURL, transport: transport)
         let result = try await coordinator.uploadPending()
-        let uploadedRecords = try await transport.fetchAll()
+        let uploadedRecords = try await transport.bootstrapRecords()
 
         XCTAssertEqual(result, SQLiteSyncUploadResult(pendingCount: 3, uploadedCount: 3, failedCount: 0))
         XCTAssertEqual(Set(uploadedRecords.map(\.entityType)), [.day, .dayTrace, .subtask])
@@ -67,7 +67,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             transport: transport
         )
         let result = try await coordinator.uploadPending(limit: 100)
-        let records = try await transport.fetchAll()
+        let records = try await transport.bootstrapRecords()
         let mergeResult = SyncRecordMerger().merge(
             records: records,
             into: try ValidatedSyncSnapshot(
@@ -108,7 +108,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
         let coordinator = SQLiteSyncUploadCoordinator(databaseURL: databaseURL, transport: transport)
         let result = try await coordinator.uploadPending()
-        let uploadedRecords = try await transport.fetchAll()
+        let uploadedRecords = try await transport.bootstrapRecords()
 
         XCTAssertEqual(result, SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 0, failedCount: 1))
         XCTAssertTrue(uploadedRecords.isEmpty)
@@ -292,7 +292,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             result,
             SQLiteSyncUploadResult(pendingCount: 1, uploadedCount: 1, failedCount: 1)
         )
-        let uploadedTypes = try await transport.fetchAll().map(\.entityType)
+        let uploadedTypes = try await transport.bootstrapRecords().map(\.entityType)
         XCTAssertEqual(uploadedTypes, [.dayTrace])
         XCTAssertEqual(
             try syncRepository.journalEntries(state: .pendingUpload).map(\.id),
@@ -427,7 +427,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             transport: transport
         )
         let firstResult = try await firstCoordinator.uploadPending(limit: 1)
-        let firstRemoteRecords = try await transport.fetchAll()
+        let firstRemoteRecords = try await transport.bootstrapRecords()
         let firstRemote = try XCTUnwrap(
             firstRemoteRecords.first
         )
@@ -460,7 +460,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         let secondResult = try await restartedCoordinator.uploadPending(
             limit: 1
         )
-        let finalRemoteRecords = try await transport.fetchAll()
+        let finalRemoteRecords = try await transport.bootstrapRecords()
         let finalRemote = try XCTUnwrap(
             finalRemoteRecords.first
         )
@@ -536,7 +536,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
             databaseURL: databaseURL,
             transport: transport
         ).uploadPending()
-        let remoteRecords = try await transport.fetchAll()
+        let remoteRecords = try await transport.bootstrapRecords()
         let remote = try XCTUnwrap(remoteRecords.first)
         let envelope = try SyncRecordMapper().decodeAppPreferences(remote)
 
@@ -611,7 +611,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? TestSyncTransportError, .unavailable)
         }
-        let committedRecords = try await transport.fetchAll()
+        let committedRecords = try await transport.bootstrapRecords()
         XCTAssertEqual(committedRecords.count, 1)
         XCTAssertEqual(
             try syncRepository.journalEntries(
@@ -621,7 +621,7 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         )
 
         let result = try await coordinator.uploadPending()
-        let retriedRecords = try await transport.fetchAll()
+        let retriedRecords = try await transport.bootstrapRecords()
         let remote = try XCTUnwrap(retriedRecords.first)
         let envelope = try SyncRecordMapper().decodeAppPreferences(remote)
 
@@ -669,7 +669,9 @@ private actor RecoveringSyncTransport: SyncRecordTransport {
     private var attempts = 0
     private var records: [SyncRecordID: SyncRecord] = [:]
 
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         attempts += 1
         guard attempts > 1 else {
             throw TestSyncTransportError.unavailable
@@ -677,10 +679,14 @@ private actor RecoveringSyncTransport: SyncRecordTransport {
         for record in records {
             self.records[record.id] = record
         }
+        return fixturePushReceipt()
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        Array(records.values)
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: Array(records.values), after: frontier)
     }
 
     func pushAttemptCount() -> Int {
@@ -692,26 +698,37 @@ private actor CommitThenThrowOnceSyncTransport: SyncRecordTransport {
     private let transport = InMemorySyncTransport()
     private var didThrow = false
 
-    func push(_ records: [SyncRecord]) async throws {
-        try await transport.push(records)
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        let receipt = try await transport.pushAccepting(records)
         guard didThrow else {
             didThrow = true
             throw TestSyncTransportError.unavailable
         }
+        return receipt
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        try await transport.fetchAll()
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        try await transport.pull(after: frontier, limit: limit)
     }
 }
 
 private actor FailingSyncTransport: SyncRecordTransport {
-    func push(_ records: [SyncRecord]) async throws {
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
         throw TestSyncTransportError.unavailable
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        []
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: [], after: frontier)
     }
 }
 
@@ -742,8 +759,16 @@ private actor AwaitingConfirmationSyncTransport: SyncRecordTransport {
         isConfirmed ? .confirmed : .awaitingUploadConfirmation
     }
 
-    func fetchAll() async throws -> [SyncRecord] {
-        records
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        SyncTransportChangePage(
+            records: records,
+            frontier: frontier,
+            hasMore: false,
+            observedProducerCount: 1
+        )
     }
 
     func confirmUploads() {

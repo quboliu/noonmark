@@ -1,12 +1,12 @@
 # FAIL-2026-08-07-15：同步稳态反复扫描并重写全部历史
 
-- 状态：处理中
+- 状态：已修复
 - 首次发现：2026-08-07T00:00:00-04:00
 - 影响版本／构建：`main` at `0fe81cc6fb7528ae6173424d44641fb349704ddf` 及此前使用全量 mirror transport 的版本
 - 引入提交：`d42bfbc4b43a78a3b05a1334d974dc7f36078d93`（`feat(app): improve local-first sync and UI experience`）；`28f261d969a70b58661a48dc07f7bd11eece3c55` 增加全 commit／mirror 修复，`e9d007f248b43dfe4b164ecdeac93e173a427912` 增加一轮内重复全量覆盖复核
 - Git author／committer：上述提交均为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：待本次完整回归门禁通过并提交后回填
+- 修复提交：`12aec75`（增量 transport、frontier 与锁定根因修复）、`fd77ee7`（pending-recovery 夹具对齐）和 `d860487`（confirmed evidence 覆盖、快照证据与偏好重启夹具修复）
 
 ## 用户症状与影响
 

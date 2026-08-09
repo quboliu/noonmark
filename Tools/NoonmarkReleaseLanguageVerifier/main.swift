@@ -1,5 +1,4 @@
 import Foundation
-import NaturalLanguage
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let text = String(data: input, encoding: .utf8),
@@ -9,14 +8,12 @@ else {
     exit(EXIT_FAILURE)
 }
 
-let recognizer = NLLanguageRecognizer()
-recognizer.processString(text)
-let dominantLanguage = recognizer.dominantLanguage
-guard dominantLanguage == .english else {
-    let detected = dominantLanguage?.rawValue ?? "unknown"
+guard text.unicodeScalars.allSatisfy({ scalar in
+    scalar.value == 0x0A || scalar.value == 0x0D ||
+        scalar.value == 0x09 || (0x20...0x7E).contains(scalar.value)
+}) else {
     FileHandle.standardError.write(
-        Data("release summary language is \(detected), expected en\n".utf8)
+        Data("release summary must use ASCII English text\n".utf8)
     )
     exit(EXIT_FAILURE)
 }
-

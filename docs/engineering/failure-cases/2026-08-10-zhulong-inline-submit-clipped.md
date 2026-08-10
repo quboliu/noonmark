@@ -1,13 +1,13 @@
 # FAIL-2026-08-10-04：烛龙内联任务草稿提交动作被固定 Composer 遮挡
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-10T13:46:00Z
 - 影响版本／构建：v0.2.6 build 25 候选，source commit `be3066cb347ab1d2bc71420780939b1582107a4e`
 - 引入提交：`f4ee883d95d1b46752a13fa7737d0fe5cb992acb`（`feat(ui): Refine the Zhulong conversation page and add the waiting-response breathing state`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`5953eeb0ab4793de5511c6c0b925df56977e4b71`（`fix(e2e): reveal the Zhulong artifact submit action`）
 
 ## 用户症状与影响
 
@@ -48,7 +48,8 @@ driver 先通过 attached view 解析精确提交 anchor，对该 anchor 执行�
 - Red（focused）：`NOONMARK_E2E_ZHULONG_INLINE_ARTIFACT_ONLY=1 scripts/test-e2e` 在 build 25 原始代码稳定返回 1。
 - Red／Green（引入边界）：`f4ee883d^` 返回 0，`f4ee883d` 返回 1。
 - Green（根因探针）：只增加精确滚动、layout、display 后，同一 focused seam 返回 0，并完成真实提交、回执及历史保留。
-- 完整候选与发行门禁：待回填。
+- Green（完整候选）：build 26 同一 evidence run `release-v0.2.6-b26-20260810T141700Z` 的完整 `scripts/test-e2e` 返回 0，真实 inline artifact 提交及历史保留证据落盘；writer-lease E2E 与 `make check` 也返回 0。
+- Green（发行门禁）：本地 annotated tag `v0.2.6` 精确绑定修复 commit；`scripts/release-private-dmg` 消费同 source／run 的完整 E2E 证据并返回 0，production App 未执行，受控 `dmg-validation` 安装／退出／重启通过。
 
 ## 永久门禁
 

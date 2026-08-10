@@ -1,6 +1,6 @@
 # FAIL-2026-08-10-03：关闭同步后重放历史全局失败
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-09T02:33:36Z
 - 影响版本／构建：0.2.5 build 24，source commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`
@@ -41,7 +41,7 @@ status restore 继续保留 `localFirstSyncMessage` 与 typed diagnostic correla
 
 修复提交上的 Preferences Clock 与完整真实 App E2E 已完成「失败 → 关闭 → 正常退出 → 重启 suppressed → 重新启用 restored → retry cleared」闭环。`scripts/test-preferences-checkbox-interaction-target-contract`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
 
-`scripts/release-private-dmg` 在启动任何 App 或 DMG 动态验证前正确拒绝旧 tag：`v0.2.5` 仍指向原故障 commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`，不是本修复 commit。最终 DMG gate 必须等待新 release candidate，不能移动既有 tag 或绕过版本门禁，因此案例保持「处理中」。
+v0.2.6 build 26 候选在精确 commit `5953eeb0ab4793de5511c6c0b925df56977e4b71` 和同一 evidence run `release-v0.2.6-b26-20260810T141700Z` 上完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e`、release diagnostic closure 与 `scripts/release-private-dmg`。受控 `dmg-validation` 退出／重启和持久化回读通过，production App 未执行；fast、symptom 与 release 三类门禁已闭环。
 
 ## 永久门禁
 

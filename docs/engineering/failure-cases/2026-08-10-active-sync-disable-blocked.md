@@ -1,6 +1,6 @@
 # FAIL-2026-08-10-01：活跃同步阻断关闭同步
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-08T02:14:25Z
 - 影响版本／构建：0.2.5 build 24，source commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`
@@ -43,7 +43,7 @@
 
 修复提交上的 Preferences Clock 与完整 E2E 均已证明 `task-mutation=blocked → lock-wait=observed → checkbox-disable=cancelled-and-persisted → gate=released`，并从诊断快照对账该 operation 只有一个 `.cancelled` 非失败终态；随后退出／重启保持 disabled。`scripts/test-unit`、`scripts/test-integration`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
 
-`scripts/release-private-dmg` 在启动任何 App 或 DMG 动态验证前正确 fail-closed：既有正式 tag `v0.2.5` 指向原故障 commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`，而不是本修复 commit。不得移动既有 tag，也不得绕过 tag 门禁；需要新 release candidate 版本后才能完成最终 DMG gate，因此案例保持「处理中」。
+v0.2.6 build 26 候选在精确 commit `5953eeb0ab4793de5511c6c0b925df56977e4b71` 和同一 evidence run `release-v0.2.6-b26-20260810T141700Z` 上完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e`、release diagnostic closure 与 `scripts/release-private-dmg`。受控 `dmg-validation` 安装、真实交互、退出和重启全部通过，production App 未执行；fast、symptom 与 release 三类门禁已闭环。
 
 ## 永久门禁
 

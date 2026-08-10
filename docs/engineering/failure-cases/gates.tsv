@@ -189,3 +189,6 @@ FAIL-2026-08-10-03	release	scripts/verify-development-validation-evidence	script
 FAIL-2026-08-10-04	fast	scripts/test-zhulong-inline-artifact-interaction-contract	scripts/check	内联草稿提交必须先滚动离开固定 Composer，再执行 layout、hit-test 与 WindowServer 真实点击
 FAIL-2026-08-10-04	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 必须把三项内联任务草稿滚入可点击区域、物理提交并保留回执历史
 FAIL-2026-08-10-04	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source/run 的完整烛龙 inline artifact E2E 成功证据
+FAIL-2026-08-10-05	fast	scripts/test-evidence-helper-lifecycle	scripts/check	真实 HFS+ 跨设备 fixture 必须建立不同 device identity，并完整执行 create、attach、拒绝跨界与 detach
+FAIL-2026-08-10-05	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	唯一 hosted macos-15 check 必须真实完成 evidence helper lifecycle，任一 disk image 阶段失败均输出具名状态并判红
+FAIL-2026-08-10-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未首次成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布

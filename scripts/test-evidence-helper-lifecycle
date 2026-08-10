@@ -599,19 +599,37 @@ mkdir -p \
   "$mount_root/temp" \
   "$mount_root/repository" \
   "$mount_root/repository/mounted"
-hdiutil create \
-  -quiet \
-  -size 32m \
-  -fs APFS \
+mount_create_log="$mount_root/hdiutil-create.log"
+mount_attach_log="$mount_root/hdiutil-attach.log"
+mount_detach_log="$mount_root/hdiutil-detach.log"
+set +e
+/usr/bin/hdiutil create \
+  -size 8m \
+  -fs HFS+ \
   -volname NoonmarkEvidenceBoundary \
-  "$mount_root/boundary.dmg"
+  "$mount_root/boundary.dmg" >"$mount_create_log" 2>&1
+mount_create_status=$?
+set -e
+if [[ "$mount_create_status" -ne 0 ]]; then
+  sed -n '1,120p' "$mount_create_log" >&2
+  fail "mount-boundary image creation failed with status $mount_create_status"
+fi
 mounted_path="$mount_root/repository/mounted"
-hdiutil attach \
-  -quiet \
+set +e
+/usr/bin/hdiutil attach \
   -nobrowse \
-  -owners on \
   -mountpoint "$mounted_path" \
-  "$mount_root/boundary.dmg"
+  "$mount_root/boundary.dmg" >"$mount_attach_log" 2>&1
+mount_attach_status=$?
+set -e
+if [[ "$mount_attach_status" -ne 0 ]]; then
+  sed -n '1,120p' "$mount_attach_log" >&2
+  fail "mount-boundary image attach failed with status $mount_attach_status"
+fi
+repository_device="$(stat -f %d "$mount_root/repository")"
+mounted_device="$(stat -f %d "$mounted_path")"
+[[ "$repository_device" != "$mounted_device" ]] ||
+  fail "mount-boundary fixture did not establish a distinct device"
 TMPDIR="$mount_root/temp" \
 MOUNT_ROOT="$mount_root" \
 REPO_ROOT="$repo_root" \
@@ -633,7 +651,14 @@ REPO_ROOT="$repo_root" \
     printf "%s:%s\n" "$prepare_status" "$inventory_status" \
       >"$MOUNT_ROOT/status.txt"
   '
-hdiutil detach -quiet "$mounted_path"
+set +e
+/usr/bin/hdiutil detach "$mounted_path" >"$mount_detach_log" 2>&1
+mount_detach_status=$?
+set -e
+if [[ "$mount_detach_status" -ne 0 ]]; then
+  sed -n '1,120p' "$mount_detach_log" >&2
+  fail "mount-boundary image detach failed with status $mount_detach_status"
+fi
 mounted_path=""
 [[ "$(<"$mount_root/status.txt")" == "1:1" ]] ||
   fail "prepare or inventory crossed a mounted filesystem boundary"

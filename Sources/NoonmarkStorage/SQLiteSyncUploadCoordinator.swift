@@ -57,7 +57,9 @@ public final class SQLiteSyncUploadCoordinator {
     }
 
     public func uploadPending(limit: Int = 100) async throws -> SQLiteSyncUploadResult {
+        try Task.checkCancellation()
         var confirmation = try await confirmPublishedEntries()
+        try Task.checkCancellation()
         let snapshot = try engineRepository.load().snapshot()
         let candidateUnits = try uploadCandidateUnits(
             limit: limit,
@@ -73,6 +75,7 @@ public final class SQLiteSyncUploadCoordinator {
             candidateUnits,
             snapshot: snapshot
         )
+        try Task.checkCancellation()
         guard materialized.records.isEmpty == false else {
             return SQLiteSyncUploadResult(
                 pendingCount: pendingEntries.count,
@@ -87,6 +90,7 @@ public final class SQLiteSyncUploadCoordinator {
             let receipt = try await transport.pushAccepting(
                 materialized.records
             )
+            try Task.checkCancellation()
             let state = receipt.confirmation
             switch state {
             case .confirmed:
@@ -130,16 +134,10 @@ public final class SQLiteSyncUploadCoordinator {
                 confirmation.awaitingConfirmationCount
             )
         } catch let error as SyncRecordTransportError {
-            try markBlockedCorruption(
-                materialized.uploadableEntries,
-                action: "uploadBlockedCorruption",
-                message: message(for: error)
+            try appendAuditLogs(
+                for: materialized.records,
+                action: "uploadRetryPending"
             )
-            // The outbox remains durably blocked, but callers must receive
-            // the typed transport rejection. Collapsing it into a generic
-            // failed-count result loses the protocol reason in diagnostics
-            // and makes an integrity rejection indistinguishable from a
-            // local materialization error.
             throw error
         } catch let error as ICloudDriveSyncTransportError {
             try markBlockedUserAttention(
@@ -163,6 +161,43 @@ public final class SQLiteSyncUploadCoordinator {
         }
     }
 
+    /// Revalidates historical corruption blocks through the same materializer
+    /// and atomic upload units used by a normal upload. This is intentionally
+    /// explicit: automatic sync must not spin on genuinely invalid local data.
+    @discardableResult
+    public func recoverMaterializableCorruptionBlocks() throws -> Int {
+        let snapshot = try engineRepository.load().snapshot()
+        let blockedEntries = try syncRepository.journalEntries(
+            state: .blockedCorruption
+        )
+        let units = uploadCandidateUnits(
+            from: blockedEntries,
+            limit: Int.max,
+            snapshot: snapshot
+        )
+        var recoveredEntries: [SyncJournalEntry] = []
+        for unit in units {
+            do {
+                _ = try materializer.records(
+                    for: unit.entries,
+                    in: snapshot
+                )
+                recoveredEntries.append(contentsOf: unit.entries)
+            } catch {
+                continue
+            }
+        }
+        guard recoveredEntries.isEmpty == false else { return 0 }
+        try syncRepository.requeueJournalEntriesBlockedCorruption(
+            recoveredEntries.map(\.id)
+        )
+        try appendAuditLogs(
+            for: recoveredEntries,
+            action: "materializationRecovered"
+        )
+        return recoveredEntries.count
+    }
+
     private func uploadCandidateUnits(
         limit: Int,
         snapshot: NoonmarkSnapshot
@@ -171,7 +206,20 @@ public final class SQLiteSyncUploadCoordinator {
         let retryableEntries = try syncRepository.journalEntries(
             state: .pendingUpload
         )
-        let orderedEntries = retryableEntries.sorted(
+        return uploadCandidateUnits(
+            from: retryableEntries,
+            limit: limit,
+            snapshot: snapshot
+        )
+    }
+
+    private func uploadCandidateUnits(
+        from entries: [SyncJournalEntry],
+        limit: Int,
+        snapshot: NoonmarkSnapshot
+    ) -> [UploadCandidateUnit] {
+        guard limit > 0 else { return [] }
+        let orderedEntries = entries.sorted(
             by: uploadCandidateComesBefore
         )
         var selectedIDs: Set<UUID> = []

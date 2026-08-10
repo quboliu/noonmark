@@ -170,6 +170,121 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
         }
     }
 
+    func testRepositoryFormatRejectionKeepsMaterializableUploadPending()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("mac-format-rejection")
+        let engine = NoonmarkEngine()
+
+        try engineRepository.save(engine.snapshot())
+        engine.updateDailyReview(
+            date: today,
+            summary: "等待端点修复",
+            unfinishedReason: nil,
+            tomorrowNote: nil,
+            now: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: RepositoryFormatRejectingSyncTransport()
+        )
+
+        do {
+            _ = try await coordinator.uploadPending()
+            XCTFail("repository format rejection must remain visible")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .repositoryFormatMismatch
+            )
+        }
+
+        let pending = try syncRepository.journalEntries(
+            state: .pendingUpload
+        )
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending.first?.retryCount, 0)
+        XCTAssertNil(pending.first?.lastError)
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            try syncRepository.auditLog(limit: 1).first?.action,
+            "uploadRetryPending"
+        )
+    }
+
+    func testExplicitRecoveryRequeuesMaterializableCorruptionBlock()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL()
+        let engineRepository = SQLiteEngineRepository(
+            databaseURL: databaseURL
+        )
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("mac-poisoned-outbox")
+        let engine = NoonmarkEngine()
+
+        try engineRepository.save(engine.snapshot())
+        engine.updateDailyReview(
+            date: today,
+            summary: "可恢复的正常资料",
+            unfinishedReason: nil,
+            tomorrowNote: nil,
+            now: now
+        )
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        let poisoned = try XCTUnwrap(
+            syncRepository.journalEntries(state: .pendingUpload).first
+        )
+        try syncRepository.markJournalEntryBlockedCorruption(
+            poisoned.id,
+            error: "historical transport rejection"
+        )
+        let transport = InMemorySyncTransport()
+        let coordinator = SQLiteSyncUploadCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+
+        let recoveredCount = try coordinator
+            .recoverMaterializableCorruptionBlocks()
+
+        XCTAssertEqual(recoveredCount, 1)
+        XCTAssertTrue(
+            try syncRepository.journalEntries(
+                state: .blockedCorruption
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .pendingUpload).count,
+            1
+        )
+        let result = try await coordinator.uploadPending()
+        XCTAssertEqual(result.uploadedCount, 1)
+        XCTAssertEqual(
+            try syncRepository.journalEntries(state: .uploaded).count,
+            1
+        )
+    }
+
     func testTransientTransportFailureRetriesPendingJournalAndAuditsRecovery() async throws {
         let databaseURL = makeDatabaseURL()
         let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
@@ -663,6 +778,21 @@ final class SQLiteSyncUploadCoordinatorTests: XCTestCase {
 
 private enum TestSyncTransportError: Error {
     case unavailable
+}
+
+private actor RepositoryFormatRejectingSyncTransport: SyncRecordTransport {
+    func pushAccepting(
+        _: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        throw SyncRecordTransportError.repositoryFormatMismatch
+    }
+
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit _: Int
+    ) async throws -> SyncTransportChangePage {
+        fixturePage(records: [], after: frontier)
+    }
 }
 
 private actor RecoveringSyncTransport: SyncRecordTransport {

@@ -491,6 +491,30 @@ public final class SQLiteSyncRepository {
         }
     }
 
+    func requeueJournalEntriesBlockedCorruption(
+        _ ids: [UUID]
+    ) throws {
+        try updateJournalEntries(ids) { database, id in
+            try run(
+                """
+                UPDATE change_journal
+                SET sync_state = 'pendingUpload', last_error = NULL,
+                    transport_receipt = NULL
+                WHERE id = ?
+                  AND sync_state = 'blockedCorruption'
+                """,
+                on: database
+            ) { statement in
+                bind(id, to: 1, in: statement)
+            }
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "sync corruption block cannot be requeued"
+                )
+            }
+        }
+    }
+
     public func pendingDownloads() throws -> [SyncPendingDownloadRecord] {
         let database = try openDatabase()
         defer { sqlite3_close(database) }

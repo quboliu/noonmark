@@ -113,7 +113,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             )
         }
         let producerID = producerEpochID.uuidString.lowercased()
-        return try withExclusiveRepositoryLock {
+        return try await withExclusiveRepositoryLock {
             let previousHead = try readHead(epochID: producerID)
             let orderedRecords = sortedRecords(records)
             if let previousHead {
@@ -685,7 +685,7 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
     private func withExclusiveRepositoryLock<Result>(
         _ operation: () throws -> Result
-    ) throws -> Result {
+    ) async throws -> Result {
         let descriptor = repositoryLockURL
             .withUnsafeFileSystemRepresentation { path in
                 guard let path else { return Int32(-1) }
@@ -700,19 +700,29 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
 
         let waitStartedAt = ProcessInfo.processInfo.systemUptime
         diagnosticOperation?.stage(.transportLockWait)
-        while flock(descriptor, LOCK_EX) != 0 {
-            guard errno == EINTR else { throw posixError(code: errno) }
+        try Task.checkCancellation()
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            let lockError = errno
+            if lockError == EINTR {
+                continue
+            }
+            guard lockError == EWOULDBLOCK || lockError == EAGAIN else {
+                throw posixError(code: lockError)
+            }
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(10))
         }
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            diagnosticOperation?.stage(.transportLockReleased)
+        }
+        try Task.checkCancellation()
         diagnosticOperation?.stage(
             .transportLockAcquired,
             durationMilliseconds: Self.durationMilliseconds(
                 since: waitStartedAt
             )
         )
-        defer {
-            _ = flock(descriptor, LOCK_UN)
-            diagnosticOperation?.stage(.transportLockReleased)
-        }
         return try operation()
     }
 

@@ -1041,6 +1041,7 @@ final class NoonmarkStore: ObservableObject {
     @Published var recurringFuturePlanVisibility:
         RecurringFuturePlanVisibility
     @Published var isLocalFirstSyncing = false
+    @Published var isLocalFirstSyncStopping = false
     @Published var localFirstSyncMessage: String?
     @Published var localFirstSyncTimestamps:
         SQLiteLocalFirstSyncTimestamps?
@@ -1078,7 +1079,10 @@ final class NoonmarkStore: ObservableObject {
         diagnostics: diagnostics
     )
     let toastScheduler = LatestTransientMessageScheduler()
+    let localFirstSyncRunController = LocalFirstSyncRunController<Void>()
     var localFirstSyncAutomationTask: Task<Void, Never>?
+    var localFirstSyncConfirmationRetryTask: Task<Void, Never>?
+    var localFirstSyncDisableTask: Task<Void, Never>?
     var localFirstSyncConfirmationRetryCount = 0
     var automaticClassificationWorkerTask: Task<Void, Never>?
     var automaticClassificationWorkerRestartRequested = false
@@ -1288,6 +1292,8 @@ final class NoonmarkStore: ObservableObject {
 
     deinit {
         localFirstSyncAutomationTask?.cancel()
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncDisableTask?.cancel()
         automaticClassificationWorkerRestartRequested = false
         automaticClassificationWorkerTask?.cancel()
         automaticClassificationBacklogDecisionTask?.cancel()

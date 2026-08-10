@@ -66,6 +66,7 @@ public enum DiagnosticEventCode: String, Codable, CaseIterable, Sendable {
     case operationStage
     case operationHeartbeat
     case operationSucceeded
+    case operationCancelled
     case operationFailed
     case mutationRejected
     case persistenceFailed
@@ -77,7 +78,9 @@ public enum DiagnosticEventCode: String, Codable, CaseIterable, Sendable {
     case oversizedMetricPayloadDropped
 
     public var isTerminal: Bool {
-        self == .operationSucceeded || self == .operationFailed
+        self == .operationSucceeded
+            || self == .operationCancelled
+            || self == .operationFailed
     }
 }
 
@@ -395,6 +398,25 @@ public struct EvidenceEvent: Codable, Equatable, Sendable {
             operationKind: kind,
             endpoint: endpoint,
             progress: progress,
+            durationMilliseconds: max(0, durationMilliseconds)
+        )
+    }
+
+    public static func operationCancelled(
+        id: DiagnosticOperationID,
+        kind: DiagnosticOperationKind,
+        endpoint: DiagnosticEndpoint,
+        durationMilliseconds: Int64,
+        stage: DiagnosticOperationStage?
+    ) -> Self {
+        Self(
+            code: .operationCancelled,
+            category: kind.category,
+            severity: .notice,
+            operationID: id,
+            operationKind: kind,
+            endpoint: endpoint,
+            stage: stage,
             durationMilliseconds: max(0, durationMilliseconds)
         )
     }

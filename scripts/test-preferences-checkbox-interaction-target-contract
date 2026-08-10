@@ -14,7 +14,18 @@ rg -F 'anchor.enclosingScrollView?.documentView' "$tree_source" >/dev/null
 rg -F 'hitView === documentView || hitView.isDescendant(of: documentView)' "$tree_source" >/dev/null
 rg -F 'AppE2EViewAnchor(' "$settings_source" >/dev/null
 rg -F 'identifier: "settings.preferences.poem.enabled"' "$settings_source" >/dev/null
+rg -F '.accessibilityIdentifier("settings.sync.enabled")' "$settings_source" >/dev/null
+rg -F 'identifier: "settings.sync.enabled"' "$settings_source" >/dev/null
+if rg -n '^[[:space:]]*\.disabled\(store\.isLocalFirstSyncing\)[[:space:]]*$' \
+  "$settings_source" >/dev/null; then
+  echo "Preferences sync card still disables its stop control during an active run" >&2
+  exit 1
+fi
 rg -F 'try await clickCheckbox(' "$automation_source" >/dev/null
+rg -F 'checkbox-disable=cancelled-and-persisted gate=released' \
+  "$automation_source" >/dev/null
+rg -F 'sync restart status=failed warning=suppressed policy=disabled' \
+  "$automation_source" >/dev/null
 rg -F 'AppViewTreeE2E.attachedView(identifier: identifier)' "$automation_source" >/dev/null
 rg -F 'anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))' "$automation_source" >/dev/null
 rg -F 'checkbox hit target was not visible after scrolling' "$automation_source" >/dev/null

@@ -62,6 +62,30 @@ final class DiagnosticOperationLifecycleTests: XCTestCase {
         )
     }
 
+    func testCancelledOperationPublishesOneNonFailureTerminalEvent() {
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive
+        )
+
+        operation.stage(.transportLockWait)
+        operation.cancel()
+        operation.fail(DiagnosticFailure(domain: .unknown, code: 0))
+
+        let records = recorder.snapshot()
+        XCTAssertEqual(
+            records.map(\.event.code),
+            [.operationStarted, .operationStage, .operationCancelled]
+        )
+        XCTAssertNil(records.last?.event.incidentID)
+        XCTAssertNil(records.last?.event.failure)
+        XCTAssertEqual(
+            records.filter { $0.event.code.isTerminal }.count,
+            1
+        )
+    }
+
     func testHeartbeatRequiresThresholdAndChangedTypedProgress() {
         let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let recorder = InMemoryDiagnosticRecorder()

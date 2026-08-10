@@ -262,8 +262,10 @@ public final class SQLiteLocalFirstSyncCoordinator {
         let diagnosticHeartbeatTask = startDiagnosticHeartbeatTask()
         defer { diagnosticHeartbeatTask?.cancel() }
         do {
+            try Task.checkCancellation()
             diagnosticOperation?.stage(.localLoad)
             let localBefore = try engineRepository.load().snapshot()
+            try Task.checkCancellation()
             diagnosticOperation?.stage(
                 .baselinePrepare,
                 progress: DiagnosticProgress(recordCount: 0)
@@ -291,6 +293,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
             )
 
             for finalizationAttempt in 1 ... maximumFinalizationAttempts {
+                try Task.checkCancellation()
                 diagnosticOperation?.stage(
                     .upload,
                     progress: DiagnosticProgress(
@@ -317,6 +320,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
 
                 var pageHasMore = true
                 while pageHasMore {
+                    try Task.checkCancellation()
                     diagnosticOperation?.stage(
                         .transportFetch,
                         progress: DiagnosticProgress(
@@ -354,6 +358,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                     )
                 )
                 let catchUpUpload = try await uploadAllPending(limit: limit)
+                try Task.checkCancellation()
                 accumulate(catchUpUpload, into: &upload)
                 try requireSuccessfulUpload(catchUpUpload)
                 if catchUpUpload.awaitingConfirmationCount > 0 {
@@ -380,6 +385,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         detectedAt: now,
                         limit: max(limit, 1)
                     )
+                try Task.checkCancellation()
                 diagnosticOperation?.stage(.downloadMerge)
                 observedRemoteRecords.append(
                     contentsOf: stabilityObservation.fetchedRecords
@@ -461,6 +467,7 @@ public final class SQLiteLocalFirstSyncCoordinator {
                         conflictCount: download.conflictCount
                     )
                 )
+                try Task.checkCancellation()
                 if try saveSuccessMetadata(
                     status: .succeeded(result),
                     timestamps: timestamps,
@@ -486,6 +493,9 @@ public final class SQLiteLocalFirstSyncCoordinator {
             preconditionFailure(
                 "sync finalization loop must return or throw"
             )
+        } catch is CancellationError {
+            diagnosticOperation?.cancel()
+            throw CancellationError()
         } catch {
             let failedAt = Self.persistedFailureTimestamp(failureClock())
             let diagnosticCorrelation = finishDiagnosticFailure(
@@ -643,9 +653,11 @@ public final class SQLiteLocalFirstSyncCoordinator {
         )
 
         while true {
+            try Task.checkCancellation()
             let batch = try await uploadCoordinator.uploadPending(
                 limit: batchLimit
             )
+            try Task.checkCancellation()
             result.pendingCount += batch.pendingCount
             result.uploadedCount += batch.uploadedCount
             result.failedCount += batch.failedCount

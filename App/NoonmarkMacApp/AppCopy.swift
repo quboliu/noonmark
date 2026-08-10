@@ -310,6 +310,7 @@ struct AppCopy {
     var syncAutomaticMode: String { language == .chinese ? "自动" : "Automatic" }
     var localFirstSyncEnabled: String { language == .chinese ? "启用同步" : "Enable sync" }
     var localFirstSyncDisabled: String { language == .chinese ? "同步已关闭" : "Sync is off" }
+    var localFirstSyncStopping: String { language == .chinese ? "正在关闭同步" : "Stopping sync" }
     var syncAutomaticIntervalTitle: String { language == .chinese ? "自动间隔" : "Automatic interval" }
     func syncAutomaticInterval(_ seconds: Int) -> String {
         if seconds < 60 {

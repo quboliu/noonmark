@@ -429,7 +429,7 @@ private extension EvidenceEvent {
         switch code {
         case .operationFailed, .previousSessionInterrupted:
             4
-        case .operationSucceeded:
+        case .operationSucceeded, .operationCancelled:
             3
         case .operationStarted:
             2
@@ -446,7 +446,8 @@ private extension EvidenceEvent {
             severity != .information
         case .sessionStarted, .cleanShutdown,
              .previousSessionInterrupted, .operationStarted,
-             .operationSucceeded, .operationFailed, .mutationRejected,
+             .operationSucceeded, .operationCancelled,
+             .operationFailed, .mutationRejected,
              .persistenceFailed, .persistedSyncFailureLoaded,
              .recordsDropped, .corruptRecordExcluded,
              .oversizedEventDropped, .oversizedMetricPayloadDropped:
@@ -1084,12 +1085,20 @@ private final class DiagnosticDiskStore {
             else { return }
             activeOperations[index].updatedAt = timestamp
             activeOperations[index].incidentID = incidentID
-        case .operationSucceeded, .operationFailed:
+        case .operationSucceeded, .operationCancelled, .operationFailed:
             let active = activeOperations.first { $0.id == operationID }
             activeOperations.removeAll { $0.id == operationID }
             guard let kind = event.operationKind else { return }
             let duration = TimeInterval(event.durationMilliseconds ?? 0)
                 / 1000
+            let outcome: DiagnosticOperationOutcome = switch event.code {
+            case .operationSucceeded:
+                .succeeded
+            case .operationCancelled:
+                .cancelled
+            default:
+                .failed
+            }
             operationCapsules.append(
                 DiagnosticOperationCapsule(
                     operationID: operationID,
@@ -1101,9 +1110,7 @@ private final class DiagnosticDiskStore {
                     finishedAt: timestamp,
                     lastStage: event.stage ?? active?.lastStage,
                     lastProgress: event.progress ?? active?.lastProgress,
-                    outcome: event.code == .operationSucceeded
-                        ? .succeeded
-                        : .failed,
+                    outcome: outcome,
                     failure: event.failure
                 )
             )
@@ -1150,7 +1157,7 @@ private final class DiagnosticDiskStore {
         switch outcome {
         case .succeeded:
             0
-        case .interrupted:
+        case .cancelled, .interrupted:
             1
         case .failed:
             2

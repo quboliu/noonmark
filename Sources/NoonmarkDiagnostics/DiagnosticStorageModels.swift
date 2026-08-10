@@ -379,6 +379,7 @@ public struct DiagnosticActiveOperation: Codable, Equatable, Sendable {
 
 public enum DiagnosticOperationOutcome: String, Codable, CaseIterable, Sendable {
     case succeeded
+    case cancelled
     case failed
     case interrupted
 }

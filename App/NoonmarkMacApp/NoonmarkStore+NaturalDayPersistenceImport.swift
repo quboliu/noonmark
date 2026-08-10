@@ -40,6 +40,18 @@ private struct EngineMutationBackgroundResult<Result: Sendable>:
 }
 
 extension NoonmarkStore {
+    func finishLocalFirstSyncForTermination() async {
+        localFirstSyncAutomationTask?.cancel()
+        localFirstSyncAutomationTask = nil
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncConfirmationRetryTask = nil
+        if let localFirstSyncDisableTask {
+            await localFirstSyncDisableTask.value
+        } else {
+            await localFirstSyncRunController.stop()
+        }
+    }
+
     func flushInputDraftsForTermination() async -> Bool {
         guard await inputDraftFlushCoordinator.flushAll() else {
             return false
@@ -52,6 +64,8 @@ extension NoonmarkStore {
         engineMutationLane?.drain()
         toastScheduler.cancel()
         localFirstSyncAutomationTask?.cancel()
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncDisableTask?.cancel()
         automaticClassificationWorkerRestartRequested = false
         automaticClassificationWorkerTask?.cancel()
         automaticClassificationBacklogDecisionTask?.cancel()

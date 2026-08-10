@@ -70,15 +70,18 @@ public final class SQLiteSyncDownloadCoordinator {
         detectedAt: Date,
         limit: Int = 100
     ) async throws -> SQLiteSyncDownloadObservation {
+        try Task.checkCancellation()
         let frontier = try loadFrontier()
         let page = try await transport.pull(
             after: frontier,
             limit: max(limit, 1)
         )
+        try Task.checkCancellation()
         let observation = try downloadAndMergeObservingPage(
             page,
             detectedAt: detectedAt
         )
+        try Task.checkCancellation()
         try await transport.acknowledge(page.frontier)
         return observation
     }

@@ -189,6 +189,24 @@ public struct DiagnosticOperation: Sendable {
         }
     }
 
+    public func cancel(
+        at timestamp: Date = Date()
+    ) {
+        emissionLane.perform {
+            guard state.finish(incidentID: nil) else { return }
+            recorder.record(
+                .operationCancelled(
+                    id: id,
+                    kind: kind,
+                    endpoint: endpoint,
+                    durationMilliseconds: elapsedMilliseconds(at: timestamp),
+                    stage: state.lastStage
+                ),
+                at: timestamp
+            )
+        }
+    }
+
     @discardableResult
     public func fail(
         _ failure: DiagnosticFailure,

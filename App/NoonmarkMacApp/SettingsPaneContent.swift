@@ -244,7 +244,7 @@ struct LocalFirstCloudSyncCard: View {
 
     private var syncEnabledBinding: Binding<Bool> {
         Binding(
-            get: { policy.enabled },
+            get: { policy.enabled && store.isLocalFirstSyncStopping == false },
             set: { enabled in store.setLocalFirstSyncEnabled(enabled) }
         )
     }
@@ -254,6 +254,9 @@ struct LocalFirstCloudSyncCard: View {
             && store.isICloudSyncEndpointAvailable == false
         if iCloudIsUnavailable {
             return (store.copy.unavailable, Theme.warn)
+        }
+        if store.isLocalFirstSyncStopping {
+            return (store.copy.localFirstSyncStopping, Theme.warn)
         }
         if policy.enabled {
             return (store.copy.available, Theme.ok)
@@ -273,6 +276,16 @@ struct LocalFirstCloudSyncCard: View {
                     Toggle(store.copy.localFirstSyncEnabled, isOn: syncEnabledBinding)
                         .toggleStyle(.checkbox)
                         .font(.noonmarkSystem(size: 12.5, weight: .medium))
+                        .disabled(store.isLocalFirstSyncStopping)
+                        .accessibilityIdentifier("settings.sync.enabled")
+                        .background {
+                            AppE2EViewAnchor(
+                                identifier: "settings.sync.enabled",
+                                verificationText: syncEnabledBinding.wrappedValue
+                                    ? "enabled"
+                                    : "disabled"
+                            )
+                        }
                     StatusPill(text: runtimeStatus.text, color: runtimeStatus.color)
                     Spacer()
                 }
@@ -283,6 +296,10 @@ struct LocalFirstCloudSyncCard: View {
                         title: store.copy.cloudSyncEndpointTitle(for:),
                         action: store.setLocalFirstSyncEndpoint
                     )
+                    .disabled(
+                        store.isLocalFirstSyncing
+                            || store.isLocalFirstSyncStopping
+                    )
                 }
                 SettingSection(title: store.copy.syncModeTitle) {
                     SegmentedPair(
@@ -292,6 +309,10 @@ struct LocalFirstCloudSyncCard: View {
                         leftAction: { store.setLocalFirstSyncMode(.manual) },
                         rightAction: { store.setLocalFirstSyncMode(.automatic) },
                         identifier: "settings.sync.mode"
+                    )
+                    .disabled(
+                        store.isLocalFirstSyncing
+                            || store.isLocalFirstSyncStopping
                     )
                 }
                 if policy.mode == .automatic {
@@ -312,6 +333,7 @@ struct LocalFirstCloudSyncCard: View {
                             }
                             .disabled(
                                 store.isLocalFirstSyncing
+                                    || store.isLocalFirstSyncStopping
                                     || policy.enabled == false
                                     || (policy.endpoint == .iCloud
                                         && store.isICloudSyncEndpointAvailable == false)
@@ -430,7 +452,6 @@ struct LocalFirstCloudSyncCard: View {
                     .foregroundStyle(Theme.text3)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(store.isLocalFirstSyncing)
         }
     }
 

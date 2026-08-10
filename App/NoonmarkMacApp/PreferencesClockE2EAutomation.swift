@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CryptoKit
+import Darwin
 import Foundation
 import NoonmarkCore
 import NoonmarkDiagnostics
@@ -104,6 +105,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     private static let languageIdentifier = "settings.preferences.language"
     private static let poemIdentifier =
         "settings.preferences.poem.enabled"
+    private static let syncEnabledIdentifier = "settings.sync.enabled"
 
     private let mode: Mode
     private let stateURL: URL
@@ -770,7 +772,6 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             on: store
         )
         try await assertPostSyncInstallFailureWarning(on: store)
-        let engineBefore = store.engine.snapshot()
         let repository = SQLiteSyncRepository(databaseURL: databaseURL)
         let timestampsBefore = try SQLiteLocalFirstSyncCoordinator.timestamps(
             in: repository
@@ -780,19 +781,51 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         let validBaselineMetadata = try repository.metadata(
             for: baselineMetadataKey
         )
-        try repository.saveMetadata(
-            SyncMetadataEntry(
-                key: baselineMetadataKey,
-                value: Data(#"{"invalid":"baseline"}"#.utf8),
-                updatedAt: Date()
-            )
+        let settingsWindow = try await visibleSettingsWindow()
+        try await activate(settingsWindow)
+        let input = try WindowServerInputDriver()
+        try await clickElement(
+            identifier: "settings.sidebar.sync",
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: store.engine.preferences.themeLanguageUpdatedAt
         )
+        _ = try await accessibilityTarget(
+            identifier: Self.syncEnabledIdentifier
+        )
+        let repositoryLock = try PreferencesClockRepositoryLock(
+            rootURL: syncFolderURL
+        )
+        defer { repositoryLock.release() }
+
+        store.poolText = "E2E 可取消同步锁等待 fixture"
+        store.addPoolTask()
+        guard store.poolText.isEmpty else {
+            throw Failure.failed(
+                "sync cancellation fixture did not create a pending upload"
+            )
+        }
 
         store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
+        guard store.isLocalFirstSyncing,
+              case let .localFirstSync(syncOperationID) =
+              store.exclusiveEngineOperation
+        else {
             throw Failure.failed(
                 "invalid sync baseline did not start the production sync path"
             )
+        }
+        try await waitUntil(
+            "sync did not enter the held repository-lock wait"
+        ) {
+            guard let recorder = store.localDiagnosticRecorder else {
+                return false
+            }
+            let package = try await recorder.snapshotPackage()
+            return package.activeOperations.contains {
+                $0.id.rawValue == syncOperationID
+                    && $0.lastStage == .transportLockWait
+            }
         }
         let gatedSnapshot = store.engine.snapshot()
         let gatedPolicy =
@@ -801,21 +834,89 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             "E2E 同步期间不得写入任务"
         store.poolText = rejectedTaskTitle
         store.addPoolTask()
-        store.setLocalFirstSyncEnabled(false)
-        guard store.isLocalFirstSyncing,
-              store.engine.snapshot() == gatedSnapshot,
-              store.engine.preferences.localFirstSyncPolicy
-              == gatedPolicy,
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: store.engine.preferences.themeLanguageUpdatedAt
+        )
+        try appendTrace(
+            "sync checkbox dispatched syncing=\(store.isLocalFirstSyncing) "
+                + "stopping=\(store.isLocalFirstSyncStopping) "
+                + "enabled=\(store.engine.preferences.localFirstSyncPolicy.enabled)"
+        )
+        guard store.engine.snapshot() == gatedSnapshot,
               store.poolText == rejectedTaskTitle
         else {
             throw Failure.failed(
-                "sync in-flight gate allowed a task or sync policy mutation"
+                "sync in-flight task gate did not reject the task mutation"
+            )
+        }
+        try await waitUntil(
+            "disabling sync did not cancel the active run and persist the policy"
+        ) {
+            store.isLocalFirstSyncing == false
+                && store.isLocalFirstSyncStopping == false
+                && store.engine.preferences.localFirstSyncPolicy.enabled == false
+        }
+        try await waitUntil(
+            "cancelled sync did not publish one non-failure terminal capsule"
+        ) {
+            guard let recorder = store.localDiagnosticRecorder else {
+                return false
+            }
+            let package = try await recorder.snapshotPackage()
+            let matchingCapsules = package.operationCapsules.filter {
+                $0.operationID.rawValue == syncOperationID
+            }
+            return package.activeOperations.contains {
+                $0.id.rawValue == syncOperationID
+            } == false
+                && matchingCapsules.count == 1
+                && matchingCapsules.first?.outcome == .cancelled
+                && matchingCapsules.first?.incidentID == nil
+                && matchingCapsules.first?.failure == nil
+        }
+        repositoryLock.release()
+        guard store.engine.preferences.localFirstSyncPolicy != gatedPolicy else {
+            throw Failure.failed(
+                "in-flight sync disable left the original enabled policy unchanged"
+            )
+        }
+        store.addPoolTask()
+        guard store.poolText.isEmpty,
+              store.engine.snapshot() != gatedSnapshot
+        else {
+            throw Failure.failed(
+                "cancelled sync did not release the task mutation gate"
             )
         }
         try appendTrace(
             "sync in-flight task-mutation=blocked "
-                + "policy-mutation=blocked"
+                + "lock-wait=observed "
+                + "checkbox-disable=cancelled-and-persisted gate=released"
         )
+
+        try repository.saveMetadata(
+            SyncMetadataEntry(
+                key: baselineMetadataKey,
+                value: Data(#"{"invalid":"baseline"}"#.utf8),
+                updatedAt: Date()
+            )
+        )
+        store.setLocalFirstSyncEnabled(true)
+        guard store.engine.preferences.localFirstSyncPolicy.enabled else {
+            throw Failure.failed(
+                "cancelled sync could not be explicitly re-enabled"
+            )
+        }
+        let engineBeforeFailedRun = store.engine.snapshot()
+        store.syncLocalFolderNow()
+        guard store.isLocalFirstSyncing else {
+            throw Failure.failed(
+                "invalid sync baseline did not restart the production sync path"
+            )
+        }
         try await waitUntil(
             "invalid sync baseline was silently treated as successful"
         ) {
@@ -842,9 +943,9 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             return AppViewTreeE2E.verificationText(for: failureView)
                 == expected
         }
-        guard store.engine.snapshot() == engineBefore,
+        guard store.engine.snapshot() == engineBeforeFailedRun,
               try SQLiteEngineRepository(databaseURL: databaseURL)
-              .load().snapshot() == engineBefore,
+              .load().snapshot() == engineBeforeFailedRun,
               try SQLiteLocalFirstSyncCoordinator.timestamps(
                   in: repository
               ) == timestampsBefore
@@ -876,13 +977,10 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             )
         }
 
-        guard let settingsWindow = NSApp.windows.first(
-            where: {
-                $0.identifier
-                    == NoonmarkSettingsWindowController.windowIdentifier
-                    && $0.isVisible
-            }
-        ) else {
+        guard settingsWindow.identifier
+            == NoonmarkSettingsWindowController.windowIdentifier,
+            settingsWindow.isVisible
+        else {
             throw Failure.failed(
                 "sync failure warning settings window is unavailable"
             )
@@ -902,8 +1000,18 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         } else {
             try repository.removeMetadata(for: baselineMetadataKey)
         }
+        store.setLocalFirstSyncEnabled(false)
+        guard store.engine.preferences.localFirstSyncPolicy.enabled == false,
+              store.operationFailureNotice == nil,
+              store.localFirstSyncMessage == expected
+        else {
+            throw Failure.failed(
+                "disabling sync did not suppress its persisted global warning"
+            )
+        }
         try appendTrace(
-            "sync failure persisted for restart with repairable baseline"
+            "sync failure persisted for restart with repairable baseline "
+                + "and disabled global warning"
         )
     }
 
@@ -1083,20 +1191,19 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             language: store.engine.preferences.language
         ).syncFailureMessage(for: .baselineInvalid)
         try await waitUntil(
-            "persisted sync failure was silent after app restart"
+            "disabled sync did not restore its historical status"
         ) {
-            guard let notice = store.operationFailureNotice,
-                  notice.context == .sync,
-                  notice.message == expected,
-                  store.localFirstSyncMessage == expected,
-                  let failureView = AppViewTreeE2E.view(
-                      identifier: "settings.operation-failure"
-                  )
-            else {
-                return false
-            }
-            return AppViewTreeE2E.verificationText(for: failureView)
-                == expected
+            store.localFirstSyncMessage == expected
+        }
+        guard store.engine.preferences.localFirstSyncPolicy.enabled == false,
+              store.operationFailureNotice == nil,
+              AppViewTreeE2E.view(
+                  identifier: "settings.operation-failure"
+              ) == nil
+        else {
+            throw Failure.failed(
+                "disabled sync replayed a historical failure as a global warning"
+            )
         }
         guard let statusMetadata = try repository.metadata(
             for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
@@ -1118,48 +1225,14 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             diagnosticCorrelation
         ) = status,
             reason == .baselineInvalid,
-            let diagnosticCorrelation,
-            store.operationFailureNotice?.diagnosticIncidentID
-            == diagnosticCorrelation.incidentID
+            diagnosticCorrelation != nil
         else {
             throw Failure.failed(
-                "restart restored the warning without its typed failure"
+                "restart lost the disabled sync historical failure"
             )
         }
-        guard let settingsWindow = NSApp.windows.first(
-            where: {
-                $0.identifier
-                    == NoonmarkSettingsWindowController.windowIdentifier
-                    && $0.isVisible
-            }
-        ) else {
-            throw Failure.failed(
-                "restart sync failure settings window is unavailable"
-            )
-        }
-        try AppE2EScreenshot.captureContent(
-            of: settingsWindow,
-            to: resultURL.deletingLastPathComponent()
-                .appendingPathComponent(
-                    "sync-failure-restart-warning.png"
-                )
-        )
         try appendTrace(
-            "sync restart status=failed warning=restored correlation=exact"
-        )
-
-        store.setLocalFirstSyncEnabled(false)
-        guard store.engine.preferences.localFirstSyncPolicy.enabled == false
-        else {
-            throw Failure.failed(
-                "sync failure policy-change probe did not disable sync"
-            )
-        }
-        try requirePersistedBaselineInvalidFailure(
-            on: store,
-            in: repository,
-            expectedMessage: expected,
-            decoder: decoder
+            "sync restart status=failed warning=suppressed policy=disabled"
         )
 
         store.setLocalFirstSyncEnabled(true)
@@ -1168,6 +1241,12 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 "sync failure policy-change probe did not re-enable sync"
             )
         }
+        try await waitUntil(
+            "re-enabled sync did not restore its actionable warning"
+        ) {
+            store.operationFailureNotice?.context == .sync
+                && store.operationFailureNotice?.message == expected
+        }
         try requirePersistedBaselineInvalidFailure(
             on: store,
             in: repository,
@@ -1175,7 +1254,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             decoder: decoder
         )
         try appendTrace(
-            "sync policy-change status=failed warning=retained"
+            "sync re-enable status=failed warning=restored"
         )
 
         store.syncLocalFolderNow()
@@ -2221,10 +2300,10 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     private func waitUntil(
         _ failure: String,
         attempts: Int = 200,
-        condition: @MainActor () throws -> Bool
+        condition: @MainActor () async throws -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
-            if try condition() {
+            if try await condition() {
                 return
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -2316,5 +2395,41 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             atomically: true,
             encoding: .utf8
         )
+    }
+}
+
+private final class PreferencesClockRepositoryLock {
+    private var descriptor: Int32
+
+    init(rootURL: URL) throws {
+        let lockURL = rootURL.appendingPathComponent(".repository.lock")
+        descriptor = lockURL.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(
+                path,
+                O_CREAT | O_RDWR,
+                mode_t(S_IRUSR | S_IWUSR)
+            )
+        }
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let lockError = errno
+            close(descriptor)
+            descriptor = -1
+            throw POSIXError(POSIXErrorCode(rawValue: lockError) ?? .EIO)
+        }
+    }
+
+    deinit {
+        release()
+    }
+
+    func release() {
+        guard descriptor >= 0 else { return }
+        _ = flock(descriptor, LOCK_UN)
+        close(descriptor)
+        descriptor = -1
     }
 }

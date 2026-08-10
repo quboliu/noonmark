@@ -410,6 +410,7 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             guard let self else {
                 return
             }
+            await store.finishLocalFirstSyncForTermination()
             let succeeded =
                 await store.flushInputDraftsForTermination()
             var terminationSucceeded = succeeded

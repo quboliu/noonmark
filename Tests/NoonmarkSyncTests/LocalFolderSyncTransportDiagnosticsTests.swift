@@ -89,6 +89,59 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         )
     }
 
+    func testCancellingPushWhileWaitingForRepositoryLockDoesNotPublish() async throws {
+        let rootURL = makeFolderURL()
+        let epochID = UUID(
+            uuidString: "D0000000-0000-0000-0000-000000000002"
+        )!
+        let record = try SyncRecordMapper().record(
+            for: AppPreferencesEnvelope(
+                theme: .warmPaper,
+                language: .english,
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_002)
+            ),
+            modifiedBy: SyncDeviceID("cancellation-fixture")
+        )
+        try FileManager.default.createDirectory(
+            at: rootURL,
+            withIntermediateDirectories: true
+        )
+        let lockHolder = try RepositoryLockHolder(rootURL: rootURL)
+        defer { try? lockHolder.release() }
+        let recorder = InMemoryDiagnosticRecorder()
+        let operation = recorder.startOperation(
+            kind: .localFirstSync,
+            endpoint: .iCloudDrive
+        )
+        let transport = LocalFolderSyncTransport(
+            rootURL: rootURL,
+            producerEpochID: epochID,
+            diagnosticOperation: operation
+        )
+        let pushTask = Task {
+            try await transport.pushAccepting([record])
+        }
+
+        try await Task.sleep(for: .milliseconds(40))
+        pushTask.cancel()
+        try await Task.sleep(for: .milliseconds(40))
+        try lockHolder.release()
+
+        do {
+            _ = try await pushTask.value
+            XCTFail("cancelled lock wait published a batch")
+        } catch is CancellationError {
+            // Expected: user-requested stop must not enter the critical section.
+        } catch {
+            XCTFail("unexpected cancellation error: \(type(of: error))")
+        }
+        let stages = recorder.snapshot().compactMap(\.event.stage)
+        XCTAssertTrue(stages.contains(.transportLockWait))
+        XCTAssertFalse(stages.contains(.transportLockAcquired))
+        let snapshots = try await transport.fetchSnapshots()
+        XCTAssertTrue(snapshots.isEmpty)
+    }
+
     func testPushRecordsSafeBatchCountsAndBytesWithoutRepositoryPath() async throws {
         let rootURL = makeFolderURL()
         let record = try SyncRecordMapper().record(

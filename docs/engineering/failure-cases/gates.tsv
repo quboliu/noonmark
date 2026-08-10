@@ -177,3 +177,12 @@ FAIL-2026-08-08-01	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	
 FAIL-2026-08-08-02	fast	scripts/test-unit	scripts/check	40 次真实 SQLite 锁持有 child spawn、锁证明、release 与 exact reap 任一次错误即判红
 FAIL-2026-08-08-02	symptom	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	隔离真实 App 诊断导出路径的 SQLite 锁释放、导出与重启闭环任一失败即阻断
 FAIL-2026-08-08-02	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	私有 DMG 签发前必须在 clean worktree 完成实际诊断 export 锁释放与重启闭环
+FAIL-2026-08-10-01	fast	scripts/test-unit	scripts/check	同步 run controller 必须拒绝重入，并在 stop 时取消及等待 active run 完成
+FAIL-2026-08-10-01	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	同步中停止复选框必须保持原生物理输入能力，禁止整张同步卡片继承 disabled
+FAIL-2026-08-10-01	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 在 repository lock wait 中物理关闭同步、保存 policy、释放 mutation gate 并重启读回
+FAIL-2026-08-10-01	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source/run 的完整 Preferences Clock 物理关闭、退出及重启证据
+FAIL-2026-08-10-02	fast	scripts/test-integration	scripts/check	真实 SQLite transport 拒绝不得污染健康 outbox，显式恢复只重排可物化 atomic unit
+FAIL-2026-08-10-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 同步失败、用户 retry、SQLite status、warning 清理与重启收敛
+FAIL-2026-08-10-03	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	关闭同步的重启路径必须抑制历史全局 warning，并保留重新启用验证
+FAIL-2026-08-10-03	symptom	scripts/test-e2e	scripts/test-all	两个真实 App process 必须保留历史同步详情但不在 disabled restart 重放全局失败
+FAIL-2026-08-10-03	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source/run 的 Preferences Clock 退出与 disabled restart 证据

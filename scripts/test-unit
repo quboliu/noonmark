@@ -7,5 +7,7 @@ swift test --filter NoonmarkSyncTests
 swift test --filter IdeaCaptureSessionTests
 swift test --filter NewTaskDraftParserTests
 swift test --filter RevisionMemoTests
+swift test --filter LocalFirstSyncRunControllerTests
+swift test --filter DiagnosticOperationLifecycleTests
 swift test --filter NoonmarkAITests
 swift test --filter NoonmarkMacUIContractTests

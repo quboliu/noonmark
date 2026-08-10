@@ -6,6 +6,17 @@ import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
 
+private struct LocalFirstSyncRunFailure: Error {
+    let underlying: any Error
+    let persistsFailure: Bool
+}
+
+private struct LocalFirstSyncInstallation {
+    let result: SQLiteLocalFirstSyncResult
+    let unresolvedConflictCount: Int
+    let timestamps: SQLiteLocalFirstSyncTimestamps?
+}
+
 extension NoonmarkStore {
     func setTheme(_ theme: AppTheme) {
         guard engine.preferences.theme != theme else { return }
@@ -149,6 +160,10 @@ extension NoonmarkStore {
             cancelCloudKitAccountCheck()
         }
         guard engine.preferences.localFirstSyncPolicy.enabled != enabled else { return }
+        if enabled == false, isLocalFirstSyncing {
+            stopLocalFirstSyncAndDisable()
+            return
+        }
         var policy = engine.preferences.localFirstSyncPolicy
         if enabled {
             guard supportsRunnableLocalFirstSync(policy.endpoint) else {
@@ -170,6 +185,29 @@ extension NoonmarkStore {
         }
         policy.enabled = enabled
         commitLocalFirstSyncPolicy(policy)
+    }
+
+    private func stopLocalFirstSyncAndDisable() {
+        guard isLocalFirstSyncStopping == false else { return }
+        isLocalFirstSyncStopping = true
+        localFirstSyncAutomationTask?.cancel()
+        localFirstSyncAutomationTask = nil
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncConfirmationRetryTask = nil
+        localFirstSyncDisableTask?.cancel()
+        localFirstSyncDisableTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                isLocalFirstSyncStopping = false
+                localFirstSyncDisableTask = nil
+            }
+            await localFirstSyncRunController.stop()
+            guard Task.isCancelled == false else { return }
+            var policy = engine.preferences.localFirstSyncPolicy
+            guard policy.enabled else { return }
+            policy.enabled = false
+            commitLocalFirstSyncPolicy(policy)
+        }
     }
 
     var isICloudDriveAvailable: Bool {
@@ -329,6 +367,8 @@ extension NoonmarkStore {
     }
 
     func syncLocalFolderNow() {
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncConfirmationRetryTask = nil
         localFirstSyncConfirmationRetryCount = 0
         runLocalFolderSync(
             showToastOnSuccess: true,
@@ -365,153 +405,247 @@ extension NoonmarkStore {
 
         let transport: any SyncRecordTransport
         do {
-            transport = try localFirstSyncTransport(
-                for: engine.preferences.localFirstSyncPolicy.endpoint,
+            transport = try prepareLocalFirstSyncRun(
                 databaseURL: databaseURL,
+                naturalDay: naturalDay,
+                retriesUserAttentionBlocks: retriesUserAttentionBlocks,
                 diagnosticOperation: diagnosticOperation
             )
-            if retriesUserAttentionBlocks {
-                try SQLiteSyncRepository(databaseURL: databaseURL)
-                    .requeueJournalEntriesBlockedForUserAttention()
-            }
-            diagnosticOperation.stage(.persistenceCommit)
-            try save(
-                engine,
-                mutationAt: engine.nextMutationDate(
-                    reference: naturalDay.instant
-                )
-            )
         } catch {
-            let failedAt = SQLiteLocalFirstSyncCoordinator
-                .persistedFailureTimestamp(Date())
-            let diagnosticCorrelation = diagnosticOperation
-                .failWithCorrelation(
-                    persistedSyncDiagnosticFailure(for: error),
-                    detail: diagnosticFailure(for: error),
-                    at: failedAt
-                )
-            presentLocalFirstSyncFailure(
+            presentPreparedLocalFirstSyncFailure(
                 error,
-                failedAt: failedAt,
-                diagnosticCorrelation: diagnosticCorrelation
+                diagnosticOperation: diagnosticOperation
             )
             return
         }
         exclusiveEngineOperation = .localFirstSync(syncOperationID)
         isLocalFirstSyncing = true
         localFirstSyncMessage = copy.syncingWithEllipsis
-        Task {
-            let coordinator = SQLiteLocalFirstSyncCoordinator(
-                databaseURL: databaseURL,
-                transport: transport,
-                diagnosticOperation: diagnosticOperation,
-                completesDiagnosticOperationOnSuccess: false,
-                completesDiagnosticOperationOnFailure: true
+        let started = localFirstSyncRunController.start(
+            operation: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await performLocalFirstSyncRun(
+                    databaseURL: databaseURL,
+                    transport: transport,
+                    diagnosticOperation: diagnosticOperation,
+                    syncOperationID: syncOperationID,
+                    showToastOnSuccess: showToastOnSuccess
+                )
+            },
+            completion: { [weak self] completion in
+                guard let self else { return }
+                completeLocalFirstSyncRun(
+                    completion,
+                    syncOperationID: syncOperationID,
+                    diagnosticOperation: diagnosticOperation
+                )
+            }
+        )
+        guard started else {
+            diagnosticOperation.fail(
+                DiagnosticFailure(domain: .syncProtocol, code: 1)
             )
-            let result: SQLiteLocalFirstSyncResult
-            do {
-                result = try await coordinator.sync()
-            } catch {
-                let diagnosticCorrelation = diagnosticOperation
-                    .failWithCorrelation(
-                        persistedSyncDiagnosticFailure(for: error),
-                        detail: diagnosticFailure(for: error)
-                    )
-                await MainActor.run {
-                    localFirstSyncConfirmationRetryCount = 0
-                    finishLocalFirstSyncOperation(syncOperationID)
-                    presentLocalFirstSyncFailure(
-                        error,
-                        diagnosticCorrelation: diagnosticCorrelation,
-                        persistsFailure: false
-                    )
-                }
-                return
-            }
+            finishLocalFirstSyncOperation(syncOperationID)
+            return
+        }
+    }
 
-            do {
-                let syncRepository = SQLiteSyncRepository(
-                    databaseURL: databaseURL
+    private func prepareLocalFirstSyncRun(
+        databaseURL: URL,
+        naturalDay: NaturalDayMoment,
+        retriesUserAttentionBlocks: Bool,
+        diagnosticOperation: DiagnosticOperation
+    ) throws -> any SyncRecordTransport {
+        let transport = try localFirstSyncTransport(
+            for: engine.preferences.localFirstSyncPolicy.endpoint,
+            databaseURL: databaseURL,
+            diagnosticOperation: diagnosticOperation
+        )
+        if retriesUserAttentionBlocks {
+            try SQLiteSyncUploadCoordinator(
+                databaseURL: databaseURL,
+                transport: transport
+            ).recoverMaterializableCorruptionBlocks()
+            try SQLiteSyncRepository(databaseURL: databaseURL)
+                .requeueJournalEntriesBlockedForUserAttention()
+        }
+        diagnosticOperation.stage(.persistenceCommit)
+        try save(
+            engine,
+            mutationAt: engine.nextMutationDate(
+                reference: naturalDay.instant
+            )
+        )
+        return transport
+    }
+
+    private func presentPreparedLocalFirstSyncFailure(
+        _ error: any Error,
+        diagnosticOperation: DiagnosticOperation
+    ) {
+        let failedAt = SQLiteLocalFirstSyncCoordinator
+            .persistedFailureTimestamp(Date())
+        let diagnosticCorrelation = diagnosticOperation
+            .failWithCorrelation(
+                persistedSyncDiagnosticFailure(for: error),
+                detail: diagnosticFailure(for: error),
+                at: failedAt
+            )
+        presentLocalFirstSyncFailure(
+            error,
+            failedAt: failedAt,
+            diagnosticCorrelation: diagnosticCorrelation
+        )
+    }
+
+    private func performLocalFirstSyncRun(
+        databaseURL: URL,
+        transport: any SyncRecordTransport,
+        diagnosticOperation: DiagnosticOperation,
+        syncOperationID: UUID,
+        showToastOnSuccess: Bool
+    ) async throws {
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport,
+            diagnosticOperation: diagnosticOperation,
+            completesDiagnosticOperationOnSuccess: false,
+            completesDiagnosticOperationOnFailure: true
+        )
+        let result: SQLiteLocalFirstSyncResult
+        do {
+            result = try await coordinator.sync()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw LocalFirstSyncRunFailure(
+                underlying: error,
+                persistsFailure: false
+            )
+        }
+
+        do {
+            try Task.checkCancellation()
+            let syncRepository = SQLiteSyncRepository(
+                databaseURL: databaseURL
+            )
+            let unresolvedConflictCount =
+                try syncRepository.unresolvedConflicts().count
+            let timestamps = try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            )
+            diagnosticOperation.stage(.installMergedState)
+            try installLocalFirstSyncResult(
+                LocalFirstSyncInstallation(
+                    result: result,
+                    unresolvedConflictCount: unresolvedConflictCount,
+                    timestamps: timestamps
+                ),
+                databaseURL: databaseURL,
+                syncOperationID: syncOperationID,
+                showToastOnSuccess: showToastOnSuccess
+            )
+            diagnosticOperation.succeed(
+                progress: DiagnosticProgress(
+                    recordCount: result.upload.uploadedCount
+                        + result.download.fetchedCount,
+                    pendingCount: result.upload.pendingCount,
+                    appliedCount: result.download.appliedCount,
+                    conflictCount: unresolvedConflictCount
                 )
-                let unresolvedConflictCount =
-                    try syncRepository.unresolvedConflicts().count
-                let timestamps =
-                    try SQLiteLocalFirstSyncCoordinator.timestamps(
-                        in: syncRepository
-                    )
-                diagnosticOperation.stage(.installMergedState)
-                try await MainActor.run {
-                    try consumePostSyncFailureForE2EIfArmed()
-                    let loaded = try SQLiteEngineRepository(
-                        databaseURL: databaseURL
-                    ).load()
-                    let moment = try dayContext.moment()
-                    let previousLanguage = engine.preferences.language
-                    let automationConfigurationChanged =
-                        engine.preferences.dataMode != loaded.preferences.dataMode
-                        || engine.preferences.localFirstSyncPolicy
-                            != loaded.preferences.localFirstSyncPolicy
-                    try withExclusiveEngineWriteAuthorization(
-                        for: .localFirstSync(syncOperationID)
-                    ) {
-                        try installExternallyLoadedEngine(
-                            loaded,
-                            moment: moment
-                        )
-                    }
-                    Theme.apply(engine.preferences.theme)
-                    if previousLanguage != engine.preferences.language {
-                        onLanguageChange?()
-                    }
-                    finishLocalFirstSyncOperation(syncOperationID)
-                    if result.isAwaitingUploadConfirmation == false {
-                        localFirstSyncConfirmationRetryCount = 0
-                        resolveOperationFailure(.sync)
-                    }
-                    localFirstSyncTimestamps = timestamps
-                    localFirstSyncMessage = copy.localFirstSyncResult(
-                        result,
-                        unresolvedConflictCount: unresolvedConflictCount
-                    )
-                    if result.isAwaitingUploadConfirmation {
-                        scheduleUploadConfirmationRetry()
-                    }
-                    if showToastOnSuccess {
-                        showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
-                    }
-                    if automationConfigurationChanged {
-                        restartLocalFirstSyncAutomation()
-                    }
-                }
-                diagnosticOperation.succeed(
-                    progress: DiagnosticProgress(
-                        recordCount: result.upload.uploadedCount
-                            + result.download.fetchedCount,
-                        pendingCount: result.upload.pendingCount,
-                        appliedCount: result.download.appliedCount,
-                        conflictCount: unresolvedConflictCount
-                    )
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw LocalFirstSyncRunFailure(
+                underlying: error,
+                persistsFailure: true
+            )
+        }
+    }
+
+    private func installLocalFirstSyncResult(
+        _ installation: LocalFirstSyncInstallation,
+        databaseURL: URL,
+        syncOperationID: UUID,
+        showToastOnSuccess: Bool
+    ) throws {
+        try consumePostSyncFailureForE2EIfArmed()
+        let loaded = try SQLiteEngineRepository(
+            databaseURL: databaseURL
+        ).load()
+        let moment = try dayContext.moment()
+        let previousLanguage = engine.preferences.language
+        let automationConfigurationChanged =
+            engine.preferences.dataMode != loaded.preferences.dataMode
+            || engine.preferences.localFirstSyncPolicy
+                != loaded.preferences.localFirstSyncPolicy
+        try withExclusiveEngineWriteAuthorization(
+            for: .localFirstSync(syncOperationID)
+        ) {
+            try installExternallyLoadedEngine(
+                loaded,
+                moment: moment
+            )
+        }
+        Theme.apply(engine.preferences.theme)
+        if previousLanguage != engine.preferences.language {
+            onLanguageChange?()
+        }
+        if installation.result.isAwaitingUploadConfirmation == false {
+            localFirstSyncConfirmationRetryCount = 0
+            resolveOperationFailure(.sync)
+        }
+        localFirstSyncTimestamps = installation.timestamps
+        localFirstSyncMessage = copy.localFirstSyncResult(
+            installation.result,
+            unresolvedConflictCount: installation.unresolvedConflictCount
+        )
+        if installation.result.isAwaitingUploadConfirmation {
+            scheduleUploadConfirmationRetry()
+        }
+        if showToastOnSuccess {
+            showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
+        }
+        if automationConfigurationChanged {
+            restartLocalFirstSyncAutomation()
+        }
+    }
+
+    private func completeLocalFirstSyncRun(
+        _ completion: Result<Void, any Error>,
+        syncOperationID: UUID,
+        diagnosticOperation: DiagnosticOperation
+    ) {
+        finishLocalFirstSyncOperation(syncOperationID)
+        switch completion {
+        case .success:
+            break
+        case let .failure(error) where error is CancellationError:
+            localFirstSyncConfirmationRetryCount = 0
+            diagnosticOperation.cancel()
+            localFirstSyncMessage = nil
+        case let .failure(error):
+            localFirstSyncConfirmationRetryCount = 0
+            let runFailure = error as? LocalFirstSyncRunFailure
+            let underlyingError = runFailure?.underlying ?? error
+            let persistsFailure = runFailure?.persistsFailure ?? true
+            let failedAt = SQLiteLocalFirstSyncCoordinator
+                .persistedFailureTimestamp(Date())
+            let diagnosticCorrelation = diagnosticOperation
+                .failWithCorrelation(
+                    persistedSyncDiagnosticFailure(
+                        for: underlyingError
+                    ),
+                    detail: diagnosticFailure(for: underlyingError),
+                    at: failedAt
                 )
-            } catch {
-                let failedAt = SQLiteLocalFirstSyncCoordinator
-                    .persistedFailureTimestamp(Date())
-                let diagnosticCorrelation = diagnosticOperation
-                    .failWithCorrelation(
-                        persistedSyncDiagnosticFailure(for: error),
-                        detail: diagnosticFailure(for: error),
-                        at: failedAt
-                    )
-                await MainActor.run {
-                    localFirstSyncConfirmationRetryCount = 0
-                    finishLocalFirstSyncOperation(syncOperationID)
-                    presentLocalFirstSyncFailure(
-                        error,
-                        failedAt: failedAt,
-                        diagnosticCorrelation: diagnosticCorrelation,
-                        persistsFailure: true
-                    )
-                }
-            }
+            presentLocalFirstSyncFailure(
+                underlyingError,
+                failedAt: failedAt,
+                diagnosticCorrelation: diagnosticCorrelation,
+                persistsFailure: persistsFailure
+            )
         }
     }
 
@@ -525,7 +659,9 @@ extension NoonmarkStore {
             localFirstSyncConfirmationRetryCount + 1,
             5
         )
-        Task { @MainActor [weak self] in
+        localFirstSyncConfirmationRetryTask?.cancel()
+        localFirstSyncConfirmationRetryTask = Task { @MainActor [weak self] in
+            defer { self?.localFirstSyncConfirmationRetryTask = nil }
             do {
                 try await Task.sleep(
                     for: .seconds(retryDelaySeconds)
@@ -541,8 +677,8 @@ extension NoonmarkStore {
                   supportsRunnableLocalFirstSync(
                       engine.preferences.localFirstSyncPolicy.endpoint
                   ),
-                  try SQLiteSyncRepository(databaseURL: databaseURL)
-                  .journalEntries(state: .publishedLocal).isEmpty == false
+                  (try? SQLiteSyncRepository(databaseURL: databaseURL)
+                      .journalEntries(state: .publishedLocal).isEmpty) == false
             else { return }
             runLocalFolderSync(
                 showToastOnSuccess: false,
@@ -827,6 +963,10 @@ extension NoonmarkStore {
                         .failureMessage(for: .sync)
                 }
                 localFirstSyncMessage = failureMessage
+                guard engine.preferences.localFirstSyncPolicy.enabled else {
+                    resolveOperationFailure(.sync)
+                    return
+                }
                 restorePersistedLocalFirstSyncFailure(
                     reason: reason,
                     failedAt: failedAt,

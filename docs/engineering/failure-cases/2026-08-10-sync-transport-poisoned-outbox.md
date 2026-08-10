@@ -41,6 +41,8 @@ transport rejection 只写隐私安全的 `uploadRetryPending` audit 并保留 `
 
 两个真实 SQLite regression 已由红转绿，相关 upload coordinator 套件、`scripts/test-integration`、`make check` 与完整真实 App `scripts/test-e2e` 均在修复提交上通过。transport format rejection 后健康 row 保持 pending；显式恢复只重排可完整物化的 atomic unit，最终 queue 能上传收敛。原始症状、受害路径、fast gate 与 symptom gate 已全部闭环。
 
+v0.2.6 build 27 候选在精确 commit `764f781076f72a80ccdefb976617ebb54b66bcda` 和同一 evidence run `release-v0.2.6-b27-20260810T151224Z` 上再次完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg`；production App 未执行。
+
 ## 永久门禁
 
 - fast：`scripts/test-integration` 执行真实 SQLite transport rejection、journal state 与显式 materialization recovery 测试。

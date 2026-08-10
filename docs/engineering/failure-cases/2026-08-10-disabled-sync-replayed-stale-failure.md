@@ -1,13 +1,13 @@
 # FAIL-2026-08-10-03：关闭同步后重放历史全局失败
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-09T02:33:36Z
 - 影响版本／构建：0.2.5 build 24，source commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`
 - 引入提交：`e9d007f248b43dfe4b164ecdeac93e173a427912` `fix(sync): Rebuild the complete baseline and eliminate silent false reports`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>／quboliu <38942505+quboliu@users.noreply.github.com>
 - 实际修改者：未知
-- 修复提交：`b6cca0b70140fec507384508b90381eacc98b897` `fix(sync): make active runs safely stoppable`；异步 presentation guard 的提交待回填
+- 修复提交：`b6cca0b70140fec507384508b90381eacc98b897` `fix(sync): make active runs safely stoppable`；`764f781076f72a80ccdefb976617ebb54b66bcda` `fix(sync): recheck policy after async failure restore`
 
 ## 用户症状与影响
 
@@ -42,7 +42,9 @@ status restore 继续保留 `localFirstSyncMessage` 与 typed diagnostic correla
 
 修复提交上的 Preferences Clock 与完整真实 App E2E 已完成「失败 → 关闭 → 正常退出 → 重启 suppressed → 重新启用 restored → retry cleared」闭环。`scripts/test-preferences-checkbox-interaction-target-contract`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
 
-build 26 的原有 disabled restart 与发行门禁曾全部通过，但没有覆盖 correlation await 与 policy mutation 的交错，故不能作为竞态闭环。新增可控 seam 在未加最终 policy guard 时稳定判红；加 guard 后同一真实 App 路径转绿，并保持重新启用与成功 retry。build 27 的完整 `make check`、完整 E2E 与 private DMG 尚待回填，因此案例保持「处理中」。
+build 26 的原有 disabled restart 与发行门禁曾全部通过，但没有覆盖 correlation await 与 policy mutation 的交错，故不能作为竞态闭环。新增可控 seam 在未加最终 policy guard 时稳定判红；加 guard 后同一真实 App 路径转绿，并保持重新启用与成功 retry。
+
+build 27 在精确提交 `764f781076f72a80ccdefb976617ebb54b66bcda` 与同一 evidence run `release-v0.2.6-b27-20260810T151224Z` 上完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e`、release diagnostic closure 与 `scripts/release-private-dmg`。完整 E2E trace 记录 `sync restore-race continuation=completed warning=suppressed policy=disabled`；受控 `dmg-validation` 安装、真实交互、SQLite 持久化、退出与重启全部通过，production App 未执行。fast、symptom 与 release 三类门禁已闭环。
 
 ## 永久门禁
 

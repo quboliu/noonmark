@@ -43,7 +43,7 @@
 
 修复提交上的 Preferences Clock 与完整 E2E 均已证明 `task-mutation=blocked → lock-wait=observed → checkbox-disable=cancelled-and-persisted → gate=released`，并从诊断快照对账该 operation 只有一个 `.cancelled` 非失败终态；随后退出／重启保持 disabled。`scripts/test-unit`、`scripts/test-integration`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
 
-v0.2.6 build 26 候选在精确 commit `5953eeb0ab4793de5511c6c0b925df56977e4b71` 和同一 evidence run `release-v0.2.6-b26-20260810T141700Z` 上完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e`、release diagnostic closure 与 `scripts/release-private-dmg`。受控 `dmg-validation` 安装、真实交互、退出和重启全部通过，production App 未执行；fast、symptom 与 release 三类门禁已闭环。
+v0.2.6 build 27 候选在精确 commit `764f781076f72a80ccdefb976617ebb54b66bcda` 和同一 evidence run `release-v0.2.6-b27-20260810T151224Z` 上完成 `make check`、writer-lease E2E、完整 `scripts/test-e2e`、release diagnostic closure 与 `scripts/release-private-dmg`。受控 `dmg-validation` 安装、真实交互、SQLite 持久化、退出和重启全部通过，production App 未执行；fast、symptom 与 release 三类门禁已闭环。
 
 ## 永久门禁
 

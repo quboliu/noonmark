@@ -48,8 +48,8 @@ driver 先通过 attached view 解析精确提交 anchor，对该 anchor 执行�
 - Red（focused）：`NOONMARK_E2E_ZHULONG_INLINE_ARTIFACT_ONLY=1 scripts/test-e2e` 在 build 25 原始代码稳定返回 1。
 - Red／Green（引入边界）：`f4ee883d^` 返回 0，`f4ee883d` 返回 1。
 - Green（根因探针）：只增加精确滚动、layout、display 后，同一 focused seam 返回 0，并完成真实提交、回执及历史保留。
-- Green（完整候选）：build 26 同一 evidence run `release-v0.2.6-b26-20260810T141700Z` 的完整 `scripts/test-e2e` 返回 0，真实 inline artifact 提交及历史保留证据落盘；writer-lease E2E 与 `make check` 也返回 0。
-- Green（发行门禁）：本地 annotated tag `v0.2.6` 精确绑定修复 commit；`scripts/release-private-dmg` 消费同 source／run 的完整 E2E 证据并返回 0，production App 未执行，受控 `dmg-validation` 安装／退出／重启通过。
+- Green（完整候选）：build 27 同一 evidence run `release-v0.2.6-b27-20260810T151224Z` 的完整 `scripts/test-e2e` 返回 0，真实 inline artifact 提交及历史保留证据落盘；writer-lease E2E 与 `make check` 也返回 0。
+- Green（发行门禁）：本地 annotated tag `v0.2.6` 精确绑定 build 27 候选 commit `764f781076f72a80ccdefb976617ebb54b66bcda`；`scripts/release-private-dmg` 消费同 source／run 的完整 E2E 证据并返回 0，production App 未执行，受控 `dmg-validation` 安装／退出／重启通过。
 
 ## 永久门禁
 

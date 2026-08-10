@@ -3,7 +3,7 @@
 ## 状态与范围
 
 - 生效日期：2026-08-05
-- 当前已发行基线：`0.2.4 (21)`；精确 commit 为 `a1a06490053245ec3b6d678709b9c2bbdf24d4b2`，由 annotated tag `v0.2.4` 绑定。
+- 当前已发行基线：`0.2.5 (24)`；精确 commit 为 `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`，由 annotated tag `v0.2.5` 绑定。
 - 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
 本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
@@ -29,7 +29,8 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| 开发中、未发行 | 当前 schema `18` | 当前 format `7` | 受控 v15／v17 SQLite 原地升级至 v18；保留领域事实和设备身份，clean cut 旧同步 runtime；用户先清空旧 iCloud repository 再首次同步新版 |
+| `0.2.6 (25)` 候选 | 当前 schema `18` | 当前 format `7` | 从 `0.2.5` 升级不改变 SQLite、JSON 或同步 repository 格式；旧的不兼容同步 repository 继续 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.2.5 (24)` | 已发行 schema `18` | 已发行 format `7` | 受控 v15／v17 SQLite 原地升级至 v18；保留领域事实和设备身份，clean cut 旧同步 runtime；用户自行准备空的新 repository 后由本机 snapshot 建立 baseline |
 | `0.2.4 (21)` | 已发行 schema `17` | 已发行 format `7` | 受控 v15 SQLite 原地升级至 v17；严格 canonical v6 JSON 可导入，v7 可导入与导出 |
 
 支持范围必须由源码、专项测试和真实 App 路径共同证明；未知非空 schema、未知 JSON format 与非 canonical 输入保持 fail-closed。下一版是否继续支持、扩展或移除任一旧格式，必须在编码前写入该版 release note 的兼容矩阵并由用户明确批准。开发／E2E／Demo 资料仍遵守 clean cut，不以生产用户升级规则替代。

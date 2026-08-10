@@ -1,6 +1,6 @@
 # FAIL-2026-08-10-05：hosted APFS evidence fixture 静默退出
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-08-10T16:09:00Z
 - 影响版本／构建：v0.2.6 build 27，source commit `764f781076f72a80ccdefb976617ebb54b66bcda`
@@ -44,7 +44,9 @@ evidence helper fixture 统一采用同一个 hosted run 已证明可建立真�
 
 ## 验证结果
 
-修复后的本机 targeted lifecycle、完整 `make check` 与 build 28 唯一首次 hosted CI 待回填。原始 hosted 症状由红转绿前，案例保持「处理中」。
+修复后的 `scripts/test-evidence-helper-lifecycle` 在本机连续两次真实建立 HFS+ 跨设备 mount、证明不同 device identity、完成跨界拒绝与安全 detach；`scripts/test-runtime-profile-isolation` 及 Bash syntax 同时通过。精确提交 `12ed27bf5d43077744a65c932703f2051f6d4ca4` 随后以 `release-v0.2.6-b28-20260810T161916Z` 完成干净 source tree 的完整 `make check`、writer-lease E2E、48 个真实 App 场景及 private DMG，`production_app_executed=false`。
+
+build 28 唯一首次 hosted `macos-15` CI run `31411676058`／job `93530979279` 在 attempt 1 完成 Check、evidence 上传与 cleanup，结论为 success；原始 hosted 症状由红转绿且没有 rerun。tag publisher run `31414712517`／job `93540894101` 同样在 attempt 1 完成签名、production DMG 静态只读验证、签名材料清理及唯一公开 DMG／checksum 发布。GitHub Release 为 <https://github.com/quboliu/noonmark/releases/tag/v0.2.6>，分发正本 SHA-256 为 `aabca16afdb840f4499e9d4e43c696515a36d1d948c67afb6515f3a796908dcf`。
 
 ## 永久门禁
 
@@ -54,7 +56,7 @@ evidence helper fixture 统一采用同一个 hosted run 已证明可建立真�
 
 ## 发行与回滚
 
-风险等级为 P：故障发生在唯一发行门禁。build 27 永久退役，不 rerun、不复用、不推 tag；build 28 必须重新完成本机同源全集、唯一首次 hosted CI 与 tag publisher。若 HFS+ fixture 不能建立不同 device identity，则门禁 fail-closed 并退役新 build；不得恢复 APFS 静默路径、删除 mount 检查或伪造跨设备结果。production 资料与 App 不参与修复验证。
+风险等级为 P：故障发生在唯一发行门禁。build 27 永久退役，没有 rerun、复用或推 tag；build 28 已重新完成本机同源全集、唯一首次 hosted CI 与 tag publisher。若未来 HFS+ fixture 不能建立不同 device identity，门禁仍会 fail-closed 并要求新 build；不得恢复 APFS 静默路径、删除 mount 检查或伪造跨设备结果。`v0.2.6` 已交付，不得移动或覆盖 tag、Release 与 asset；production 资料与 App 没有参与修复验证。
 
 ## 教训与永久约束
 

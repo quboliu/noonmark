@@ -7,7 +7,7 @@
 - 引入提交：`e9d007f248b43dfe4b164ecdeac93e173a427912` `fix(sync): Rebuild the complete baseline and eliminate silent false reports`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>／quboliu <38942505+quboliu@users.noreply.github.com>
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`b6cca0b70140fec507384508b90381eacc98b897` `fix(sync): make active runs safely stoppable`
 
 ## 用户症状与影响
 
@@ -41,7 +41,9 @@
 
 ## 验证结果
 
-当前真实 App trace 已证明 `task-mutation=blocked → checkbox-disable=cancelled-and-persisted → gate=released`，随后退出／重启保持 disabled。完整 `make check`、完整发行门禁与修复提交尚未完成，因此案例保持「处理中」。
+修复提交上的 Preferences Clock 与完整 E2E 均已证明 `task-mutation=blocked → lock-wait=observed → checkbox-disable=cancelled-and-persisted → gate=released`，并从诊断快照对账该 operation 只有一个 `.cancelled` 非失败终态；随后退出／重启保持 disabled。`scripts/test-unit`、`scripts/test-integration`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
+
+`scripts/release-private-dmg` 在启动任何 App 或 DMG 动态验证前正确 fail-closed：既有正式 tag `v0.2.5` 指向原故障 commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`，而不是本修复 commit。不得移动既有 tag，也不得绕过 tag 门禁；需要新 release candidate 版本后才能完成最终 DMG gate，因此案例保持「处理中」。
 
 ## 永久门禁
 

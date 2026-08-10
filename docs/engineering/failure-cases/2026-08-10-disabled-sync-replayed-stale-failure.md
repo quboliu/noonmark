@@ -7,7 +7,7 @@
 - 引入提交：`e9d007f248b43dfe4b164ecdeac93e173a427912` `fix(sync): Rebuild the complete baseline and eliminate silent false reports`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>／quboliu <38942505+quboliu@users.noreply.github.com>
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`b6cca0b70140fec507384508b90381eacc98b897` `fix(sync): make active runs safely stoppable`
 
 ## 用户症状与影响
 
@@ -39,7 +39,9 @@ status restore 继续保留 `localFirstSyncMessage` 与 typed diagnostic correla
 
 ## 验证结果
 
-真实签名 App 已完成「失败 → 关闭 → 正常退出 → 重启 suppressed → 重新启用 restored → retry cleared」闭环。完整 `make check`、发行门禁和修复提交尚待完成，案例保持「处理中」。
+修复提交上的 Preferences Clock 与完整真实 App E2E 已完成「失败 → 关闭 → 正常退出 → 重启 suppressed → 重新启用 restored → retry cleared」闭环。`scripts/test-preferences-checkbox-interaction-target-contract`、`make check`、writer-lease E2E、完整 `scripts/test-e2e` 与隔离 worktree 的 `scripts/test-release-diagnostic-closure` 全部转绿。
+
+`scripts/release-private-dmg` 在启动任何 App 或 DMG 动态验证前正确拒绝旧 tag：`v0.2.5` 仍指向原故障 commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`，不是本修复 commit。最终 DMG gate 必须等待新 release candidate，不能移动既有 tag 或绕过版本门禁，因此案例保持「处理中」。
 
 ## 永久门禁
 

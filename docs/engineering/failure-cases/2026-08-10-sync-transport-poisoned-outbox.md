@@ -1,13 +1,13 @@
 # FAIL-2026-08-10-02：同步 transport 拒绝污染本机 outbox
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-09T02:33:27Z
 - 影响版本／构建：0.2.5 build 24，source commit `4d7c2ca52d13dbea8dcf160c1c5d606dc23f6880`
 - 引入提交：`1f264ff9c38047c8ac959e9d0cd624c70d495116` `fix(sync): replace full-history replication`
 - Git author／committer：mxt <mxt@local.com>／mxt <mxt@local.com>
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`b6cca0b70140fec507384508b90381eacc98b897` `fix(sync): make active runs safely stoppable`
 
 ## 用户症状与影响
 
@@ -39,7 +39,7 @@ transport rejection 只写隐私安全的 `uploadRetryPending` audit 并保留 `
 
 ## 验证结果
 
-两个真实 SQLite regression 已由红转绿，相关 upload coordinator 套件转绿。完整聚合门禁及修复提交尚待完成，案例保持「处理中」。
+两个真实 SQLite regression 已由红转绿，相关 upload coordinator 套件、`scripts/test-integration`、`make check` 与完整真实 App `scripts/test-e2e` 均在修复提交上通过。transport format rejection 后健康 row 保持 pending；显式恢复只重排可完整物化的 atomic unit，最终 queue 能上传收敛。原始症状、受害路径、fast gate 与 symptom gate 已全部闭环。
 
 ## 永久门禁
 

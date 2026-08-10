@@ -126,6 +126,9 @@ run_check_suite() {
   echo "==> Preferences checkbox interaction target contract"
   bash scripts/test-preferences-checkbox-interaction-target-contract
 
+  echo "==> Zhulong inline artifact interaction contract"
+  scripts/test-zhulong-inline-artifact-interaction-contract
+
   echo "==> GitHub release readiness contract"
   scripts/test-github-release-readiness-contract
 

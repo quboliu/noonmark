@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+automation_source="App/NoonmarkMacApp/ZhulongInlineArtifactE2EAutomation.swift"
+
+fail() {
+  echo "Zhulong inline artifact interaction contract: $*" >&2
+  exit 1
+}
+
+rg -F 'let attachedSubmitAnchor = AppViewTreeE2E.attachedView(' \
+  "$automation_source" >/dev/null ||
+  fail "the submit action must be resolved while attached, including when clipped"
+rg -F 'attachedSubmitAnchor.scrollToVisible(' "$automation_source" >/dev/null ||
+  fail "the submit action must be scrolled into the user-visible region"
+rg -F 'attachedSubmitAnchor.bounds.insetBy(dx: 0, dy: -24)' \
+  "$automation_source" >/dev/null ||
+  fail "the reveal must preserve a margin from the fixed composer"
+rg -F 'submitWindow.contentView?.layoutSubtreeIfNeeded()' \
+  "$automation_source" >/dev/null ||
+  fail "the window must settle layout after scrolling"
+rg -F 'submitWindow.displayIfNeeded()' "$automation_source" >/dev/null ||
+  fail "the window must display the revealed target before hit testing"
+rg -F 'failed: inline task draft did not become physically submittable' \
+  "$automation_source" >/dev/null ||
+  fail "failure output must distinguish rendering from physical submission"
+
+scroll_line="$(rg -n -F 'attachedSubmitAnchor.scrollToVisible(' \
+  "$automation_source" | head -1 | cut -d: -f1)"
+target_line="$(awk -v start="$scroll_line" '
+  NR > start && index($0, "AppViewTreeE2E.buttonInteractionTarget(") {
+    print NR
+    exit
+  }
+' "$automation_source")"
+click_line="$(awk -v start="$target_line" '
+  NR > start && index($0, "try await input.postClick(") {
+    print NR
+    exit
+  }
+' "$automation_source")"
+
+[[ -n "$scroll_line" && -n "$target_line" && -n "$click_line" ]] ||
+  fail "the reveal, hit-test, and WindowServer click sequence must all exist"
+((scroll_line < target_line && target_line < click_line)) ||
+  fail "the submit action must be revealed before hit testing and real clicking"
+
+if rg -n 'AppViewTreeE2E\.click\(|performClick\(' "$automation_source" >/dev/null; then
+  fail "the symptom gate must not bypass WindowServer input"
+fi
+
+echo "Zhulong inline artifact interaction contract passed"

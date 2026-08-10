@@ -59,10 +59,26 @@ struct ZhulongInlineArtifactE2EAutomation:
         guard remainingAttempts > 0 else {
             let session = store.zhulongWorkspace.selectedSession
             let lastSend = session?.providerSends.last
+            let artifactIdentifier = session?.currentTodoDiff?
+                .conversationRunID?.rawValue.uuidString
+            let draftAttached = artifactIdentifier.map {
+                AppViewTreeE2E.attachedView(
+                    identifier: "zhulong-inline-task-draft-anchor-\($0)"
+                ) != nil
+            } ?? false
+            let submitIdentifier = artifactIdentifier.map {
+                "zhulong-inline-task-draft-submit-anchor-\($0)"
+            }
+            let submitAnchor = submitIdentifier.flatMap {
+                AppViewTreeE2E.attachedView(identifier: $0)
+            }
+            let submitTargetVisible = submitAnchor.flatMap {
+                AppViewTreeE2E.buttonInteractionTarget(overlapping: $0)
+            } != nil
             AppViewTreeE2E.writeDump(beside: resultURL)
             write(
                 [
-                    "failed: inline task draft did not appear",
+                    "failed: inline task draft did not become physically submittable",
                     "phase=\(session?.phase.rawValue ?? "none")",
                     "workspaceStatus=\(session?.workspaceStatus.rawValue ?? "none")",
                     "providerFailure=\(lastSend?.failure?.code ?? "none")",
@@ -72,6 +88,9 @@ struct ZhulongInlineArtifactE2EAutomation:
                     "receipts=\(session?.todoApplyReceipts.count ?? -1)",
                     "currentDraft=\(session?.currentTodoDiff?.id.rawValue.uuidString ?? "none")",
                     "sessionStream=\(AppViewTreeE2E.view(identifier: "zhulong-session-stream") != nil)",
+                    "draftAttached=\(draftAttached)",
+                    "submitAttached=\(submitAnchor != nil)",
+                    "submitTargetVisible=\(submitTargetVisible)",
                     "notice=\(String(describing: store.zhulongWorkspace.status))"
                 ].joined(separator: "; ")
             )
@@ -148,14 +167,35 @@ struct ZhulongInlineArtifactE2EAutomation:
             )
             return
         }
-        guard AppViewTreeE2E.view(
-            identifier:
+        let draftIdentifier =
             "zhulong-inline-task-draft-anchor-\(artifactIdentifier)"
+        let submitIdentifier =
+            "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
+        guard AppViewTreeE2E.attachedView(
+            identifier: draftIdentifier
         ) != nil,
-            let submitAnchor = AppViewTreeE2E.view(
-                identifier:
-                "zhulong-inline-task-draft-submit-anchor-\(artifactIdentifier)"
+            let attachedSubmitAnchor = AppViewTreeE2E.attachedView(
+                identifier: submitIdentifier
             ),
+            let submitWindow = attachedSubmitAnchor.window
+        else {
+            retry {
+                waitForDraft(
+                    on: store,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+            return
+        }
+        attachedSubmitAnchor.scrollToVisible(
+            attachedSubmitAnchor.bounds.insetBy(dx: 0, dy: -24)
+        )
+        submitWindow.contentView?.layoutSubtreeIfNeeded()
+        submitWindow.displayIfNeeded()
+        guard let submitAnchor = AppViewTreeE2E.view(
+            identifier: submitIdentifier,
+            in: submitWindow
+        ),
             let submitTarget = AppViewTreeE2E.buttonInteractionTarget(
                 overlapping: submitAnchor
             )
@@ -172,7 +212,10 @@ struct ZhulongInlineArtifactE2EAutomation:
             writePreviewReady()
             return
         }
-        let submitWindow = submitTarget.window
+        guard submitTarget.window === submitWindow else {
+            write("failed: inline task draft submit window diverged")
+            return
+        }
         Task { @MainActor [self] in
             await submitDraftThroughWindowServer(
                 on: store,

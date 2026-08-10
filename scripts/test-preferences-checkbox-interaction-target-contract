@@ -26,6 +26,21 @@ rg -F 'checkbox-disable=cancelled-and-persisted gate=released' \
   "$automation_source" >/dev/null
 rg -F 'sync restart status=failed warning=suppressed policy=disabled' \
   "$automation_source" >/dev/null
+rg -F 'sync restore-race continuation=completed warning=suppressed ' \
+  "$automation_source" >/dev/null
+restore_wait_line="$(rg -n -F \
+  'await self?.persistedSyncFailureRestoreE2EGate.waitIfArmed()' \
+  'App/NoonmarkMacApp/NoonmarkStore+Sync.swift' | head -1 | cut -d: -f1)"
+policy_recheck_line="$(awk -v start="$restore_wait_line" '
+  NR > start && index($0, "engine.preferences.localFirstSyncPolicy.enabled,") {
+    print NR
+    exit
+  }
+' 'App/NoonmarkMacApp/NoonmarkStore+Sync.swift')"
+[[ -n "$restore_wait_line" && -n "$policy_recheck_line" ]] || {
+  echo "Persisted sync failure restore lost its post-await policy check" >&2
+  exit 1
+}
 rg -F 'AppViewTreeE2E.attachedView(identifier: identifier)' "$automation_source" >/dev/null
 rg -F 'anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))' "$automation_source" >/dev/null
 rg -F 'checkbox hit target was not visible after scrolling' "$automation_source" >/dev/null

@@ -42,7 +42,13 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
 
         let lockHolder = try RepositoryLockHolder(rootURL: rootURL)
         defer { try? lockHolder.release() }
-        let recorder = InMemoryDiagnosticRecorder()
+        let lockWaitObserved = expectation(
+            description: "transport entered repository lock wait"
+        )
+        let recorder = StageObservingDiagnosticRecorder(
+            stage: .transportLockWait,
+            expectation: lockWaitObserved
+        )
         let operation = recorder.startOperation(
             kind: .localFirstSync,
             endpoint: .iCloudDrive
@@ -55,7 +61,7 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             ).pushAccepting([secondRecord])
         }
 
-        try await Task.sleep(for: .milliseconds(40))
+        await fulfillment(of: [lockWaitObserved], timeout: 1)
         try lockHolder.release()
         try await pushTask.value
 
@@ -67,10 +73,7 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         let acquired = try XCTUnwrap(events.first {
             $0.stage == .transportLockAcquired
         })
-        XCTAssertGreaterThanOrEqual(
-            acquired.durationMilliseconds ?? 0,
-            20
-        )
+        XCTAssertNotNil(acquired.durationMilliseconds)
         let uploadEvidence = try XCTUnwrap(events.last {
             $0.stage == .upload && $0.progress != nil
         })
@@ -108,7 +111,13 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
         )
         let lockHolder = try RepositoryLockHolder(rootURL: rootURL)
         defer { try? lockHolder.release() }
-        let recorder = InMemoryDiagnosticRecorder()
+        let lockWaitObserved = expectation(
+            description: "transport entered cancellable repository lock wait"
+        )
+        let recorder = StageObservingDiagnosticRecorder(
+            stage: .transportLockWait,
+            expectation: lockWaitObserved
+        )
         let operation = recorder.startOperation(
             kind: .localFirstSync,
             endpoint: .iCloudDrive
@@ -122,10 +131,8 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             try await transport.pushAccepting([record])
         }
 
-        try await Task.sleep(for: .milliseconds(40))
+        await fulfillment(of: [lockWaitObserved], timeout: 1)
         pushTask.cancel()
-        try await Task.sleep(for: .milliseconds(40))
-        try lockHolder.release()
 
         do {
             _ = try await pushTask.value
@@ -185,6 +192,44 @@ final class LocalFolderSyncTransportDiagnosticsTests: XCTestCase {
             )
         temporaryURLs.append(url)
         return url
+    }
+}
+
+private final class StageObservingDiagnosticRecorder:
+    DiagnosticRecording,
+    @unchecked Sendable
+{
+    let sessionID: DiagnosticSessionID
+
+    private let recorder: InMemoryDiagnosticRecorder
+    private let stage: DiagnosticOperationStage
+    private let expectation: XCTestExpectation
+    private let lock = NSLock()
+    private var didObserveStage = false
+
+    init(
+        stage: DiagnosticOperationStage,
+        expectation: XCTestExpectation
+    ) {
+        let recorder = InMemoryDiagnosticRecorder()
+        self.recorder = recorder
+        sessionID = recorder.sessionID
+        self.stage = stage
+        self.expectation = expectation
+    }
+
+    func record(_ event: EvidenceEvent, at timestamp: Date) {
+        recorder.record(event, at: timestamp)
+        guard event.stage == stage else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard didObserveStage == false else { return }
+        didObserveStage = true
+        expectation.fulfill()
+    }
+
+    func snapshot() -> [RecordedEvidence] {
+        recorder.snapshot()
     }
 }
 

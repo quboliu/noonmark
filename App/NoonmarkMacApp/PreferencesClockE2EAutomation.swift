@@ -1257,6 +1257,13 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             "sync re-enable status=failed warning=restored"
         )
 
+        try await assertPersistedFailureRestoreRaceIsSuppressed(
+            on: store,
+            in: repository,
+            expectedMessage: expected,
+            decoder: decoder
+        )
+
         store.syncLocalFolderNow()
         guard store.isLocalFirstSyncing else {
             throw Failure.failed(
@@ -1288,6 +1295,134 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             "sync restart recovery status=succeeded "
                 + "stale-warning=cleared"
         )
+    }
+
+    private func assertPersistedFailureRestoreRaceIsSuppressed(
+        on store: NoonmarkStore,
+        in repository: SQLiteSyncRepository,
+        expectedMessage: String,
+        decoder: JSONDecoder
+    ) async throws {
+        let settingsWindow = try await visibleSettingsWindow()
+        try await activate(settingsWindow)
+        let input = try WindowServerInputDriver()
+        let beforeClock = store.engine.preferences.themeLanguageUpdatedAt
+        try await clickElement(
+            identifier: "settings.sidebar.sync",
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil(
+            "restore-race fixture did not physically disable sync"
+        ) {
+            store.engine.preferences.localFirstSyncPolicy.enabled == false
+                && store.operationFailureNotice == nil
+        }
+
+        let metadata = try requiredMetadata(
+            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+            in: repository
+        )
+        let status = try decoder.decode(
+            SQLiteLocalFirstSyncStatus.self,
+            from: metadata.value
+        )
+        guard case let .failed(reason, message, failedAt, _) = status else {
+            throw Failure.failed(
+                "restore-race fixture lost the persisted failure"
+            )
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try repository.saveMetadata(
+            SyncMetadataEntry(
+                key: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
+                value: try encoder.encode(
+                    SQLiteLocalFirstSyncStatus.failed(
+                        reason: reason,
+                        message: message,
+                        failedAt: failedAt,
+                        diagnosticCorrelation: nil
+                    )
+                ),
+                updatedAt: failedAt
+            )
+        )
+
+        guard store.persistedSyncFailureRestoreE2EGate.arm() else {
+            throw Failure.failed(
+                "persisted failure restore race gate was unavailable"
+            )
+        }
+        var gateReleased = false
+        defer {
+            if gateReleased == false {
+                store.persistedSyncFailureRestoreE2EGate.release()
+            }
+        }
+
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil(
+            "persisted failure restore did not reach its suspended continuation"
+        ) {
+            store.engine.preferences.localFirstSyncPolicy.enabled
+                && store.persistedSyncFailureRestoreE2EGate.isWaiting
+        }
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil(
+            "restore-race fixture did not disable sync while restore was suspended"
+        ) {
+            store.engine.preferences.localFirstSyncPolicy.enabled == false
+                && store.operationFailureNotice == nil
+        }
+        store.persistedSyncFailureRestoreE2EGate.release()
+        gateReleased = true
+        try await waitUntil(
+            "persisted failure restore continuation did not finish"
+        ) {
+            store.persistedSyncFailureRestoreE2EGate.isWaiting == false
+        }
+        guard store.operationFailureNotice == nil else {
+            throw Failure.failed(
+                "async persisted failure restore outlived the disabled sync policy"
+            )
+        }
+        try appendTrace(
+            "sync restore-race continuation=completed warning=suppressed "
+                + "policy=disabled"
+        )
+
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil(
+            "restore-race cleanup did not restore the actionable warning"
+        ) {
+            store.engine.preferences.localFirstSyncPolicy.enabled
+                && store.operationFailureNotice?.context == .sync
+                && store.operationFailureNotice?.message == expectedMessage
+        }
     }
 
     private func requirePersistedBaselineInvalidFailure(

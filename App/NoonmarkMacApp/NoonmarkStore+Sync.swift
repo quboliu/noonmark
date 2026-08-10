@@ -1009,7 +1009,9 @@ extension NoonmarkStore {
                     failedAt: failedAt
                 )
             }
+            await self?.persistedSyncFailureRestoreE2EGate.waitIfArmed()
             guard let self,
+                  engine.preferences.localFirstSyncPolicy.enabled,
                   persistedSyncFailureStillMatches(
                       reason: reason,
                       failedAt: failedAt,

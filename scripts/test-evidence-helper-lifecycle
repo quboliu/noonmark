@@ -6,10 +6,28 @@ fixture="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-evidence-helper-lifecycle.XXXXXX"
 fixture="$(cd "$fixture" && pwd -P)"
 active_pids=""
 mounted_path=""
+has_distinct_mounted_device() {
+  local path="$1"
+  local parent
+  local parent_device
+  local path_device
+
+  [[ -d "$path" ]] || return 1
+  parent="$(dirname "$path")"
+  parent_device="$(stat -f %d "$parent")" || return 1
+  path_device="$(stat -f %d "$path")" || return 1
+  [[ "$parent_device" != "$path_device" ]]
+}
+
 cleanup() {
+  local exit_status=$?
   local active_pid
+  local cleanup_detach_log
+  local cleanup_force_detach_log
   local job_pid
   local is_active_job
+
+  trap - EXIT
   for active_pid in $active_pids; do
     is_active_job=0
     while IFS= read -r job_pid; do
@@ -24,9 +42,24 @@ cleanup() {
     fi
   done
   if [[ -n "$mounted_path" ]]; then
-    hdiutil detach -quiet "$mounted_path" >/dev/null 2>&1 || true
+    cleanup_detach_log="$fixture/cleanup-hdiutil-detach.log"
+    cleanup_force_detach_log="$fixture/cleanup-hdiutil-force-detach.log"
+    if ! /usr/bin/hdiutil detach "$mounted_path" \
+      >"$cleanup_detach_log" 2>&1; then
+      sed -n '1,120p' "$cleanup_detach_log" >&2
+      exit_status=1
+      /usr/bin/hdiutil detach -force "$mounted_path" \
+        >"$cleanup_force_detach_log" 2>&1 || true
+    fi
+    if has_distinct_mounted_device "$mounted_path"; then
+      sed -n '1,120p' "$cleanup_force_detach_log" >&2 2>/dev/null || true
+      echo "evidence helper lifecycle cleanup retained a mounted fixture: $mounted_path" >&2
+      exit 1
+    fi
+    mounted_path=""
   fi
   rm -rf "$fixture"
+  exit "$exit_status"
 }
 trap cleanup EXIT
 
@@ -658,6 +691,9 @@ set -e
 if [[ "$mount_detach_status" -ne 0 ]]; then
   sed -n '1,120p' "$mount_detach_log" >&2
   fail "mount-boundary image detach failed with status $mount_detach_status"
+fi
+if has_distinct_mounted_device "$mounted_path"; then
+  fail "mount-boundary image detach returned success but retained the mounted device"
 fi
 mounted_path=""
 [[ "$(<"$mount_root/status.txt")" == "1:1" ]] ||

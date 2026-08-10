@@ -7,7 +7,7 @@
 - 引入提交：`038e4e71f72b2d808e3327aae7b7f23f570f3850` `fix(evidence): harden evidence paths and session lifecycle`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>／quboliu <38942505+quboliu@users.noreply.github.com>
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`a4af2c44a8849d5a8c370fe252067e99407707d1` `fix(ci): stabilize the hosted mount boundary fixture`；cleanup 审查修复提交待回填
 
 ## 用户症状与影响
 
@@ -25,7 +25,7 @@
 
 GitHub run `31406579094`／job `93514291832` 是 commit `764f781076f72a80ccdefb976617ebb54b66bcda` 唯一、首次、`main` push、`macos-15` job。日志证明 1514 项测试以 0 failure 完成，随后 `scripts/test-runtime-profile-isolation` 的 HFS+ 跨设备 fixture 返回 0。evidence helper lifecycle 进入最终 disk image 段后没有输出其成功终态，`scripts/check` 保留子进程原始状态 16；GitHub cleanup 明确报告 orphan `diskimages-help`。
 
-本机同一提交与同一脚本返回 0，证明产品功能与 helper 语义没有普遍失败；差异只存在于 hosted runner 的重复 APFS image lifecycle。原脚本对 create、attach、detach 全部使用 `-quiet` 且没有阶段化状态，导致 CI 只能看见裸状态 16。
+本机同一提交与同一脚本返回 0，证明产品功能与 helper 语义没有普遍失败；差异只存在于 hosted runner 的第二套 APFS image lifecycle。原脚本对 create、attach、detach 全部使用 `-quiet` 且没有阶段化状态，导致 CI 只能看见裸状态 16。既有日志无法继续区分三个阶段，因此实际返回 16 的精确 `hdiutil` 子命令为未知；不得把 APFS format 本身写成已经证明的唯一原因。
 
 ## 排除的假设
 
@@ -36,11 +36,11 @@ GitHub run `31406579094`／job `93514291832` 是 commit `764f781076f72a80ccdefb9
 
 ## 根因与破坏机制
 
-同一聚合 check 内存在两套语义相同但 filesystem format 不同的 disk image fixture。evidence helper lifecycle 选择 APFS，并把三个 `hdiutil` 阶段设为 quiet、无具名状态；hosted runner 的该 image lifecycle 退出时，Bash 只能把原始状态 16 传给聚合入口，既没有说明失败阶段，也遗留 DiskImages helper。测试把不必要的 APFS format 选择与核心的“不同 device identity”安全需求耦合，造成环境相关阻断且不可诊断。
+同一聚合 check 内存在两套语义相同但 filesystem format 不同的 disk image fixture。evidence helper lifecycle 额外选择 APFS，并把三个 `hdiutil` 阶段设为 quiet、无具名状态；hosted runner 的该 image lifecycle 退出时，Bash 只能把原始状态 16 传给聚合入口，既没有说明失败阶段，也遗留 DiskImages helper。旧 cleanup 又在 detach 失败后静默重试并继续递归删除 fixture，无法证明 mount 已释放。已证实的根因是测试把核心的“不同 device identity”安全需求耦合到重复且不可诊断、cleanup 不闭合的外部生命周期；现有证据不足以把状态 16 进一步归因到某个子命令或 APFS 实现。
 
 ## 根因修复
 
-evidence helper fixture 改用同一个 hosted run 已证明可用的 HFS+ image 语义，但仍真实 create、attach 与 detach。挂载后显式比较 repository 与 mountpoint 的 device identity，只有确实跨设备才继续执行 prepare／inventory 拒绝；三个 image 阶段分别保存输出并在失败时报告具名状态。没有 skip、mock、重试、超时放宽或跨设备检查降级。
+evidence helper fixture 统一采用同一个 hosted run 已证明可建立真实跨设备边界的 HFS+ fixture 语义，移除与安全需求无关的第二种 filesystem format，但仍真实 create、attach 与 detach。挂载后显式比较 repository 与 mountpoint 的 device identity，只有确实跨设备才继续执行 prepare／inventory 拒绝；三个 image 阶段分别保存输出并在失败时报告具名状态。正常 detach 失败时，EXIT cleanup 保存错误、执行 force detach 并再次按 device identity 验证；若 mount 仍存在，保留 fixture、返回失败且绝不递归删除 mounted tree。没有 skip、mock、超时放宽或跨设备检查降级。
 
 ## 验证结果
 

@@ -7,7 +7,7 @@
 - 引入提交：`038e4e71f72b2d808e3327aae7b7f23f570f3850` `fix(evidence): harden evidence paths and session lifecycle`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>／quboliu <38942505+quboliu@users.noreply.github.com>
 - 实际修改者：未知；现有 Git 与 session 证据不能证明实际操作者
-- 修复提交：`a4af2c44a8849d5a8c370fe252067e99407707d1` `fix(ci): stabilize the hosted mount boundary fixture`；cleanup 审查修复提交待回填
+- 修复提交：`a4af2c44a8849d5a8c370fe252067e99407707d1` `fix(ci): stabilize the hosted mount boundary fixture`；`95b3e31a64b06df2931467bd0296157b3a50dd59` `fix(ci): close the mount fixture cleanup lifecycle`
 
 ## 用户症状与影响
 

@@ -96,6 +96,233 @@ final class SQLiteLocalFirstSyncCoordinatorTests: XCTestCase {
         )
     }
 
+    func testConfirmedLocalBaselineDoesNotDownloadItsOwnPublishedBatches()
+        async throws
+    {
+        // FAIL-2026-08-11-01：首轮基线已经由本机 snapshot 持久化并由
+        // transport 确认后，本机不得再从 origin 回读和合并相同 batch。
+        let sourceURL = makeDatabaseURL("confirmed-local-baseline-source")
+        let sourceRepository = SQLiteEngineRepository(databaseURL: sourceURL)
+        let sourceSyncRepository = SQLiteSyncRepository(databaseURL: sourceURL)
+        let sourceDeviceID = SyncDeviceID("confirmed-local-baseline-source")
+        let source = NoonmarkEngine()
+        let expectedTitles = Set(try (0 ..< 128).map { index in
+            let title = "本机完整基线-\(index)"
+            _ = try source.createPoolTask(
+                title: title,
+                now: now.addingTimeInterval(TimeInterval(index))
+            )
+            return title
+        })
+        try sourceRepository.save(
+            source.snapshot(),
+            recordingChangesFor: sourceDeviceID,
+            changedAt: now.addingTimeInterval(127)
+        )
+        try sourceSyncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(
+                deviceID: sourceDeviceID,
+                createdAt: now
+            )
+        )
+        let repositoryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "confirmed-local-baseline-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: repositoryRoot)
+        }
+        let sourceTransport = LocalFolderSyncTransport(
+            rootURL: repositoryRoot,
+            producerEpochID: try sourceSyncRepository
+                .loadOrCreateTransportProducerEpochID()
+        )
+
+        let sourceResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: sourceURL,
+            transport: sourceTransport
+        ).sync(limit: 16, now: now.addingTimeInterval(128))
+
+        XCTAssertGreaterThan(sourceResult.upload.uploadedCount, 0)
+        XCTAssertEqual(
+            sourceResult.download.fetchedCount,
+            0,
+            "本机 confirmed batch 已由当前 snapshot 覆盖，不得 self-echo 回读"
+        )
+
+        let targetURL = makeDatabaseURL("confirmed-local-baseline-target")
+        let targetRepository = SQLiteEngineRepository(databaseURL: targetURL)
+        let targetSyncRepository = SQLiteSyncRepository(databaseURL: targetURL)
+        try targetRepository.save(NoonmarkEngine().snapshot())
+        let targetTransport = LocalFolderSyncTransport(
+            rootURL: repositoryRoot,
+            producerEpochID: try targetSyncRepository
+                .loadOrCreateTransportProducerEpochID()
+        )
+        let targetResult = try await SQLiteLocalFirstSyncCoordinator(
+            databaseURL: targetURL,
+            transport: targetTransport
+        ).sync(limit: 16, now: now.addingTimeInterval(129))
+
+        XCTAssertGreaterThan(targetResult.download.fetchedCount, 0)
+        XCTAssertEqual(
+            Set(try targetRepository.load().taskPool().map(\.definition.title)),
+            expectedTitles
+        )
+    }
+
+    func testPendingBaselineRecoversV026ConfirmedReceiptsBeforePull()
+        async throws
+    {
+        // FAIL-2026-08-11-01：v0.2.6 会先把 journal 标为 uploaded，
+        // 却不推进本机 apply frontier。升级后的第一轮必须从 pending
+        // baseline 的精确 journal IDs 恢复，不能再次回读自身完整历史。
+        let databaseURL = makeDatabaseURL("v026-confirmed-baseline-recovery")
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("v026-confirmed-baseline-recovery")
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "升级前已确认基线", now: now)
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        try syncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(deviceID: deviceID, createdAt: now)
+        )
+        let repositoryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "v026-confirmed-baseline-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: repositoryRoot)
+        }
+        let transport = DelayedLocalConfirmationTransport(
+            rootURL: repositoryRoot,
+            producerEpochID: try syncRepository
+                .loadOrCreateTransportProducerEpochID()
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+
+        var publishedEntryCount = 0
+        while true {
+            let awaiting = try await coordinator.sync(
+                limit: 1,
+                now: now.addingTimeInterval(1)
+            )
+            XCTAssertTrue(awaiting.isAwaitingUploadConfirmation)
+            let published = try syncRepository.journalEntries(
+                state: .publishedLocal
+            )
+            XCTAssertFalse(published.isEmpty)
+            XCTAssertTrue(published.allSatisfy { $0.transportReceipt != nil })
+            publishedEntryCount += published.count
+            // 精确模拟 v0.2.6：确认只迁移 journal state，receipt 被保留，
+            // generic.download.frontier 仍是 origin。
+            try syncRepository.markJournalEntriesUploaded(published.map(\.id))
+            if try syncRepository.journalEntries(
+                state: .pendingUpload
+            ).isEmpty {
+                break
+            }
+        }
+        XCTAssertGreaterThan(publishedEntryCount, 1)
+        XCTAssertNil(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            )
+        )
+
+        let recoveredAt = now.addingTimeInterval(2)
+        let recovered = try await coordinator.sync(
+            limit: 1,
+            now: recoveredAt
+        )
+
+        XCTAssertFalse(
+            recovered.isAwaitingUploadConfirmation,
+            "v0.2.6 已确认 journal 不得重新进入上传等待"
+        )
+        XCTAssertEqual(
+            recovered.download.fetchedCount,
+            0,
+            "升级恢复必须在 pull 前消费已确认的本机 receipt"
+        )
+        XCTAssertEqual(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            ),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: recoveredAt,
+                lastEffectiveSyncedAt: recoveredAt
+            )
+        )
+    }
+
+    func testDelayedConfirmationCommitsFrontierBeforeCompletingSync()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("delayed-confirmed-frontier")
+        let engineRepository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let deviceID = SyncDeviceID("delayed-confirmed-frontier")
+        let engine = NoonmarkEngine()
+        _ = try engine.createPoolTask(title: "等待系统确认后完成", now: now)
+        try engineRepository.save(
+            engine.snapshot(),
+            recordingChangesFor: deviceID,
+            changedAt: now
+        )
+        try syncRepository.saveDeviceIdentity(
+            SyncDeviceIdentity(deviceID: deviceID, createdAt: now)
+        )
+        let repositoryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "delayed-confirmed-frontier-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: repositoryRoot)
+        }
+        let transport = DelayedLocalConfirmationTransport(
+            rootURL: repositoryRoot,
+            producerEpochID: try syncRepository
+                .loadOrCreateTransportProducerEpochID()
+        )
+        let coordinator = SQLiteLocalFirstSyncCoordinator(
+            databaseURL: databaseURL,
+            transport: transport
+        )
+        var completedAt = now.addingTimeInterval(1)
+        var result = try await coordinator.sync(limit: 1, now: completedAt)
+
+        while result.isAwaitingUploadConfirmation {
+            await transport.confirmUploads()
+            completedAt = completedAt.addingTimeInterval(1)
+            result = try await coordinator.sync(
+                limit: 1,
+                now: completedAt
+            )
+        }
+
+        XCTAssertEqual(result.download.fetchedCount, 0)
+        XCTAssertEqual(
+            try SQLiteLocalFirstSyncCoordinator.timestamps(
+                in: syncRepository
+            ),
+            SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: completedAt,
+                lastEffectiveSyncedAt: completedAt
+            )
+        )
+    }
+
     func testSubtaskRenameSurvivesUploadAfterInitialSync() async throws {
         // FAIL-2026-08-06-01：production 症状级复现。子任务首版上传后再改名，
         // 修复前下一轮上传 preflight 必抛 invalidCurrentRecordMerge（251），
@@ -2708,6 +2935,50 @@ private actor RawCurrentRecordSyncTransport: SyncRecordTransport {
             observedProducerCount: batches.isEmpty ? 0 : 1,
             openedBatchCount: references.count
         )
+    }
+}
+
+private actor DelayedLocalConfirmationTransport: SyncRecordTransport {
+    private let backing: LocalFolderSyncTransport
+    private var uploadsAreConfirmed = false
+    nonisolated let frontierNamespace: String
+
+    init(rootURL: URL, producerEpochID: UUID) {
+        backing = LocalFolderSyncTransport(
+            rootURL: rootURL,
+            producerEpochID: producerEpochID
+        )
+        frontierNamespace = LocalFolderSyncTransport.frontierNamespace(
+            for: rootURL
+        )
+    }
+
+    func pushAccepting(
+        _ records: [SyncRecord]
+    ) async throws -> SyncTransportPushReceipt {
+        uploadsAreConfirmed = false
+        return try await backing.pushAccepting(records).replacingConfirmation(
+            .awaitingUploadConfirmation
+        )
+    }
+
+    func confirmationStatus(
+        for _: SyncTransportPushReceipt
+    ) async throws -> SyncTransportConfirmation {
+        uploadsAreConfirmed
+            ? .confirmed
+            : .awaitingUploadConfirmation
+    }
+
+    func pull(
+        after frontier: SyncTransportFrontier,
+        limit: Int
+    ) async throws -> SyncTransportChangePage {
+        try await backing.pull(after: frontier, limit: limit)
+    }
+
+    func confirmUploads() {
+        uploadsAreConfirmed = true
     }
 }
 

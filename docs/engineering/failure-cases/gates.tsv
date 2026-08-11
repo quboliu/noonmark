@@ -192,3 +192,5 @@ FAIL-2026-08-10-04	release	scripts/verify-development-validation-evidence	script
 FAIL-2026-08-10-05	fast	scripts/test-evidence-helper-lifecycle	scripts/check	真实 HFS+ 跨设备 fixture 必须建立不同 device identity，并完整执行 create、attach、拒绝跨界与 detach
 FAIL-2026-08-10-05	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	唯一 hosted macos-15 check 必须真实完成 evidence helper lifecycle，任一 disk image 阶段失败均输出具名状态并判红
 FAIL-2026-08-10-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未首次成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布
+FAIL-2026-08-11-01	fast	scripts/test-incremental-sync-contract	scripts/check	上传确认必须在 SQLiteSyncRepository 同一事务提交 journal uploaded 与本机 producer frontier；延迟确认必须 CAS 精确 durable receipt
+FAIL-2026-08-11-01	symptom	scripts/test-incremental-sync-symptom	scripts/test-all	128 项本机完整基线确认上传后不得 self-echo；另一设备仍须取得完整资料；v0.2.6 pending baseline 必须凭精确 receipt 在 pull 前恢复并写入有效同步时间

@@ -15,6 +15,7 @@ folder="Sources/NoonmarkSync/LocalFolderSyncTransport.swift"
 cloudkit="Sources/NoonmarkSync/CloudKitSyncEngineTransport.swift"
 session="Sources/NoonmarkSync/CloudKitSyncSession.swift"
 download="Sources/NoonmarkStorage/SQLiteSyncDownloadCoordinator.swift"
+upload="Sources/NoonmarkStorage/SQLiteSyncUploadCoordinator.swift"
 sync_repository="Sources/NoonmarkStorage/SQLiteSyncRepository.swift"
 
 rg -F 'func pushAccepting(' "$protocol" >/dev/null ||
@@ -61,5 +62,16 @@ rg -F 'deferredFetchEngineState' "$cloudkit" >/dev/null ||
   fail "CloudKit can persist a fetch receipt before Inbox evidence"
 rg -F 'frontierMetadata:' "$download" >/dev/null ||
   fail "download frontier is not committed with the domain merge"
+rg -F 'commitConfirmedUpload(' "$upload" >/dev/null ||
+  fail "upload confirmation bypasses the atomic repository commit seam"
+if rg -F 'markJournalEntriesUploaded(' "$upload" >/dev/null; then
+  fail "upload confirmation still commits journal state without its frontier"
+fi
+rg -F 'BEGIN IMMEDIATE TRANSACTION' "$sync_repository" >/dev/null ||
+  fail "confirmed upload has no exclusive SQLite transaction"
+rg -F 'expectedStoredReceipt:' "$upload" >/dev/null ||
+  fail "delayed confirmation does not CAS the exact durable receipt"
+rg -F 'SQLiteSyncRepository.frontierMetadataKey(' "$download" >/dev/null ||
+  fail "download and confirmed-upload paths do not share the frontier key owner"
 
 echo "Incremental sync contract passed"

@@ -316,6 +316,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 }
                 if let pendingBaseline {
                     try requireBaselineUploaded(pendingBaseline)
+                    upload.uploadedCount += try syncRepository
+                        .recoverConfirmedBaselineFrontier(
+                            pendingBaseline,
+                            frontierNamespace: transportNamespace,
+                            recoveredAt: now
+                        )
                 }
 
                 var pageHasMore = true
@@ -372,6 +378,12 @@ public final class SQLiteLocalFirstSyncCoordinator {
                 }
                 if let pendingBaseline {
                     try requireBaselineUploaded(pendingBaseline)
+                    upload.uploadedCount += try syncRepository
+                        .recoverConfirmedBaselineFrontier(
+                            pendingBaseline,
+                            frontierNamespace: transportNamespace,
+                            recoveredAt: now
+                        )
                 }
 
                 diagnosticOperation?.stage(

@@ -349,6 +349,283 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
         XCTAssertEqual(failed.lastError, "deterministic")
     }
 
+    func testConfirmedUploadAtomicallyAdvancesOnlyTheLocalProducerFrontier()
+        throws
+    {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let localProducerID = try repository
+            .loadOrCreateTransportProducerEpochID().uuidString.lowercased()
+        let namespace = "confirmed-upload-atomic"
+        let frontierKey = "generic.download.frontier.\(namespace)"
+        let foreignPosition = SyncTransportPosition(
+            sequence: 7,
+            contentHash: String(repeating: "b", count: 64)
+        )
+        try repository.saveMetadata(
+            SyncMetadataEntry(
+                key: frontierKey,
+                value: try sortedJSONData(
+                    SyncTransportFrontier(
+                        positions: ["foreign-producer": foreignPosition]
+                    )
+                ),
+                updatedAt: now
+            )
+        )
+        let entry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "confirmed-local-entry",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(entry)
+
+        try repository.commitConfirmedUpload(
+            [entry.id],
+            receipt: SyncTransportPushReceipt(
+                batches: [
+                    SyncTransportBatchReference(
+                        producerID: localProducerID,
+                        sequence: 1,
+                        contentHash: String(repeating: "a", count: 64)
+                    )
+                ],
+                confirmation: .confirmed
+            ),
+            frontierNamespace: namespace,
+            confirmedAt: now.addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(
+            try repository.journalEntries(state: .uploaded).map(\.id),
+            [entry.id]
+        )
+        let frontier = try JSONDecoder().decode(
+            SyncTransportFrontier.self,
+            from: try XCTUnwrap(
+                repository.metadata(for: frontierKey)
+            ).value
+        )
+        XCTAssertEqual(
+            frontier.position(for: localProducerID),
+            SyncTransportPosition(
+                sequence: 1,
+                contentHash: String(repeating: "a", count: 64)
+            )
+        )
+        XCTAssertEqual(
+            frontier.position(for: "foreign-producer"),
+            foreignPosition
+        )
+    }
+
+    func testConfirmedUploadFrontierGapRollsBackTheJournalTransition()
+        throws
+    {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let localProducerID = try repository
+            .loadOrCreateTransportProducerEpochID().uuidString.lowercased()
+        let namespace = "confirmed-upload-gap"
+        let entry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "gap-entry",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(entry)
+
+        XCTAssertThrowsError(
+            try repository.commitConfirmedUpload(
+                [entry.id],
+                receipt: SyncTransportPushReceipt(
+                    batches: [
+                        SyncTransportBatchReference(
+                            producerID: localProducerID,
+                            sequence: 2,
+                            contentHash: String(repeating: "c", count: 64)
+                        )
+                    ],
+                    confirmation: .confirmed
+                ),
+                frontierNamespace: namespace
+            )
+        )
+        XCTAssertEqual(
+            try repository.journalEntries(state: .pendingUpload).map(\.id),
+            [entry.id]
+        )
+        XCTAssertNil(
+            try repository.metadata(
+                for: "generic.download.frontier.\(namespace)"
+            )
+        )
+    }
+
+    func testConfirmedUploadInvalidFrontierRollsBackTheJournalTransition()
+        throws
+    {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let localProducerID = try repository
+            .loadOrCreateTransportProducerEpochID().uuidString.lowercased()
+        let namespace = "confirmed-upload-invalid-frontier"
+        let frontierKey = "generic.download.frontier.\(namespace)"
+        try repository.saveMetadata(
+            SyncMetadataEntry(
+                key: frontierKey,
+                value: Data("invalid-frontier".utf8),
+                updatedAt: now
+            )
+        )
+        let entry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "rollback-entry",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(entry)
+
+        XCTAssertThrowsError(
+            try repository.commitConfirmedUpload(
+                [entry.id],
+                receipt: SyncTransportPushReceipt(
+                    batches: [
+                        SyncTransportBatchReference(
+                            producerID: localProducerID,
+                            sequence: 1,
+                            contentHash: String(repeating: "d", count: 64)
+                        )
+                    ],
+                    confirmation: .confirmed
+                ),
+                frontierNamespace: namespace
+            )
+        )
+        XCTAssertEqual(
+            try repository.journalEntries(state: .pendingUpload).map(\.id),
+            [entry.id]
+        )
+        XCTAssertEqual(
+            try repository.metadata(for: frontierKey)?.value,
+            Data("invalid-frontier".utf8)
+        )
+    }
+
+    func testDelayedConfirmationRequiresTheExactDurableReceipt()
+        throws
+    {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        let localProducerID = try repository
+            .loadOrCreateTransportProducerEpochID().uuidString.lowercased()
+        let namespace = "confirmed-upload-receipt-cas"
+        let entry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "receipt-cas-entry",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(entry)
+        let durableReceipt = SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: localProducerID,
+                    sequence: 1,
+                    contentHash: String(repeating: "e", count: 64)
+                )
+            ],
+            confirmation: .awaitingUploadConfirmation
+        )
+        let durableReceiptData = try sortedJSONData(durableReceipt)
+        try repository.markJournalEntriesPublishedLocal(
+            [entry.id],
+            receipt: durableReceiptData
+        )
+        let mismatchedReceipt = SyncTransportPushReceipt(
+            batches: [
+                SyncTransportBatchReference(
+                    producerID: localProducerID,
+                    sequence: 1,
+                    contentHash: String(repeating: "f", count: 64)
+                )
+            ],
+            confirmation: .awaitingUploadConfirmation
+        )
+        let mismatchedData = try sortedJSONData(mismatchedReceipt)
+
+        XCTAssertThrowsError(
+            try repository.commitConfirmedUpload(
+                [entry.id],
+                receipt: mismatchedReceipt,
+                expectedStoredReceipt: mismatchedData,
+                frontierNamespace: namespace
+            )
+        )
+        let published = try XCTUnwrap(
+            repository.journalEntries(state: .publishedLocal).first
+        )
+        XCTAssertEqual(published.id, entry.id)
+        XCTAssertEqual(published.transportReceipt, durableReceiptData)
+        XCTAssertNil(
+            try repository.metadata(
+                for: "generic.download.frontier.\(namespace)"
+            )
+        )
+    }
+
+    func testForeignAndEmptyConfirmedReceiptsDoNotAdvanceTheFrontier()
+        throws
+    {
+        let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
+        _ = try repository.loadOrCreateTransportProducerEpochID()
+        let namespace = "confirmed-upload-nonlocal"
+        let foreignEntry = SyncJournalEntry(
+            entityType: .taskChain,
+            entityID: "foreign-receipt",
+            changedAt: now,
+            deviceID: SyncDeviceID("mac-a")
+        )
+        let emptyEntry = SyncJournalEntry(
+            entityType: .dayTrace,
+            entityID: "cloudkit-empty-receipt",
+            changedAt: now.addingTimeInterval(1),
+            deviceID: SyncDeviceID("mac-a")
+        )
+        try repository.appendJournalEntry(foreignEntry)
+        try repository.appendJournalEntry(emptyEntry)
+
+        try repository.commitConfirmedUpload(
+            [foreignEntry.id],
+            receipt: SyncTransportPushReceipt(
+                batches: [
+                    SyncTransportBatchReference(
+                        producerID: "foreign-producer",
+                        sequence: 1,
+                        contentHash: String(repeating: "a", count: 64)
+                    )
+                ],
+                confirmation: .confirmed
+            ),
+            frontierNamespace: namespace
+        )
+        try repository.commitConfirmedUpload(
+            [emptyEntry.id],
+            receipt: SyncTransportPushReceipt(
+                batches: [],
+                confirmation: .confirmed
+            ),
+            frontierNamespace: namespace
+        )
+
+        XCTAssertEqual(
+            Set(try repository.journalEntries(state: .uploaded).map(\.id)),
+            Set([foreignEntry.id, emptyEntry.id])
+        )
+        XCTAssertNil(
+            try repository.metadata(
+                for: "generic.download.frontier.\(namespace)"
+            )
+        )
+    }
+
     func testJournalEntriesUseDomainDependencyOrderAtTheSameTimestamp() throws {
         let repository = SQLiteSyncRepository(databaseURL: makeDatabaseURL())
         let dependencyOrder: [SyncEntityType] = [
@@ -1755,6 +2032,12 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
             try syncRepository.metadata(for: baselineMetadata.key),
             baselineMetadata
         )
+    }
+
+    private func sortedJSONData(_ value: some Encodable) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
     }
 
     private func makeDatabaseURL() -> URL {

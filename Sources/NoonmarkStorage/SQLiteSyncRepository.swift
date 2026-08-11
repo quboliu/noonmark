@@ -290,6 +290,18 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let entries = try journalEntries(
+            state: state,
+            from: database
+        )
+        guard let limit, limit >= 0 else { return entries }
+        return Array(entries.prefix(limit))
+    }
+
+    private func journalEntries(
+        state: SyncChangeState? = nil,
+        from database: Database?
+    ) throws -> [SyncJournalEntry] {
         let projection = """
         SELECT id, entity_type, entity_id, operation, changed_at, changed_at_bits,
             device_id, sync_state, retry_count, last_error, record_payload,
@@ -310,9 +322,7 @@ public final class SQLiteSyncRepository {
                 try journalEntry(from: statement)
             }
         }
-        let ordered = entries.sorted(by: journalEntryComesBefore)
-        guard let limit, limit >= 0 else { return ordered }
-        return Array(ordered.prefix(limit))
+        return entries.sorted(by: journalEntryComesBefore)
     }
 
     func unfinishedJournalEntryCount() throws -> Int {
@@ -368,6 +378,247 @@ public final class SQLiteSyncRepository {
         }
     }
 
+    /// Commits one transport-confirmed local publication as a single durable
+    /// fact. The journal transition and the local producer frontier must never
+    /// be observable independently: the current SQLite snapshot already
+    /// contains these records, so a later pull can safely start after their
+    /// confirmed immutable batches without downloading its own publication.
+    func commitConfirmedUpload(
+        _ ids: [UUID],
+        receipt: SyncTransportPushReceipt,
+        expectedStoredReceipt: Data? = nil,
+        frontierNamespace: String,
+        confirmedAt: Date = Date()
+    ) throws {
+        guard ids.isEmpty == false else { return }
+        guard Set(ids).count == ids.count,
+              frontierNamespace.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty == false
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "confirmed sync upload identity is invalid"
+            )
+        }
+        let canonicalReceipt = try Self.canonicalReceiptData(receipt)
+        if let expectedStoredReceipt {
+            guard expectedStoredReceipt == canonicalReceipt,
+                  receipt.confirmation == .awaitingUploadConfirmation
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed sync receipt does not match durable evidence"
+                )
+            }
+        } else {
+            guard receipt.confirmation == .confirmed else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "immediate sync confirmation is invalid"
+                )
+            }
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            for id in ids {
+                if let expectedStoredReceipt {
+                    try run(
+                        """
+                        UPDATE change_journal
+                        SET sync_state = 'uploaded', last_error = NULL
+                        WHERE id = ? AND sync_state = 'publishedLocal'
+                          AND transport_receipt = ?
+                        """,
+                        on: database
+                    ) { statement in
+                        bind(id, to: 1, in: statement)
+                        bind(expectedStoredReceipt, to: 2, in: statement)
+                    }
+                } else {
+                    try run(
+                        """
+                        UPDATE change_journal
+                        SET sync_state = 'uploaded', last_error = NULL
+                        WHERE id = ? AND sync_state = 'pendingUpload'
+                          AND transport_receipt IS NULL
+                        """,
+                        on: database
+                    ) { statement in
+                        bind(id, to: 1, in: statement)
+                    }
+                }
+                guard sqlite3_changes(database) == 1 else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "confirmed sync entry is not uploadable"
+                    )
+                }
+            }
+            let key = Self.frontierMetadataKey(
+                namespace: frontierNamespace
+            )
+            let current = try loadFrontier(
+                metadataKey: key,
+                from: database
+            )
+            let localProducerID = try storedTransportProducerID(
+                from: database
+            )
+            let advanced = try frontier(
+                current,
+                advancingPast: receipt.batches,
+                localProducerID: localProducerID
+            )
+            if advanced != current {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                try saveMetadata(
+                    SyncMetadataEntry(
+                        key: key,
+                        value: try encoder.encode(advanced),
+                        updatedAt: confirmedAt
+                    ),
+                    into: database
+                )
+            }
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    /// Repairs the exact v0.2.6 durable shape: a pending baseline whose rows
+    /// are already uploaded and still retain canonical iCloud receipts, while
+    /// the local producer frontier was never committed. Every authorization
+    /// fact is revalidated in one SQLite snapshot before the frontier moves.
+    func recoverConfirmedBaselineFrontier(
+        _ manifest: SQLiteSyncBaselineManifest,
+        frontierNamespace: String,
+        recoveredAt: Date
+    ) throws -> Int {
+        guard manifest.state == .pending,
+              manifest.transportNamespace == frontierNamespace,
+              frontierNamespace.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty == false,
+              recoveredAt.timeIntervalSinceReferenceDate.isFinite
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "confirmed baseline recovery identity is invalid"
+            )
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            let allEntries = try journalEntries(from: database)
+            guard manifest.validate(against: allEntries) else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed baseline no longer matches its journal evidence"
+                )
+            }
+            let expectedIDs = manifest.expectedJournalEntryIDs
+            let expectedEntries = allEntries.filter {
+                expectedIDs.contains($0.id)
+            }
+            guard expectedEntries.count == expectedIDs.count,
+                  expectedEntries.allSatisfy({ $0.state == .uploaded })
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed baseline journal state is invalid"
+                )
+            }
+            guard let localProducerID = try storedTransportProducerID(
+                from: database
+            ) else {
+                try execute("COMMIT", on: database)
+                return 0
+            }
+
+            guard expectedEntries.allSatisfy({
+                $0.transportReceipt != nil
+            }) else {
+                // Older direct-confirmation releases did not retain the
+                // receipt. With no complete immutable-batch evidence, keep
+                // the origin/previous frontier and let the ordinary pull
+                // prove remote state instead of guessing past it.
+                try execute("COMMIT", on: database)
+                return 0
+            }
+            var batches: [SyncTransportBatchReference] = []
+            var localSequencesByEntry: [UUID: Set<UInt64>] = [:]
+            for entry in expectedEntries {
+                guard let receiptData = entry.transportReceipt else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "confirmed baseline receipt is missing"
+                    )
+                }
+                let receipt = try Self.decodeCanonicalReceipt(receiptData)
+                guard receipt.confirmation == .awaitingUploadConfirmation else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "confirmed baseline receipt state is invalid"
+                    )
+                }
+                batches.append(contentsOf: receipt.batches)
+                localSequencesByEntry[entry.id] = Set(
+                    receipt.batches.compactMap {
+                        $0.producerID == localProducerID
+                            ? $0.sequence
+                            : nil
+                    }
+                )
+            }
+            let key = Self.frontierMetadataKey(
+                namespace: frontierNamespace
+            )
+            let current = try loadFrontier(
+                metadataKey: key,
+                from: database
+            )
+            let advanced = try frontier(
+                current,
+                advancingPast: batches,
+                localProducerID: localProducerID
+            )
+            guard advanced != current,
+                  let advancedPosition = advanced.position(
+                      for: localProducerID
+                  )
+            else {
+                try execute("COMMIT", on: database)
+                return 0
+            }
+            let previousSequence = current.position(
+                for: localProducerID
+            )?.sequence ?? 0
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try saveMetadata(
+                SyncMetadataEntry(
+                    key: key,
+                    value: try encoder.encode(advanced),
+                    updatedAt: recoveredAt
+                ),
+                into: database
+            )
+            let recoveredEntryCount = localSequencesByEntry.values.filter {
+                $0.contains(where: {
+                    $0 > previousSequence
+                        && $0 <= advancedPosition.sequence
+                })
+            }.count
+            try execute("COMMIT", on: database)
+            return recoveredEntryCount
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     public func markJournalEntriesPublishedLocal(
         _ ids: [UUID],
         receipt: Data
@@ -395,6 +646,212 @@ public final class SQLiteSyncRepository {
                     "sync outbox entry cannot enter publishedLocal"
                 )
             }
+        }
+    }
+
+    static func frontierMetadataKey(namespace: String) -> String {
+        "generic.download.frontier.\(namespace)"
+    }
+
+    private func loadFrontier(
+        metadataKey: String,
+        from database: Database?
+    ) throws -> SyncTransportFrontier {
+        let values: [Data] = try query(
+            "SELECT value FROM sync_metadata WHERE key = ?",
+            on: database
+        ) { statement in
+            bind(metadataKey, to: 1, in: statement)
+        } row: { statement in
+            data(statement, 0)
+        }
+        guard let value = values.first else { return .origin }
+        do {
+            return try JSONDecoder().decode(
+                SyncTransportFrontier.self,
+                from: value
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync transport frontier is invalid"
+            )
+        }
+    }
+
+    private func frontier(
+        _ current: SyncTransportFrontier,
+        advancingPast batches: [SyncTransportBatchReference],
+        localProducerID: String?
+    ) throws -> SyncTransportFrontier {
+        guard let localProducerID else { return current }
+        let localBatches = batches.filter {
+            $0.producerID == localProducerID
+        }
+        guard localBatches.isEmpty == false else { return current }
+        let hashBySequence = try confirmedBatchHashes(
+            localBatches,
+            localProducerID: localProducerID
+        )
+        let existing = current.position(for: localProducerID)
+        try validate(
+            existingLocalPosition: existing,
+            against: hashBySequence
+        )
+        guard existing?.sequence != UInt64.max else { return current }
+
+        let nextSequence = (existing?.sequence ?? 0) + 1
+        let advancingSequences = hashBySequence.keys
+            .filter { $0 >= nextSequence }
+            .sorted()
+        guard advancingSequences.isEmpty == false else { return current }
+        try validateContiguous(
+            advancingSequences,
+            startingAt: nextSequence
+        )
+
+        var advanced = current
+        for sequence in advancingSequences {
+            guard let contentHash = hashBySequence[sequence] else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed sync batch evidence disappeared"
+                )
+            }
+            advanced = advanced.advancing(
+                producerID: localProducerID,
+                to: SyncTransportPosition(
+                    sequence: sequence,
+                    contentHash: contentHash
+                )
+            )
+        }
+        return advanced
+    }
+
+    private func confirmedBatchHashes(
+        _ localBatches: [SyncTransportBatchReference],
+        localProducerID: String
+    ) throws -> [UInt64: String] {
+        var hashBySequence: [UInt64: String] = [:]
+        for batch in localBatches {
+            guard batch.producerID == localProducerID,
+                  batch.sequence > 0,
+                  Self.isSHA256Hex(batch.contentHash)
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed sync batch reference is invalid"
+                )
+            }
+            if let existing = hashBySequence[batch.sequence] {
+                guard existing == batch.contentHash else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "confirmed sync batch sequence has conflicting hashes"
+                    )
+                }
+            } else {
+                hashBySequence[batch.sequence] = batch.contentHash
+            }
+        }
+        return hashBySequence
+    }
+
+    private func validate(
+        existingLocalPosition: SyncTransportPosition?,
+        against hashBySequence: [UInt64: String]
+    ) throws {
+        guard let existingLocalPosition else { return }
+        guard existingLocalPosition.sequence > 0,
+              Self.isSHA256Hex(existingLocalPosition.contentHash)
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "durable local sync frontier is invalid"
+            )
+        }
+        if let repeatedHash = hashBySequence[
+            existingLocalPosition.sequence
+        ] {
+            guard repeatedHash == existingLocalPosition.contentHash else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed sync batch conflicts with the durable frontier"
+                )
+            }
+        }
+    }
+
+    private func validateContiguous(
+        _ sequences: [UInt64],
+        startingAt firstExpectedSequence: UInt64
+    ) throws {
+        var expectedSequence = firstExpectedSequence
+        for sequence in sequences {
+            guard sequence == expectedSequence else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "confirmed sync batch sequence is not contiguous"
+                )
+            }
+            if expectedSequence < UInt64.max {
+                expectedSequence += 1
+            } else {
+                break
+            }
+        }
+    }
+
+    private static func canonicalReceiptData(
+        _ receipt: SyncTransportPushReceipt
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(receipt)
+    }
+
+    private static func decodeCanonicalReceipt(
+        _ data: Data
+    ) throws -> SyncTransportPushReceipt {
+        let receipt: SyncTransportPushReceipt
+        do {
+            receipt = try JSONDecoder().decode(
+                SyncTransportPushReceipt.self,
+                from: data
+            )
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync transport receipt is invalid"
+            )
+        }
+        guard try canonicalReceiptData(receipt) == data else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "sync transport receipt is not canonical"
+            )
+        }
+        return receipt
+    }
+
+    private func storedTransportProducerID(
+        from database: Database?
+    ) throws -> String? {
+        let values: [Data] = try query(
+            "SELECT value FROM sync_metadata WHERE key = ?",
+            on: database
+        ) { statement in
+            bind(Self.transportProducerEpochMetadataKey, to: 1, in: statement)
+        } row: { statement in
+            data(statement, 0)
+        }
+        guard let value = values.first else { return nil }
+        guard let producerID = String(data: value, encoding: .utf8),
+              let uuid = UUID(uuidString: producerID),
+              uuid.uuidString.lowercased() == producerID
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "transport producer epoch is invalid"
+            )
+        }
+        return producerID
+    }
+
+    private static func isSHA256Hex(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { byte in
+            (48 ... 57).contains(byte) || (97 ... 102).contains(byte)
         }
     }
 

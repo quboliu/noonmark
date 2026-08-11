@@ -247,7 +247,9 @@ public final class SQLiteSyncDownloadCoordinator {
     }
 
     private var frontierMetadataKey: String {
-        "generic.download.frontier.\(transport.frontierNamespace)"
+        SQLiteSyncRepository.frontierMetadataKey(
+            namespace: transport.frontierNamespace
+        )
     }
 
     private func loadFrontier() throws -> SyncTransportFrontier {

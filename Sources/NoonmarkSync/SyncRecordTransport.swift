@@ -135,6 +135,10 @@ public enum SyncTransportConfirmation: String, Codable, Equatable, Sendable {
 }
 
 public struct SyncTransportPushReceipt: Codable, Equatable, Sendable {
+    /// Immutable batches accepted by this push. A storage coordinator may
+    /// advance its apply frontier past only the references whose producer ID
+    /// exactly matches its existing durable local producer epoch. Empty or
+    /// foreign-producer references never authorize a local frontier advance.
     public let batches: [SyncTransportBatchReference]
     public let confirmation: SyncTransportConfirmation
 

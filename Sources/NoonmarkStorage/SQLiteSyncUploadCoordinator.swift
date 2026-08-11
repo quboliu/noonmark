@@ -94,8 +94,10 @@ public final class SQLiteSyncUploadCoordinator {
             let state = receipt.confirmation
             switch state {
             case .confirmed:
-                try syncRepository.markJournalEntriesUploaded(
-                    materialized.uploadedIDs
+                try syncRepository.commitConfirmedUpload(
+                    materialized.uploadedIDs,
+                    receipt: receipt,
+                    frontierNamespace: transport.frontierNamespace
                 )
                 try appendAuditLogs(
                     for: materialized.records,
@@ -462,8 +464,11 @@ public final class SQLiteSyncUploadCoordinator {
             let receipt = try decodedReceipt(receiptData)
             switch try await transport.confirmationStatus(for: receipt) {
             case .confirmed:
-                try syncRepository.markJournalEntriesUploaded(
-                    entries.map(\.id)
+                try syncRepository.commitConfirmedUpload(
+                    entries.map(\.id),
+                    receipt: receipt,
+                    expectedStoredReceipt: receiptData,
+                    frontierNamespace: transport.frontierNamespace
                 )
                 try appendAuditLogs(
                     for: entries,

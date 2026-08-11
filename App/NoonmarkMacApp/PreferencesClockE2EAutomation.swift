@@ -505,10 +505,13 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
 
         let syncResult = try await synchronize(store)
+        // FAIL-2026-08-11-01：本机已确认的 preference batch 已由当前
+        // SQLite snapshot 覆盖，必须在上传事务推进 local frontier，不能
+        // 再以两条 download replay／ignored 审计掩盖 self-echo。
         guard syncResult.upload.pendingCount == 2,
               syncResult.upload.uploadedCount == 2,
               syncResult.upload.failedCount == 0,
-              syncResult.download.fetchedCount == 2,
+              syncResult.download.fetchedCount == 0,
               syncResult.download.appliedCount == 0,
               syncResult.download.waitingCount == 0,
               syncResult.download.conflictCount == 0
@@ -611,18 +614,18 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         let uploadAudit = preferenceAudit.filter {
             $0.direction == .upload && $0.action == "uploaded"
         }
-        guard preferenceAudit.count == 5,
+        guard preferenceAudit.count == 3,
               uploadAudit.count == 2,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "merged"
               }).count == 1,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "ignored"
-              }).count == 2
+              }).isEmpty
         else {
             throw Failure.failed(
-                "preference sync audit did not record one merge, two replay ignores, "
-                    + "and two uploads"
+                "preference sync audit did not record one remote merge, "
+                    + "zero self-echo ignores, and two uploads"
             )
         }
 
@@ -651,6 +654,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
         try appendTrace(
             "sync uploaded=2 pending=0 failed=0 "
+                + "fetched=\(syncResult.download.fetchedCount) "
                 + "final=\(exactBits(languageClock)) "
                 + "recordSHA256=\(finalStoredRecord.sha256)"
         )
@@ -743,7 +747,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         guard preferenceAudit.count == final.auditCountAfterExercise + 1,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "ignored"
-              }).count == 3,
+              }).count == 1,
               preferenceAudit.filter({
                   $0.direction == .download && $0.action == "merged"
               }).count == 1,
@@ -2415,7 +2419,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
               finalSnapshotID.count == 64,
               finalSnapshotPayloadDigest.count == 64,
               finalSnapshotSHA256.count == 64,
-              auditCount == 5
+              auditCount == 3
         else {
             throw Failure.failed(
                 "preference-clock exercise state is incomplete or inconsistent"

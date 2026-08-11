@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-01：已确认本机基线未推进 frontier，导致同步反复回读
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T09:27:44+08:00
 - 影响版本／构建：v0.2.6，build 28，source commit `12ed27bf5d43077744a65c932703f2051f6d4ca4`
 - 引入提交：`1f264ff9c38047c8ac959e9d0cd624c70d495116`（`fix(sync): replace full-history replication`）
 - Git author／committer：`mxt <mxt@local.com>`／`mxt <mxt@local.com>`
 - 实际修改者：未知；现有 Git 证据只能确认提交 identity
-- 修复提交：待回填
+- 修复提交：`b9f9ffda1fade56228d262f2198ef45b1bce18a3`（`fix(sync): atomically commit confirmed upload frontiers`）
 
 ## 用户症状与影响
 

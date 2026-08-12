@@ -75,6 +75,10 @@ fi
 release_script="scripts/release-private-dmg"
 rg -F 'scripts/verify-release-version-tag' "$release_script" >/dev/null ||
   fail "private release entry does not require the exact version tag"
+rg -F 'scripts/verify-release-trial-version' "$release_script" >/dev/null ||
+  fail "private release entry does not expose the pre-tag trial verifier"
+[[ -x scripts/verify-release-trial-version ]] ||
+  fail "pre-tag trial version verifier is missing or not executable"
 rg -F 'fetch-depth: 0' .github/workflows/release-publish.yml >/dev/null ||
   fail "release workflow does not fetch the annotated version tag"
 rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||

@@ -261,3 +261,6 @@ FAIL-2026-08-11-28	fast	scripts/test-development-data-clean-cut	scripts/check	�
 FAIL-2026-08-11-28	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 必须在 schema 19 空 Engine、零 V1／V2 同步 ledger 下保留 pending sidecar，并在 SQLite writer lock 中拒绝所有写路径
 FAIL-2026-08-11-29	fast	scripts/test-windowserver-physical-target-contract	scripts/check	WindowServer pointer readiness 必须同时要求坐标稳定与物理最前窗口 exact match，且 mouseDown 前再次校验
 FAIL-2026-08-11-29	symptom	scripts/test-e2e	scripts/test-all	完整签名 App 必须连续完成 native command exercise／restart 两次 Search、真实点击与 SQLite 对账，不得由下面的主窗截获 mouseDown
+FAIL-2026-08-12-01	fast	scripts/test-release-version-contract	scripts/check	current 版本必须对应严格递增 ledger 的唯一最高 candidate，正式入口保留 exact tag，trial 入口使用独立 pre-tag verifier
+FAIL-2026-08-12-01	symptom	scripts/test-release-trial-contract	scripts/check	无 tag 的最新 candidate 必须可进入 trial；已有 exact tag、retired build 或非 ledger tip 全部 fail-closed，两种模式汇合到同一本机 package chain
+FAIL-2026-08-12-01	release	scripts/test-dmg-install	scripts/release-private-dmg	精确 pre-tag trial package 必须以受控 dmg-validation 身份完成真实安装、交互、退出、重启和资料回读

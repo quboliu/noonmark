@@ -195,6 +195,9 @@ run_check_suite() {
   echo "==> Release version contract"
   scripts/test-release-version-contract
 
+  echo "==> Pre-tag trial release contract"
+  scripts/test-release-trial-contract
+
   echo "==> DMG window identity contract"
   scripts/test-dmg-window-identity-contract
 

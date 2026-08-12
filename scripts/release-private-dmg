@@ -6,8 +6,11 @@ cd "$repo_root"
 
 source scripts/evidence-common
 
-if [[ "$#" -ne 0 ]]; then
-  echo "usage: scripts/release-private-dmg" >&2
+mode="tagged"
+if [[ "$#" -eq 1 && "$1" == "--trial" ]]; then
+  mode="trial"
+elif [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/release-private-dmg [--trial]" >&2
   exit 64
 fi
 
@@ -26,8 +29,12 @@ fi
 
 # The already-completed non-App gate and existing runtime manifests must be
 # valid before the first release-targeted real App gate is allowed to start.
-scripts/verify-release-version-tag
-scripts/verify-github-release-readiness
+if [[ "$mode" == "trial" ]]; then
+  scripts/verify-release-trial-version
+else
+  scripts/verify-release-version-tag
+  scripts/verify-github-release-readiness
+fi
 scripts/verify-release-static-preflight
 scripts/verify-development-validation-evidence --scope runtime
 scripts/test-release-diagnostic-closure
@@ -38,4 +45,8 @@ scripts/verify-dmg dist/Noonmark.dmg
 scripts/test-dmg-install dist/Noonmark.dmg
 scripts/verify-development-validation-evidence --scope full
 
-echo "Private DMG package and complete same-run validation evidence passed"
+if [[ "$mode" == "trial" ]]; then
+  echo "Pre-tag trial DMG and complete same-run validation evidence passed"
+else
+  echo "Private DMG package and complete same-run validation evidence passed"
+fi

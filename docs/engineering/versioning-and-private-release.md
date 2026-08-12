@@ -4,6 +4,7 @@
 
 - 生效日期：2026-08-05
 - 当前已发行基线：`0.2.6 (28)`；精确 commit 为 `12ed27bf5d43077744a65c932703f2051f6d4ca4`，由 annotated tag `v0.2.6` 绑定。
+- 当前未发行 trial candidate：`0.3.0 (30)`；采用 schema 19 Replication V2 clean cut，在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
 - 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
 本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
@@ -29,8 +30,8 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| 下一未发行候选（版本待分配） | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18 与 format 6 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
-| `0.2.7 (29)` 候选 | 当前 schema `18` | 当前 format `7` | 从 `0.2.6` 升级不改变 SQLite、JSON 或同步 repository 格式；confirmed upload 与本机 producer frontier 改由同一 SQLite transaction 提交，消除上传后回读自身完整基线；旧的不兼容同步 repository 继续 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.0 (30)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18、format 6、V1 或无 marker 非空 repository 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.2.7 (29)` 退役候选 | 当前 schema `18` | 当前 format `7` | 只记录历史 confirmed-frontier 候选；源码与 schema 已被 Replication V2 取代，build 29 不得重打、交付或复用 |
 | `0.2.6 (28)` | 已发行 schema `18` | 已发行 format `7` | 从 `0.2.5` 升级不改变 SQLite、JSON 或同步 repository 格式；旧的不兼容同步 repository 继续 fail-closed，不迁移、不兼容、不自动删除 |
 | `0.2.5 (24)` | 已发行 schema `18` | 已发行 format `7` | 受控 v15／v17 SQLite 原地升级至 v18；保留领域事实和设备身份，clean cut 旧同步 runtime；用户自行准备空的新 repository 后由本机 snapshot 建立 baseline |
 | `0.2.4 (21)` | 已发行 schema `17` | 已发行 format `7` | 受控 v15 SQLite 原地升级至 v17；严格 canonical v6 JSON 可导入，v7 可导入与导出 |
@@ -41,11 +42,12 @@ build_number=正整数
 
 1. **立项与版本分配**：在需求设计中声明用户可见范围、目标 `MAJOR.MINOR.PATCH`、下一构建号和资料兼容矩阵。营销版本只在兼容决策、产品范围和验证方式被审核后修改；build 号随候选递增。
 2. **开发与合并**：每项工作使用隔离 worktree，按需求、现状、设计、实施、验证、闭环推进。修复必须更新故障案例和 fast／symptom／release 门禁映射。
-3. **合入 `main`**：只接受经过 review 的干净提交并先正常 push `main`；它是唯一发行候选分支。任何未提交内容都不能进入 package。
-4. **发行前验证**：在实际打包的 `main` worktree 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，得到同一 evidence run 的成功清单。新增或改变用户可见能力时，同步运行 `make test-demo-fixture`；资料变更额外运行升级与旧 JSON 导入专项测试。
-5. **本地候选 tag**：在候选 commit 创建带注释 tag `v<marketing_version>`，先不 push。`scripts/verify-release-version-tag` 要求 tag 精确指向当前 `HEAD`；该本地 tag 只绑定待验证候选，不代表已经交付。
-6. **唯一本地发行门禁**：运行 `scripts/release-private-dmg`（名称保留自既有本地验证入口，不表示最终 GitHub Release 是私有的；`make package-dmg` 也只委托至此入口）。它依次验证同一 run 的静态证据、诊断闭环、腾讯输入 release smoke 及其 source／run 绑定证据、DMG 打包、只读 DMG 静态验证、受控 `dmg-validation` 安装／退出／重启验证及最终证据对账。
-7. **候选发布**：只用 `scripts/push-release-tag` 推送。该入口要求 `origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 恰有三个签名 secret 且只允许 `v*` tag。tag workflow 还拒绝重复 run attempt 和同一 commit 的既有 run，验证该 commit 已有且唯一的 GitHub-hosted CI 成功，再以临时 keychain 验证唯一签名身份和一次性签名探针，最后发布公开 GitHub Release。公开 Release notes 只从英文 conventional commits 生成，过滤 CI／release／test／docs 等非用户作用域，并在发布前后拒绝 Han 正文；内部版本记录继续使用新加坡中文。若任一门禁失败，删除未交付候选并用新 build 重新开始；不得移动已交付 tag。成功后保留 SHA-256、release manifest、dSYM 和 release note。
+3. **合入 `main`**：只接受经过 review 的干净提交。trial 阶段允许本机 `main` 尚未 push；任何未提交内容都不能进入 package。正式发布前再按已审核步骤正常 push `main`，它仍是唯一发行候选分支。
+4. **发行前验证**：在实际打包的 `main` worktree 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，得到同一 evidence run 的成功清单。新增或改变用户可见能力时，同步运行 `make test-demo-fixture`；资料变更额外运行 clean-cut 与 current JSON 导入专项测试。
+5. **Pre-tag trial 门禁**：在没有同名 tag 时运行 `scripts/release-private-dmg --trial`。`scripts/verify-release-trial-version` 要求 current version 精确指向 ledger 最后一条最高 build 的 `candidate`；随后执行与 tagged 本机候选相同的静态证据、诊断闭环、腾讯输入 release smoke、DMG 打包、只读静态验证、受控 `dmg-validation` 安装／退出／重启及最终证据对账。trial 不检查 GitHub Environment，也不触发 hosted CI、push 或 Release。
+6. **实体灰度与 soak**：trial DMG 只以全新、不覆盖的名称交给当前指定用户。双实体 Mac 与连续 72 小时 soak 全绿前不建立 tag；失败时退休该 build，下一候选使用更大 build，不覆盖现存产物。
+7. **本地候选 tag 与 tagged 门禁**：灰度完成并获审核后，在精确候选 commit 创建带注释 tag `v<marketing_version>`，先不 push。默认运行 `scripts/release-private-dmg`；它继续要求 tag 精确指向 `HEAD`、GitHub release Environment ready，并重跑完整本机 package／install 门禁。`make package-dmg` 与 `make release-private-dmg` 只委托默认 tagged 入口，不会隐式进入 trial。
+8. **候选发布**：只用 `scripts/push-release-tag` 推送。该入口要求 `origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 恰有三个签名 secret 且只允许 `v*` tag。tag workflow 还拒绝重复 run attempt 和同一 commit 的既有 run，验证该 commit 已有且唯一的 GitHub-hosted CI 成功，再以临时 keychain 验证唯一签名身份和一次性签名探针，最后发布公开 GitHub Release。公开 Release notes 只从英文 conventional commits 生成，过滤 CI／release／test／docs 等非用户作用域，并在发布前后拒绝 Han 正文；内部版本记录继续使用新加坡中文。若任一门禁失败，删除未交付候选并用新 build 重新开始；不得移动已交付 tag。成功后保留 SHA-256、release manifest、dSYM 和 release note。
 
 ## 版本号语义
 

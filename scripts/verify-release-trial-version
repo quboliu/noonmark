@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release trial version: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/verify-release-trial-version" >&2
+  exit 64
+fi
+
+marketing_version="$(scripts/release-version marketing-version)"
+build_number="$(scripts/release-version build-number)"
+ledger_file="release/BUILD-LEDGER.tsv"
+[[ -f "$ledger_file" ]] || fail "missing build ledger"
+
+IFS=$'\t' read -r ledger_header <"$ledger_file"
+[[ "$ledger_header" == $'marketing_version\tbuild_number\tstate' ]] ||
+  fail "build ledger header is invalid"
+
+previous_build=0
+current_matches=0
+last_version=""
+last_build=""
+last_state=""
+while IFS=$'\t' read -r ledger_version ledger_build ledger_state ledger_extra ||
+  [[ -n "${ledger_version:-}" ]]; do
+  [[ -z "${ledger_extra:-}" &&
+    "$ledger_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ &&
+    "$ledger_build" =~ ^[1-9][0-9]*$ ]] ||
+    fail "build ledger entry is malformed"
+  [[ "$ledger_state" == "candidate" || "$ledger_state" == "released" ||
+    "$ledger_state" == "retired" ]] || fail "build ledger state is invalid"
+  ((ledger_build > previous_build)) ||
+    fail "build ledger numbers are not strictly increasing"
+  previous_build="$ledger_build"
+  last_version="$ledger_version"
+  last_build="$ledger_build"
+  last_state="$ledger_state"
+  if [[ "$ledger_version" == "$marketing_version" &&
+    "$ledger_build" == "$build_number" ]]; then
+    [[ "$ledger_state" == "candidate" ]] ||
+      fail "current trial version is not a candidate"
+    ((current_matches += 1))
+  fi
+done < <(tail -n +2 "$ledger_file")
+
+[[ "$current_matches" -eq 1 ]] ||
+  fail "current trial version must match exactly one candidate ledger entry"
+[[ "$last_version" == "$marketing_version" &&
+  "$last_build" == "$build_number" && "$last_state" == "candidate" ]] ||
+  fail "current trial version must be the latest ledger candidate"
+
+expected_tag="v${marketing_version}"
+if git show-ref --verify --quiet "refs/tags/${expected_tag}"; then
+  fail "pre-tag trial requires ${expected_tag} to be absent"
+fi
+
+echo "Pre-tag trial version verified: ${marketing_version} (${build_number})"

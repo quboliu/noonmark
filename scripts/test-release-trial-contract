@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release trial contract: $*" >&2
+  exit 1
+}
+
+release_script="scripts/release-private-dmg"
+trial_verifier="scripts/verify-release-trial-version"
+[[ -x "$trial_verifier" ]] || fail "trial version verifier is missing or not executable"
+
+for required in \
+  'usage: scripts/release-private-dmg [--trial]' \
+  'mode="tagged"' \
+  'mode="trial"' \
+  'scripts/verify-release-trial-version' \
+  'scripts/verify-release-version-tag' \
+  'scripts/verify-github-release-readiness' \
+  'scripts/verify-release-static-preflight' \
+  'scripts/test-release-diagnostic-closure' \
+  'scripts/test-tencent-ime-release-smoke release' \
+  'scripts/package-dmg release' \
+  'scripts/verify-dmg dist/Noonmark.dmg' \
+  'scripts/test-dmg-install dist/Noonmark.dmg' \
+  'scripts/verify-development-validation-evidence --scope full'; do
+  rg -F -- "$required" "$release_script" >/dev/null ||
+    fail "private DMG entry lacks required trial boundary: $required"
+done
+
+trial_line="$(rg -n -F 'scripts/verify-release-trial-version' "$release_script" |
+  head -n 1 | cut -d: -f1)"
+tag_line="$(rg -n -F 'scripts/verify-release-version-tag' "$release_script" |
+  head -n 1 | cut -d: -f1)"
+github_line="$(rg -n -F 'scripts/verify-github-release-readiness' "$release_script" |
+  head -n 1 | cut -d: -f1)"
+shared_line="$(rg -n -F 'scripts/verify-release-static-preflight' "$release_script" |
+  head -n 1 | cut -d: -f1)"
+for line in "$trial_line" "$tag_line" "$github_line" "$shared_line"; do
+  [[ "$line" =~ ^[0-9]+$ ]] || fail "release prerequisite line is missing"
+done
+((trial_line < shared_line)) || fail "trial verifier does not precede shared gates"
+((tag_line < github_line && github_line < shared_line)) ||
+  fail "tagged prerequisites do not precede shared gates"
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-trial-contract.XXXXXX")"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT INT TERM
+
+entry_fixture="$fixture_root/entry"
+mkdir -p "$entry_fixture/scripts"
+cp "$release_script" "$entry_fixture/scripts/"
+: >"$entry_fixture/scripts/evidence-common"
+stub_commands=(
+  verify-release-trial-version
+  verify-release-version-tag
+  verify-github-release-readiness
+  verify-release-static-preflight
+  verify-development-validation-evidence
+  test-release-diagnostic-closure
+  test-tencent-ime-release-smoke
+  verify-tencent-ime-release-smoke-evidence
+  package-dmg
+  verify-dmg
+  test-dmg-install
+)
+for stub_command in "${stub_commands[@]}"; do
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'printf "%s\\n" "$(basename "$0")" >>"$NOONMARK_TRIAL_TRACE"' \
+    >"$entry_fixture/scripts/$stub_command"
+  chmod +x "$entry_fixture/scripts/$stub_command"
+done
+
+trial_trace="$fixture_root/trial.trace"
+(
+  cd "$entry_fixture"
+  NOONMARK_EVIDENCE_RUN_ID=trial-fixture \
+    NOONMARK_TRIAL_TRACE="$trial_trace" \
+    scripts/release-private-dmg --trial >/dev/null
+)
+rg -Fx 'verify-release-trial-version' "$trial_trace" >/dev/null ||
+  fail "trial mode did not execute its version verifier"
+if rg -Fx 'verify-release-version-tag' "$trial_trace" >/dev/null ||
+  rg -Fx 'verify-github-release-readiness' "$trial_trace" >/dev/null; then
+  fail "trial mode executed a tagged release prerequisite"
+fi
+
+tagged_trace="$fixture_root/tagged.trace"
+(
+  cd "$entry_fixture"
+  NOONMARK_EVIDENCE_RUN_ID=tagged-fixture \
+    NOONMARK_TRIAL_TRACE="$tagged_trace" \
+    scripts/release-private-dmg >/dev/null
+)
+rg -Fx 'verify-release-version-tag' "$tagged_trace" >/dev/null ||
+  fail "tagged mode did not execute its version verifier"
+rg -Fx 'verify-github-release-readiness' "$tagged_trace" >/dev/null ||
+  fail "tagged mode did not execute GitHub readiness"
+if rg -Fx 'verify-release-trial-version' "$tagged_trace" >/dev/null; then
+  fail "tagged mode executed the pre-tag trial verifier"
+fi
+
+shared_commands=(
+  verify-release-static-preflight
+  verify-development-validation-evidence
+  test-release-diagnostic-closure
+  test-tencent-ime-release-smoke
+  verify-tencent-ime-release-smoke-evidence
+  package-dmg
+  verify-dmg
+  test-dmg-install
+)
+for shared_command in "${shared_commands[@]}"; do
+  trial_count="$(rg -c -x "$shared_command" "$trial_trace")"
+  tagged_count="$(rg -c -x "$shared_command" "$tagged_trace")"
+  [[ "$trial_count" == "$tagged_count" && "$trial_count" -ge 1 ]] ||
+    fail "trial and tagged modes do not share the same $shared_command gate"
+done
+
+version_fixture="$fixture_root/version"
+mkdir -p "$version_fixture/scripts" "$version_fixture/release"
+cp "$trial_verifier" scripts/release-version "$version_fixture/scripts/"
+chmod +x \
+  "$version_fixture/scripts/verify-release-trial-version" \
+  "$version_fixture/scripts/release-version"
+cp release/VERSION release/BUILD-LEDGER.tsv "$version_fixture/release/"
+git -C "$version_fixture" init -q
+git -C "$version_fixture" config user.name Noonmark
+git -C "$version_fixture" config user.email noonmark@example.invalid
+git -C "$version_fixture" add scripts release
+git -C "$version_fixture" commit -qm 'test: establish trial fixture'
+
+(
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null
+) || fail "fresh highest candidate without a tag was rejected"
+
+marketing_version="$(
+  cd "$version_fixture"
+  scripts/release-version marketing-version
+)"
+git -C "$version_fixture" tag -a "v${marketing_version}" -m trial-contract
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted an existing exact version tag"
+fi
+git -C "$version_fixture" tag -d "v${marketing_version}" >/dev/null
+
+sed -i '' '$s/candidate$/retired/' "$version_fixture/release/BUILD-LEDGER.tsv"
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a retired current build"
+fi
+git -C "$version_fixture" restore release/BUILD-LEDGER.tsv
+
+printf '9.9.9\t99999\tcandidate\n' >>"$version_fixture/release/BUILD-LEDGER.tsv"
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a current build that is not the ledger tip"
+fi
+
+echo "Release pre-tag trial contract passed"

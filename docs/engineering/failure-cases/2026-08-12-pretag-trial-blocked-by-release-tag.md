@@ -8,7 +8,7 @@
 - 加重提交：`885d0843be615bcab4357848e90a8851f00f71ed`（`fix(release): harden GitHub signing readiness`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1eb996ab6ddb2c5ae19c680042643d1d56`（exclusive output）、`461fb598d80ed548669295f08137d2dd7108f47a`（package evidence authority）；案例保持处理中，实际 release gate 尚待运行
+- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1eb996ab6ddb2c5ae19c680042643d1d56`（exclusive output）、`461fb598d80ed548669295f08137d2dd7108f47a`（package evidence authority）；build 30 因后续 runtime evidence gate 失败已退役，build 31 继续验证；案例保持处理中，实际 release gate 尚待运行
 
 ## 用户症状与影响
 
@@ -64,7 +64,7 @@ commit `84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea` 已新增显式 pre-tag trial 
 
 ## 发行与回滚
 
-build 29 永久退役且不覆盖。修复只能先生成独立命名的 build 30 trial；不建立 tag、不 push、不触发 hosted CI、不发布 GitHub Release。任何本机、双 Mac 或 soak 故障都停止扩大试用并退休 build 30；下一候选使用更大 build，不移动 tag、不降级资料、不恢复 V1，也不触碰既有 iCloud 对象。
+build 29、30 永久退役且不覆盖。修复只能先生成独立命名的 build 31 trial；不建立 tag、不 push、不触发 hosted CI、不发布 GitHub Release。任何本机、双 Mac 或 soak 故障都停止扩大试用并退休当前 build；下一候选使用更大 build，不移动 tag、不降级资料、不恢复 V1，也不触碰既有 iCloud 对象。
 
 ## 教训与永久约束
 

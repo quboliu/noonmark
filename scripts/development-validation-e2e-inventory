@@ -46,16 +46,9 @@ development_validation_e2e_required_inventory_paths() {
     artifacts/e2e-preferences-clock/exercise.log \
     artifacts/e2e-preferences-clock/restart-result.txt \
     artifacts/e2e-preferences-clock/restart.log \
-    artifacts/e2e-preferences-clock/failure-restart-result.txt \
-    artifacts/e2e-preferences-clock/failure-restart.log \
     artifacts/e2e-preferences-clock/input-trace.txt \
-    artifacts/e2e-preferences-clock/sync-task-summary.png \
-    artifacts/e2e-preferences-clock/remote-future-preferences.json \
-    artifacts/e2e-preferences-clock/remote-before-local-settings.json \
-    artifacts/e2e-preferences-clock/stale-remote-reintroduced.json \
-    artifacts/e2e-preferences-clock/stale-remote-before-restart-sync.json \
-    artifacts/e2e-preferences-clock/final-local-winner-preferences.json \
-    artifacts/e2e-preferences-clock/final-local-winner-snapshot.json \
+    artifacts/e2e-preferences-clock/sync-v2-status.png \
+    artifacts/e2e-preferences-clock/sync-v2-lifecycle.png \
     artifacts/e2e-preferences-clock/probe.txt \
     artifacts/e2e-data-import-ui/Noonmark.sqlite \
     artifacts/e2e-data-import-ui/panel-events.txt \

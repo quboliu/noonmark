@@ -266,3 +266,6 @@ FAIL-2026-08-12-01	symptom	scripts/test-release-trial-contract	scripts/check	无
 FAIL-2026-08-12-01	symptom	scripts/test-release-trial-output-contract	scripts/check	trial source、临时副本与 final output 必须绑定 full package manifest SHA authority并以 canonical 版本名 exclusive-create；tamper、既有输出或 symlink 均零覆盖 fail-closed
 FAIL-2026-08-12-01	release	scripts/test-dmg-install	scripts/release-private-dmg	精确 pre-tag trial package 必须以受控 dmg-validation 身份完成真实安装、交互、退出、重启和资料回读
 FAIL-2026-08-12-01	release	scripts/publish-trial-dmg	scripts/release-private-dmg	full verifier 前后 package manifest SHA 必须不变，publisher 只可按其 dmg_sha256 exclusive-create canonical trial DMG并报告 SHA；既有输出永不覆盖
+FAIL-2026-08-12-02	fast	scripts/test-e2e-evidence-contract	scripts/check	拒绝 V1 PreferencesClock inventory 名称回流，并要求完整 E2E producer 在成功 manifest 前消费共享 V2 inventory authority
+FAIL-2026-08-12-02	symptom	scripts/test-e2e	scripts/test-all	真实完整 App E2E 必须生成并哈希绑定 V2 SQLite、三阶段结果、输入轨迹、probe 与两张 lifecycle 截图，任一缺项直接判红
+FAIL-2026-08-12-02	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	trial runtime／full verifier 必须对同一 run、source 与 artifact inventory SHA 独立复核共享 V2 必需路径

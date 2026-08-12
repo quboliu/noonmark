@@ -341,19 +341,34 @@ for required_preferences_clock_inventory in \
   setup-result.txt \
   exercise-result.txt \
   restart-result.txt \
-  failure-restart-result.txt \
   input-trace.txt \
+  sync-v2-status.png \
+  sync-v2-lifecycle.png \
+  probe.txt; do
+  require_literal \
+    scripts/development-validation-e2e-inventory \
+    "artifacts/e2e-preferences-clock/$required_preferences_clock_inventory"
+done
+for retired_preferences_clock_inventory in \
+  failure-restart-result.txt \
+  failure-restart.log \
   sync-task-summary.png \
   remote-future-preferences.json \
   remote-before-local-settings.json \
   stale-remote-reintroduced.json \
   stale-remote-before-restart-sync.json \
   final-local-winner-preferences.json \
-  final-local-winner-snapshot.json \
-  probe.txt; do
-  require_literal \
+  final-local-winner-snapshot.json; do
+  forbid_literal \
     scripts/development-validation-e2e-inventory \
-    "artifacts/e2e-preferences-clock/$required_preferences_clock_inventory"
+    "artifacts/e2e-preferences-clock/$retired_preferences_clock_inventory"
+done
+for required_e2e_inventory_seam in \
+  'source scripts/development-validation-e2e-inventory' \
+  'validate_full_e2e_release_inventory' \
+  'development_validation_e2e_required_inventory_paths' \
+  'evidence_require_inventory_paths'; do
+  require_literal scripts/test-e2e "$required_e2e_inventory_seam"
 done
 require_literal \
   scripts/verify-development-validation-evidence \

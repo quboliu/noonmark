@@ -14,6 +14,7 @@ source scripts/dmg-install-observer-common
 source scripts/diagnostic-scope-manifest
 source scripts/diagnostic-lock-evidence
 source scripts/dmg-harness-evidence
+source scripts/development-validation-e2e-inventory
 
 configuration="${1:-debug}"
 evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
@@ -894,6 +895,42 @@ validate_english_scenario_ledger() {
     "$(shasum -a 256 "$english_scenario_ledger" | awk '{print $1}')"
 }
 
+validate_full_e2e_release_inventory() {
+  local required_inventory_output
+  local required_inventory_path
+  local -a required_inventory_paths=()
+
+  if [[ "$suite_mode" != "full" ]]; then
+    return 0
+  fi
+
+  required_inventory_output="$(
+    development_validation_e2e_required_inventory_paths \
+      "$repo_root" \
+      "${repo_root}/${runtime_evidence_dir}" \
+      "$english_scenario_set"
+  )" || {
+    echo "full E2E could not resolve its release inventory" >&2
+    return 1
+  }
+  while IFS= read -r required_inventory_path; do
+    if [[ -z "$required_inventory_path" ]]; then
+      echo "full E2E release inventory contains an empty path" >&2
+      return 1
+    fi
+    required_inventory_paths+=("$required_inventory_path")
+  done <<<"$required_inventory_output"
+  if (( ${#required_inventory_paths[@]} == 0 )); then
+    echo "full E2E release inventory is empty" >&2
+    return 1
+  fi
+
+  evidence_require_inventory_paths \
+    "$repo_root" \
+    "$evidence_inventory_path" \
+    "${required_inventory_paths[@]}"
+}
+
 finish_e2e_evidence() {
   local suite_status="$1"
   local app_binary_sha256_after=""
@@ -1141,6 +1178,10 @@ finish_e2e_evidence() {
     "$repo_root" \
     "$evidence_inventory_path" \
     "${artifact_paths[@]}"; then
+    if ! validate_full_e2e_release_inventory; then
+      echo "full E2E release inventory is incomplete" >&2
+      suite_status=1
+    fi
     inventory_sha256="$(
       shasum -a 256 "$evidence_inventory_path" | awk '{print $1}'
     )"

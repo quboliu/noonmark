@@ -238,6 +238,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 
     private let boundary: Boundary
     private let files: ContentAddressedFileReplicationEndpoint
+    private let downloadRequest: (URL) throws -> Void
 
     public init(
         round: ICloudAppendOnlyTestRound,
@@ -262,6 +263,9 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
             fileReadPolicy: .coordinated,
             repositoryWasCreated: result.createdRepository
         )
+        downloadRequest = {
+            try FileManager.default.startDownloadingUbiquitousItem(at: $0)
+        }
         namespace = "icloud-append-only-" + round.sessionID.uuidString
             .lowercased() + "-" + round.roundID.uuidString.lowercased()
     }
@@ -288,6 +292,33 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
             fileReadPolicy: .coordinated,
             repositoryWasCreated: result.createdRepository
         )
+        downloadRequest = {
+            try FileManager.default.startDownloadingUbiquitousItem(at: $0)
+        }
+        namespace = "icloud-" + files.namespace
+    }
+
+    init(
+        rootURL: URL,
+        generationID: UUID,
+        fileReadPolicy: ReplicationFileReadPolicy = .direct,
+        fileDataReader: @escaping @Sendable (URL) throws -> Data = {
+            try Data(contentsOf: $0)
+        },
+        downloadRequest: @escaping (URL) throws -> Void
+    ) {
+        round = nil
+        self.rootURL = rootURL
+        self.generationID = generationID
+        repositoryWasCreated = false
+        boundary = Boundary(rootURL: rootURL, requiredSuffix: nil)
+        files = ContentAddressedFileReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            fileReadPolicy: fileReadPolicy,
+            fileDataReader: fileDataReader
+        )
+        self.downloadRequest = downloadRequest
         namespace = "icloud-" + files.namespace
     }
 
@@ -336,7 +367,40 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
                 state: .awaitingMaterialization
             )
         }
-        return try await files.read(after: cursor, budget: budget)
+        do {
+            return try await files.read(after: cursor, budget: budget)
+        } catch let error as FileReplicationEndpointError {
+            let missingURL: URL
+            switch error {
+            case let .announcementGap(
+                producerID,
+                missingSequence,
+                highestObservedSequence
+            ):
+                guard missingSequence > 0,
+                      missingSequence <= highestObservedSequence
+                else {
+                    throw error
+                }
+                missingURL = rootURL.appendingPathComponent(
+                    "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/\(String(format: "%020llu", missingSequence))",
+                    isDirectory: true
+                ).standardizedFileURL
+            case let .objectNotMaterialized(relativeKey):
+                missingURL = try descendantURL(relativeKey: relativeKey)
+            default:
+                throw error
+            }
+            try validateDescendant(missingURL)
+            try downloadRequest(missingURL)
+            return ReplicationReadPage(
+                publications: [],
+                cursor: cursor,
+                hasMore: true,
+                openedByteCount: 0,
+                state: .awaitingMaterialization
+            )
+        }
     }
 
     public func cancelAndJoin() async {
@@ -360,6 +424,22 @@ private extension ICloudDriveReplicationEndpoint {
         guard url.standardizedFileURL.path.hasPrefix(root + "/") else {
             throw ICloudDriveReplicationEndpointError.invalidRoundBoundary
         }
+    }
+
+    func descendantURL(relativeKey: String) throws -> URL {
+        guard relativeKey.isEmpty == false,
+              relativeKey.hasPrefix("/") == false,
+              relativeKey.split(separator: "/").allSatisfy({
+                  $0 != "." && $0 != ".."
+              })
+        else {
+            throw ICloudDriveReplicationEndpointError.invalidRoundBoundary
+        }
+        let url = rootURL.appendingPathComponent(
+            relativeKey
+        ).standardizedFileURL
+        try validateDescendant(url)
+        return url
     }
 
     func objectURL(
@@ -492,7 +572,7 @@ private extension ICloudDriveReplicationEndpoint {
         if values.isUbiquitousItem == true,
            values.ubiquitousItemDownloadingStatus != .current
         {
-            try FileManager.default.startDownloadingUbiquitousItem(at: url)
+            try downloadRequest(url)
             return false
         }
         return true

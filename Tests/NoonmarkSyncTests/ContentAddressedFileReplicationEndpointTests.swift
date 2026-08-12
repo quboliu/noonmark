@@ -359,6 +359,284 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
         }
     }
 
+    func testAnnouncementGapCannotBeReportedAsAStableChainEnd()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let first = try publication(sequence: 1, recordIndex: 1)
+        let second = try publication(
+            sequence: 2,
+            previousSealDigest: first.reference.sealDigest,
+            recordIndex: 2
+        )
+        let third = try publication(
+            sequence: 3,
+            previousSealDigest: second.reference.sealDigest,
+            recordIndex: 3
+        )
+        try seedImmutable(first, into: rootURL)
+        try seedImmutable(third, into: rootURL)
+        let endpoint = ContentAddressedFileReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID
+        )
+
+        do {
+            _ = try await endpoint.read(
+                after: .origin,
+                budget: ReplicationReadBudget(
+                    maximumPublications: 10,
+                    maximumBytes: 1_000_000
+                )
+            )
+            XCTFail("an observed successor must make a missing sequence explicit")
+        } catch let error as FileReplicationEndpointError {
+            XCTAssertEqual(
+                error,
+                .announcementGap(
+                    producerID: producerID,
+                    missingSequence: 2,
+                    highestObservedSequence: 3
+                )
+            )
+        }
+    }
+
+    func testICloudAnnouncementGapRequestsTheExactMissingSequence()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let first = try publication(sequence: 1, recordIndex: 1)
+        let second = try publication(
+            sequence: 2,
+            previousSealDigest: first.reference.sealDigest,
+            recordIndex: 2
+        )
+        let third = try publication(
+            sequence: 3,
+            previousSealDigest: second.reference.sealDigest,
+            recordIndex: 3
+        )
+        try seedImmutable(first, into: rootURL)
+        try seedImmutable(third, into: rootURL)
+        let missingSequenceURL = rootURL.appendingPathComponent(
+            "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/00000000000000000002",
+            isDirectory: true
+        )
+        let requests = DownloadRequestRecorder()
+        let announcement = try XCTUnwrap(
+            second.objects.first { $0.reference.kind == .announcement }
+        )
+        let seal = try XCTUnwrap(
+            second.objects.first { $0.reference.kind == .seal }
+        )
+        let root = try XCTUnwrap(
+            second.objects.first { $0.reference.kind == .root }
+        )
+        let chunks = second.objects.filter { $0.reference.kind == .chunk }
+        let expectedObjectRequests = [seal, root] + chunks
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            downloadRequest: { url in
+                requests.record(url)
+                let object = if url == missingSequenceURL {
+                    announcement
+                } else {
+                    try XCTUnwrap(second.objects.first {
+                        rootURL.appendingPathComponent(
+                            $0.reference.relativeKey
+                        ) == url
+                    })
+                }
+                let objectURL = rootURL.appendingPathComponent(
+                    object.reference.relativeKey
+                )
+                try FileManager.default.createDirectory(
+                    at: objectURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try object.bytes.write(
+                    to: objectURL,
+                    options: [.withoutOverwriting]
+                )
+            }
+        )
+
+        let budget = ReplicationReadBudget(
+            maximumPublications: 10,
+            maximumBytes: 1_000_000
+        )
+        let expectedRequests = [missingSequenceURL]
+            + expectedObjectRequests.map {
+                rootURL.appendingPathComponent($0.reference.relativeKey)
+            }
+        for expectedRequest in expectedRequests {
+            let page = try await endpoint.read(
+                after: .origin,
+                budget: budget
+            )
+            XCTAssertEqual(page.state, .awaitingMaterialization)
+            XCTAssertTrue(page.hasMore)
+            XCTAssertEqual(page.cursor, .origin)
+            XCTAssertTrue(page.publications.isEmpty)
+            XCTAssertEqual(requests.snapshot().last, expectedRequest)
+        }
+
+        let materializedPage = try await endpoint.read(
+            after: .origin,
+            budget: budget
+        )
+        XCTAssertEqual(requests.snapshot(), expectedRequests)
+        XCTAssertEqual(
+            materializedPage.publications.map(\.reference),
+            [first.reference, second.reference, third.reference]
+        )
+        XCTAssertEqual(
+            materializedPage.cursor.position(for: producerID)?.sequence,
+            3
+        )
+        XCTAssertEqual(materializedPage.state, .stable)
+        XCTAssertFalse(materializedPage.hasMore)
+    }
+
+    func testICloudReadTimeMissingObjectRequestsExactMaterializationTarget()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let first = try publication(sequence: 1, recordIndex: 1)
+        try seedImmutable(first, into: rootURL)
+        let seal = try XCTUnwrap(
+            first.objects.first { $0.reference.kind == .seal }
+        )
+        let sealURL = rootURL.appendingPathComponent(
+            seal.reference.relativeKey
+        )
+        let reader = TransientMissingFileReader(targetURL: sealURL)
+        let requests = DownloadRequestRecorder()
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            fileDataReader: { url in
+                try reader.read(url)
+            },
+            downloadRequest: { url in
+                requests.record(url)
+            }
+        )
+        let budget = ReplicationReadBudget(
+            maximumPublications: 10,
+            maximumBytes: 1_000_000
+        )
+
+        let awaitingPage = try await endpoint.read(
+            after: .origin,
+            budget: budget
+        )
+
+        XCTAssertEqual(awaitingPage.state, .awaitingMaterialization)
+        XCTAssertTrue(awaitingPage.hasMore)
+        XCTAssertEqual(awaitingPage.cursor, .origin)
+        XCTAssertTrue(awaitingPage.publications.isEmpty)
+        XCTAssertEqual(requests.snapshot(), [sealURL])
+
+        let materializedPage = try await endpoint.read(
+            after: .origin,
+            budget: budget
+        )
+
+        XCTAssertEqual(requests.snapshot(), [sealURL])
+        XCTAssertEqual(
+            materializedPage.publications.map(\.reference),
+            [first.reference]
+        )
+        XCTAssertEqual(materializedPage.state, .stable)
+        XCTAssertFalse(materializedPage.hasMore)
+    }
+
+    func testMaterializedInternalSequenceDirectoryWithoutAnnouncementCannotCloseChain()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let first = try publication(sequence: 1, recordIndex: 1)
+        let second = try publication(
+            sequence: 2,
+            previousSealDigest: first.reference.sealDigest,
+            recordIndex: 2
+        )
+        let third = try publication(
+            sequence: 3,
+            previousSealDigest: second.reference.sealDigest,
+            recordIndex: 3
+        )
+        try seedImmutable(first, into: rootURL)
+        try seedImmutable(third, into: rootURL)
+        let incompleteSequenceURL = rootURL.appendingPathComponent(
+            "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/00000000000000000002",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: incompleteSequenceURL,
+            withIntermediateDirectories: true
+        )
+        let endpoint = ContentAddressedFileReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID
+        )
+
+        do {
+            _ = try await endpoint.read(
+                after: .origin,
+                budget: ReplicationReadBudget(
+                    maximumPublications: 10,
+                    maximumBytes: 1_000_000
+                )
+            )
+            XCTFail("an observed sequence directory needs one announcement")
+        } catch let error as FileReplicationEndpointError {
+            XCTAssertEqual(
+                error,
+                .announcementGap(
+                    producerID: producerID,
+                    missingSequence: 2,
+                    highestObservedSequence: 3
+                )
+            )
+        }
+    }
+
+    func testEmptyTerminalSequenceDirectoryIsNotAPublicationPromise()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let first = try publication(sequence: 1, recordIndex: 1)
+        try seedImmutable(first, into: rootURL)
+        let orphanDirectoryURL = rootURL.appendingPathComponent(
+            "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/00000000000000000003",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: orphanDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        let endpoint = ContentAddressedFileReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID
+        )
+
+        let page = try await endpoint.read(
+            after: .origin,
+            budget: ReplicationReadBudget(
+                maximumPublications: 10,
+                maximumBytes: 1_000_000
+            )
+        )
+
+        XCTAssertEqual(page.publications.map(\.reference), [first.reference])
+        XCTAssertEqual(page.state, .stable)
+        XCTAssertFalse(page.hasMore)
+    }
+
     func testSameSequenceDifferentDigestPreservesForkEvidenceAndFailsClosed()
         async throws
     {
@@ -767,5 +1045,42 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+}
+
+private final class DownloadRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+
+    func record(_ url: URL) {
+        lock.withLock {
+            urls.append(url)
+        }
+    }
+
+    func snapshot() -> [URL] {
+        lock.withLock { urls }
+    }
+}
+
+private final class TransientMissingFileReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private let targetURL: URL
+    private var didFail = false
+
+    init(targetURL: URL) {
+        self.targetURL = targetURL
+    }
+
+    func read(_ url: URL) throws -> Data {
+        let mustFail = lock.withLock {
+            guard url == targetURL, didFail == false else { return false }
+            didFail = true
+            return true
+        }
+        if mustFail {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        return try Data(contentsOf: url)
     }
 }

@@ -144,12 +144,32 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
                     )
                 }
             }
-            let sequence = try nextSequence(after: previousHead)
+            let recovered = try recoverUnpublishedSuccessors(
+                after: previousHead,
+                producerID: producerID
+            )
+            if recovered.head?.tipSequence != previousHead?.tipSequence,
+               recovered.records == orderedRecords,
+               let recoveredHead = recovered.head
+            {
+                try publicationFault(.willPublishHead)
+                try publishHead(
+                    recoveredHead,
+                    to: headURL(epochID: producerID)
+                )
+                try publicationFault(.didPublishHead)
+                return pushReceipt(
+                    producerID: producerID,
+                    sequence: recoveredHead.tipSequence,
+                    batchHash: recoveredHead.tipHash
+                )
+            }
+            let sequence = try nextSequence(after: recovered.head)
             let body = RepositoryBatchBody(
                 formatVersion: Self.formatVersion,
                 epochID: producerID,
                 sequence: sequence,
-                previousHash: previousHead?.tipHash,
+                previousHash: recovered.head?.tipHash,
                 records: orderedRecords
             )
             let batch = RepositoryBatch(
@@ -579,6 +599,42 @@ public actor LocalFolderSyncTransport: SyncRecordTransport {
             throw SyncRecordTransportError.repositoryFormatMismatch
         }
         return next
+    }
+
+    private func recoverUnpublishedSuccessors(
+        after publishedHead: RepositoryHead?,
+        producerID: String
+    ) throws -> (head: RepositoryHead?, records: [SyncRecord]?) {
+        var recoveredHead = publishedHead
+        var recoveredRecords: [SyncRecord]?
+        while true {
+            let sequence = try nextSequence(after: recoveredHead)
+            let url = batchURL(epochID: producerID, sequence: sequence)
+            guard fileManager.fileExists(atPath: url.path) else {
+                return (recoveredHead, recoveredRecords)
+            }
+            let data = try Data(contentsOf: url)
+            let batch = try decodeBatch(
+                data,
+                producerID: producerID,
+                sequence: sequence
+            )
+            let hash = Self.sha256Hex(data)
+            let candidateHead = RepositoryHead(
+                tipSequence: sequence,
+                tipHash: hash
+            )
+            try validate(
+                batch: batch,
+                hash: hash,
+                expectedEpochID: producerID,
+                expectedSequence: sequence,
+                expectedPreviousHash: recoveredHead?.tipHash,
+                head: candidateHead
+            )
+            recoveredHead = candidateHead
+            recoveredRecords = batch.records
+        }
     }
 
     private func decodeBatch(

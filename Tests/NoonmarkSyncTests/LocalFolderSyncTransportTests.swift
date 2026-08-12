@@ -186,6 +186,89 @@ final class LocalFolderSyncTransportTests: XCTestCase {
         XCTAssertEqual(try headFiles(in: root).count, 1)
     }
 
+    func testCrashAfterBatchWriteWithChangedRetryAppendsAfterOrphan()
+        async throws
+    {
+        let root = makeFolderURL()
+        let orphanedRecord = try preferenceRecord(index: 1)
+        let interrupted = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        ) { point in
+            if point == .didPublishBatch {
+                throw InjectedPublicationError.interrupted
+            }
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await interrupted.pushAccepting([orphanedRecord])
+        }
+        XCTAssertEqual(try batchFiles(in: root).count, 1)
+        XCTAssertTrue(try headFiles(in: root).isEmpty)
+
+        let recovered = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        )
+        let changedRecord = try preferenceRecord(index: 2)
+        let recoveredReceipt = try await recovered.pushAccepting([
+            changedRecord,
+        ])
+        XCTAssertEqual(recoveredReceipt.batches.first?.sequence, 2)
+
+        let laterRecord = try preferenceRecord(index: 3)
+        let laterReceipt = try await recovered.pushAccepting([laterRecord])
+        XCTAssertEqual(laterReceipt.batches.first?.sequence, 3)
+
+        let page = try await recovered.pull(after: .origin, limit: 10)
+        XCTAssertEqual(page.records, [
+            orphanedRecord,
+            changedRecord,
+            laterRecord,
+        ])
+        XCTAssertFalse(page.hasMore)
+        XCTAssertEqual(try batchFiles(in: root).count, 3)
+        XCTAssertEqual(try headFiles(in: root).count, 1)
+    }
+
+    func testPostProbeCompetingWriterStillFailsClosedAsProducerFork()
+        async throws
+    {
+        let root = makeFolderURL()
+        let producerID = epochA.uuidString.lowercased()
+        let initial = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        )
+        try await initial.pushAccepting([try preferenceRecord(index: 1)])
+        let competingURL = root
+            .appendingPathComponent("batches", isDirectory: true)
+            .appendingPathComponent(producerID, isDirectory: true)
+            .appendingPathComponent("00000000000000000002.json")
+        let contender = LocalFolderSyncTransport(
+            rootURL: root,
+            producerEpochID: epochA
+        ) { point in
+            guard point == .willPublishBatch else { return }
+            try FileManager.default.createDirectory(
+                at: competingURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("competing-writer".utf8).write(
+                to: competingURL,
+                options: [.withoutOverwriting]
+            )
+        }
+
+        await XCTAssertThrowsErrorAsync({
+            try await contender.pushAccepting([try preferenceRecord(index: 2)])
+        }) { error in
+            XCTAssertEqual(
+                error as? SyncRecordTransportError,
+                .producerFork(producerID: producerID, sequence: 2)
+            )
+        }
+    }
+
     func testLostReceiptAfterHeadPublicationRetriesIdempotently()
         async throws
     {

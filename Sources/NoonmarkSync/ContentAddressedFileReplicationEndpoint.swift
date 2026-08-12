@@ -5,7 +5,13 @@ public enum FileReplicationEndpointError: Error, Equatable, Sendable {
     case generationMismatch
     case invalidObject
     case missingObject
+    case objectNotMaterialized(relativeKey: String)
     case invalidCursor
+    case announcementGap(
+        producerID: UUID,
+        missingSequence: UInt64,
+        highestObservedSequence: UInt64
+    )
     case producerFork(producerID: UUID, sequence: UInt64)
 }
 
@@ -75,6 +81,7 @@ public actor ContentAddressedFileReplicationEndpoint:
 
     private let fileManager: FileManager
     private let fileReadPolicy: ReplicationFileReadPolicy
+    private let fileDataReader: @Sendable (URL) throws -> Data
     private let filePublisher: AppendOnlyFilePublisher
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -101,13 +108,17 @@ public actor ContentAddressedFileReplicationEndpoint:
         generationID: UUID,
         fileReadPolicy: ReplicationFileReadPolicy = .direct,
         repositoryWasCreated: Bool = false,
-        writeByteLimitForTesting: Int? = nil
+        writeByteLimitForTesting: Int? = nil,
+        fileDataReader: @escaping @Sendable (URL) throws -> Data = {
+            try Data(contentsOf: $0)
+        }
     ) {
         self.rootURL = rootURL
         self.generationID = generationID
         self.repositoryWasCreated = repositoryWasCreated
         fileManager = FileManager()
         self.fileReadPolicy = fileReadPolicy
+        self.fileDataReader = fileDataReader
         filePublisher = AppendOnlyFilePublisher(
             rootURL: rootURL,
             writeByteLimitForTesting: writeByteLimitForTesting
@@ -499,60 +510,14 @@ private extension ContentAddressedFileReplicationEndpoint {
         guard fileManager.fileExists(atPath: producerURL.path) else {
             return nil
         }
-        let sequenceURLs = try fileManager.contentsOfDirectory(
+        let directories = try observedAnnouncementDirectories(
             at: producerURL,
-            includingPropertiesForKeys: nil
+            producerID: producerID
         )
-        var announcements: [UInt64: (Announcement, ReplicationDigest)] = [:]
-        for sequenceURL in sequenceURLs {
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(
-                atPath: sequenceURL.path,
-                isDirectory: &isDirectory
-            ), isDirectory.boolValue,
-                sequenceURL.lastPathComponent.count == 20,
-                let sequence = UInt64(sequenceURL.lastPathComponent),
-                sequence > 0
-            else {
-                throw FileReplicationEndpointError.invalidObject
-            }
-            let files = try fileManager.contentsOfDirectory(
-                at: sequenceURL,
-                includingPropertiesForKeys: nil
-            ).filter { $0.pathExtension == "json" }
-            guard files.count == 1 else {
-                throw FileReplicationEndpointError.producerFork(
-                    producerID: producerID,
-                    sequence: sequence
-                )
-            }
-            let file = files[0]
-            guard let digest = ReplicationDigest(
-                rawValue: file.deletingPathExtension().lastPathComponent
-            ) else {
-                throw FileReplicationEndpointError.invalidObject
-            }
-            let value: Announcement
-            do {
-                value = try decoder.decode(
-                    Announcement.self,
-                    from: readAndValidate(url: file, digest: digest)
-                )
-            } catch let error as FileReplicationEndpointError {
-                throw error
-            } catch {
-                throw FileReplicationEndpointError.invalidObject
-            }
-            guard value.formatVersion
-                    == ReplicationPublicationBuilder.formatVersion,
-                  value.generationID == generationID,
-                  value.producerID == producerID,
-                  value.sequence == sequence
-            else {
-                throw FileReplicationEndpointError.invalidObject
-            }
-            announcements[sequence] = (value, digest)
-        }
+        let announcements = try readAnnouncements(
+            from: directories,
+            producerID: producerID
+        )
         var sequence: UInt64 = 1
         var previousSeal: ReplicationDigest?
         var tip: (Announcement, ReplicationDigest)?
@@ -576,6 +541,106 @@ private extension ContentAddressedFileReplicationEndpoint {
             sealDigest: tip.0.sealDigest,
             announcementDigest: tip.1
         )
+    }
+
+    private func observedAnnouncementDirectories(
+        at producerURL: URL,
+        producerID: UUID
+    ) throws -> [(sequence: UInt64, url: URL)] {
+        let sequenceURLs = try fileManager.contentsOfDirectory(
+            at: producerURL,
+            includingPropertiesForKeys: nil
+        )
+        var directories: [UInt64: URL] = [:]
+        for sequenceURL in sequenceURLs {
+            var isDirectory: ObjCBool = false
+            let name = sequenceURL.lastPathComponent
+            guard fileManager.fileExists(
+                atPath: sequenceURL.path,
+                isDirectory: &isDirectory
+            ), isDirectory.boolValue,
+                name.count == 20,
+                let sequence = UInt64(name),
+                sequence > 0,
+                name == String(format: "%020llu", sequence),
+                directories[sequence] == nil
+            else {
+                throw FileReplicationEndpointError.invalidObject
+            }
+            directories[sequence] = sequenceURL
+        }
+        let orderedSequences = directories.keys.sorted()
+        return try orderedSequences.map { sequence in
+            guard let url = directories[sequence] else {
+                throw FileReplicationEndpointError.invalidObject
+            }
+            return (sequence, url)
+        }
+    }
+
+    private func readAnnouncements(
+        from directories: [(sequence: UInt64, url: URL)],
+        producerID: UUID
+    ) throws -> [UInt64: (Announcement, ReplicationDigest)] {
+        var announcements: [UInt64: (Announcement, ReplicationDigest)] = [:]
+        for directory in directories {
+            let files = try fileManager.contentsOfDirectory(
+                at: directory.url,
+                includingPropertiesForKeys: nil
+            ).filter { $0.pathExtension == "json" }
+            if files.isEmpty {
+                continue
+            }
+            guard files.count == 1 else {
+                throw FileReplicationEndpointError.producerFork(
+                    producerID: producerID,
+                    sequence: directory.sequence
+                )
+            }
+            let file = files[0]
+            guard let digest = ReplicationDigest(
+                rawValue: file.deletingPathExtension().lastPathComponent
+            ) else {
+                throw FileReplicationEndpointError.invalidObject
+            }
+            let value: Announcement
+            do {
+                value = try decoder.decode(
+                    Announcement.self,
+                    from: readAndValidate(url: file, digest: digest)
+                )
+            } catch let error as FileReplicationEndpointError {
+                throw error
+            } catch {
+                throw FileReplicationEndpointError.invalidObject
+            }
+            guard value.formatVersion
+                    == ReplicationPublicationBuilder.formatVersion,
+                  value.generationID == generationID,
+                  value.producerID == producerID,
+                  value.sequence == directory.sequence
+            else {
+                throw FileReplicationEndpointError.invalidObject
+            }
+            announcements[directory.sequence] = (value, digest)
+        }
+        let sequences = announcements.keys.sorted()
+        if let highestObservedSequence = sequences.last {
+            var expectedSequence: UInt64 = 1
+            for sequence in sequences {
+                guard sequence == expectedSequence else {
+                    throw FileReplicationEndpointError.announcementGap(
+                        producerID: producerID,
+                        missingSequence: expectedSequence,
+                        highestObservedSequence: highestObservedSequence
+                    )
+                }
+                if sequence != highestObservedSequence {
+                    expectedSequence += 1
+                }
+            }
+        }
+        return announcements
     }
 
     private func validate(
@@ -617,7 +682,9 @@ private extension ContentAddressedFileReplicationEndpoint {
             isDirectory: true
         )
         guard fileManager.fileExists(atPath: producerURL.path) else {
-            throw FileReplicationEndpointError.missingObject
+            throw FileReplicationEndpointError.objectNotMaterialized(
+                relativeKey: try relativeKey(for: producerURL)
+            )
         }
         let sequenceURLs = try fileManager.contentsOfDirectory(
             at: producerURL,
@@ -687,7 +754,9 @@ private extension ContentAddressedFileReplicationEndpoint {
             sequence: sequence
         )
         guard fileManager.fileExists(atPath: directory.path) else {
-            throw FileReplicationEndpointError.missingObject
+            throw FileReplicationEndpointError.objectNotMaterialized(
+                relativeKey: try relativeKey(for: directory)
+            )
         }
         let files = try fileManager.contentsOfDirectory(
             at: directory,
@@ -1035,7 +1104,9 @@ private extension ContentAddressedFileReplicationEndpoint {
         digest: ReplicationDigest
     ) throws -> Data {
         guard fileManager.fileExists(atPath: url.path) else {
-            throw FileReplicationEndpointError.missingObject
+            throw FileReplicationEndpointError.objectNotMaterialized(
+                relativeKey: try relativeKey(for: url)
+            )
         }
         let data = try readData(at: url)
         guard try ReplicationPublicationBuilder.digest(data) == digest else {
@@ -1065,7 +1136,17 @@ private extension ContentAddressedFileReplicationEndpoint {
 
     func readData(at url: URL) throws -> Data {
         guard fileReadPolicy == .coordinated else {
-            return try Data(contentsOf: url)
+            do {
+                return try fileDataReader(url)
+            } catch {
+                if Self.isMissingFile(error) {
+                    throw FileReplicationEndpointError
+                        .objectNotMaterialized(
+                            relativeKey: try relativeKey(for: url)
+                        )
+                }
+                throw error
+            }
         }
         var coordinatedData: Data?
         var readError: Error?
@@ -1076,20 +1157,55 @@ private extension ContentAddressedFileReplicationEndpoint {
             error: &coordinationError
         ) { coordinatedURL in
             do {
-                coordinatedData = try Data(contentsOf: coordinatedURL)
+                coordinatedData = try fileDataReader(coordinatedURL)
             } catch {
                 readError = error
             }
         }
         if let coordinationError {
+            if Self.isMissingFile(coordinationError) {
+                throw FileReplicationEndpointError.objectNotMaterialized(
+                    relativeKey: try relativeKey(for: url)
+                )
+            }
             throw coordinationError
         }
         if let readError {
+            if Self.isMissingFile(readError) {
+                throw FileReplicationEndpointError.objectNotMaterialized(
+                    relativeKey: try relativeKey(for: url)
+                )
+            }
             throw readError
         }
         guard let coordinatedData else {
-            throw FileReplicationEndpointError.missingObject
+            throw FileReplicationEndpointError.objectNotMaterialized(
+                relativeKey: try relativeKey(for: url)
+            )
         }
         return coordinatedData
+    }
+
+    func relativeKey(for url: URL) throws -> String {
+        let rootPath = rootURL.standardizedFileURL.path + "/"
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath) else {
+            throw FileReplicationEndpointError.invalidObject
+        }
+        let relativeKey = String(path.dropFirst(rootPath.count))
+        guard relativeKey.isEmpty == false else {
+            throw FileReplicationEndpointError.invalidObject
+        }
+        return relativeKey
+    }
+
+    static func isMissingFile(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            return nsError.code == NSFileNoSuchFileError
+                || nsError.code == CocoaError.fileReadNoSuchFile.rawValue
+        }
+        return nsError.domain == NSPOSIXErrorDomain
+            && nsError.code == POSIXErrorCode.ENOENT.rawValue
     }
 }

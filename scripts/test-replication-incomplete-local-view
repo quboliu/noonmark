@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+require_test() {
+  local source_file="$1"
+  local test_name="$2"
+
+  if ! rg -F "func ${test_name}" "$source_file" >/dev/null; then
+    echo "required replication incomplete-local-view test is missing: ${test_name}" >&2
+    exit 1
+  fi
+}
+
+run_test() {
+  local selector="$1"
+  local output
+
+  if ! output="$(swift test --filter "$selector" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$output"
+  if ! grep -Fq 'Executed 1 test, with 0 failures' <<<"$output"; then
+    echo "replication incomplete-local-view selector did not execute exactly one XCTest: ${selector}" >&2
+    exit 1
+  fi
+}
+
+require_test \
+  Tests/NoonmarkSyncTests/LocalFolderSyncTransportTests.swift \
+  testCrashAfterBatchWriteWithChangedRetryAppendsAfterOrphan
+require_test \
+  Tests/NoonmarkSyncTests/LocalFolderSyncTransportTests.swift \
+  testPostProbeCompetingWriterStillFailsClosedAsProducerFork
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testAnnouncementGapCannotBeReportedAsAStableChainEnd
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testICloudAnnouncementGapRequestsTheExactMissingSequence
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testICloudReadTimeMissingObjectRequestsExactMaterializationTarget
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testMaterializedInternalSequenceDirectoryWithoutAnnouncementCannotCloseChain
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testEmptyTerminalSequenceDirectoryIsNotAPublicationPromise
+require_test \
+  Tests/NoonmarkSyncTests/ContentAddressedFileReplicationEndpointTests.swift \
+  testSameSequenceDifferentDigestPreservesForkEvidenceAndFailsClosed
+
+app_sync_surface="App/NoonmarkMacApp/NoonmarkStore+Sync.swift"
+if ! rg -q 'ICloudDriveReplicationEndpoint\(' "$app_sync_surface"; then
+  echo "the real App iCloud path no longer uses the tested V2 endpoint" >&2
+  exit 1
+fi
+if ! rg -q 'ContentAddressedFileReplicationEndpoint' "$app_sync_surface"; then
+  echo "the real App Local Folder path no longer uses the tested V2 endpoint" >&2
+  exit 1
+fi
+
+run_test \
+  LocalFolderSyncTransportTests/testCrashAfterBatchWriteWithChangedRetryAppendsAfterOrphan
+run_test \
+  LocalFolderSyncTransportTests/testPostProbeCompetingWriterStillFailsClosedAsProducerFork
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testAnnouncementGapCannotBeReportedAsAStableChainEnd
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testICloudAnnouncementGapRequestsTheExactMissingSequence
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testICloudReadTimeMissingObjectRequestsExactMaterializationTarget
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testMaterializedInternalSequenceDirectoryWithoutAnnouncementCannotCloseChain
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testEmptyTerminalSequenceDirectoryIsNotAPublicationPromise
+run_test \
+  ContentAddressedFileReplicationEndpointTests/testSameSequenceDifferentDigestPreservesForkEvidenceAndFailsClosed

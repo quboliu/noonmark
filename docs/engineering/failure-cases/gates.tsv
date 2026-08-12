@@ -269,3 +269,5 @@ FAIL-2026-08-12-01	release	scripts/publish-trial-dmg	scripts/release-private-dmg
 FAIL-2026-08-12-02	fast	scripts/test-e2e-evidence-contract	scripts/check	拒绝 V1 PreferencesClock inventory 名称回流，并要求完整 E2E producer 在成功 manifest 前消费共享 V2 inventory authority
 FAIL-2026-08-12-02	symptom	scripts/test-e2e	scripts/test-all	真实完整 App E2E 必须生成并哈希绑定 V2 SQLite、三阶段结果、输入轨迹、probe 与两张 lifecycle 截图，任一缺项直接判红
 FAIL-2026-08-12-02	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	trial runtime／full verifier 必须对同一 run、source 与 artifact inventory SHA 独立复核共享 V2 必需路径
+FAIL-2026-08-12-03	fast	scripts/test-replication-incomplete-local-view	scripts/test-replication-v2-recovery-contract	崩溃 orphan 必须接回连续链；announcement／引用对象 gap 与读取期 Cocoa 260 必须 typed waiting；terminal orphan 非事实，真正双 digest fork 仍 fail-closed
+FAIL-2026-08-12-03	symptom	scripts/test-replication-incomplete-local-view	scripts/test-all	真实临时 filesystem 必须从 changed retry、逐 item 乱序与读取期消失收敛到完整连续事实，不得永久 stall、泄漏 raw Cocoa error 或静默 stable 截断

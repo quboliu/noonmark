@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-19：批次 provenance 重算放大合并时间
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T16:05:00-04:00 至 2026-08-11T16:50:00-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；批次 provenance 初版为每个候选重建完整合并 context
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -53,7 +53,7 @@
 - `CurrentSyncRecordMergerTests`：23／23 通过；其中 deterministic batch 性能门禁由 `9.359 s` 红转为 `0.059–0.067 s` 绿，并已由 recovery aggregate 强制执行。
 - divergence identity、三版本 synthetic provenance、reactivation witness self-authorization 等行为回归均通过。
 - 新建隔离 iCloud round 的签名 App 全量 stress 通过。第二 SQLite 首轮由 `224067 ms` 降至 `43462 ms` 并应用 18 份远端 publication，下一轮 `204 ms` 收敛且 pending 为 0；重启轮 `188 ms`、remote apply 为 0。
-- 领域 snapshot 与共享 preferences 精确相等，target device-local preferences 原样保留，waiting 为 0、incident 为 none。fast 与真实 symptom 均已转绿；案例仍因修复提交尚未确定而保持「处理中」。
+- 领域 snapshot 与共享 preferences 精确相等，target device-local preferences 原样保留，waiting 为 0、incident 为 none。fast 与真实 symptom 均已转绿；修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

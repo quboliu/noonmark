@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-15：iCloud 删除能力逃逸 append-only 门禁
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T15:00:00-04:00 至 2026-08-11T15:59:59-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；既有开发 reset 与 CloudKit live validation 代码早于本轮铁命
-- Git author／committer：不适用；尚无修复提交
+- Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同值
 - 实际修改者：历史实际操作者未知；本轮修复由 Codex agent 完成，可由 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 

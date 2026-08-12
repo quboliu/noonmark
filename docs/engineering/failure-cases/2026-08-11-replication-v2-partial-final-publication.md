@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-17：不可变最终键可在崩溃时留下半写对象
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T15:45:00-04:00 至 2026-08-11T16:12:45-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；content-addressed endpoint 与 marker bootstrap 初版直接写最终路径
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -52,7 +52,7 @@
 - `scripts/test-icloud-append-only-guard` 通过；真实 iCloud hard-link capability probe 通过。
 - 全量签名 App stress 已在全新真实 iCloud round 通过：导入 1,013 条任务后完成 exercise 120／80／40 增改删、71 次跨领域 mutation，再于重启后完成 30／20／10 增改删；两阶段 pending 均为 0、最近同步与最近有效同步均存在、同步失败与修改拒绝均为 0。
 - 第二 SQLite 首轮应用 18 份远端 publication，下一轮 pending 归零；重启为 0 次 remote apply。进入第二消费者前的 198 个 immutable 文件全部保持原 digest，最终只追加至 206 个，零 mutable head、零删除／覆盖／移动／改名。
-- fast、真实签名 App 与第二 SQLite symptom 均已转绿；案例仍因修复提交尚未确定而保持「处理中」。
+- fast、真实签名 App 与第二 SQLite symptom 均已转绿；修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-18：上传确认重试放大永久 staging 证据
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T00:00:00-04:00 至 2026-08-11T16:50:00-04:00（精确起点未保留）
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；append-only publisher 初版在幂等判断前建立永久 staging
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,7 @@
 - 本机精确 retry 测试通过；第二次 publish 前后的永久 staging URL 集合完全相同。`scripts/test-replication-v2-recovery-contract` 已包含并通过该门禁。
 - 修正后的真实 iCloud session 以两个全新 round 通过：每轮 repository file count 均为 18、零 mutable head，双 SQLite 收敛、重启 remote apply 为 0，后轮没有改变前轮 inventory 或 digest。
 - 全量签名 App stress 也已通过；来源 App 两阶段共完成 417 次真实 reconcile、652 份 confirmed outbox，pending 均为 0。第二 SQLite 精确收敛并重启零 replay，进入第二消费者前的 198 个文件全部保持原 digest。
-- fast 与真实 symptom 均已转绿；案例仍因修复提交尚未确定而保持「处理中」。
+- fast 与真实 symptom 均已转绿；修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

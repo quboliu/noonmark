@@ -7,7 +7,7 @@
 - 引入提交：未提交；V2 把 publication watermark 升级为 mandatory Data Protection Keychain 后，通用 E2E build 入口仍沿用无 entitlement 的稳定签名
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,7 @@ V2 把 SQLite seal watermark 与 `ThisDeviceOnly` Keychain watermark 的 exact m
 - `scripts/test-e2e-evidence-contract` 已转绿并固定 provisioning／Data Protection Keychain／stable signing 三项契约。
 - 真实签名 Preferences 三进程路径完成 failure、disable + join、restart 与 re-enable convergence。
 - 真实签名诊断三进程路径完成异常终止与跨重启导出；最终 manifest 为 `suite_exit_status=0`。
-- Keychain watermark 的专用签名门禁与 V2 recovery contract 已通过本轮定向验证；完整 `make check` 审计运行 `20260811T223945Z-98349` 也以 `suite_exit_status=0` 完成，且运行前后 worktree tree OID 一致。案例仍因修复提交尚未确定而保持「处理中」。
+- Keychain watermark 的专用签名门禁与 V2 recovery contract 已通过本轮定向验证；完整签名 App E2E 运行 `20260812T035748Z-64356` 与 `make check` 运行 `20260812T041033Z-39844` 均以 `suite_exit_status=0` 完成，且运行前后 worktree tree OID 一致。修复提交已回填；实际私有 DMG release gate 尚待本任务后续完成，因此案例保持「处理中」。
 
 ## 永久门禁
 

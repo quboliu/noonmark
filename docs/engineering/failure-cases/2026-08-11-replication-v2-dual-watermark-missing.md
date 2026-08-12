@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-10：Replication V2 缺少 SQLite／ThisDeviceOnly Keychain 双 watermark
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T10:43:36-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；最初 V2 只持久化 confirmation prefix，没有 publication rollback witness
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -66,7 +66,7 @@ Runtime 在每次 reconcile 起点和每次 Endpoint publish 前，把 Keychain 
 - fast：`scripts/test-replication-v2-recovery-contract` 固定运行双向 mismatch、store CAS 与 ad-hoc entitlement fail-closed测试，由 `scripts/check` 强制调用。
 - fast signing contract：`scripts/test-replication-watermark-keychain-contract` 固定 provisioning、精确 Keychain group、DER entitlement、三阶段 App automation 与 `--ephemeral`／无 iCloud 边界，由 recovery contract 强制调用并登记于 `gates.tsv`。
 - symptom：`scripts/test-integration` 执行完整 Storage suite，覆盖真实临时 SQLite、文件 Endpoint、Runtime restart 与后续本机 mutation。
-- signed gate：`scripts/test-replication-watermark-keychain-signed` 固定三次独立 `e2e` App 启动、`nil → 1 → 2`、stale CAS、security attributes、第三次重启与精确测试记录清理；精确 provisioning profile 到位后已连续两轮通过。案例在修复 commit 回填前仍保持「处理中」。
+- signed gate：`scripts/test-replication-watermark-keychain-signed` 固定三次独立 `e2e` App 启动、`nil → 1 → 2`、stale CAS、security attributes、第三次重启与精确测试记录清理；精确 provisioning profile 到位后已连续两轮通过。修复 commit 已回填，案例标记为「已修复」。
 
 ## 发行与回滚
 

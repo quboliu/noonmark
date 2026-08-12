@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-20：跨设备对账误把本机设置当同步资料
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T16:58:00-04:00 至 2026-08-11T17:08:00-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 症状门禁
 - 引入提交：未提交；第二 SQLite stress 初版直接比较完整 `NoonmarkSnapshot`
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,7 @@
 
 - `SyncRecordMergerTests.testPreferenceRecordPreservesDeviceLocalConfiguration` 通过，并已由 recovery aggregate 强制执行；共享主题／语言更新后，五组 device-local 字段保持原值。
 - 修正后的全量签名 App stress 在全新真实 iCloud round 通过。第二 SQLite 精确取得所有领域资料与共享 preferences，同时保留同步前的 target device-local preferences；首次 apply 后与 restart 后对账均通过。
-- 第二 SQLite 下一轮 `204 ms` pending 归零，重启轮 `188 ms`、remote apply 为 0；fast 与真实 symptom 均已转绿。案例仍因修复提交尚未确定而保持「处理中」。
+- 第二 SQLite 下一轮 `204 ms` pending 归零，重启轮 `188 ms`、remote apply 为 0；fast 与真实 symptom 均已转绿。修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

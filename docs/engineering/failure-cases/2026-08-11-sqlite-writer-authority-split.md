@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-12：同步与正常修改分裂 SQLite writer authority
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T14:00:00-04:00 至 2026-08-11T14:59:59-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；既有 `SQLiteStoreRuntime` 只维持 WAL anchor，没有完整持有同进程单写者 authority
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -58,7 +58,7 @@ SQLite WAL 支持并发 reader，但同一时刻仍只有一个 writer。既有 
 
 ## 发行与回滚
 
-V2 尚未发行。若回归，只撤回未发行 slice并重建非 production profile；不得启动、读取或修改 production。进程级 coordinator 不涉及 iCloud object；任何回滚均不得删除或覆盖 iCloud 资料。案例须在修复提交回填后才可标记「已修复」。
+V2 尚未发行。若回归，只撤回未发行 slice并重建非 production profile；不得启动、读取或修改 production。进程级 coordinator 不涉及 iCloud object；任何回滚均不得删除或覆盖 iCloud 资料。修复提交已回填，案例标记为「已修复」；production 发行仍受独立门禁阻断。
 
 ## 教训与永久约束
 

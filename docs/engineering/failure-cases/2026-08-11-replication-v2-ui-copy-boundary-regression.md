@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-21：同步恢复文案绕过 typed presentation boundary
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T17:23:41-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；V2 restart 状态恢复初版在 Store 内直接选择中英文文案
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -43,7 +43,7 @@ restart 状态恢复实现直接根据 engine language 选择字符串，没有�
 ## 验证结果
 
 - `scripts/check-ui-localization` 与 `scripts/test-ui-localization-han-contract` 已通过，证明 Store 不再持有新增 production UI literal，中文／英文 scalar 与 scanner 自测试均保持全绿。
-- 完整 `make check` 已于本轮通过，审计运行 `20260811T223945Z-98349` 的 `suite_exit_status=0`，且运行前后 worktree tree OID 一致。案例仍因修复提交尚未确定而保持「处理中」。
+- 完整 `make check` 已于本轮通过，审计运行 `20260811T223945Z-98349` 的 `suite_exit_status=0`，且运行前后 worktree tree OID 一致。修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

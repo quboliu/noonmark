@@ -7,7 +7,7 @@
 - 引入提交：`26f0cb91f0be8e756cc48b87b316a11200916aeb` `merge(release): integrate sync diagnostics with Feiguang compatibility`；`1f264ff9c38047c8ac959e9d0cd624c70d495116` 后续延续 schema migration；v18→v19 路径属于尚未提交的本次工作树
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同值；`mxt <mxt@local.com>`／同值
 - 实际修改者：既有提交的实际修改者未知；v18→v19 未提交扩展可由本次 Codex session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,7 @@
 
 - SQLite clean-cut 专项：旧 schema 与 current-version drift 均零迁移拒绝；current-version drift 在 `journal_mode=delete` 时判红，修复后拒绝仍保持 `delete`、主数据库 bytes exact 且没有 WAL sidecar。
 - DataPackage clean-cut 专项：2 项、0 失败；current format 7 round-trip，format 6 明确拒绝。
-- 真实签名 App E2E、最终 `make check` 与 release evidence 尚待本任务后续完成；因此案例保持「处理中」。
+- 真实签名 App E2E 运行 `20260812T035748Z-64356` 与完整 `make check` 运行 `20260812T041033Z-39844` 均以 `suite_exit_status=0` 完成，current format 7 File → Import、fresh schema 19、重启回读及零迁移拒绝均已转绿。修复提交已回填；实际私有 DMG release evidence 尚待本任务后续完成，因此案例保持「处理中」。
 
 ## 永久门禁
 

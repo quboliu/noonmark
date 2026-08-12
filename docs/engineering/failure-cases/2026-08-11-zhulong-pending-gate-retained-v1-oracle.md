@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-28：烛龙 pending-gate 保留 V1 baseline oracle
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T21:25:21-04:00
 - 影响版本／构建：未发行的 schema 19 Replication V2 工作树
 - 引入提交：`883f96495be703eb469630f6013027891e5b49b3` `docs(readme): Build the Noonmark v1.0 product homepage` 引入 V1 preferences journal oracle；`fd77ee795dccf73894bc9547c51234f0659f5183` `test(sync): align pending recovery fixture` 把总 journal 数固定为 1
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同值
 - 实际修改者：既有提交的实际修改者未知；本次 clean cut 与门禁修正可由当前 Codex session 和工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -47,7 +47,7 @@ clean cut 删除了数据导入／替换阶段生成 V1 baseline journal 的行�
 - clean-cut fast gate 通过：current format 7 round-trip 与 format 6 typed rejection 共 2 项、0 失败；故障案例映射共 103 个案例并 fail-closed 通过。
 - focused 签名 App pending-gate 通过：setup 与 verify 均为 `ok`，真实 SQLite writer lock 下 direct Engine save、Store persist、自然日 rollover、数据导入和同步启动均被围栏拒绝。
 - 完整签名 App E2E 通过：48 个场景、英文 10／10、烛龙 pending-gate、current format 7 File → Import、诊断异常终止闭环与 V2 lifecycle 全部转绿；manifest 为 `suite_exit_status=0`，source start／end、App binary 与 helper binary 均一致，新增 DiagnosticReports 为零。
-- 最终 `make check` 运行 `20260812T022243Z-83938` 已以 `suite_exit_status=0` 结束，source start／end worktree OID 一致，104 个故障案例映射通过。修复提交仍待建立，因此案例按规则保持「处理中」。
+- 最终 `make check` 运行 `20260812T022243Z-83938` 已以 `suite_exit_status=0` 结束，source start／end worktree OID 一致，104 个故障案例映射通过。修复提交已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

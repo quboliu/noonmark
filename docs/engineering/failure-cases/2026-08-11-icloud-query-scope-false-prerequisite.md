@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-02：iCloud query scope 被误当成所有运行身份的确认前提
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T09:18:32-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 tracer 工作树
 - 引入提交：未提交；错误假设在本次 tracer 首版实现中引入
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -48,7 +48,7 @@
 - fast：证据真值表覆盖缺 URL、digest unknown／mismatch、uploading、uploaded unknown、conflict、excluded、quota、server unavailable 与多对象优先级；immutable endpoint 覆盖两轮发布不创建 mutable head、不改变首轮 bytes。
 - symptom：全新真实 iCloud session 内连续两个全新 round，各自完成独立 SQLite A → iCloud → SQLite B；每轮含 4 个 immutable publication object 与 1 个 canonical marker、0 mutable head；目标 restart 零重复 apply；第二轮后第一轮 inventory 与 digest 完全不变。
 - 可重复性：完成 `NSFileCoordinator` 与 symlink fail-closed 加固后，第二个独立 session 再跑两个全新 round，37.315 秒通过同一组收敛、重启与不可变性断言。
-- 当前仍未切换 production App authority，因此案例保持「处理中」，不得宣称用户 production 路径已经修复。
+- 修复提交已建立，fast 与真实 append-only symptom 均已转绿，因此案例标记为「已修复」。production App authority 尚未切换，仍不得宣称用户已安装版本完成修复；该交付状态由双实体 Mac、72 小时 soak 与 cutover 审批独立约束。
 
 ## 永久门禁
 

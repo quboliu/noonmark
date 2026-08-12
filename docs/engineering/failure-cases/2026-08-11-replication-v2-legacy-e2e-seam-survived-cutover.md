@@ -7,7 +7,7 @@
 - 引入提交：未提交；V2 App cutover 初版没有同步替换 Preferences 与诊断闭环的 V1 automation
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -55,8 +55,8 @@ cutover 的 reachability audit 主要检查 production writer／transport，没�
 - `LocalFirstReplicationTests.testDisableJoinsBlockedWorkerAndRestartsAsDurablyDisabled` 已通过，覆盖 running → stopping → stoppingDelayed → disabled、join 完成及重启首态 disabled。
 - `LocalFirstReplicationTests.testFailedShutdownFenceCanBeRetriedAndStillJoinsEndpoint` 已通过：首个 fence 在真实 SQLite writer lock 下失败且 endpoint 未 cancel／join；释放 lock 后同一 Runtime retry 成功 join，下一代 Runtime 保持 enabled policy。
 - 真实签名 Preferences 路径得到 SQLite probe `1 1 0 4 1 1 0`：V2 preference facts 精确、worker disabled、incident 清除、重启 suppression 与重新启用收敛全部成立。
-- 诊断 fast gate 已强制组合 oracle：V2 endpoint wait → ordinary mutation committed → injected SQLite persistence failure rejects exact mutation → operation／incident correlation → restart evidence。修复后的真实签名闭环结果仍待本轮重新运行，因此案例继续保持「处理中」。
-- 完整 `make check` 已于本轮通过，审计运行 `20260811T223945Z-98349` 的 `suite_exit_status=0`，且运行前后 worktree tree OID 一致。案例仍因修复提交尚未确定而保持「处理中」。
+- 诊断 fast gate 已强制组合 oracle：V2 endpoint wait → ordinary mutation committed → injected SQLite persistence failure rejects exact mutation → operation／incident correlation → restart evidence。真实签名闭环运行 `20260812T035748Z-64356` 已按该组合 oracle 通过。
+- 完整 `make check` 运行 `20260812T041033Z-39844` 以 `suite_exit_status=0` 完成，且运行前后 worktree tree OID 一致。修复提交已回填；实际私有 DMG release gate 尚待本任务后续完成，因此案例保持「处理中」。
 
 ## 永久门禁
 

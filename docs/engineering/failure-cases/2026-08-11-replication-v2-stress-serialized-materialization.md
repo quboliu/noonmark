@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-26：真实 iCloud 压力门禁串行等待 materialization
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T20:13:04-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；签名 App stress automation 初版在每个 mutation batch 后等待完整 iCloud materialization
 - Git author／committer：不适用；错误改动仍在未提交工作树
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -55,7 +55,7 @@
 - 修复祖先重试后，第三轮在原六分钟上限内通过：exercise 导入 1,013 项资料，完成 120 次创建、80 次修改、40 次删除与 71 次跨领域 mutation；最终 outbox 为零、双水位存在、convergence 为 `converged`、同步失败与 mutation rejection 均为零。
 - 同一 round 的 restart 再完成 30 次创建、20 次修改与 10 次删除，仍为零失败、零拒绝并收敛；第二 SQLite 首次应用 14 个 publication，restart apply count 为零。
 - 第二 SQLite 对账确认原有 168 个 iCloud 文件逐一保持不变，最终 inventory 只追加至 176；后续独立 live gate 的两个新 round 各有 18 个文件，mutable head count 为零。
-- `scripts/test-replication-v2-real-validation` 全绿；案例仍保持「处理中」，等待修复 commit 与最终完整回归回填。
+- `scripts/test-replication-v2-real-validation` 全绿；修复 commit 已回填，最终完整回归已通过，案例标记为「已修复」。
 
 ## 永久门禁
 

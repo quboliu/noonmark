@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-29：AppKit key window 领先于 WindowServer 物理窗口顺序
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T21:44:00-04:00
 - 影响版本／构建：未发行的 schema 19 Replication V2 工作树；共享 Mac E2E 输入驱动
 - 引入提交：`3d5cc9e80915cd9c8f37a907e84cd3248692e9ae` `feat(app): Complete the native experience and consistency acceptance upgrade`
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／同值
 - 实际修改者：既有提交的实际修改者未知；本次诊断与共享输入边界修正可由当前 Codex session 和工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -49,7 +49,7 @@ AppKit 的 `isKeyWindow` 可以先于 WindowServer 的物理 z-order 更新。�
 
 - regression test 先因 `physicalTargetIsReady` 不存在而稳定编译判红，实施后 1 项、0 失败。
 - 修复前临时物理命中门禁在 focused 第一轮立即判红；修复后同一签名 App native-command stress 连续 8／8 轮通过。每轮均覆盖 exercise、restart、两次 Search、真实 WindowServer 点击与 SQLite `1 1 1 1 1` 对账。
-- 完整签名 App E2E 运行 `20260812T021133Z-72054` 已通过：48 个场景、英文 10／10、native-command exercise／restart 两次 Search、App／helper binary 与 source start／end 均一致，`suite_exit_status=0`。最终 `make check` 运行 `20260812T022243Z-83938` 也以 `suite_exit_status=0` 结束，104 个故障案例映射通过。修复 commit 尚未建立，因此案例仍按规则保持「处理中」。
+- 完整签名 App E2E 运行 `20260812T021133Z-72054` 已通过：48 个场景、英文 10／10、native-command exercise／restart 两次 Search、App／helper binary 与 source start／end 均一致，`suite_exit_status=0`。最终 `make check` 运行 `20260812T022243Z-83938` 也以 `suite_exit_status=0` 结束，104 个故障案例映射通过。修复 commit 已回填，案例标记为「已修复」。
 
 ## 永久门禁
 

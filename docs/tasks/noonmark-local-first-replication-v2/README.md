@@ -2,7 +2,7 @@
 
 - Task-ID：`noonmark-local-first-replication-v2`
 - 风险等级：P
-- 状态：本机实现、append-only 真实 iCloud、签名压力、完整 E2E 与 `make check` 已完成；待修复 commit、双实体 Mac 与 72 小时 soak，production cutover 尚未获批
+- 状态：实现 commit 已建立；append-only 真实 iCloud、签名压力、完整 E2E 与 `make check` 已完成；待私有 DMG release gate、双实体 Mac 与 72 小时 soak，production cutover 尚未获批
 - 决策来源：ADR-0047；Kimi Code K3 第五轮终审 `approve`
 
 ## 需求与成功标准
@@ -186,4 +186,4 @@
 - 审查整改后的完整签名 App E2E 运行 `20260812T035748Z-64356` 再次覆盖 48 个场景、英文 10／10、V2 lifecycle、同步失败／endpoint wait／正常 mutation／真实 persistence rejection／异常终止／重启／诊断导出闭环，`suite_exit_status=0`；source start／end worktree OID、App binary 与 helper binary 均一致。随后完整 `make check` 运行 `20260812T041033Z-39844` 以 `suite_exit_status=0` 结束，source start／end worktree OID 一致。
 - 审查整改后的最终真实压力链先在签名 App Local Folder 完成 1,013 条导入、exercise 120／80／40 增改删与 71 次跨领域 mutation、restart 30／20／10 增改删；两阶段 542／652 份 outbox 全部 confirmed、pending 为 0、最近同步与最近有效同步均存在、diagnostic failure 与 mutation rejection 均为 0。其后才创建 iCloud session `53cf43bf-e3cd-4e84-a64e-932d99ec954f`、round `fe9e23b9-9a1a-4a38-9bf5-870d8959557b`，以相同操作得到相同领域结果；第二 SQLite 首轮应用 7 份 publication、重启应用 0，进入前 112 个 immutable 对象全部保持原 digest，最终只追加至 120 个，mutable head 为 0。
 - 最终独立多轮 adapter session `1bc4817c-1a1b-4b56-8ede-1b371676ccee` 的两个全新 round `b0b5436f-e5ec-4840-aafd-9e1d5ae5d18d` 与 `2cc42e7c-e482-4a55-8a97-0b665af5e033` 各创建 18 个 immutable 对象、0 mutable head；每轮均经 Apple positive evidence 收敛，前轮 inventory／digest 在后轮完成后保持不变。以上全部 iCloud 对象永久保留，没有删除、覆盖、替换、截断、移动或改名。
-- 当前尚未完成的不是本机实现或本机验证，而是治理与跨设备门禁：修复 commit 尚未建立，双实体 Mac 与连续 72 小时 soak 尚无运行产物。因此不得宣称 production cutover 或 release ready；同机双 SQLite 只证明协议与领域收敛，不冒充双实体 Mac。
+- 实现修复 commit `6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73` 已建立；当前尚未完成的是实际私有 DMG release gate、双实体 Mac 与连续 72 小时 soak。因此不得宣称 production cutover 或 release ready；同机双 SQLite 只证明协议与领域收敛，不冒充双实体 Mac。

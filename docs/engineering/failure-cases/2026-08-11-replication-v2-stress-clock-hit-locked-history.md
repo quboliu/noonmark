@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-14：Replication V2 压力门禁固定时钟落入锁定历史
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T15:00:00-04:00 至 2026-08-11T15:59:59-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 压力门禁
 - 引入提交：未提交；签名 App stress 最初没有覆盖 e2e profile 的默认 fixed-clock
 - Git author／committer：不适用；尚无提交
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -57,7 +57,7 @@
 
 ## 发行与回滚
 
-V2 尚未发行。若回归，只撤回未发行的压力门禁 slice并保留全部已建立的 iCloud round；不得修改资料包、解锁历史、读取 production 或增加跳过排期的降级路径。案例须在修复提交回填后才可标记「已修复」。
+V2 尚未发行。若回归，只撤回未发行的压力门禁 slice并保留全部已建立的 iCloud round；不得修改资料包、解锁历史、读取 production 或增加跳过排期的降级路径。修复提交已回填，案例标记为「已修复」；production 发行仍受独立门禁阻断。
 
 ## 教训与永久约束
 

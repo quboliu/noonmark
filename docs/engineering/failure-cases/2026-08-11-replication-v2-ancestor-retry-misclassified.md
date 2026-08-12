@@ -1,13 +1,13 @@
 # FAIL-2026-08-11-27：后代已发布时祖先精确重试被误判为 fork
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-11T20:18:24-04:00
 - 影响版本／构建：未发行的 Local-First Replication V2 工作树
 - 引入提交：未提交；content-addressed endpoint 初版只允许当前 head 做 exact retry
 - Git author／committer：不适用；错误改动仍在未提交工作树
 - 实际修改者：Codex agent；可由本次 session 与工作树确认
-- 修复提交：待回填
+- 修复提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 
 ## 用户症状与影响
 
@@ -57,7 +57,7 @@ Runtime 的 delivery 语义是 at-least-once：未取得远端确认前，每轮
 - 第三轮真实签名 App 在多个 publication 同时 pending 的路径完成 exercise 与 restart，最终 pending outbox 为零、convergence 为 `converged`、同步失败与 mutation rejection 均为零。
 - 第二 SQLite 首次应用 14 个 publication 后精确收敛，restart apply count 为零；原有 168 个 iCloud 文件保持不变，最终只追加至 176。
 - 独立 live-iCloud gate 另建两个新 round 并全部收敛，各有 18 个 repository 文件且 mutable head count 为零；`scripts/test-replication-v2-real-validation` 全绿。
-- 案例仍保持「处理中」，等待修复 commit 与最终完整回归回填。
+- 修复 commit 已回填，最终完整回归已通过，案例标记为「已修复」。
 
 ## 永久门禁
 

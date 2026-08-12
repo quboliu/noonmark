@@ -7,7 +7,7 @@
 - 引入提交：`00c17fa8b1d48e1c6b3dc1af8f89dc3c63fbdb6a`（`feat(ios): add iOS parity target and import flow`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：`5985376468baee43052cedfcbf1cd83e26122f4a`
+- 修复提交：`8660e34ec0710192aa1b249a75a27e6cf9c44bf2`
 
 ## 用户症状与影响
 
@@ -42,11 +42,11 @@ xcodebuild test -project NoonmarkIOS.xcodeproj -scheme NoonmarkIOSApp -destinati
 
 ## 根因修复
 
-数据包路径改为显式的 UIKit `UIDocumentPickerViewController`：导出先写入 application caches 下的规范 JSON 临时文件，再通过系统 export picker 交给用户选择保存位置；导入通过 opening picker 选择 JSON，先显示确认 alert，再进入既有完整性校验和事务性 SQLite 替换。picker 结束时清理导出临时文件，取消动作不显示错误。
+数据包路径改为显式的 UIKit `UIDocumentPickerViewController`：导出先写入 application caches 下的规范 JSON 临时文件，再通过系统 export picker 交给用户选择保存位置；导入通过 opening picker 选择 JSON，先显示确认 alert，再进入既有完整性校验和事务性 SQLite 替换。picker 结束时清理导出临时文件；若系统在 delegate callback 之前终止或收回 picker，下一次 development app 启动只清理应用自己命名的临时 export JSON，取消动作不显示错误。
 
 ## 验证结果
 
-修复提交 `5985376468baee43052cedfcbf1cd83e26122f4a` 已完成，原始症状已转绿。已取得的症状证据：
+修复提交 `8660e34ec0710192aa1b249a75a27e6cf9c44bf2` 已完成，原始症状已转绿。已取得的症状证据：
 
 - `testUserCanOpenAndCancelDataPackageExportInSimulator`：真实文件保存面板打开并取消，0 failures。
 - `testUserCanOpenAndCancelDataPackageFileFlowsInSimulator`：真实导入面板打开／取消后再打开导出面板并取消，0 failures。

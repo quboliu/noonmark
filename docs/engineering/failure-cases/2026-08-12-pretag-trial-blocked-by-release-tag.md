@@ -8,7 +8,7 @@
 - 加重提交：`885d0843be615bcab4357848e90a8851f00f71ed`（`fix(release): harden GitHub signing readiness`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1499b68749dbda17747125544881c1c815`（exclusive output）、`461fb59c3ad69f3c8f5547928d73d37c8466958a`（package evidence authority）；案例保持处理中，实际 release gate 尚待运行
+- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1eb996ab6ddb2c5ae19c680042643d1d56`（exclusive output）、`461fb598d80ed548669295f08137d2dd7108f47a`（package evidence authority）；案例保持处理中，实际 release gate 尚待运行
 
 ## 用户症状与影响
 
@@ -47,7 +47,7 @@
 
 commit `84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea` 已新增显式 pre-tag trial 状态及独立 trial version verifier；trial 只跳过 tag 与 GitHub Environment readiness，随后复用全部本机发行证据链。默认模式继续强制 exact annotated tag 和 GitHub readiness。build 29 永久退役，Replication V2 分配 `0.3.0 (30)`。
 
-审查整改 commits `314bbf1499b68749dbda17747125544881c1c815` 与 `461fb59c3ad69f3c8f5547928d73d37c8466958a` 进一步把 trial output 纳入唯一入口：调用者必须显式提供 absolute canonical output；入口在 full verifier 前后固定 package manifest SHA，publisher 再把 source、同目录临时副本与 final output 全部对账到该 manifest 的 `dmg_sha256`，最后才以不可覆盖 hard link 原子暴露最终名称。既有输出、source／manifest／parent symlink、manifest replacement、路径 alias、错误 basename 或 checksum 漂移全部 fail-closed；门禁精确校验 tagged／trial 两条命令序列与每一阶段参数。
+审查整改 commits `314bbf1eb996ab6ddb2c5ae19c680042643d1d56` 与 `461fb598d80ed548669295f08137d2dd7108f47a` 进一步把 trial output 纳入唯一入口：调用者必须显式提供 absolute canonical output；入口在 full verifier 前后固定 package manifest SHA，publisher 再把 source、同目录临时副本与 final output 全部对账到该 manifest 的 `dmg_sha256`，最后才以不可覆盖 hard link 原子暴露最终名称。既有输出、source／manifest／parent symlink、manifest replacement、路径 alias、错误 basename 或 checksum 漂移全部 fail-closed；门禁精确校验 tagged／trial 两条命令序列与每一阶段参数。
 
 ## 验证结果
 

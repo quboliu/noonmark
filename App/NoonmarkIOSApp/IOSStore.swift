@@ -144,6 +144,7 @@ final class IOSStore: ObservableObject {
                 errorMessage = "本地数据目录无法建立，当前工作区只读。"
             }
         }
+        Self.cleanupStaleDataPackageExports(fileManager: fileManager)
         databaseURL = dataRoot.appendingPathComponent("noonmark.sqlite")
         repository = SQLiteEngineRepository(databaseURL: databaseURL)
         let zhulongDirectory = dataRoot.appendingPathComponent(
@@ -1212,6 +1213,30 @@ final class IOSStore: ObservableObject {
         }
         dataPackageExportURL = nil
         dataPackagePickerRequest = nil
+    }
+
+    private static func cleanupStaleDataPackageExports(fileManager: FileManager) {
+        guard let cacheDirectory = try? fileManager.url(
+            for: .cachesDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            return
+        }
+        let exportDirectory = cacheDirectory.appendingPathComponent(
+            "NoonmarkDataPackageExports",
+            isDirectory: true
+        )
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: exportDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return
+        }
+        for file in files where file.lastPathComponent.hasPrefix("Noonmark-data-") && file.pathExtension == "json" {
+            try? fileManager.removeItem(at: file)
+        }
     }
 
     private static func dataPackageSummary(_ snapshot: NoonmarkSnapshot) -> String {

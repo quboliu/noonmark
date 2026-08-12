@@ -110,6 +110,7 @@ final class IOSStore: ObservableObject {
     private let zhulongSessionRepository: EncryptedFileZhulongSessionRepository
     private let zhulongApplicationJournal: EncryptedFileZhulongApplicationJournal
     private let zhulongProviderOrchestrator: ZhulongProviderOrchestrator
+    private var dataPackageExportURL: URL?
     private let zhulongSessionIDsKey = "noonmark.ios.zhulong.sessionIDs"
     private let zhulongProviderService = "app.noonmark.ios.development.zhulong.provider"
     private var diagnosticRecording: (any DiagnosticRecording)?
@@ -1080,6 +1081,7 @@ final class IOSStore: ObservableObject {
 
     func exportDataPackage() {
         do {
+            finishDataPackagePicker()
             let cacheDirectory = try FileManager.default.url(
                 for: .cachesDirectory,
                 in: .userDomainMask,
@@ -1095,6 +1097,7 @@ final class IOSStore: ObservableObject {
             )
             _ = try NoonmarkDataPackage.write(engine.snapshot(), to: exportURL)
             dataPackageStatusMessage = nil
+            dataPackageExportURL = exportURL
             dataPackagePickerRequest = IOSDataPackagePickerRequest(
                 mode: .exporting(exportURL)
             )
@@ -1105,6 +1108,7 @@ final class IOSStore: ObservableObject {
     }
 
     func beginDataPackageImport() {
+        finishDataPackagePicker()
         dataPackagePickerRequest = IOSDataPackagePickerRequest(mode: .importing)
         errorMessage = nil
     }
@@ -1203,9 +1207,10 @@ final class IOSStore: ObservableObject {
     }
 
     func finishDataPackagePicker() {
-        if case let .exporting(url)? = dataPackagePickerRequest?.mode {
-            try? FileManager.default.removeItem(at: url)
+        if let exportURL = dataPackageExportURL {
+            try? FileManager.default.removeItem(at: exportURL)
         }
+        dataPackageExportURL = nil
         dataPackagePickerRequest = nil
     }
 

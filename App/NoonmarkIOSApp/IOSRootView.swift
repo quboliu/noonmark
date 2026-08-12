@@ -59,7 +59,12 @@ struct IOSRootView: View {
                 store.errorMessage = error.localizedDescription
             }
         }
-        .sheet(item: $store.dataPackagePickerRequest) { request in
+        .sheet(
+            item: $store.dataPackagePickerRequest,
+            onDismiss: {
+                store.finishDataPackagePicker()
+            }
+        ) { request in
             IOSDocumentPicker(mode: request.mode) { result in
                 store.finishDataPackagePicker()
                 switch request.mode {

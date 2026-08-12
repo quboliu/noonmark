@@ -10,3 +10,4 @@ scripts/test-e2e
 scripts/test-interactive-demo-fixture
 scripts/test-tencent-ime-input-matrix
 scripts/test-tencent-ime-termination-persistence
+scripts/test-ios-simulator

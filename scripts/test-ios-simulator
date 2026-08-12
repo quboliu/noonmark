@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+simulator_udid="6C6FA7CE-F5B5-4881-9B3D-2CE9A7177F3D"
+bundle_identifier="app.noonmark.ios.development"
+derived_data_path="$repo_root/artifacts/ios-derived"
+
+if [[ "$simulator_udid" == *"production"* || "$bundle_identifier" == "app.noonmark.mac" ]]; then
+  echo "refusing to run an iOS verification against a production identity" >&2
+  exit 1
+fi
+if ! command -v xcodegen >/dev/null 2>&1; then
+  echo "missing required tool: xcodegen" >&2
+  exit 1
+fi
+if ! xcrun simctl list devices available | rg -F "Noonmark iPhone 17 Pro ($simulator_udid)" >/dev/null; then
+  echo "fixed iOS verification simulator is missing or has the wrong identity: Noonmark iPhone 17 Pro ($simulator_udid)" >&2
+  exit 1
+fi
+
+xcodegen generate --spec "$repo_root/project.yml" --project "$repo_root"
+# Erase the exact fixed non-production device before each suite. This removes
+# simulator Keychain, UserDefaults, app data and encrypted Zhulong sidecar
+# state together; uninstalling the app alone cannot prove a clean cut.
+xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
+xcrun simctl erase "$simulator_udid"
+xcrun simctl boot "$simulator_udid" >/dev/null 2>&1 || true
+xcrun simctl bootstatus "$simulator_udid" -b
+
+# Keep the exact fixed simulator clean-cut to this run. This is the fixed
+# non-production iOS development bundle; no host Application Support or
+# production bundle is inspected or removed here.
+xcrun simctl terminate "$simulator_udid" "$bundle_identifier" >/dev/null 2>&1 || true
+xcrun simctl uninstall "$simulator_udid" "$bundle_identifier" >/dev/null 2>&1 || true
+
+xcodebuild test \
+  -project NoonmarkIOS.xcodeproj \
+  -scheme NoonmarkIOSApp \
+  -destination "id=$simulator_udid" \
+  -derivedDataPath "$derived_data_path" \
+  | tee artifacts/ios-test.log
+
+# XCTest can finish the xcodebuild process without making the shell pipeline
+# status sufficiently explicit. Keep the simulator gate fail-closed on the
+# symptom-level result written to the test log.
+if rg -q "TEST FAILED|Test Suite '.*' failed at|Executed [0-9]+ tests, with [1-9][0-9]* failure" artifacts/ios-test.log; then
+  echo "iOS simulator XCTest reported a failure; refusing to publish a screenshot as a pass" >&2
+  exit 1
+fi
+
+app_path="$derived_data_path/Build/Products/Debug-iphonesimulator/Noonmark.app"
+if [[ ! -d "$app_path" ]]; then
+  echo "iOS simulator app was not produced: $app_path" >&2
+  exit 1
+fi
+
+# XCTest may leave the development app terminated after the final test. Reopen
+# the exact built app before taking the visual evidence so the screenshot is
+# an app surface, never the simulator Home Screen.
+xcrun simctl install "$simulator_udid" "$app_path"
+launch_result="$(xcrun simctl launch "$simulator_udid" "$bundle_identifier")"
+[[ "$launch_result" == *"$bundle_identifier:"* ]] || {
+  echo "failed to relaunch the iOS development app before screenshot: $launch_result" >&2
+  exit 1
+}
+app_ready=0
+for _ in $(seq 1 40); do
+  if xcrun simctl io "$simulator_udid" screenshot artifacts/ios-simulator-final.png >/dev/null 2>&1 &&
+    [[ -s artifacts/ios-simulator-final.png ]] &&
+    file artifacts/ios-simulator-final.png | rg -F 'PNG image data' >/dev/null; then
+    app_ready=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$app_ready" -ne 1 ]]; then
+  echo "iOS development app did not produce a screenshot after launch: $launch_result" >&2
+  exit 1
+fi
+echo "iOS simulator verification passed: $simulator_udid"

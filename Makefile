@@ -1,4 +1,4 @@
-.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture package-dmg verify-dmg test-dmg-install release-private-dmg test test-unit test-integration test-system test-deterministic-sim test-e2e test-runtime-profile-isolation test-failure-case-gates test-notes-ui-contract test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-tencent-ime-release-smoke test-ai-provider-live test-cloudkit-sync-live test-all lint format format-check check
+.PHONY: reset-dev-data generate-app-icon verify-app-icon build build-app run-app run-demo-app test-demo-fixture test-dmg-install release-private-dmg test test-unit test-integration test-system test-deterministic-sim test-e2e test-ios-simulator test-ios-target-contract test-runtime-profile-isolation test-failure-case-gates test-notes-ui-contract test-tencent-ime-input-contract test-tencent-ime-input-matrix test-tencent-ime-termination-persistence test-tencent-ime-release-smoke test-ai-provider-live test-cloudkit-sync-live test-all lint format-check check
 
 reset-dev-data:
 	@test -n "$(RESET_PROFILE)" || \
@@ -57,6 +57,12 @@ test-deterministic-sim:
 
 test-e2e:
 	scripts/test-e2e
+
+test-ios-simulator:
+	scripts/test-ios-simulator
+
+test-ios-target-contract:
+	scripts/test-ios-target-contract
 
 test-runtime-profile-isolation:
 	scripts/test-runtime-profile-isolation

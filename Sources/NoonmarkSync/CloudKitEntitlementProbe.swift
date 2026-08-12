@@ -52,6 +52,7 @@ public enum CloudKitEntitlementProbe {
     public static func validateCurrentProcess(
         containerIdentifier: String
     ) throws -> CloudKitSyncEnvironment {
+#if os(macOS)
         guard let task = SecTaskCreateFromSelf(nil) else {
             throw CloudKitSyncEngineTransportError.missingEntitlement(
                 containerIdentifiersKey
@@ -74,8 +75,18 @@ public enum CloudKitEntitlementProbe {
             environment: environment,
             remoteNotificationsEnvironment: remoteEnvironment
         )
+#else
+        // iOS does not expose SecTask to application targets. Until the iOS
+        // target has a signed CloudKit entitlement reader, fail closed instead
+        // of treating an unverified bundle as a live sync environment.
+        _ = containerIdentifier
+        throw CloudKitSyncEngineTransportError.missingEntitlement(
+            containerIdentifiersKey
+        )
+#endif
     }
 
+#if os(macOS)
     private static func entitlement(
         _ key: String,
         from task: SecTask
@@ -86,4 +97,5 @@ public enum CloudKitEntitlementProbe {
             nil
         )
     }
+#endif
 }

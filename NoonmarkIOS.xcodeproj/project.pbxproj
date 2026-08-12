@@ -1,0 +1,660 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01972B5E26117993471DFA8C /* NoonmarkCore in Frameworks */ = {isa = PBXBuildFile; productRef = 380042EB0C61D54579F3CDA6 /* NoonmarkCore */; };
+		2107919B97DF23CA244A4134 /* IOSRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30E7984E719A1BC2E1E849FE /* IOSRootView.swift */; };
+		222202CD3F6669D8D54FB9D6 /* IOSStoreSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51CEDA075E38D39157657D81 /* IOSStoreSmokeTests.swift */; };
+		27BF197776BE318219530F49 /* IOSSettingsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 130D4462214A9457AF246C10 /* IOSSettingsPage.swift */; };
+		317AAED0FB8EBB04F4901444 /* IOSTaskDetailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC38C3F09A2FA9DF1C37233 /* IOSTaskDetailViews.swift */; };
+		48D0294EB60B0E50D217F581 /* NoonmarkIOSUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACB6575CD348A2360069F8B /* NoonmarkIOSUITests.swift */; };
+		563757F63628E05D5E7C5BB6 /* IOSFlylightPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */; };
+		6E48163FEF011E582114A38D /* NoonmarkZhulongAI in Frameworks */ = {isa = PBXBuildFile; productRef = 616645BFD25B549C69186437 /* NoonmarkZhulongAI */; };
+		7D84CE15FDB3DA23B6477B0B /* NoonmarkZhulong in Frameworks */ = {isa = PBXBuildFile; productRef = 9E2419BA137569D9FE5ADF3B /* NoonmarkZhulong */; };
+		7DCA8914296DE8078B0A9E98 /* NoonmarkAI in Frameworks */ = {isa = PBXBuildFile; productRef = 935CFBD3A6476CF32AE01752 /* NoonmarkAI */; };
+		7E86E813CBF334755B89E393 /* IOSTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC226BB1C0F771B11759BD7E /* IOSTheme.swift */; };
+		854227A2EF286186194CB556 /* IOSZhulongPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A6933C4A1583EC94E8CFC2 /* IOSZhulongPage.swift */; };
+		8A71BDA527B2C2848FA8A5AA /* IOSClassificationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5AFD950DCD2EBFEB581A530 /* IOSClassificationEditor.swift */; };
+		A25B876DD341946F4E69D38C /* NoonmarkMacRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = B409DF30313EF426F0304ACA /* NoonmarkMacRuntime */; };
+		A645EF49DAFDE5FFC6BC61C6 /* NoonmarkSync in Frameworks */ = {isa = PBXBuildFile; productRef = 49CC14FC3BC18F36DB7F2B23 /* NoonmarkSync */; };
+		A80E80DAADBED2357E8BEDD6 /* IOSDiagnosticDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248B4F12CD89D108909FED6D /* IOSDiagnosticDocument.swift */; };
+		AA9A9D11A8EDBC2D49BD79BA /* IOSDataPackageDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */; };
+		C6403A8C4F8F381C6C1D4155 /* NoonmarkDiagnostics in Frameworks */ = {isa = PBXBuildFile; productRef = C7F112C70E43C5D8913B6810 /* NoonmarkDiagnostics */; };
+		C72424403F4F2FD29F8F41C9 /* NoonmarkStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 4B361D5BBD12ACC7CA25FE77 /* NoonmarkStorage */; };
+		CA117E284A79A5612BEAF1A4 /* NoonmarkIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D46AB309CC9205B2F4C69706 /* NoonmarkIOSApp.swift */; };
+		CB7A40410BDEE94F17DD6E54 /* IOSCalendarAndRecurringPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988FD8A995D7CA9AD90EF2C7 /* IOSCalendarAndRecurringPages.swift */; };
+		DB0C9779C6D50FCEDF88B661 /* IOSTaskCollectionPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3306117C3F840492D78FF6EB /* IOSTaskCollectionPresentation.swift */; };
+		DE8537A7D80818C33B1EEE3D /* IOSStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25564FE308FA5518B5B58FB /* IOSStore.swift */; };
+		F70E1F8FA8391B849E9FCF57 /* IOSStickyNotePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA000AD6A02E099C5697604B /* IOSStickyNotePresentation.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		453754313FDBCD06C88EBCC8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BAD32E3BE14988A6DD536608 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D39357700B60FCBC6DD9B74;
+			remoteInfo = NoonmarkIOSApp;
+		};
+		FD3886BF66ABE6E97FE72BBF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BAD32E3BE14988A6DD536608 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D39357700B60FCBC6DD9B74;
+			remoteInfo = NoonmarkIOSApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		130D4462214A9457AF246C10 /* IOSSettingsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSettingsPage.swift; sourceTree = "<group>"; };
+		248B4F12CD89D108909FED6D /* IOSDiagnosticDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticDocument.swift; sourceTree = "<group>"; };
+		2DE19F000B0B621DE349C8A7 /* noonmark-ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "noonmark-ios"; path = .; sourceTree = SOURCE_ROOT; };
+		30A6933C4A1583EC94E8CFC2 /* IOSZhulongPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSZhulongPage.swift; sourceTree = "<group>"; };
+		30E7984E719A1BC2E1E849FE /* IOSRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSRootView.swift; sourceTree = "<group>"; };
+		3306117C3F840492D78FF6EB /* IOSTaskCollectionPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSTaskCollectionPresentation.swift; sourceTree = "<group>"; };
+		3AC38C3F09A2FA9DF1C37233 /* IOSTaskDetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSTaskDetailViews.swift; sourceTree = "<group>"; };
+		51CEDA075E38D39157657D81 /* IOSStoreSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStoreSmokeTests.swift; sourceTree = "<group>"; };
+		77A2B763EEA3F8D2CFAB12CF /* NoonmarkIOSApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NoonmarkIOSApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		80EA53829AAB92DCAAE4DF95 /* NoonmarkIOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NoonmarkIOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSFlylightPage.swift; sourceTree = "<group>"; };
+		96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDataPackageDocument.swift; sourceTree = "<group>"; };
+		988FD8A995D7CA9AD90EF2C7 /* IOSCalendarAndRecurringPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCalendarAndRecurringPages.swift; sourceTree = "<group>"; };
+		9F1D2AF7DBBC1C76855A81ED /* NoonmarkIOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NoonmarkIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A25564FE308FA5518B5B58FB /* IOSStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStore.swift; sourceTree = "<group>"; };
+		C5AFD950DCD2EBFEB581A530 /* IOSClassificationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClassificationEditor.swift; sourceTree = "<group>"; };
+		CACB6575CD348A2360069F8B /* NoonmarkIOSUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoonmarkIOSUITests.swift; sourceTree = "<group>"; };
+		D46AB309CC9205B2F4C69706 /* NoonmarkIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoonmarkIOSApp.swift; sourceTree = "<group>"; };
+		DA000AD6A02E099C5697604B /* IOSStickyNotePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStickyNotePresentation.swift; sourceTree = "<group>"; };
+		FC226BB1C0F771B11759BD7E /* IOSTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSTheme.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D75BBAD63E8989E72F834D7F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01972B5E26117993471DFA8C /* NoonmarkCore in Frameworks */,
+				A25B876DD341946F4E69D38C /* NoonmarkMacRuntime in Frameworks */,
+				7DCA8914296DE8078B0A9E98 /* NoonmarkAI in Frameworks */,
+				7D84CE15FDB3DA23B6477B0B /* NoonmarkZhulong in Frameworks */,
+				6E48163FEF011E582114A38D /* NoonmarkZhulongAI in Frameworks */,
+				C6403A8C4F8F381C6C1D4155 /* NoonmarkDiagnostics in Frameworks */,
+				C72424403F4F2FD29F8F41C9 /* NoonmarkStorage in Frameworks */,
+				A645EF49DAFDE5FFC6BC61C6 /* NoonmarkSync in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0C188067C5811F7E8789E0AA /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				1B3B8935AAAA26E408825A2E /* NoonmarkIOSTests */,
+				FFE110CF5052E5D30618DD52 /* NoonmarkIOSUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		1B3B8935AAAA26E408825A2E /* NoonmarkIOSTests */ = {
+			isa = PBXGroup;
+			children = (
+				51CEDA075E38D39157657D81 /* IOSStoreSmokeTests.swift */,
+			);
+			path = NoonmarkIOSTests;
+			sourceTree = "<group>";
+		};
+		564F2B477AB00E679A1963ED = {
+			isa = PBXGroup;
+			children = (
+				D9C2DC574943E43E70E12DD5 /* App */,
+				95C905D9FBDE2F70C24EF247 /* Packages */,
+				0C188067C5811F7E8789E0AA /* Tests */,
+				CA2ECF879E09BDD8C040E561 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		77B00FBA95DF253E37B84178 /* NoonmarkIOSApp */ = {
+			isa = PBXGroup;
+			children = (
+				988FD8A995D7CA9AD90EF2C7 /* IOSCalendarAndRecurringPages.swift */,
+				C5AFD950DCD2EBFEB581A530 /* IOSClassificationEditor.swift */,
+				96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */,
+				248B4F12CD89D108909FED6D /* IOSDiagnosticDocument.swift */,
+				94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */,
+				30E7984E719A1BC2E1E849FE /* IOSRootView.swift */,
+				130D4462214A9457AF246C10 /* IOSSettingsPage.swift */,
+				DA000AD6A02E099C5697604B /* IOSStickyNotePresentation.swift */,
+				A25564FE308FA5518B5B58FB /* IOSStore.swift */,
+				3306117C3F840492D78FF6EB /* IOSTaskCollectionPresentation.swift */,
+				3AC38C3F09A2FA9DF1C37233 /* IOSTaskDetailViews.swift */,
+				FC226BB1C0F771B11759BD7E /* IOSTheme.swift */,
+				30A6933C4A1583EC94E8CFC2 /* IOSZhulongPage.swift */,
+				D46AB309CC9205B2F4C69706 /* NoonmarkIOSApp.swift */,
+			);
+			path = NoonmarkIOSApp;
+			sourceTree = "<group>";
+		};
+		95C905D9FBDE2F70C24EF247 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				2DE19F000B0B621DE349C8A7 /* noonmark-ios */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		CA2ECF879E09BDD8C040E561 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				77A2B763EEA3F8D2CFAB12CF /* NoonmarkIOSApp.app */,
+				80EA53829AAB92DCAAE4DF95 /* NoonmarkIOSTests.xctest */,
+				9F1D2AF7DBBC1C76855A81ED /* NoonmarkIOSUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D9C2DC574943E43E70E12DD5 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				77B00FBA95DF253E37B84178 /* NoonmarkIOSApp */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		FFE110CF5052E5D30618DD52 /* NoonmarkIOSUITests */ = {
+			isa = PBXGroup;
+			children = (
+				CACB6575CD348A2360069F8B /* NoonmarkIOSUITests.swift */,
+			);
+			path = NoonmarkIOSUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6B5DC7A0F0A096890B031A3A /* NoonmarkIOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A2C607BCF2DAB4296E3660C7 /* Build configuration list for PBXNativeTarget "NoonmarkIOSTests" */;
+			buildPhases = (
+				9D502166B9DCBB67FEE51D26 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				57D01CCDB1510C86F89F46D2 /* PBXTargetDependency */,
+			);
+			name = NoonmarkIOSTests;
+			packageProductDependencies = (
+			);
+			productName = NoonmarkIOSTests;
+			productReference = 80EA53829AAB92DCAAE4DF95 /* NoonmarkIOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		7D39357700B60FCBC6DD9B74 /* NoonmarkIOSApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 46B8368834A36FBFFC4E94AC /* Build configuration list for PBXNativeTarget "NoonmarkIOSApp" */;
+			buildPhases = (
+				C6125CE38D2B3FE25E3FB21F /* Sources */,
+				D75BBAD63E8989E72F834D7F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NoonmarkIOSApp;
+			packageProductDependencies = (
+				380042EB0C61D54579F3CDA6 /* NoonmarkCore */,
+				B409DF30313EF426F0304ACA /* NoonmarkMacRuntime */,
+				935CFBD3A6476CF32AE01752 /* NoonmarkAI */,
+				9E2419BA137569D9FE5ADF3B /* NoonmarkZhulong */,
+				616645BFD25B549C69186437 /* NoonmarkZhulongAI */,
+				C7F112C70E43C5D8913B6810 /* NoonmarkDiagnostics */,
+				4B361D5BBD12ACC7CA25FE77 /* NoonmarkStorage */,
+				49CC14FC3BC18F36DB7F2B23 /* NoonmarkSync */,
+			);
+			productName = NoonmarkIOSApp;
+			productReference = 77A2B763EEA3F8D2CFAB12CF /* NoonmarkIOSApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F1092E4718D66D496BA7375D /* NoonmarkIOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 970092FD178BB271B041160A /* Build configuration list for PBXNativeTarget "NoonmarkIOSUITests" */;
+			buildPhases = (
+				DAAACD96A4C724D01960CFA5 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6090C3463DEC627CBC6B8052 /* PBXTargetDependency */,
+			);
+			name = NoonmarkIOSUITests;
+			packageProductDependencies = (
+			);
+			productName = NoonmarkIOSUITests;
+			productReference = 9F1D2AF7DBBC1C76855A81ED /* NoonmarkIOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BAD32E3BE14988A6DD536608 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					6B5DC7A0F0A096890B031A3A = {
+						DevelopmentTeam = "";
+					};
+					7D39357700B60FCBC6DD9B74 = {
+						DevelopmentTeam = "";
+					};
+					F1092E4718D66D496BA7375D = {
+						DevelopmentTeam = "";
+						TestTargetID = 7D39357700B60FCBC6DD9B74;
+					};
+				};
+			};
+			buildConfigurationList = 4AAABD3B43CE9FD5405CB497 /* Build configuration list for PBXProject "NoonmarkIOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 564F2B477AB00E679A1963ED;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E757F6FFD87C15B2ED5E5CCB /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CA2ECF879E09BDD8C040E561 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7D39357700B60FCBC6DD9B74 /* NoonmarkIOSApp */,
+				6B5DC7A0F0A096890B031A3A /* NoonmarkIOSTests */,
+				F1092E4718D66D496BA7375D /* NoonmarkIOSUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		9D502166B9DCBB67FEE51D26 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				222202CD3F6669D8D54FB9D6 /* IOSStoreSmokeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C6125CE38D2B3FE25E3FB21F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CB7A40410BDEE94F17DD6E54 /* IOSCalendarAndRecurringPages.swift in Sources */,
+				8A71BDA527B2C2848FA8A5AA /* IOSClassificationEditor.swift in Sources */,
+				AA9A9D11A8EDBC2D49BD79BA /* IOSDataPackageDocument.swift in Sources */,
+				A80E80DAADBED2357E8BEDD6 /* IOSDiagnosticDocument.swift in Sources */,
+				563757F63628E05D5E7C5BB6 /* IOSFlylightPage.swift in Sources */,
+				2107919B97DF23CA244A4134 /* IOSRootView.swift in Sources */,
+				27BF197776BE318219530F49 /* IOSSettingsPage.swift in Sources */,
+				F70E1F8FA8391B849E9FCF57 /* IOSStickyNotePresentation.swift in Sources */,
+				DE8537A7D80818C33B1EEE3D /* IOSStore.swift in Sources */,
+				DB0C9779C6D50FCEDF88B661 /* IOSTaskCollectionPresentation.swift in Sources */,
+				317AAED0FB8EBB04F4901444 /* IOSTaskDetailViews.swift in Sources */,
+				7E86E813CBF334755B89E393 /* IOSTheme.swift in Sources */,
+				854227A2EF286186194CB556 /* IOSZhulongPage.swift in Sources */,
+				CA117E284A79A5612BEAF1A4 /* NoonmarkIOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DAAACD96A4C724D01960CFA5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				48D0294EB60B0E50D217F581 /* NoonmarkIOSUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		57D01CCDB1510C86F89F46D2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D39357700B60FCBC6DD9B74 /* NoonmarkIOSApp */;
+			targetProxy = 453754313FDBCD06C88EBCC8 /* PBXContainerItemProxy */;
+		};
+		6090C3463DEC627CBC6B8052 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D39357700B60FCBC6DD9B74 /* NoonmarkIOSApp */;
+			targetProxy = FD3886BF66ABE6E97FE72BBF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		18657EB9C5F1B5A772380965 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noonmark.app/Noonmark";
+			};
+			name = Debug;
+		};
+		3A25BD797841A7C1AE5B2574 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		45CAD3B21AFD0663A4C834D0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "晷迹";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development;
+				PRODUCT_NAME = Noonmark;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5E727CFD9690106759EC6F50 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NoonmarkIOSApp;
+			};
+			name = Debug;
+		};
+		6C5772154A22ECD87815075E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NoonmarkIOSApp;
+			};
+			name = Release;
+		};
+		91E69013079BC0E9F7413695 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A8D4D7EEAA7E7A9508E9130D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noonmark.app/Noonmark";
+			};
+			name = Release;
+		};
+		E3D5DB96160C61583C16E6AD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "晷迹";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.noonmark.ios.development;
+				PRODUCT_NAME = Noonmark;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		46B8368834A36FBFFC4E94AC /* Build configuration list for PBXNativeTarget "NoonmarkIOSApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E3D5DB96160C61583C16E6AD /* Debug */,
+				45CAD3B21AFD0663A4C834D0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4AAABD3B43CE9FD5405CB497 /* Build configuration list for PBXProject "NoonmarkIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3A25BD797841A7C1AE5B2574 /* Debug */,
+				91E69013079BC0E9F7413695 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		970092FD178BB271B041160A /* Build configuration list for PBXNativeTarget "NoonmarkIOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5E727CFD9690106759EC6F50 /* Debug */,
+				6C5772154A22ECD87815075E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A2C607BCF2DAB4296E3660C7 /* Build configuration list for PBXNativeTarget "NoonmarkIOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				18657EB9C5F1B5A772380965 /* Debug */,
+				A8D4D7EEAA7E7A9508E9130D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		E757F6FFD87C15B2ED5E5CCB /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		380042EB0C61D54579F3CDA6 /* NoonmarkCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkCore;
+		};
+		49CC14FC3BC18F36DB7F2B23 /* NoonmarkSync */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkSync;
+		};
+		4B361D5BBD12ACC7CA25FE77 /* NoonmarkStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkStorage;
+		};
+		616645BFD25B549C69186437 /* NoonmarkZhulongAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkZhulongAI;
+		};
+		935CFBD3A6476CF32AE01752 /* NoonmarkAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkAI;
+		};
+		9E2419BA137569D9FE5ADF3B /* NoonmarkZhulong */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkZhulong;
+		};
+		B409DF30313EF426F0304ACA /* NoonmarkMacRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkMacRuntime;
+		};
+		C7F112C70E43C5D8913B6810 /* NoonmarkDiagnostics */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoonmarkDiagnostics;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = BAD32E3BE14988A6DD536608 /* Project object */;
+}

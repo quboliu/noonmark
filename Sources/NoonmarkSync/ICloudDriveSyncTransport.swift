@@ -66,14 +66,26 @@ public actor ICloudDriveSyncTransport: SyncRecordTransport {
         repositoryName: String,
         fileManager: FileManager = .default
     ) throws -> URL {
+#if os(macOS)
         let cloudDocsURL = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+        let cloudDocsExists = fileManager.fileExists(atPath: cloudDocsURL.path)
+#else
+        // iOS has no user home directory. An iOS app must use an explicitly
+        // entitled ubiquity container; silently falling back to an arbitrary
+        // local directory would make the endpoint appear synced when it is not.
+        let cloudDocsURL = fileManager.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        ).first ?? fileManager.temporaryDirectory
+        let cloudDocsExists = false
+#endif
         return try resolvedRootURL(
             repositoryName: repositoryName,
             ubiquitousContainerURL: fileManager.url(forUbiquityContainerIdentifier: nil),
             cloudDocsURL: cloudDocsURL,
             hasICloudAccount: fileManager.ubiquityIdentityToken != nil,
-            cloudDocsExists: fileManager.fileExists(atPath: cloudDocsURL.path)
+            cloudDocsExists: cloudDocsExists
         )
     }
 

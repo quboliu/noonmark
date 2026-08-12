@@ -5,6 +5,7 @@ import PackageDescription
 let package = Package(
     name: "Noonmark",
     platforms: [
+        .iOS(.v17),
         .macOS(.v14)
     ],
     products: [

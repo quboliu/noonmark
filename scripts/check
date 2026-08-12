@@ -91,6 +91,9 @@ run_check_suite() {
   echo "==> Runtime profile isolation"
   scripts/test-runtime-profile-isolation
 
+  echo "==> iOS target contract"
+  scripts/test-ios-target-contract
+
   echo "==> Validation evidence provenance"
   scripts/test-evidence-common
 

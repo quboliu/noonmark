@@ -263,6 +263,6 @@ FAIL-2026-08-11-29	fast	scripts/test-windowserver-physical-target-contract	scrip
 FAIL-2026-08-11-29	symptom	scripts/test-e2e	scripts/test-all	完整签名 App 必须连续完成 native command exercise／restart 两次 Search、真实点击与 SQLite 对账，不得由下面的主窗截获 mouseDown
 FAIL-2026-08-12-01	fast	scripts/test-release-version-contract	scripts/check	current 版本必须对应严格递增 ledger 的唯一最高 candidate，正式入口保留 exact tag，trial 入口使用独立 pre-tag verifier
 FAIL-2026-08-12-01	symptom	scripts/test-release-trial-contract	scripts/check	无 tag 的最新 candidate 必须可进入 trial；已有 exact tag、retired build 或非 ledger tip 全部 fail-closed，两种模式汇合到同一本机 package chain
-FAIL-2026-08-12-01	symptom	scripts/test-release-trial-output-contract	scripts/check	通过完整门禁的 trial DMG 必须以 canonical 版本名 exclusive-create；既有输出、symlink source／parent 或错误名称均零覆盖 fail-closed
+FAIL-2026-08-12-01	symptom	scripts/test-release-trial-output-contract	scripts/check	trial source、临时副本与 final output 必须绑定 full package manifest SHA authority并以 canonical 版本名 exclusive-create；tamper、既有输出或 symlink 均零覆盖 fail-closed
 FAIL-2026-08-12-01	release	scripts/test-dmg-install	scripts/release-private-dmg	精确 pre-tag trial package 必须以受控 dmg-validation 身份完成真实安装、交互、退出、重启和资料回读
-FAIL-2026-08-12-01	release	scripts/publish-trial-dmg	scripts/release-private-dmg	full evidence 转绿后才可从 exact verified package exclusive-create canonical trial DMG并报告 SHA；既有输出永不覆盖
+FAIL-2026-08-12-01	release	scripts/publish-trial-dmg	scripts/release-private-dmg	full verifier 前后 package manifest SHA 必须不变，publisher 只可按其 dmg_sha256 exclusive-create canonical trial DMG并报告 SHA；既有输出永不覆盖

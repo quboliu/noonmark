@@ -21,11 +21,24 @@ trap cleanup EXIT INT TERM
 
 source_dmg="$fixture_root/source.dmg"
 printf '%s\n' 'signed trial fixture bytes' >"$source_dmg"
+source_sha256="$(shasum -a 256 "$source_dmg" | awk '{print $1}')"
+package_manifest="${source_dmg}.manifest"
+printf '%s\n' \
+  'suite=package-dmg' \
+  'suite_mode=full' \
+  "dmg_sha256=$source_sha256" \
+  'suite_exit_status=0' \
+  >"$package_manifest"
+package_manifest_sha256="$(shasum -a 256 "$package_manifest" | awk '{print $1}')"
 marketing_version="$(scripts/release-version marketing-version)"
 build_number="$(scripts/release-version build-number)"
 output_dmg="$fixture_root/Noonmark-${marketing_version}-build${build_number}.dmg"
 
-"$publisher" "$source_dmg" "$output_dmg" >/dev/null ||
+"$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$output_dmg" >/dev/null ||
   fail "exclusive trial publication rejected a fresh output"
 [[ -f "$output_dmg" && ! -L "$output_dmg" ]] ||
   fail "published trial output is not a regular file"
@@ -36,24 +49,86 @@ cmp -s "$source_dmg" "$output_dmg" ||
 original_sha="$(shasum -a 256 "$output_dmg" | awk '{print $1}')"
 
 printf '%s\n' 'changed source bytes' >"$source_dmg"
-if "$publisher" "$source_dmg" "$output_dmg" >/dev/null 2>&1; then
+if "$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$output_dmg" >/dev/null 2>&1; then
   fail "trial publisher overwrote an existing output"
 fi
 [[ "$(shasum -a 256 "$output_dmg" | awk '{print $1}')" == "$original_sha" ]] ||
   fail "existing trial output changed after a rejected publication"
 
 wrong_name="$fixture_root/Noonmark-trial.dmg"
-if "$publisher" "$source_dmg" "$wrong_name" >/dev/null 2>&1; then
+if "$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$wrong_name" >/dev/null 2>&1; then
   fail "trial publisher accepted a non-canonical output name"
 fi
 [[ ! -e "$wrong_name" ]] || fail "rejected non-canonical output was created"
+
+changed_parent="$fixture_root/changed-source"
+mkdir "$changed_parent"
+changed_output="$changed_parent/Noonmark-${marketing_version}-build${build_number}.dmg"
+if "$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$changed_output" >/dev/null 2>&1; then
+  fail "trial publisher accepted source bytes outside the verified manifest"
+fi
+[[ ! -e "$changed_output" ]] || fail "changed-source output was created"
+
+printf '%s\n' 'signed trial fixture bytes' >"$source_dmg"
+printf '%s\n' 'tampered=true' >>"$package_manifest"
+manifest_parent="$fixture_root/changed-manifest"
+mkdir "$manifest_parent"
+manifest_output="$manifest_parent/Noonmark-${marketing_version}-build${build_number}.dmg"
+if "$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$manifest_output" >/dev/null 2>&1; then
+  fail "trial publisher accepted a manifest outside the full evidence authority"
+fi
+[[ ! -e "$manifest_output" ]] || fail "changed-manifest output was created"
+
+printf '%s\n' \
+  'suite=package-dmg' \
+  'suite_mode=full' \
+  "dmg_sha256=$source_sha256" \
+  'suite_exit_status=0' \
+  >"$package_manifest"
+package_manifest_sha256="$(shasum -a 256 "$package_manifest" | awk '{print $1}')"
+
+manifest_link_source="$fixture_root/manifest-link-source.dmg"
+cp "$source_dmg" "$manifest_link_source"
+manifest_link="${manifest_link_source}.manifest"
+ln -s "$package_manifest" "$manifest_link"
+manifest_link_parent="$fixture_root/manifest-link"
+mkdir "$manifest_link_parent"
+manifest_link_output="$manifest_link_parent/Noonmark-${marketing_version}-build${build_number}.dmg"
+if "$publisher" \
+  "$manifest_link_source" \
+  "$manifest_link" \
+  "$package_manifest_sha256" \
+  "$manifest_link_output" >/dev/null 2>&1; then
+  fail "trial publisher accepted a symlink package manifest"
+fi
+[[ ! -e "$manifest_link_output" ]] || fail "symlink-manifest output was created"
 
 source_link="$fixture_root/source-link.dmg"
 ln -s "$source_dmg" "$source_link"
 fresh_parent="$fixture_root/fresh"
 mkdir "$fresh_parent"
 fresh_output="$fresh_parent/Noonmark-${marketing_version}-build${build_number}.dmg"
-if "$publisher" "$source_link" "$fresh_output" >/dev/null 2>&1; then
+if "$publisher" \
+  "$source_link" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$fresh_output" >/dev/null 2>&1; then
   fail "trial publisher accepted a symlink source"
 fi
 [[ ! -e "$fresh_output" ]] || fail "symlink-source output was created"
@@ -61,7 +136,11 @@ fi
 alias_parent="$fixture_root/alias"
 ln -s "$fresh_parent" "$alias_parent"
 alias_output="$alias_parent/Noonmark-${marketing_version}-build${build_number}.dmg"
-if "$publisher" "$source_dmg" "$alias_output" >/dev/null 2>&1; then
+if "$publisher" \
+  "$source_dmg" \
+  "$package_manifest" \
+  "$package_manifest_sha256" \
+  "$alias_output" >/dev/null 2>&1; then
   fail "trial publisher accepted a symlink output parent"
 fi
 [[ ! -e "$fresh_output" ]] || fail "symlink-parent output was created"

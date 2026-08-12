@@ -25,13 +25,13 @@ Replication V2 在正式 tag／push 前必须先产生一份可安装的 Apple D
 2. `--trial <absolute-output-dmg>` 先运行独立 `scripts/verify-release-trial-version`。验证器要求当前 `release/VERSION` 精确对应 ledger 中最后一条、最高 build 的 `candidate`，并要求本机不存在同名版本 tag；任一不满足即在 App／DMG 副作用前 fail-closed。
 3. 两种模式随后共用同一条本机证据链：static preflight → same-run runtime evidence → diagnostic closure → Tencent IME release smoke／evidence → production identity 静态打包 → read-only DMG verify → 受控 `dmg-validation` 安装／退出／重启 → full evidence verifier。
 4. trial 模式只跳过与 GitHub 发布本身有关的 tag 和 remote Environment readiness；它不增加低强度 package 捷径，也不允许直接调用 `scripts/package-dmg` 冒充已验证 trial。
-5. trial DMG 只在全部本机门禁通过后，以独立、不覆盖的 `Noonmark-0.3.0-build30.dmg` 名称 exclusive-create 到显式 Downloads 目标。source、output parent 与 canonical basename 都须 fail-closed 校验；既有目标、symlink 或 checksum 漂移不得覆盖。`dist/Noonmark.dmg` 只是受控构建输出，不作为历史候选登记。
+5. trial DMG 只在全部本机门禁通过后，以独立、不覆盖的 `Noonmark-0.3.0-build30.dmg` 名称 exclusive-create 到显式 Downloads 目标。full verifier 前后的 package manifest SHA 必须不变；source、临时副本与 final output 都须匹配该 manifest 的 `dmg_sha256`。source／manifest、output parent 与 canonical basename 也须 fail-closed 校验；既有目标、symlink、manifest replacement 或 checksum 漂移不得覆盖。`dist/Noonmark.dmg` 只是受控构建输出，不作为历史候选登记。
 
 ## 影响范围与测试策略
 
 - 版本身份：`release/VERSION`、`release/BUILD-LEDGER.tsv`、`docs/releases/v0.2.7.md`、新建 `docs/releases/v0.3.0.md`。
 - 发行编排：`scripts/release-private-dmg`、新 trial version verifier、release version／gate contract。
-- 永久门禁：fast gate 固定版本与 ledger；symptom gate 运行 trial verifier、精确有序编排与 exclusive output 的正反 fixture；release gate 必须在最终精确 commit 上真实执行 `--trial <absolute-output-dmg>` 的完整 DMG 安装与交付链。
+- 永久门禁：fast gate 固定版本与 ledger；symptom gate 运行 trial verifier、精确有序编排、package manifest authority 与 exclusive output 的正反 fixture；release gate 必须在最终精确 commit 上真实执行 `--trial <absolute-output-dmg>` 的完整 DMG 安装与交付链。
 - 回归点：默认无参数入口仍要求 tag 与 GitHub readiness；`make package-dmg`／`make release-private-dmg` 不自动进入 trial；production App 不执行；用户资料与 iCloud repository 不读取、不修改。
 
 ## 风险评估、回滚、灰度与监控

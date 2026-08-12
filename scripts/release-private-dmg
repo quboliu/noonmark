@@ -45,10 +45,25 @@ scripts/verify-tencent-ime-release-smoke-evidence
 scripts/package-dmg release
 scripts/verify-dmg dist/Noonmark.dmg
 scripts/test-dmg-install dist/Noonmark.dmg
+package_manifest="$repo_root/dist/Noonmark.dmg.manifest"
+if [[ ! -f "$package_manifest" || -L "$package_manifest" ]]; then
+  echo "release package manifest is missing or not a regular file" >&2
+  exit 1
+fi
+package_manifest_sha256="$(shasum -a 256 "$package_manifest" | awk '{print $1}')"
 scripts/verify-development-validation-evidence --scope full
+if [[ "$(shasum -a 256 "$package_manifest" | awk '{print $1}')" != \
+  "$package_manifest_sha256" ]]; then
+  echo "release package manifest changed during full evidence verification" >&2
+  exit 1
+fi
 
 if [[ "$mode" == "trial" ]]; then
-  scripts/publish-trial-dmg "$repo_root/dist/Noonmark.dmg" "$trial_output"
+  scripts/publish-trial-dmg \
+    "$repo_root/dist/Noonmark.dmg" \
+    "$package_manifest" \
+    "$package_manifest_sha256" \
+    "$trial_output"
   echo "Pre-tag trial DMG and complete same-run validation evidence passed"
 else
   echo "Private DMG package and complete same-run validation evidence passed"

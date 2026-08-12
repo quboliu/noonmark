@@ -4,22 +4,45 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
+source scripts/evidence-common
+
 fail() {
   echo "trial DMG publication: $*" >&2
   exit 1
 }
 
-if [[ "$#" -ne 2 ]]; then
-  echo "usage: scripts/publish-trial-dmg <source-dmg> <absolute-output-dmg>" >&2
+if [[ "$#" -ne 4 ]]; then
+  echo "usage: scripts/publish-trial-dmg <source-dmg> <package-manifest> <verified-manifest-sha256> <absolute-output-dmg>" >&2
   exit 64
 fi
 
 source_dmg="$1"
-output_dmg="$2"
-[[ "$source_dmg" == /* && "$output_dmg" == /* ]] ||
-  fail "source and output paths must be absolute"
+package_manifest="$2"
+verified_manifest_sha256="$3"
+output_dmg="$4"
+[[ "$source_dmg" == /* && "$package_manifest" == /* &&
+  "$output_dmg" == /* ]] || fail "source, manifest, and output paths must be absolute"
 [[ -f "$source_dmg" && ! -L "$source_dmg" ]] ||
   fail "source DMG must be a regular non-symlink file"
+[[ -f "$package_manifest" && ! -L "$package_manifest" ]] ||
+  fail "package manifest must be a regular non-symlink file"
+[[ "$package_manifest" == "${source_dmg}.manifest" ]] ||
+  fail "package manifest must be adjacent to its source DMG"
+[[ "$verified_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "verified package manifest SHA-256 is invalid"
+
+current_manifest_sha256="$(shasum -a 256 "$package_manifest" | awk '{print $1}')"
+[[ "$current_manifest_sha256" == "$verified_manifest_sha256" ]] ||
+  fail "package manifest differs from the full evidence authority"
+[[ "$(evidence_read "$package_manifest" suite)" == "package-dmg" &&
+  "$(evidence_read "$package_manifest" suite_mode)" == "full" &&
+  "$(evidence_read "$package_manifest" suite_exit_status)" == "0" ]] ||
+  fail "package manifest is not a completed full package record"
+verified_dmg_sha256="$(evidence_read "$package_manifest" dmg_sha256)"
+[[ "$verified_dmg_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "package manifest DMG SHA-256 is invalid"
+[[ "$(shasum -a 256 "$source_dmg" | awk '{print $1}')" == \
+  "$verified_dmg_sha256" ]] || fail "source DMG differs from its verified package manifest"
 
 marketing_version="$(scripts/release-version marketing-version)"
 build_number="$(scripts/release-version build-number)"
@@ -45,10 +68,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cp "$source_dmg" "$temporary_dmg"
-source_sha="$(shasum -a 256 "$source_dmg" | awk '{print $1}')"
 temporary_sha="$(shasum -a 256 "$temporary_dmg" | awk '{print $1}')"
-[[ "$temporary_sha" == "$source_sha" ]] || fail "copied DMG checksum differs"
+[[ "$temporary_sha" == "$verified_dmg_sha256" ]] ||
+  fail "copied DMG differs from its verified package manifest"
 chmod 0444 "$temporary_dmg"
+
+[[ "$(shasum -a 256 "$package_manifest" | awk '{print $1}')" == \
+  "$verified_manifest_sha256" ]] ||
+  fail "package manifest changed before trial publication"
 
 # A hard link makes the verified bytes visible at the final name without a
 # replace window. It fails if another process has created the output first.
@@ -59,8 +86,11 @@ temporary_dmg=""
 trap - EXIT INT TERM
 
 published_sha="$(shasum -a 256 "$output_dmg" | awk '{print $1}')"
-[[ "$published_sha" == "$source_sha" ]] ||
-  fail "published DMG checksum differs"
+[[ "$published_sha" == "$verified_dmg_sha256" ]] ||
+  fail "published DMG differs from its verified package manifest"
+[[ "$(shasum -a 256 "$package_manifest" | awk '{print $1}')" == \
+  "$verified_manifest_sha256" ]] ||
+  fail "package manifest changed during trial publication"
 
 echo "Trial DMG exclusively published: $output_dmg"
 echo "Trial DMG SHA-256: $published_sha"

@@ -7,7 +7,7 @@
 - 引入提交：待回溯；故障由分类真实 Simulator 症状门禁暴露
 - Git author／committer：基线提交记录中的仓库 author；本次未提交
 - 实际修改者：未知
-- 修复提交：`21856cf`
+- 修复提交：`00c17fa`
 
 ## 用户症状与影响
 
@@ -42,7 +42,7 @@ SwiftUI 同一 view chain 上的多个 `.alert(item:)` 竞争 presentation，删
 
 ## 验证结果
 
-修复后的 focused 症状门禁已转绿；完整 iOS Simulator 套件已执行 9 项 UI tests、0 failures。修复提交为 `21856cf`，案例标记为「已修复」。
+修复后的 focused 症状门禁已转绿；完整 iOS Simulator 套件已执行 9 项 UI tests、0 failures。修复提交为 `00c17fa`，案例标记为「已修复」。
 
 ## 永久门禁
 

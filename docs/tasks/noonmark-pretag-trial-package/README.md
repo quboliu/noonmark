@@ -2,7 +2,7 @@
 
 - Task-ID：`noonmark-pretag-trial-package`
 - 风险等级：P
-- 状态：实施中
+- 状态：本机 release 验证中；双实体 Mac 与 72 小时 soak 待 trial DMG 交付后执行
 
 ## 需求
 

@@ -7,7 +7,7 @@
 - 引入提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 与当前 session 证据不能证明先前提交的实际操作者
-- 修复提交：待回填
+- 修复提交：`81e58442a5aa990d59adcf89338b66cafa924eb4`（共享 V2 inventory authority、producer fail-closed 与 build 31 身份）
 
 ## 用户症状与影响
 
@@ -44,7 +44,7 @@ E2E producer 与发行 consumer 虽然名义上共享 inventory 函数，produce
 ## 验证结果
 
 - Red：旧 source 的 runtime verifier 稳定因 V1 `failure-restart-result.txt` 缺失退出 1，而完整 E2E manifest 错误保持成功。
-- Green（fast）：待运行。
+- Green（fast）：`scripts/test-e2e-evidence-contract`、`scripts/test-release-version-contract`、`scripts/test-release-trial-contract`、`scripts/test-release-trial-output-contract` 与 `scripts/test-failure-case-gates` 已通过；案例登记共 106 个。
 - Green（symptom）：待在修复 commit 上重跑完整真实 App E2E。
 - Green（release）：待同 run writer-lease、`make check` 与 pre-tag trial runtime／full verifier 通过。
 

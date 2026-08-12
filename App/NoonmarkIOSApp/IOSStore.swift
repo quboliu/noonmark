@@ -22,6 +22,11 @@ private enum IOSSyncConfigurationError: LocalizedError {
     }
 }
 
+struct IOSDataPackagePickerRequest: Identifiable {
+    let id = UUID()
+    let mode: IOSDataPackagePickerMode
+}
+
 @MainActor
 final class IOSStore: ObservableObject {
     enum Page: String, CaseIterable, Hashable, Identifiable {
@@ -81,9 +86,8 @@ final class IOSStore: ObservableObject {
     @Published var selectedTraceID: DayTraceID?
     @Published var selectedPoolChainID: TaskChainID?
     @Published var selectedIdeaID: IdeaID?
-    @Published var isExportingData = false
-    @Published var isImportingData = false
-    @Published var dataPackageDocument: IOSDataPackageDocument?
+    @Published var dataPackagePickerRequest: IOSDataPackagePickerRequest?
+    @Published var dataPackageStatusMessage: String?
     @Published var isExportingDiagnostics = false
     @Published var diagnosticDocument: IOSDiagnosticDocument?
     @Published var syncMessage: String?
@@ -1076,12 +1080,33 @@ final class IOSStore: ObservableObject {
 
     func exportDataPackage() {
         do {
-            dataPackageDocument = try IOSDataPackageDocument(snapshot: engine.snapshot())
-            isExportingData = true
+            let cacheDirectory = try FileManager.default.url(
+                for: .cachesDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            ).appendingPathComponent("NoonmarkDataPackageExports", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: cacheDirectory,
+                withIntermediateDirectories: true
+            )
+            let exportURL = cacheDirectory.appendingPathComponent(
+                "Noonmark-data-\(UUID().uuidString).json"
+            )
+            _ = try NoonmarkDataPackage.write(engine.snapshot(), to: exportURL)
+            dataPackageStatusMessage = nil
+            dataPackagePickerRequest = IOSDataPackagePickerRequest(
+                mode: .exporting(exportURL)
+            )
             errorMessage = nil
         } catch {
             errorMessage = Self.userFacingError(error)
         }
+    }
+
+    func beginDataPackageImport() {
+        dataPackagePickerRequest = IOSDataPackagePickerRequest(mode: .importing)
+        errorMessage = nil
     }
 
     func startDiagnostics() async {
@@ -1152,10 +1177,44 @@ final class IOSStore: ObservableObject {
             )
             engine = try NoonmarkEngine(snapshot: snapshot)
             IOSTheme.apply(engine.preferences.theme)
+            dataPackageStatusMessage = Self.dataPackageSummary(snapshot)
             errorMessage = nil
         } catch {
+            dataPackageStatusMessage = nil
             errorMessage = Self.userFacingError(error)
         }
+    }
+
+    func handleDataPackageExportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success:
+            dataPackageStatusMessage = "数据包已导出。"
+            errorMessage = nil
+        case let .failure(error) where Self.isDocumentPickerCancellation(error):
+            break
+        case let .failure(error):
+            errorMessage = Self.userFacingError(error)
+        }
+    }
+
+    func handleDataPackagePickerError(_ error: Error) {
+        guard Self.isDocumentPickerCancellation(error) == false else { return }
+        errorMessage = Self.userFacingError(error)
+    }
+
+    func finishDataPackagePicker() {
+        if case let .exporting(url)? = dataPackagePickerRequest?.mode {
+            try? FileManager.default.removeItem(at: url)
+        }
+        dataPackagePickerRequest = nil
+    }
+
+    private static func dataPackageSummary(_ snapshot: NoonmarkSnapshot) -> String {
+        "已导入数据包：\(snapshot.days.count) 个日期、\(snapshot.chains.count) 条任务链、\(snapshot.traces.count) 条轨迹、\(snapshot.ideas.count) 条飞光。"
+    }
+
+    private static func isDocumentPickerCancellation(_ error: Error) -> Bool {
+        error is IOSDocumentPickerError
     }
 
     func requestSync() {

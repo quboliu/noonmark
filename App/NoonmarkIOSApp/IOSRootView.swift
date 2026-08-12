@@ -50,16 +50,6 @@ struct IOSRootView: View {
             Text("导入会替换当前 development 工作区的数据；校验失败时会保留现有数据。")
         }
         .fileExporter(
-            isPresented: $store.isExportingData,
-            document: store.dataPackageDocument,
-            contentType: .json,
-            defaultFilename: "Noonmark-data"
-        ) { result in
-            if case let .failure(error) = result {
-                store.errorMessage = error.localizedDescription
-            }
-        }
-        .fileExporter(
             isPresented: $store.isExportingDiagnostics,
             document: store.diagnosticDocument,
             contentType: .json,
@@ -69,18 +59,22 @@ struct IOSRootView: View {
                 store.errorMessage = error.localizedDescription
             }
         }
-        .fileImporter(
-            isPresented: $store.isImportingData,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case let .success(urls):
-                guard let url = urls.first else { return }
-                pendingImportURL = url
-                isImportConfirmationPresented = true
-            case let .failure(error):
-                store.errorMessage = error.localizedDescription
+        .sheet(item: $store.dataPackagePickerRequest) { request in
+            IOSDocumentPicker(mode: request.mode) { result in
+                store.finishDataPackagePicker()
+                switch request.mode {
+                case .importing:
+                    switch result {
+                    case let .success(urls):
+                        guard let url = urls.first else { return }
+                        pendingImportURL = url
+                        isImportConfirmationPresented = true
+                    case let .failure(error):
+                        store.handleDataPackagePickerError(error)
+                    }
+                case .exporting:
+                    store.handleDataPackageExportResult(result)
+                }
             }
         }
         .sheet(

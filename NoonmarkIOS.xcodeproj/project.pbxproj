@@ -14,6 +14,7 @@
 		317AAED0FB8EBB04F4901444 /* IOSTaskDetailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC38C3F09A2FA9DF1C37233 /* IOSTaskDetailViews.swift */; };
 		48D0294EB60B0E50D217F581 /* NoonmarkIOSUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACB6575CD348A2360069F8B /* NoonmarkIOSUITests.swift */; };
 		563757F63628E05D5E7C5BB6 /* IOSFlylightPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */; };
+		6A1C6D17E2DCFEABEA7D431C /* IOSDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D1622218F7A579E4F7D99C /* IOSDocumentPicker.swift */; };
 		6E48163FEF011E582114A38D /* NoonmarkZhulongAI in Frameworks */ = {isa = PBXBuildFile; productRef = 616645BFD25B549C69186437 /* NoonmarkZhulongAI */; };
 		7D84CE15FDB3DA23B6477B0B /* NoonmarkZhulong in Frameworks */ = {isa = PBXBuildFile; productRef = 9E2419BA137569D9FE5ADF3B /* NoonmarkZhulong */; };
 		7DCA8914296DE8078B0A9E98 /* NoonmarkAI in Frameworks */ = {isa = PBXBuildFile; productRef = 935CFBD3A6476CF32AE01752 /* NoonmarkAI */; };
@@ -23,7 +24,6 @@
 		A25B876DD341946F4E69D38C /* NoonmarkMacRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = B409DF30313EF426F0304ACA /* NoonmarkMacRuntime */; };
 		A645EF49DAFDE5FFC6BC61C6 /* NoonmarkSync in Frameworks */ = {isa = PBXBuildFile; productRef = 49CC14FC3BC18F36DB7F2B23 /* NoonmarkSync */; };
 		A80E80DAADBED2357E8BEDD6 /* IOSDiagnosticDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248B4F12CD89D108909FED6D /* IOSDiagnosticDocument.swift */; };
-		AA9A9D11A8EDBC2D49BD79BA /* IOSDataPackageDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */; };
 		C6403A8C4F8F381C6C1D4155 /* NoonmarkDiagnostics in Frameworks */ = {isa = PBXBuildFile; productRef = C7F112C70E43C5D8913B6810 /* NoonmarkDiagnostics */; };
 		C72424403F4F2FD29F8F41C9 /* NoonmarkStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 4B361D5BBD12ACC7CA25FE77 /* NoonmarkStorage */; };
 		CA117E284A79A5612BEAF1A4 /* NoonmarkIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D46AB309CC9205B2F4C69706 /* NoonmarkIOSApp.swift */; };
@@ -60,9 +60,9 @@
 		3AC38C3F09A2FA9DF1C37233 /* IOSTaskDetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSTaskDetailViews.swift; sourceTree = "<group>"; };
 		51CEDA075E38D39157657D81 /* IOSStoreSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStoreSmokeTests.swift; sourceTree = "<group>"; };
 		77A2B763EEA3F8D2CFAB12CF /* NoonmarkIOSApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NoonmarkIOSApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		79D1622218F7A579E4F7D99C /* IOSDocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDocumentPicker.swift; sourceTree = "<group>"; };
 		80EA53829AAB92DCAAE4DF95 /* NoonmarkIOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NoonmarkIOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSFlylightPage.swift; sourceTree = "<group>"; };
-		96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDataPackageDocument.swift; sourceTree = "<group>"; };
 		988FD8A995D7CA9AD90EF2C7 /* IOSCalendarAndRecurringPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCalendarAndRecurringPages.swift; sourceTree = "<group>"; };
 		9F1D2AF7DBBC1C76855A81ED /* NoonmarkIOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NoonmarkIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A25564FE308FA5518B5B58FB /* IOSStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStore.swift; sourceTree = "<group>"; };
@@ -124,8 +124,8 @@
 			children = (
 				988FD8A995D7CA9AD90EF2C7 /* IOSCalendarAndRecurringPages.swift */,
 				C5AFD950DCD2EBFEB581A530 /* IOSClassificationEditor.swift */,
-				96DB39D1B9A91E7CDABD6BD2 /* IOSDataPackageDocument.swift */,
 				248B4F12CD89D108909FED6D /* IOSDiagnosticDocument.swift */,
+				79D1622218F7A579E4F7D99C /* IOSDocumentPicker.swift */,
 				94D17540AEF552BF16C0659E /* IOSFlylightPage.swift */,
 				30E7984E719A1BC2E1E849FE /* IOSRootView.swift */,
 				130D4462214A9457AF246C10 /* IOSSettingsPage.swift */,
@@ -299,8 +299,8 @@
 			files = (
 				CB7A40410BDEE94F17DD6E54 /* IOSCalendarAndRecurringPages.swift in Sources */,
 				8A71BDA527B2C2848FA8A5AA /* IOSClassificationEditor.swift in Sources */,
-				AA9A9D11A8EDBC2D49BD79BA /* IOSDataPackageDocument.swift in Sources */,
 				A80E80DAADBED2357E8BEDD6 /* IOSDiagnosticDocument.swift in Sources */,
+				6A1C6D17E2DCFEABEA7D431C /* IOSDocumentPicker.swift in Sources */,
 				563757F63628E05D5E7C5BB6 /* IOSFlylightPage.swift in Sources */,
 				2107919B97DF23CA244A4134 /* IOSRootView.swift in Sources */,
 				27BF197776BE318219530F49 /* IOSSettingsPage.swift in Sources */,

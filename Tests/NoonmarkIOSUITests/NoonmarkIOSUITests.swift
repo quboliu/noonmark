@@ -326,6 +326,34 @@ final class NoonmarkIOSUITests: XCTestCase {
         XCTAssertEqual(app.textFields["ios.daily.review.tomorrow"].value as? String, "iOS simulator review tomorrow")
     }
 
+    func testUserCanOpenAndCancelDataPackageFileFlowsInSimulator() throws {
+        let app = launchApp()
+        openPage("settings", in: app)
+
+        let importButton = app.buttons["ios.data-package.import"]
+        XCTAssertTrue(scrollUntilExists(importButton, in: app))
+        importButton.tap()
+        cancelDocumentPicker(in: app)
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+
+        let exportButton = app.buttons["ios.data-package.export"]
+        XCTAssertTrue(scrollUntilExists(exportButton, in: app, resetToTop: true))
+        exportButton.tap()
+        cancelDocumentPicker(in: app)
+        XCTAssertTrue(exportButton.waitForExistence(timeout: 5))
+    }
+
+    func testUserCanOpenAndCancelDataPackageExportInSimulator() throws {
+        let app = launchApp()
+        openPage("settings", in: app)
+
+        let exportButton = app.buttons["ios.data-package.export"]
+        XCTAssertTrue(scrollUntilExists(exportButton, in: app))
+        exportButton.tap()
+        cancelDocumentPicker(in: app)
+        XCTAssertTrue(exportButton.waitForExistence(timeout: 5))
+    }
+
     func testUserCanEditTaskSubtaskAndTraceNoteInSimulator() throws {
         let app = launchApp()
         let taskTitle = "iOS simulator task detail parity"
@@ -517,6 +545,30 @@ final class NoonmarkIOSUITests: XCTestCase {
         if chunk.isEmpty == false {
             element.typeText(chunk)
         }
+    }
+
+    private func cancelDocumentPicker(in app: XCUIApplication) {
+        let documentsApp = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
+        let labels = ["取消", "Cancel"]
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            for root in [documentsApp, app] {
+                let cancel = root
+                    .descendants(matching: .any)
+                    .matching(NSPredicate(format: "label IN %@", labels))
+                    .firstMatch
+                if cancel.exists {
+                    cancel.tap()
+                    return
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        XCTAssertTrue(
+            false,
+            "文件面板没有取消按钮。App hierarchy:\n\(app.debugDescription)"
+        )
     }
 
     private func scrollUntilExists(

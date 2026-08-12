@@ -34,11 +34,20 @@ struct IOSSettingsPage: View {
 
             Section("数据") {
                 Button("导出 Noonmark 数据包") { store.exportDataPackage() }
-                Button("导入 Noonmark 数据包") { store.isImportingData = true }
+                    .accessibilityIdentifier("ios.data-package.export")
+                Button("导入 Noonmark 数据包") { store.beginDataPackageImport() }
+                    .accessibilityIdentifier("ios.data-package.import")
                 Button("导出诊断记录") { store.exportDiagnostics() }
+                    .accessibilityIdentifier("ios.diagnostics.export")
                 Text("导入前会校验完整 snapshot；当前数据不会在校验失败时被替换。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let status = store.dataPackageStatusMessage {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(IOSTheme.accent)
+                        .accessibilityIdentifier("ios.data-package.status")
+                }
             }
 
             Section("备份") {

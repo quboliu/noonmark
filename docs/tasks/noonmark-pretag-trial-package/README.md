@@ -19,19 +19,19 @@ Replication V2 在正式 tag／push 前必须先产生一份可安装的 Apple D
 
 ## 设计
 
-`scripts/release-private-dmg` 保留默认的 tagged release-candidate 模式，并新增唯一显式参数 `--trial`：
+`scripts/release-private-dmg` 保留默认的 tagged release-candidate 模式，并新增唯一显式形式 `--trial <absolute-output-dmg>`：
 
 1. 默认模式继续验证 exact annotated `v<marketing_version>` tag 与 GitHub release 环境，不改变 `scripts/push-release-tag` 或 hosted publisher 的任何规则。
-2. `--trial` 先运行独立 `scripts/verify-release-trial-version`。验证器要求当前 `release/VERSION` 精确对应 ledger 中最后一条、最高 build 的 `candidate`，并要求本机不存在同名版本 tag；任一不满足即在 App／DMG 副作用前 fail-closed。
+2. `--trial <absolute-output-dmg>` 先运行独立 `scripts/verify-release-trial-version`。验证器要求当前 `release/VERSION` 精确对应 ledger 中最后一条、最高 build 的 `candidate`，并要求本机不存在同名版本 tag；任一不满足即在 App／DMG 副作用前 fail-closed。
 3. 两种模式随后共用同一条本机证据链：static preflight → same-run runtime evidence → diagnostic closure → Tencent IME release smoke／evidence → production identity 静态打包 → read-only DMG verify → 受控 `dmg-validation` 安装／退出／重启 → full evidence verifier。
 4. trial 模式只跳过与 GitHub 发布本身有关的 tag 和 remote Environment readiness；它不增加低强度 package 捷径，也不允许直接调用 `scripts/package-dmg` 冒充已验证 trial。
-5. trial DMG 以独立、不覆盖的 `Noonmark-0.3.0-build30.dmg` 名称复制到 Downloads。`dist/Noonmark.dmg` 只是受控构建输出，不作为历史候选登记。
+5. trial DMG 只在全部本机门禁通过后，以独立、不覆盖的 `Noonmark-0.3.0-build30.dmg` 名称 exclusive-create 到显式 Downloads 目标。source、output parent 与 canonical basename 都须 fail-closed 校验；既有目标、symlink 或 checksum 漂移不得覆盖。`dist/Noonmark.dmg` 只是受控构建输出，不作为历史候选登记。
 
 ## 影响范围与测试策略
 
 - 版本身份：`release/VERSION`、`release/BUILD-LEDGER.tsv`、`docs/releases/v0.2.7.md`、新建 `docs/releases/v0.3.0.md`。
 - 发行编排：`scripts/release-private-dmg`、新 trial version verifier、release version／gate contract。
-- 永久门禁：fast gate 固定版本与 ledger；symptom gate 运行 trial verifier 的正反 fixture 并证明 tagged／trial 分流；release gate 必须在最终精确 commit 上真实执行 `--trial` 的完整 DMG 安装链。
+- 永久门禁：fast gate 固定版本与 ledger；symptom gate 运行 trial verifier、精确有序编排与 exclusive output 的正反 fixture；release gate 必须在最终精确 commit 上真实执行 `--trial <absolute-output-dmg>` 的完整 DMG 安装与交付链。
 - 回归点：默认无参数入口仍要求 tag 与 GitHub readiness；`make package-dmg`／`make release-private-dmg` 不自动进入 trial；production App 不执行；用户资料与 iCloud repository 不读取、不修改。
 
 ## 风险评估、回滚、灰度与监控
@@ -48,6 +48,6 @@ Replication V2 在正式 tag／push 前必须先产生一份可安装的 Apple D
 ## 完成条件
 
 - 新增门禁先在旧实现上复现 `--trial` 无法进入流程，再在新实现上转绿。
-- `0.3.0 (30)` 精确 commit 完成完整 `make check`、签名 App E2E、同 run writer lease、`scripts/release-private-dmg --trial` 与最终 evidence 对账。
+- `0.3.0 (30)` 精确 commit 完成完整 `make check`、签名 App E2E、同 run writer lease、`scripts/release-private-dmg --trial <absolute-output-dmg>` 与最终 evidence 对账。
 - Downloads 中只创建全新、不覆盖的 trial DMG，并报告 SHA-256；不 tag、不 push、不发布。
 - 双实体 Mac 与 72 小时 soak 尚未完成前，任务保持灰度中，不宣称 release ready。

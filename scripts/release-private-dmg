@@ -7,10 +7,12 @@ cd "$repo_root"
 source scripts/evidence-common
 
 mode="tagged"
-if [[ "$#" -eq 1 && "$1" == "--trial" ]]; then
+trial_output=""
+if [[ "$#" -eq 2 && "$1" == "--trial" ]]; then
   mode="trial"
+  trial_output="$2"
 elif [[ "$#" -ne 0 ]]; then
-  echo "usage: scripts/release-private-dmg [--trial]" >&2
+  echo "usage: scripts/release-private-dmg [--trial <absolute-output-dmg>]" >&2
   exit 64
 fi
 
@@ -46,6 +48,7 @@ scripts/test-dmg-install dist/Noonmark.dmg
 scripts/verify-development-validation-evidence --scope full
 
 if [[ "$mode" == "trial" ]]; then
+  scripts/publish-trial-dmg "$repo_root/dist/Noonmark.dmg" "$trial_output"
   echo "Pre-tag trial DMG and complete same-run validation evidence passed"
 else
   echo "Private DMG package and complete same-run validation evidence passed"

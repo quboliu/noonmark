@@ -198,6 +198,9 @@ run_check_suite() {
   echo "==> Pre-tag trial release contract"
   scripts/test-release-trial-contract
 
+  echo "==> Pre-tag trial output contract"
+  scripts/test-release-trial-output-contract
+
   echo "==> DMG window identity contract"
   scripts/test-dmg-window-identity-contract
 

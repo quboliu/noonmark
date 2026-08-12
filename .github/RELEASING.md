@@ -4,7 +4,7 @@
 
 ## 分工：本地是自测，CI 是发布门禁
 
-- **本地（发布前自测）**：开发机运行 `make check`、writer-lease E2E、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg --trial`，覆盖真实 GUI／TCC／腾讯拼音／安装重启。pre-tag trial 与双实体 Mac／72 小时 soak 完成后才允许建立 tag；其证据不上传、不被 tag publisher 消费，也不是线上发布的机器依赖。
+- **本地（发布前自测）**：开发机运行 `make check`、writer-lease E2E、完整 `scripts/test-e2e` 与 `scripts/release-private-dmg --trial /absolute/Downloads/Noonmark-X.Y.Z-buildN.dmg`，覆盖真实 GUI／TCC／腾讯拼音／安装重启，并在全部证据转绿后 exclusive-create 指定 trial 产物。pre-tag trial 与双实体 Mac／72 小时 soak 完成后才允许建立 tag；其证据不上传、不被 tag publisher 消费，也不是线上发布的机器依赖。
 - **CI（发布门禁）**：所有 workflow 只使用 GitHub-hosted runner。main push 只运行一次 `scripts/check` 子集；tag workflow 只验证该精确 commit 的 main CI 结果，不重跑子集。验证成功后才继续 `scripts/package-dmg release`、`scripts/verify-dmg` 与 GitHub Release 发布。CI 不调度本机，也不读取本地自测产物。
 - **格式工具链**：`scripts/check` 与 CI 都只通过 `scripts/install-pinned-swiftformat` 使用 checksum 锁定的 SwiftFormat `0.62.1`；不得直接安装或调用 Homebrew 浮动版本。
 
@@ -30,7 +30,7 @@ CI 里 `scripts/package-dmg` 强制稳定 Apple Development 签名，证书以 `
 
 1. 在本机 `main` 完成开发与候选资料：更新 `release/VERSION`、`release/BUILD-LEDGER.tsv` 与 `docs/releases/vX.Y.Z.md`，闭环故障案例与门禁。
 2. 在该精确 commit 运行本地 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`。
-3. 确认同名 tag 不存在，运行 `scripts/release-private-dmg --trial` 完成本地诊断闭环、腾讯拼音、DMG 与安装重启自测。全部本地 evidence 只服务自测审计，不上传给 GitHub。
+3. 确认同名 tag 与目标文件均不存在，运行 `scripts/release-private-dmg --trial /absolute/Downloads/Noonmark-X.Y.Z-buildN.dmg` 完成本地诊断闭环、腾讯拼音、DMG、安装重启自测与不可覆盖的 trial 交付。输出 basename 必须精确匹配 current version／build；全部本地 evidence 只服务自测审计，不上传给 GitHub。
 4. 把独立命名、不覆盖的 trial DMG 交给当前指定用户；完成双实体 Mac 与连续 72 小时 soak。任一失败即退休 build，使用更大 build 重新开始。
 5. 灰度全绿并获审核后，在精确候选 `HEAD` 创建 annotated tag `vX.Y.Z`，先不 push；运行默认 `scripts/release-private-dmg`，让 exact tag、GitHub release Environment 与完整本机门禁再次通过。
 6. push 最终 candidate commit 到 `main`，等待该精确 commit 的 `ci.yml` 单一 GitHub-hosted job 成功。

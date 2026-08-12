@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "trial DMG publication: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 2 ]]; then
+  echo "usage: scripts/publish-trial-dmg <source-dmg> <absolute-output-dmg>" >&2
+  exit 64
+fi
+
+source_dmg="$1"
+output_dmg="$2"
+[[ "$source_dmg" == /* && "$output_dmg" == /* ]] ||
+  fail "source and output paths must be absolute"
+[[ -f "$source_dmg" && ! -L "$source_dmg" ]] ||
+  fail "source DMG must be a regular non-symlink file"
+
+marketing_version="$(scripts/release-version marketing-version)"
+build_number="$(scripts/release-version build-number)"
+expected_name="Noonmark-${marketing_version}-build${build_number}.dmg"
+output_parent="$(dirname "$output_dmg")"
+output_name="$(basename "$output_dmg")"
+[[ "$output_name" == "$expected_name" ]] ||
+  fail "output name must be ${expected_name}"
+[[ -d "$output_parent" && ! -L "$output_parent" ]] ||
+  fail "output parent must be an existing non-symlink directory"
+physical_parent="$(cd "$output_parent" && pwd -P)"
+[[ "$output_dmg" == "$physical_parent/$expected_name" ]] ||
+  fail "output path must use its physical parent without aliases"
+[[ ! -e "$output_dmg" && ! -L "$output_dmg" ]] ||
+  fail "output already exists and will not be overwritten"
+
+temporary_dmg="$(mktemp "$physical_parent/.${expected_name}.partial.XXXXXX")"
+cleanup() {
+  rm -f "$temporary_dmg"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cp "$source_dmg" "$temporary_dmg"
+source_sha="$(shasum -a 256 "$source_dmg" | awk '{print $1}')"
+temporary_sha="$(shasum -a 256 "$temporary_dmg" | awk '{print $1}')"
+[[ "$temporary_sha" == "$source_sha" ]] || fail "copied DMG checksum differs"
+chmod 0444 "$temporary_dmg"
+
+# A hard link makes the verified bytes visible at the final name without a
+# replace window. It fails if another process has created the output first.
+ln "$temporary_dmg" "$output_dmg" ||
+  fail "cannot exclusively create the trial DMG output"
+rm "$temporary_dmg"
+temporary_dmg=""
+trap - EXIT INT TERM
+
+published_sha="$(shasum -a 256 "$output_dmg" | awk '{print $1}')"
+[[ "$published_sha" == "$source_sha" ]] ||
+  fail "published DMG checksum differs"
+
+echo "Trial DMG exclusively published: $output_dmg"
+echo "Trial DMG SHA-256: $published_sha"

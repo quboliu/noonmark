@@ -14,7 +14,7 @@ trial_verifier="scripts/verify-release-trial-version"
 [[ -x "$trial_verifier" ]] || fail "trial version verifier is missing or not executable"
 
 for required in \
-  'usage: scripts/release-private-dmg [--trial]' \
+  'usage: scripts/release-private-dmg [--trial <absolute-output-dmg>]' \
   'mode="tagged"' \
   'mode="trial"' \
   'scripts/verify-release-trial-version' \
@@ -26,7 +26,8 @@ for required in \
   'scripts/package-dmg release' \
   'scripts/verify-dmg dist/Noonmark.dmg' \
   'scripts/test-dmg-install dist/Noonmark.dmg' \
-  'scripts/verify-development-validation-evidence --scope full'; do
+  'scripts/verify-development-validation-evidence --scope full' \
+  'scripts/publish-trial-dmg "$repo_root/dist/Noonmark.dmg" "$trial_output"'; do
   rg -F -- "$required" "$release_script" >/dev/null ||
     fail "private DMG entry lacks required trial boundary: $required"
 done
@@ -47,6 +48,7 @@ done
   fail "tagged prerequisites do not precede shared gates"
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-trial-contract.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
 cleanup() {
   rm -rf "$fixture_root"
 }
@@ -68,28 +70,52 @@ stub_commands=(
   package-dmg
   verify-dmg
   test-dmg-install
+  publish-trial-dmg
 )
 for stub_command in "${stub_commands[@]}"; do
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
-    'printf "%s\\n" "$(basename "$0")" >>"$NOONMARK_TRIAL_TRACE"' \
+    'if [[ "$#" -eq 0 ]]; then' \
+    '  printf "%s\\n" "$(basename "$0")" >>"$NOONMARK_TRIAL_TRACE"' \
+    'else' \
+    '  printf "%s %s\\n" "$(basename "$0")" "$*" >>"$NOONMARK_TRIAL_TRACE"' \
+    'fi' \
     >"$entry_fixture/scripts/$stub_command"
   chmod +x "$entry_fixture/scripts/$stub_command"
 done
 
+if "$entry_fixture/scripts/release-private-dmg" --trial >/dev/null 2>&1; then
+  fail "trial mode accepted a missing output path"
+fi
+
 trial_trace="$fixture_root/trial.trace"
+marketing_version="$(scripts/release-version marketing-version)"
+build_number="$(scripts/release-version build-number)"
+trial_output="$fixture_root/Noonmark-${marketing_version}-build${build_number}.dmg"
 (
   cd "$entry_fixture"
   NOONMARK_EVIDENCE_RUN_ID=trial-fixture \
     NOONMARK_TRIAL_TRACE="$trial_trace" \
-    scripts/release-private-dmg --trial >/dev/null
+    scripts/release-private-dmg --trial "$trial_output" >/dev/null
 )
-rg -Fx 'verify-release-trial-version' "$trial_trace" >/dev/null ||
-  fail "trial mode did not execute its version verifier"
-if rg -Fx 'verify-release-version-tag' "$trial_trace" >/dev/null ||
-  rg -Fx 'verify-github-release-readiness' "$trial_trace" >/dev/null; then
-  fail "trial mode executed a tagged release prerequisite"
+expected_trial_trace="$fixture_root/expected-trial.trace"
+printf '%s\n' \
+  'verify-release-trial-version' \
+  'verify-release-static-preflight' \
+  'verify-development-validation-evidence --scope runtime' \
+  'test-release-diagnostic-closure' \
+  'test-tencent-ime-release-smoke release' \
+  'verify-tencent-ime-release-smoke-evidence' \
+  'package-dmg release' \
+  'verify-dmg dist/Noonmark.dmg' \
+  'test-dmg-install dist/Noonmark.dmg' \
+  'verify-development-validation-evidence --scope full' \
+  "publish-trial-dmg $entry_fixture/dist/Noonmark.dmg $trial_output" \
+  >"$expected_trial_trace"
+if ! cmp -s "$expected_trial_trace" "$trial_trace"; then
+  diff -u "$expected_trial_trace" "$trial_trace" >&2 || true
+  fail "trial mode did not execute the exact ordered gate chain"
 fi
 
 tagged_trace="$fixture_root/tagged.trace"
@@ -99,30 +125,24 @@ tagged_trace="$fixture_root/tagged.trace"
     NOONMARK_TRIAL_TRACE="$tagged_trace" \
     scripts/release-private-dmg >/dev/null
 )
-rg -Fx 'verify-release-version-tag' "$tagged_trace" >/dev/null ||
-  fail "tagged mode did not execute its version verifier"
-rg -Fx 'verify-github-release-readiness' "$tagged_trace" >/dev/null ||
-  fail "tagged mode did not execute GitHub readiness"
-if rg -Fx 'verify-release-trial-version' "$tagged_trace" >/dev/null; then
-  fail "tagged mode executed the pre-tag trial verifier"
+expected_tagged_trace="$fixture_root/expected-tagged.trace"
+printf '%s\n' \
+  'verify-release-version-tag' \
+  'verify-github-release-readiness' \
+  'verify-release-static-preflight' \
+  'verify-development-validation-evidence --scope runtime' \
+  'test-release-diagnostic-closure' \
+  'test-tencent-ime-release-smoke release' \
+  'verify-tencent-ime-release-smoke-evidence' \
+  'package-dmg release' \
+  'verify-dmg dist/Noonmark.dmg' \
+  'test-dmg-install dist/Noonmark.dmg' \
+  'verify-development-validation-evidence --scope full' \
+  >"$expected_tagged_trace"
+if ! cmp -s "$expected_tagged_trace" "$tagged_trace"; then
+  diff -u "$expected_tagged_trace" "$tagged_trace" >&2 || true
+  fail "tagged mode did not execute the exact ordered gate chain"
 fi
-
-shared_commands=(
-  verify-release-static-preflight
-  verify-development-validation-evidence
-  test-release-diagnostic-closure
-  test-tencent-ime-release-smoke
-  verify-tencent-ime-release-smoke-evidence
-  package-dmg
-  verify-dmg
-  test-dmg-install
-)
-for shared_command in "${shared_commands[@]}"; do
-  trial_count="$(rg -c -x "$shared_command" "$trial_trace")"
-  tagged_count="$(rg -c -x "$shared_command" "$tagged_trace")"
-  [[ "$trial_count" == "$tagged_count" && "$trial_count" -ge 1 ]] ||
-    fail "trial and tagged modes do not share the same $shared_command gate"
-done
 
 version_fixture="$fixture_root/version"
 mkdir -p "$version_fixture/scripts" "$version_fixture/release"

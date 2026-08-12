@@ -5,6 +5,7 @@
 - 首次发现：2026-08-12T05:20:00Z
 - 影响版本／构建：`0.2.7 (29)` candidate；Replication V2 source commit `f225dd98bc22650ba09122fe69fc2f4e11e2a06b`
 - 引入提交：`a2eaca6571b8226c55fcd5cc289fdeefeb28890d`（`feat(release): standardize versioning and the private release process`）
+- 加重提交：`885d0843be615bcab4357848e90a8851f00f71ed`（`fix(release): harden GitHub signing readiness`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 修复提交：待回填
@@ -17,7 +18,8 @@
 
 ## 时间线
 
-- 2026-08-05：版本治理把 exact tag 与 GitHub Environment readiness 无条件放入本地 DMG 唯一入口。
+- 2026-08-05：commit `a2eaca6571b8226c55fcd5cc289fdeefeb28890d` 把 exact tag 无条件放入本地 DMG 唯一入口。
+- 2026-08-07：commit `885d0843be615bcab4357848e90a8851f00f71ed` 再把 GitHub Environment readiness 放入同一前置链，加重本机质量门禁与线上发布条件的耦合。
 - 2026-08-11T04:42:42Z：commit `012aa8595db51d42d60f6c59515a6939acf98a32` 分配 `0.2.7 (29)` 给 schema 18 confirmed-frontier trial。
 - 2026-08-12：Replication V2 schema 19 clean cut 在 commits `6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73` 与 `f225dd98bc22650ba09122fe69fc2f4e11e2a06b` 完成并通过本机完整验证。
 - 2026-08-12T05:20:00Z 后：`scripts/release-private-dmg` 报 `release requires exact tag v0.2.7 on the candidate commit`，确认 tag-first 与已批准 trial-first 顺序冲突。
@@ -43,20 +45,22 @@
 
 ## 根因修复
 
-待实施：新增显式 `--trial` 状态及独立 trial version verifier；trial 只跳过 tag 与 GitHub Environment readiness，随后复用全部本机发行证据链。默认模式继续强制 exact annotated tag 和 GitHub readiness。build 29 永久退役，Replication V2 分配 `0.3.0 (30)`。
+commit `84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea` 已新增显式 pre-tag trial 状态及独立 trial version verifier；trial 只跳过 tag 与 GitHub Environment readiness，随后复用全部本机发行证据链。默认模式继续强制 exact annotated tag 和 GitHub readiness。build 29 永久退役，Replication V2 分配 `0.3.0 (30)`。
+
+审查整改进一步把 trial output 纳入唯一入口：调用者必须显式提供 absolute canonical output；只有 full evidence 通过后才从已经验证的 DMG 建立同目录临时副本、逐字节 SHA 对账，再以不可覆盖 hard link 原子暴露最终名称。既有输出、source／parent symlink、路径 alias、错误 basename 或 checksum 漂移全部 fail-closed；门禁精确校验 tagged／trial 两条命令序列与每一阶段参数。
 
 ## 验证结果
 
 - Red（症状）：旧入口拒绝 `--trial`，且无 tag 时默认入口在 package 前退出 1。
-- Green（fast）：待完成。
-- Green（symptom）：待完成。
+- Green（fast）：`scripts/test-release-version-contract` 已在 `0.3.0 (30)` 上通过；版本、ledger、tagged／trial verifier 均被聚合入口固定。
+- Green（symptom）：`scripts/test-release-trial-contract` 已以隔离 Git／命令 fixture 证明 trial 与 tagged 前置分流、共享阶段的 exact order／arguments，以及 tag／retired／非最新 candidate 拒绝；`scripts/test-release-trial-output-contract` 已证明新输出、既有输出不可变、canonical basename 与 symlink 边界。
 - Green（release）：待在最终精确 commit 上真实完成完整 pre-tag trial DMG 门禁。
 
 ## 永久门禁
 
 - fast：`scripts/test-release-version-contract`，由 `scripts/check` 强制调用；固定 current candidate、严格递增 ledger 与 tagged／trial 两种版本前置条件。
-- symptom：`scripts/test-release-trial-contract`，由 `scripts/check` 强制调用；以隔离 Git fixture 证明无 tag candidate 可进入 trial、tag／retired／非最新 build 均 fail-closed，并固定两种入口汇合到同一 package chain。
-- release：`scripts/test-dmg-install`，由 `scripts/release-private-dmg --trial` 强制调用；对 exact package 的受控 `dmg-validation` 身份完成真实安装、交互、退出、重启与资料回读。
+- symptom：`scripts/test-release-trial-contract` 与 `scripts/test-release-trial-output-contract`，由 `scripts/check` 强制调用；以隔离 fixture 证明无 tag candidate 可进入 trial、tag／retired／非最新 build 均 fail-closed，两种入口按 exact order／arguments 汇合到同一 package chain，并且最终 trial output 只能 canonical exclusive-create。
+- release：`scripts/test-dmg-install` 与 `scripts/publish-trial-dmg`，由 `scripts/release-private-dmg --trial <absolute-output-dmg>` 强制调用；对 exact package 的受控 `dmg-validation` 身份完成真实安装、交互、退出、重启与资料回读，随后才 exclusive-create canonical trial output。
 
 ## 发行与回滚
 

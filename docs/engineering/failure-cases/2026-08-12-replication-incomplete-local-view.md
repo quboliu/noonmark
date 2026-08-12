@@ -7,7 +7,7 @@
 - 引入提交：M3 为 `1f264ff9c38047c8ac959e9d0cd624c70d495116`（`fix(sync): replace full-history replication`）；M4 为 `6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 - Git author／committer：M3 为 `mxt <mxt@local.com>`／`mxt <mxt@local.com>`；M4 为 `quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；仓库只能证明 Git identity，不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`3834260aec6707f65ec4d5b65654df2e606200b7`（`fix(sync): recover incomplete replication views`）
 
 ## 用户症状与影响
 
@@ -26,8 +26,9 @@ M3 的 `LocalFolderSyncTransport` 已不属于正式 App 的 V2 writer，但仍�
 - 2026-08-12：M4 tracer 只物化 sequence 1／3 时稳定得到 stable chain-end；目录 2 已出现但 JSON 缺失时又被误判为 fork／invalid object。
 - 2026-08-12：独立 Standards／Spec review 发现 fixture 把 announcement 与其跨目录引用对象一次性全部物化，掩盖了 seal／root／chunk 的同根缺口；同时确认最高空目录可能只是 announcement publish 崩溃遗留，不是远端 promise。
 - 2026-08-12：补齐逐 item materialization 与 terminal orphan 反向边界后，七条 tracer 全部转绿。
-- 2026-08-12：完整 `make check` 在具备 `/bin/ps` 与 Git index 权限的环境通过；修复 commit 尚待回填。
+- 2026-08-12：完整 `make check` 在具备 `/bin/ps` 与 Git index 权限的环境首次通过，确认先前中断只是受限沙箱所致。
 - 2026-08-12：提交后双轴 review 以 Foundation 运行产物证实读取期缺失会返回 Cocoa 260，而初版只识别 FileManager code 4；案例维持处理中，补齐同根映射与第八条 tracer 后重新验证。
+- 2026-08-12：最终修复提交 `3834260aec6707f65ec4d5b65654df2e606200b7` 完成；相同提交上的第二轮完整 `make check` 于 `2026-08-12T17:16:51Z` 以 `suite_exit_status=0` 结束。
 
 ## 复现与证据
 
@@ -66,17 +67,21 @@ M3 的 `LocalFolderSyncTransport` 已不属于正式 App 的 V2 writer，但仍�
 ## 验证结果
 
 - 聚焦 incomplete-local-view gate：8 项、0 失败；覆盖 changed retry、post-probe 真竞争、directory／内部 JSON gap、announcement 与引用对象逐项 materialization、读取期 Cocoa 260、terminal 空目录非事实，以及同 sequence 双 digest fork fail-closed。
-- `NoonmarkSyncTests` 执行 318 项、0 失败；此前受限沙箱中的 Keychain OSStatus `-25291` 已不再出现，真实 Keychain session tracer 同样通过。
+- `NoonmarkSyncTests` 执行 319 项、0 失败；此前受限沙箱中的 Keychain OSStatus `-25291` 已不再出现，真实 Keychain session tracer 同样通过。
 - `NoonmarkStorageTests` 执行 307 项、0 失败；2 项明确要求 `NOONMARK_LIVE_ICLOUD_SYNC=1` 的实体 iCloud 测试按设计未启用。本任务没有授权或执行真实 iCloud round。
 - endpoint 最终修正后再执行 `LocalFirstReplicationTests` 29 项、0 失败，覆盖 V2 runtime、fork、restart、waiting 与双 SQLite 收敛。
-- Standards／Spec 双轴 review 找到的跨目录引用对象与 terminal 空目录问题均已补门禁并完成复核；最终没有剩余高／中风险 finding。
-- 原样 `make check` 完整通过：Swift build、UT、IT、ST、确定性仿真、Replication V2 recovery、107 个 failure-case mapping、SwiftLint 与 SwiftFormat 均执行完成；evidence manifest `suite_exit_status=0`，开始与结束的 worktree tree OID 相同。SwiftLint 只有仓库既有的非阻断 warning，SwiftFormat 为 0／499 个文件需要格式化。
+- Standards／Spec 双轴 review 找到的跨目录引用对象、terminal 空目录与读取期 Cocoa 260 问题均已补门禁；实现没有剩余高／中风险 finding。review 同时指出当前 symptom gate 尚未经过签名 App 的真实 iCloud 用户路径，因此案例不能标记为已修复。
+- 原样 `make check` 在修复提交 `3834260aec6707f65ec4d5b65654df2e606200b7` 完整通过：Swift build、UT、IT、ST、1593 项 system tests（2 项明确 live iCloud 测试按设计未启用）、确定性仿真、Replication V2 recovery、107 个 failure-case mapping、SwiftLint 与 SwiftFormat 均执行完成；evidence run `20260812T165709Z-37229` 的 `suite_exit_status=0`，开始与结束的 HEAD／worktree tree OID 各自相同。SwiftLint 只有仓库既有的非阻断 warning，SwiftFormat 为 0／499 个文件需要格式化。
 - `make check` 只 reset 固定隔离的 `audit` profile，并明确保留 iCloud；两项要求显式 live 开关的实体 iCloud 测试按设计未启用。本任务没有授权或执行真实 iCloud round、production App、DMG 打包或发行流程。
 
 ## 永久门禁
 
 - fast：`scripts/test-replication-incomplete-local-view` 直接执行当前 Local Folder 与 V2 content-addressed／iCloud public seams，并静态绑定真实 App 目前选择的 `ICloudDriveReplicationEndpoint`／`ContentAddressedFileReplicationEndpoint`，同时保留现有真正 fork tracer；由 `scripts/test-replication-v2-recovery-contract` 强制调用，后者由 `scripts/check` 强制调用。
 - symptom：同一 gate 以真实临时 filesystem、immutable publication bytes 与 materialization boundary 重放原始崩溃／乱序症状；由 `scripts/test-all` 强制调用。未来 rewrite 若删除或绕过当前 V2 endpoint，具名测试会在编译、filter 或行为断言处判红。
+
+## 待闭环事项
+
+当前 fast gate 与 transport-level symptom gate 已稳定转绿，但还没有在签名 `e2e` App 的真实用户同步路径中重放 announcement／object 乱序 materialization。该证据不能由临时 filesystem fixture、静态 App binding 或 `make check` 中的 signed-App contract 代替。由于本任务明确禁止接触真实用户 iCloud，也没有授权开启 append-only live iCloud round，案例保持「处理中」。后续只有在先通过 append-only 静态门禁与本机症状门禁后，使用全新 session／round UUID，在获授权的 `Noonmark-E2E/AppendOnlyLiveTests/...` 路径完成真实 signed-App symptom gate 并登记到 `gates.tsv`，才可改为「已修复」；测试对象永久保留，不得清理。
 
 ## 发行与回滚
 

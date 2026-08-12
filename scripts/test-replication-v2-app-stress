@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+scripts/test-icloud-append-only-guard
+source scripts/runtime-profile-common
+
+backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"
+noonmark_runtime_profile_load e2e
+app_path="dist/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
+app_process="${NOONMARK_RUNTIME_PROCESS_NAME}"
+provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
+temporary_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+gate_root="$(mktemp -d "$temporary_base/noonmark-replication-v2-app-stress.XXXXXX")"
+local_database_path="$gate_root/local-Noonmark.sqlite"
+local_state_path="$gate_root/local-restart-state.json"
+local_sync_root="$gate_root/local-sync-repository"
+icloud_database_path="$gate_root/icloud-Noonmark.sqlite"
+icloud_state_path="$gate_root/icloud-restart-state.json"
+backup_fixture="$gate_root/import-package.json"
+icloud_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+icloud_round_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+
+cleanup() {
+  pkill -x "$app_process" >/dev/null 2>&1 || true
+  case "$gate_root" in
+    "$temporary_base"/noonmark-replication-v2-app-stress.*)
+      rm -rf "$gate_root"
+      ;;
+    *)
+      echo "refusing to remove an unexpected stress gate root" >&2
+      ;;
+  esac
+}
+trap cleanup EXIT
+
+if [[ "$backup_path" != /* || ! -f "$backup_path" || -L "$backup_path" ]]; then
+  echo "replication V2 stress backup must be a regular non-symlink file" >&2
+  exit 1
+fi
+if [[ "$provisioning_profile" != /* ||
+      ! -f "$provisioning_profile" ||
+      -L "$provisioning_profile" ]]; then
+  echo "replication V2 stress gate requires an absolute regular NOONMARK_PROVISIONING_PROFILE" >&2
+  exit 1
+fi
+
+if ! IFS=$'\t' read -r backup_max_year backup_max_month backup_max_day < <(
+  jq -er '
+    .snapshot.days
+    | map(.date)
+    | sort_by(.year, .month, .day)
+    | last
+    | [.year, .month, .day]
+    | @tsv
+  ' "$backup_path"
+); then
+  echo "replication V2 stress backup does not contain a valid day boundary" >&2
+  exit 1
+fi
+printf -v backup_max_date '%04d-%02d-%02d' \
+  "$backup_max_year" "$backup_max_month" "$backup_max_day"
+if ! stress_natural_day="$('/bin/date' -j -v+1d -f '%Y-%m-%d' \
+  "$backup_max_date" '+%Y-%m-%d' 2>/dev/null)"; then
+  echo "replication V2 stress backup has an invalid maximum day" >&2
+  exit 1
+fi
+
+NOONMARK_REPLICATION_V2_STRESS_BACKUP="$backup_path" \
+  NOONMARK_REPLICATION_V2_STRESS_TODAY="$stress_natural_day" \
+  swift test \
+    --filter ReplicationV2BackupDomainStressTests/testMixedDomainMutationsRemainValidAfterBackupImportAndV2Cutover
+
+/bin/cp -X "$backup_path" "$backup_fixture"
+chmod 600 "$backup_fixture"
+
+wait_for_result() {
+  local result_path="$1"
+  local expected_phase="$2"
+  local attempt
+
+  for attempt in {1..3600}; do
+    if [[ -f "$result_path" ]]; then
+      if ! jq -e \
+        --arg phase "$expected_phase" \
+        '.status == "ok"
+          and .phase == $phase
+          and .pendingOutboxCount == 0
+          and .lastSyncedPresent == true
+          and .lastEffectiveSyncedPresent == true
+          and .convergence == "converged"
+          and (($phase == "exercise" and .mixedDomainMutationCount == 71)
+            or ($phase == "verify-restart" and .mixedDomainMutationCount == 0))
+          and .diagnosticSyncFailedCount == 0
+          and .mutationRejectionCount == 0' \
+        "$result_path" >/dev/null; then
+        jq -c \
+          '{status,phase,errorCode,underlyingErrorKind,pendingOutboxCount,convergence,diagnosticSyncFailedCount,mutationRejectionCount,diagnosticFailureDomain,diagnosticFailureCode,diagnosticFailureStage,sqliteFailurePoint}' \
+          "$result_path" >&2
+        return 1
+      fi
+      jq -c \
+        '{status,phase,importedTaskCount,createdCount,editedCount,deletedCount,mixedDomainMutationCount,syncRunCount,pendingOutboxCount,confirmedOutboxCount,lastSyncedPresent,lastEffectiveSyncedPresent,convergence,diagnosticSyncSucceededCount,diagnosticSyncFailedCount,mutationRejectionCount}' \
+        "$result_path"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "replication V2 stress phase did not produce its bounded result" >&2
+  return 1
+}
+
+wait_for_exit() {
+  local attempt
+
+  for attempt in {1..300}; do
+    if ! pgrep -x "$app_process" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "replication V2 stress App did not terminate" >&2
+  return 1
+}
+
+run_phase() {
+  local endpoint_mode="$1"
+  local phase="$2"
+  local database_path
+  local state_path
+  local result_path="$gate_root/${endpoint_mode}-${phase}.json"
+  local phase_flag="--e2e-replication-v2-stress-${phase}"
+  local arguments=(
+    --e2e-replication-v2-stress-result-url "$result_path"
+    --e2e-fixed-instant "${stress_natural_day}T16:00:00Z"
+    --e2e-fixed-time-zone America/New_York
+    --e2e-fixed-locale zh_Hans_SG
+    "$phase_flag"
+  )
+  case "$endpoint_mode" in
+    local-folder)
+      database_path="$local_database_path"
+      state_path="$local_state_path"
+      arguments+=(
+        --data-url "$database_path"
+        --sync-folder-url "$local_sync_root"
+        --e2e-replication-v2-stress-state-url "$state_path"
+        --e2e-replication-v2-stress-local-folder
+      )
+      ;;
+    icloud)
+      database_path="$icloud_database_path"
+      state_path="$icloud_state_path"
+      arguments+=(
+        --data-url "$database_path"
+        --e2e-replication-v2-stress-state-url "$state_path"
+        --e2e-replication-v2-stress-icloud
+        --e2e-replication-v2-stress-icloud-session-id "$icloud_session_id"
+        --e2e-replication-v2-stress-icloud-round-id "$icloud_round_id"
+      )
+      ;;
+    *)
+      echo "unknown replication V2 stress endpoint mode" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$phase" == "exercise" ]]; then
+    arguments+=(
+      --e2e-replication-v2-stress-backup-url "$backup_fixture"
+    )
+  fi
+
+  /usr/bin/open -n "$app_path" --args "${arguments[@]}"
+  wait_for_result "$result_path" "$phase"
+  wait_for_exit
+}
+
+NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING=1 \
+  NOONMARK_PROVISIONING_PROFILE="$provisioning_profile" \
+  NOONMARK_REQUIRE_STABLE_UI_SIGNING=1 \
+  scripts/build-mac-app debug e2e >/dev/null
+
+codesign --verify --deep --strict "$app_path"
+echo "Replication V2 signed App local-folder prerequisite: starting"
+run_phase local-folder exercise
+run_phase local-folder verify-restart
+echo "Replication V2 signed App local-folder prerequisite: passed"
+
+echo "Replication V2 signed App real iCloud stress: starting"
+echo "session_id=$icloud_session_id"
+echo "round_id=$icloud_round_id"
+run_phase icloud exercise
+run_phase icloud verify-restart
+
+NOONMARK_LIVE_ICLOUD_SYNC=1 \
+  NOONMARK_REPLICATION_V2_STRESS_SECONDARY=1 \
+  NOONMARK_REPLICATION_V2_STRESS_SOURCE_DATABASE="$icloud_database_path" \
+  NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID="$icloud_session_id" \
+  NOONMARK_ICLOUD_APPEND_ONLY_ROUND_ID="$icloud_round_id" \
+  swift test --skip-build --filter \
+    ICloudDriveLocalFirstSyncLiveTests/testStressRoundConvergesIntoIndependentSQLiteAndRestartsWithoutReplay
+
+echo "Replication V2 signed App import/mutation/restart and secondary SQLite iCloud convergence gate passed"
+echo "session_id=$icloud_session_id"
+echo "round_id=$icloud_round_id"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+schema_source="Sources/NoonmarkStorage/SQLiteSchema.swift"
+
+for forbidden in \
+  'migratePreviousVersionToCurrent' \
+  'migratePreviousChangeJournal' \
+  'migrateVersion15PendingDownloads' \
+  'storedVersion == 15' \
+  'storedVersion == 17' \
+  'storedVersion == 18'; do
+  if /usr/bin/grep -F "$forbidden" "$schema_source" >/dev/null; then
+    echo "legacy SQLite schema compatibility returned: $forbidden" >&2
+    exit 1
+  fi
+done
+
+if ! /usr/bin/grep -F \
+  'only an empty store or the current schema is supported' \
+  "$schema_source" >/dev/null; then
+  echo "SQLite clean-cut rejection boundary is missing" >&2
+  exit 1
+fi
+
+swift test --filter \
+  'SQLiteSchemaTests/(testSchemaDeclaresOnlyTheCurrentGenerationStorageContract|testCurrentVersionSchemaDriftIsRejectedBeforeEnablingWAL|testVersion15StoreIsRejectedWithoutMigrationOrMutation|testVersion17StoreIsRejectedWithoutMigrationOrMutation|testVersion18StoreIsRejectedWithoutMigrationOrMutation)'

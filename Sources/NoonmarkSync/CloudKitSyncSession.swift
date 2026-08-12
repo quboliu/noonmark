@@ -8,7 +8,6 @@ public enum CloudKitSyncEngineTransportError: Error, Equatable, Sendable {
     case invalidServerRecordSystemFields
     case unexpectedRemoteRecordDeletion(String)
     case recordZoneDeleted
-    case liveValidationZoneRequired
     case syncScopeChanged(
         previous: CloudKitSyncScopeIdentity,
         current: CloudKitSyncScopeIdentity
@@ -32,8 +31,6 @@ extension CloudKitSyncEngineTransportError: LocalizedError {
             "CloudKit record \(recordName) was deleted outside Noonmark."
         case .recordZoneDeleted:
             "The Noonmark CloudKit record zone was deleted."
-        case .liveValidationZoneRequired:
-            "CloudKit cleanup is restricted to an isolated live-validation zone."
         case .syncScopeChanged:
             "CloudKit container, zone, or environment changed; explicit reset is required."
         case let .cloudKitFailure(message):

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source scripts/runtime-profile-common
+
+noonmark_runtime_profile_load e2e
+app_path="dist/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
+app_process="${NOONMARK_RUNTIME_PROCESS_NAME}"
+provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
+gate_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-watermark-keychain-signed.XXXXXX")"
+generation_id="$(uuidgen)"
+producer_id="$(uuidgen)"
+
+cleanup() {
+  pkill -x "$app_process" >/dev/null 2>&1 || true
+  rm -rf "$gate_root"
+}
+trap cleanup EXIT
+
+wait_for_result() {
+  local result_path="$1"
+  local expected="$2"
+  local attempt
+
+  for attempt in {1..200}; do
+    if [[ -f "$result_path" ]]; then
+      local observed
+      observed="$(cat "$result_path")"
+      if [[ "$observed" != "$expected" ]]; then
+        echo "signed Keychain gate returned: $observed" >&2
+        return 1
+      fi
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "signed Keychain gate did not produce its bounded result" >&2
+  return 1
+}
+
+wait_for_exit() {
+  local attempt
+
+  for attempt in {1..100}; do
+    if ! pgrep -x "$app_process" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "signed Keychain gate App did not terminate" >&2
+  return 1
+}
+
+run_phase() {
+  local phase="$1"
+  local expected="$2"
+  local result_path="$gate_root/${phase}.txt"
+
+  /usr/bin/open -n "$app_path" --args \
+    --ephemeral \
+    "--e2e-replication-watermark-keychain-${phase}" \
+    --e2e-replication-watermark-keychain-generation-id "$generation_id" \
+    --e2e-replication-watermark-keychain-producer-id "$producer_id" \
+    --e2e-replication-watermark-keychain-result-url "$result_path"
+  wait_for_result "$result_path" "$expected"
+  wait_for_exit
+}
+
+if [[ "$provisioning_profile" != /* ||
+      ! -f "$provisioning_profile" ||
+      -L "$provisioning_profile" ]]; then
+  echo "signed Keychain gate requires an absolute regular NOONMARK_PROVISIONING_PROFILE" >&2
+  exit 1
+fi
+
+NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING=1 \
+  NOONMARK_PROVISIONING_PROFILE="$provisioning_profile" \
+  NOONMARK_REQUIRE_STABLE_UI_SIGNING=1 \
+  scripts/build-mac-app debug e2e >/dev/null
+
+codesign --verify --deep --strict "$app_path"
+
+run_phase prepare \
+  "ok phase=prepare sequence=1"
+run_phase advance \
+  "ok phase=advance stale_rejected=true sequence=2 accessibility=after-first-unlock-this-device-only synchronizable=false"
+run_phase verify \
+  "ok phase=verify sequence=2 cleanup=deleted"
+
+echo "Signed App Data Protection Keychain watermark gate passed"

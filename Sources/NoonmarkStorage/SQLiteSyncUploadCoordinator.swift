@@ -141,7 +141,7 @@ public final class SQLiteSyncUploadCoordinator {
                 action: "uploadRetryPending"
             )
             throw error
-        } catch let error as ICloudDriveSyncTransportError {
+        } catch let error as ICloudDriveRepositoryLocationError {
             try markBlockedUserAttention(
                 materialized.uploadableEntries,
                 action: "uploadBlockedUserAttention",

@@ -114,6 +114,11 @@ final class WindowServerInputDriver {
         case coordinateRoundTripFailed(expected: NSPoint, actual: NSPoint)
         case inputContextUnavailable(InputContextReport)
         case targetBecameUnavailable(point: CGPoint, InputContextReport)
+        case physicalTargetUnavailable(
+            expectedWindowNumber: Int,
+            actualWindowNumber: Int,
+            point: NSPoint
+        )
         case pointerDidNotSettle(PointerSettlementReport)
         case buttonStateDidNotChange(expectedDown: Bool)
         case clickGestureFailed(
@@ -144,6 +149,10 @@ final class WindowServerInputDriver {
             case let .targetBecameUnavailable(point, context):
                 return "WindowServer click target moved or disappeared before mouseDown: "
                     + "point=\(point),\(context.report)"
+            case let .physicalTargetUnavailable(expected, actual, point):
+                return "WindowServer physical target unavailable before mouseDown: "
+                    + "expected=\(expected),"
+                    + "actual=\(actual),appkit=\(point)"
             case let .pointerDidNotSettle(report):
                 return "WindowServer pointer did not settle: \(report.report)"
             case let .buttonStateDidNotChange(expectedDown):
@@ -174,6 +183,7 @@ final class WindowServerInputDriver {
                  .coordinateRoundTripFailed,
                  .inputContextUnavailable,
                  .targetBecameUnavailable,
+                 .physicalTargetUnavailable,
                  .pointerDidNotSettle,
                  .buttonStateDidNotChange,
                  .menuBarTargetUnavailable,
@@ -377,6 +387,10 @@ final class WindowServerInputDriver {
                 matching: settledCoordinate,
                 expectedButtonState: .up
             )
+            try requirePhysicalTarget(
+                resolvedCoordinate,
+                matching: settledCoordinate
+            )
             guard let event = CGEvent(
                 scrollWheelEvent2Source: source,
                 units: .pixel,
@@ -473,6 +487,10 @@ final class WindowServerInputDriver {
             finalCoordinate,
             matching: initialCoordinate,
             expectedButtonState: .up
+        )
+        try requirePhysicalTarget(
+            finalCoordinate,
+            matching: initialCoordinate
         )
 
         var mouseDownWasPosted = false
@@ -807,7 +825,15 @@ final class WindowServerInputDriver {
             let pointerIsSettled = last.map {
                 pointsAreNear($0, resolvedCoordinate.quartzPoint)
             } == true
-            if pointerIsSettled {
+            let hitWindowNumber = NSWindow.windowNumber(
+                at: resolvedCoordinate.appKitScreenPoint,
+                belowWindowWithWindowNumber: 0
+            )
+            if WindowServerInputContextContract.physicalTargetIsReady(
+                expectedWindowNumber: expectedCoordinate.windowNumber,
+                hitWindowNumber: hitWindowNumber,
+                pointerIsSettled: pointerIsSettled
+            ) {
                 consecutiveSettledSamples += 1
                 if consecutiveSettledSamples >= 2 {
                     return resolvedCoordinate
@@ -973,6 +999,33 @@ final class WindowServerInputDriver {
                 expectedButtonState: expectedButtonState
             )
             throw Failure.inputContextUnavailable(context)
+        }
+    }
+
+    private func requirePhysicalTarget(
+        _ coordinate: PointerCoordinate,
+        matching expectedCoordinate: PointerCoordinate
+    ) throws {
+        let hitWindowNumber = NSWindow.windowNumber(
+            at: coordinate.appKitScreenPoint,
+            belowWindowWithWindowNumber: 0
+        )
+        let pointerIsSettled = currentPointerLocation.map {
+            pointsAreNear($0, coordinate.quartzPoint)
+        } == true
+        guard coordinate.window === expectedCoordinate.window,
+              coordinate.windowNumber == expectedCoordinate.windowNumber,
+              WindowServerInputContextContract.physicalTargetIsReady(
+                  expectedWindowNumber: expectedCoordinate.windowNumber,
+                  hitWindowNumber: hitWindowNumber,
+                  pointerIsSettled: pointerIsSettled
+              )
+        else {
+            throw Failure.physicalTargetUnavailable(
+                expectedWindowNumber: expectedCoordinate.windowNumber,
+                actualWindowNumber: hitWindowNumber,
+                point: coordinate.appKitScreenPoint
+            )
         }
     }
 

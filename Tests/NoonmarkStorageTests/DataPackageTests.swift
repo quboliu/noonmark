@@ -31,22 +31,24 @@ final class DataPackageTests: XCTestCase {
         XCTAssertEqual(restored.snapshot(), engine.snapshot())
     }
 
-    func testJSONDataPackageImportsCanonicalPreviousV6Package() throws {
+    func testJSONDataPackageRejectsPreviousV6Package() throws {
         let engine = try makeEngine()
         let currentData = try NoonmarkDataPackage.encode(engine.snapshot())
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: currentData) as? [String: Any]
         )
-        object["formatVersion"] = NoonmarkDataPackage.legacyFormatVersion
+        object["formatVersion"] = 6
         var snapshot = try XCTUnwrap(object["snapshot"] as? [String: Any])
         snapshot.removeValue(forKey: "ideas")
         object["snapshot"] = snapshot
         let legacyData = try canonicalJSON(object)
 
-        let restored = try NoonmarkDataPackage.decode(legacyData)
-
-        XCTAssertEqual(restored, engine.snapshot())
-        XCTAssertEqual(restored.ideas, [])
+        XCTAssertThrowsError(try NoonmarkDataPackage.decode(legacyData)) { error in
+            XCTAssertEqual(
+                error as? DataPackageError,
+                .unsupportedFormatVersion(6)
+            )
+        }
     }
 
     func testDataPackagePreservesTaskCycleParentCancellationAndFullTrack() throws {

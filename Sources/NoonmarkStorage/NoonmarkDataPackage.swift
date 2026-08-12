@@ -13,7 +13,6 @@ public struct DataPackageWriteReceipt: Equatable, Sendable {
 }
 
 public enum NoonmarkDataPackage {
-    public static let legacyFormatVersion = 6
     public static let currentFormatVersion = 7
 
     public static func encode(_ snapshot: NoonmarkSnapshot) throws -> Data {
@@ -26,23 +25,12 @@ public enum NoonmarkDataPackage {
         let decoder = ExactDateJSONCoding.decoder(
             nonFiniteDateDescription: "data package date must be finite"
         )
-        let snapshot: NoonmarkSnapshot
-        let encodedJSON: (data: Data, object: Any)
-        switch header.formatVersion {
-        case currentFormatVersion:
-            snapshot = try decoder.decode(DataPackageEnvelope.self, from: data)
-                .snapshot
-            encodedJSON = try currentJSON(for: snapshot)
-        case legacyFormatVersion:
-            let legacyEnvelope = try decoder.decode(
-                LegacyV6DataPackageEnvelope.self,
-                from: data
-            )
-            snapshot = legacyEnvelope.snapshot.currentSnapshot
-            encodedJSON = try legacyV6JSON(for: snapshot)
-        default:
+        guard header.formatVersion == currentFormatVersion else {
             throw DataPackageError.unsupportedFormatVersion(header.formatVersion)
         }
+        let snapshot = try decoder.decode(DataPackageEnvelope.self, from: data)
+            .snapshot
+        let encodedJSON = try currentJSON(for: snapshot)
         try validate(snapshot)
         let inputJSON = try canonicalJSON(from: data)
         guard inputJSON.data == data,
@@ -88,18 +76,6 @@ public enum NoonmarkDataPackage {
         )
         let encoded = try encoder.encode(
             DataPackageEnvelope(formatVersion: currentFormatVersion, snapshot: snapshot)
-        )
-        return try canonicalJSON(from: encoded)
-    }
-
-    private static func legacyV6JSON(
-        for snapshot: NoonmarkSnapshot
-    ) throws -> (data: Data, object: Any) {
-        let encoder = ExactDateJSONCoding.encoder(
-            nonFiniteDateDescription: "data package date must be finite"
-        )
-        let encoded = try encoder.encode(
-            LegacyV6DataPackageEnvelope(snapshot: snapshot)
         )
         return try canonicalJSON(from: encoded)
     }
@@ -222,16 +198,6 @@ private struct DataPackageEnvelope: Codable {
     }
 }
 
-private struct LegacyV6DataPackageEnvelope: Codable {
-    let formatVersion: Int
-    let snapshot: LegacyV6DataPackageSnapshot
-
-    init(snapshot: NoonmarkSnapshot) {
-        formatVersion = NoonmarkDataPackage.legacyFormatVersion
-        self.snapshot = LegacyV6DataPackageSnapshot(snapshot)
-    }
-}
-
 private struct DataPackageSnapshot: Decodable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case days
@@ -267,42 +233,6 @@ private struct DataPackageSnapshot: Decodable {
             preferences: container.decode(AppPreferences.self, forKey: .preferences),
             classifications: container.decode(TaskClassificationState.self, forKey: .classifications),
             ideas: container.decode([IdeaEntry].self, forKey: .ideas)
-        )
-    }
-}
-
-private struct LegacyV6DataPackageSnapshot: Codable {
-    let days: [Day]
-    let taskCycleSeries: [TaskCycleSeries]
-    let chains: [TaskChain]
-    let definitions: [TaskDefinition]
-    let traces: [DayTrace]
-    let subtasks: [Subtask]
-    let preferences: AppPreferences
-    let classifications: TaskClassificationState
-
-    init(_ snapshot: NoonmarkSnapshot) {
-        days = snapshot.days
-        taskCycleSeries = snapshot.taskCycleSeries
-        chains = snapshot.chains
-        definitions = snapshot.definitions
-        traces = snapshot.traces
-        subtasks = snapshot.subtasks
-        preferences = snapshot.preferences
-        classifications = snapshot.classifications
-    }
-
-    var currentSnapshot: NoonmarkSnapshot {
-        NoonmarkSnapshot(
-            days: days,
-            taskCycleSeries: taskCycleSeries,
-            chains: chains,
-            definitions: definitions,
-            traces: traces,
-            subtasks: subtasks,
-            preferences: preferences,
-            classifications: classifications,
-            ideas: []
         )
     }
 }

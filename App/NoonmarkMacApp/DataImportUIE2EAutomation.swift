@@ -282,7 +282,7 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
             throw Failure.failed("baseline fixture was not committed to SQLite")
         }
 
-        try writePreviousReleaseDataPackage(
+        try writeCurrentDataPackage(
             importEngine.snapshot(),
             to: fixtureURL
         )
@@ -295,28 +295,14 @@ struct DataImportUIE2EAutomation: LaunchAutomationRunnable {
         }
     }
 
-    private func writePreviousReleaseDataPackage(
+    private func writeCurrentDataPackage(
         _ snapshot: NoonmarkSnapshot,
         to url: URL
     ) throws {
-        let currentData = try NoonmarkDataPackage.encode(snapshot)
-        guard var envelope = try JSONSerialization.jsonObject(
-            with: currentData
-        ) as? [String: Any],
-            var legacySnapshot = envelope["snapshot"] as? [String: Any]
-        else {
-            throw Failure.failed(
-                "could not build the previous-release import fixture"
-            )
-        }
-        envelope["formatVersion"] = NoonmarkDataPackage.legacyFormatVersion
-        legacySnapshot.removeValue(forKey: "ideas")
-        envelope["snapshot"] = legacySnapshot
-        let legacyData = try canonicalJSON(envelope)
-        try legacyData.write(to: url, options: .atomic)
+        try NoonmarkDataPackage.write(snapshot, to: url)
         guard try NoonmarkDataPackage.read(from: url) == snapshot else {
             throw Failure.failed(
-                "previous-release import fixture did not round-trip"
+                "current import fixture did not round-trip"
             )
         }
     }

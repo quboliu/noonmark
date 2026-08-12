@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "replication watermark signed Keychain contract: $*" >&2
+  exit 1
+}
+
+require_literal() {
+  local path="$1"
+  local literal="$2"
+
+  rg -Fq -- "$literal" "$path" ||
+    fail "$path no longer contains required contract: $literal"
+}
+
+build_script="scripts/build-mac-app"
+signed_gate="scripts/test-replication-watermark-keychain-signed"
+automation="App/NoonmarkMacApp/ReplicationWatermarkKeychainE2EAutomation.swift"
+registration="App/NoonmarkMacApp/LegacyLaunchAutomations.swift"
+
+for path in "$build_script" "$signed_gate" "$automation" "$registration"; do
+  [[ -f "$path" ]] || fail "missing required file: $path"
+done
+[[ -x "$build_script" ]] || fail "$build_script is not executable"
+[[ -x "$signed_gate" ]] || fail "$signed_gate is not executable"
+
+bash -n "$build_script"
+bash -n "$signed_gate"
+
+require_literal "$build_script" 'NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING'
+require_literal "$build_script" 'NOONMARK_PROVISIONING_PROFILE'
+require_literal "$build_script" 'provisioning profile does not authorize the exact Keychain group'
+require_literal "$build_script" '<key>keychain-access-groups</key>'
+require_literal "$build_script" '--generate-entitlement-der'
+require_literal "$build_script" 'signed app does not contain its exact Keychain access group'
+
+require_literal "$registration" 'ReplicationWatermarkKeychainE2EAutomation.fromCommandLine()'
+require_literal "$automation" '@_spi(Testing) import NoonmarkSync'
+require_literal "$automation" '--e2e-replication-watermark-keychain-prepare'
+require_literal "$automation" '--e2e-replication-watermark-keychain-advance'
+require_literal "$automation" '--e2e-replication-watermark-keychain-verify'
+require_literal "$automation" 'kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly'
+require_literal "$automation" 'synchronizableStatus == errSecItemNotFound'
+require_literal "$automation" 'deleteWatermarkForTesting(in: scope)'
+
+require_literal "$signed_gate" 'NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING=1'
+require_literal "$signed_gate" 'NOONMARK_REQUIRE_STABLE_UI_SIGNING=1'
+require_literal "$signed_gate" '--ephemeral'
+require_literal "$signed_gate" 'run_phase prepare'
+require_literal "$signed_gate" 'run_phase advance'
+require_literal "$signed_gate" 'run_phase verify'
+if rg -q 'reset-dev-data|test-icloud|SyncRepository|AppendOnlyLiveTests' "$signed_gate"; then
+  fail "$signed_gate must stay isolated from reset, SQLite, and iCloud paths"
+fi
+
+echo "Replication watermark signed Keychain contract passed"

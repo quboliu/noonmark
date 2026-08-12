@@ -6,15 +6,55 @@ import NoonmarkMacRuntime
 import NoonmarkStorage
 import NoonmarkSync
 
-private struct LocalFirstSyncRunFailure: Error {
-    let underlying: any Error
-    let persistsFailure: Bool
+private enum AppReplicationConfigurationError: Error {
+    case unavailableEndpoint
 }
 
-private struct LocalFirstSyncInstallation {
-    let result: SQLiteLocalFirstSyncResult
-    let unresolvedConflictCount: Int
-    let timestamps: SQLiteLocalFirstSyncTimestamps?
+func appSQLiteFailurePoint(_ candidate: Error) -> String? {
+    let candidate = if let wrapped = candidate as? EnginePersistenceCommitError {
+        wrapped.underlying
+    } else {
+        candidate
+    }
+    guard let error = candidate as? SQLiteRepositoryError else { return nil }
+    switch error {
+    case .transientContention: return "transient-contention"
+    case .openFailed: return "open"
+    case .prepareFailed: return "prepare"
+    case let .executeFailed(message, _):
+        let source = if message.hasPrefix("engine repository ") {
+            "engine"
+        } else if message.hasPrefix("replication ledger ") {
+            "replication-ledger"
+        } else if message.hasPrefix("sync repository ") {
+            "sync-repository"
+        } else if message.hasPrefix("schema:") {
+            "schema"
+        } else {
+            "unknown"
+        }
+        let depth = if message.contains("writerDepth=1") {
+            "depth-1"
+        } else if message.contains("writerDepth=2") {
+            "depth-2"
+        } else {
+            "depth-other"
+        }
+        if message.contains("BEGIN IMMEDIATE") {
+            return "execute-begin-immediate-\(source)-\(depth)"
+        } else if message.contains("COMMIT") {
+            return "execute-commit-\(source)"
+        } else if message.contains("ROLLBACK") {
+            return "execute-rollback-\(source)"
+        } else if message.contains("PRAGMA foreign_keys") {
+            return "execute-foreign-keys-\(source)"
+        } else {
+            return "execute-other-\(source)"
+        }
+    case .stepFailed: return "step"
+    case .invalidStoredValue: return "stored-value"
+    case .backupFailed: return "backup"
+    }
 }
 
 extension NoonmarkStore {
@@ -80,20 +120,15 @@ extension NoonmarkStore {
     }
 
     @discardableResult
-    func autosaveSettingsPoemText(
-        _ text: String
-    ) async -> Bool {
+    func autosaveSettingsPoemText(_ text: String) async -> Bool {
         do {
             try await commitEngineMutationInBackground(
                 undoPolicy: .invalidate,
                 publishesEngine: false
             ) { candidate, _ in
-                var policy = candidate.preferences
-                    .settingsPoemDisplayPolicy
+                var policy = candidate.preferences.settingsPoemDisplayPolicy
                 policy.text = text
-                candidate.updateSettingsPoemDisplayPolicy(
-                    policy
-                )
+                candidate.updateSettingsPoemDisplayPolicy(policy)
             }
             resolveOperationFailure(.preferences)
             return true
@@ -122,10 +157,6 @@ extension NoonmarkStore {
             try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
                 candidate.updateDataMode(dataMode)
             }
-            if dataMode != .localFirst {
-                cancelCloudKitAccountCheck()
-                discardCloudKitTransport()
-            }
             restartLocalFirstSyncAutomation()
             showToast(copy.dataModeChangedToast(for: dataMode))
         } catch {
@@ -134,15 +165,12 @@ extension NoonmarkStore {
     }
 
     func setLocalFirstSyncEndpoint(_ endpoint: CloudSyncEndpointKind) {
-        guard engine.preferences.localFirstSyncPolicy.endpoint != endpoint else { return }
-        if endpoint != .iCloud {
-            cancelCloudKitAccountCheck()
+        guard engine.preferences.localFirstSyncPolicy.endpoint != endpoint else {
+            return
         }
         var policy = engine.preferences.localFirstSyncPolicy
         policy.endpoint = endpoint
-        let endpointIsUnavailable = supportsRunnableLocalFirstSync(endpoint) == false
-            || (endpoint == .iCloud && isICloudSyncEndpointAvailable == false)
-        if endpointIsUnavailable {
+        if supportsRunnableLocalFirstSync(endpoint) == false {
             policy.enabled = false
         }
         commitLocalFirstSyncPolicy(policy)
@@ -156,745 +184,164 @@ extension NoonmarkStore {
     }
 
     func setLocalFirstSyncEnabled(_ enabled: Bool) {
-        if enabled == false {
-            cancelCloudKitAccountCheck()
-        }
-        guard engine.preferences.localFirstSyncPolicy.enabled != enabled else { return }
-        if enabled == false, isLocalFirstSyncing {
-            stopLocalFirstSyncAndDisable()
+        guard engine.preferences.localFirstSyncPolicy.enabled != enabled else {
             return
         }
         var policy = engine.preferences.localFirstSyncPolicy
-        if enabled {
-            guard supportsRunnableLocalFirstSync(policy.endpoint) else {
-                showToast(copy.localFirstSyncUnavailableToast)
-                return
-            }
-            if policy.endpoint == .iCloud {
-                if cloudKitSyncConfiguration != nil {
-                    beginCloudKitSyncEnablement()
-                    return
-                }
-                do {
-                    try validateICloudSyncEndpoint()
-                } catch {
-                    presentLocalFirstSyncFailure(error)
-                    return
-                }
-            }
+        if enabled, supportsRunnableLocalFirstSync(policy.endpoint) == false {
+            showToast(copy.localFirstSyncUnavailableToast)
+            return
+        }
+        if enabled, policy.endpoint == .iCloud,
+           isICloudSyncEndpointAvailable == false
+        {
+            showToast(copy.localFirstSyncUnavailableToast)
+            return
         }
         policy.enabled = enabled
         commitLocalFirstSyncPolicy(policy)
     }
 
-    private func stopLocalFirstSyncAndDisable() {
-        guard isLocalFirstSyncStopping == false else { return }
-        isLocalFirstSyncStopping = true
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncAutomationTask = nil
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncConfirmationRetryTask = nil
-        localFirstSyncDisableTask?.cancel()
-        localFirstSyncDisableTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                isLocalFirstSyncStopping = false
-                localFirstSyncDisableTask = nil
-            }
-            await localFirstSyncRunController.stop()
-            guard Task.isCancelled == false else { return }
-            var policy = engine.preferences.localFirstSyncPolicy
-            guard policy.enabled else { return }
-            policy.enabled = false
-            commitLocalFirstSyncPolicy(policy)
-        }
-    }
-
-    var isICloudDriveAvailable: Bool {
-        (try? ICloudDriveSyncTransport.defaultRootURL(
-            repositoryName: AppLaunchArguments.validatedRuntimeProfile
-                .iCloudRepositoryName
-        )) != nil
-    }
-
-    var cloudKitSyncConfiguration: CloudKitSyncLaunchConfiguration? {
-        try? CloudKitSyncLaunchConfiguration.resolve(
-            arguments: AppLaunchArguments.values
-        )
-    }
-
-    var isCloudKitSyncConfigured: Bool {
-        cloudKitSyncConfiguration != nil
-    }
-
-    var isICloudSyncEndpointAvailable: Bool {
+    private func commitLocalFirstSyncPolicy(
+        _ policy: LocalFirstCloudSyncPolicy
+    ) {
         do {
-            try validateICloudSyncEndpoint()
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    private func validateICloudSyncEndpoint() throws {
-        if let cloudKitSyncConfiguration {
-            try CloudKitEntitlementProbe.validateCurrentProcess(
-                containerIdentifier: cloudKitSyncConfiguration
-                    .containerIdentifier
-            )
-            guard let cloudKitAccountAvailability,
-                  cloudKitAccountAvailability.canSync
-            else {
-                throw CloudKitSyncEngineTransportError.accountUnavailable(
-                    cloudKitAccountAvailability ?? .couldNotDetermine
-                )
+            try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
+                candidate.updateLocalFirstSyncPolicy(policy)
             }
-        } else {
-            _ = try ICloudDriveSyncTransport.defaultRootURL(
-                repositoryName: AppLaunchArguments.validatedRuntimeProfile
-                    .iCloudRepositoryName
-            )
-        }
-    }
-
-    func refreshCloudKitAccountAvailability() {
-        guard cloudKitSyncConfiguration != nil else {
-            cancelCloudKitAccountCheck()
-            if cloudKitAccountAvailability != nil {
-                cloudKitAccountAvailability = nil
-            }
-            return
-        }
-        cancelCloudKitAccountCheck()
-        cloudKitAccountCheckTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let availability = try await resolvedCloudKitAccountAvailability()
-                try Task.checkCancellation()
-                cloudKitAccountAvailability = availability
-                if availability.canSync {
-                    restoreLocalFirstSyncStatus()
-                } else if engine.preferences.localFirstSyncPolicy.endpoint == .iCloud {
-                    localFirstSyncMessage = AppPresentation(
-                        language: engine.preferences.language
-                    ).failureMessage(for: .sync)
-                }
-                restartLocalFirstSyncAutomation()
-            } catch is CancellationError {
-                return
-            } catch {
-                cloudKitAccountAvailability = nil
-                if engine.preferences.localFirstSyncPolicy.endpoint == .iCloud {
-                    localFirstSyncMessage = AppPresentation(
-                        language: engine.preferences.language
-                    ).failureMessage(for: .sync)
-                }
-                restartLocalFirstSyncAutomation()
-            }
-        }
-    }
-
-    func enableCloudKitSyncAfterAccountCheck() async throws {
-        let availability = try await resolvedCloudKitAccountAvailability()
-        try Task.checkCancellation()
-        cloudKitAccountAvailability = availability
-        guard availability.canSync else {
-            throw CloudKitSyncEngineTransportError.accountUnavailable(availability)
-        }
-        guard engine.preferences.dataMode == .localFirst,
-              engine.preferences.localFirstSyncPolicy.endpoint == .iCloud
-        else {
-            throw CloudKitSyncEngineTransportError.cloudKitFailure(
-                "CloudKit enablement was cancelled because the data mode or endpoint changed"
-            )
-        }
-        var policy = engine.preferences.localFirstSyncPolicy
-        guard policy.enabled == false else { return }
-        policy.enabled = true
-        try applyLocalFirstSyncPolicy(policy)
-    }
-
-    private func resolvedCloudKitAccountAvailability() async throws -> CloudKitAccountAvailability {
-        guard let databaseURL, cloudKitSyncConfiguration != nil else {
-            throw CloudKitSyncEngineTransportError.cloudKitFailure(
-                "CloudKit account validation requires a persistent database"
-            )
-        }
-        return try await cloudKitTransport(
-            databaseURL: databaseURL
-        ).accountAvailability()
-    }
-
-    private func beginCloudKitSyncEnablement() {
-        cancelCloudKitAccountCheck()
-        cloudKitAccountCheckTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await enableCloudKitSyncAfterAccountCheck()
-            } catch is CancellationError {
-                return
-            } catch {
-                presentLocalFirstSyncFailure(error)
-            }
-        }
-    }
-
-    func cancelCloudKitAccountCheck() {
-        cloudKitAccountCheckTask?.cancel()
-        cloudKitAccountCheckTask = nil
-    }
-
-    private func commitLocalFirstSyncPolicy(_ policy: LocalFirstCloudSyncPolicy) {
-        do {
-            try applyLocalFirstSyncPolicy(policy)
+            restartLocalFirstSyncAutomation()
+            showToast(copy.localFirstSyncChangedToast)
         } catch {
             showOperationFailure(.preferences, error: error)
         }
     }
 
-    private func applyLocalFirstSyncPolicy(
-        _ policy: LocalFirstCloudSyncPolicy
-    ) throws {
-        try commitEngineMutation(undoPolicy: .invalidate) { candidate, _ in
-            candidate.updateLocalFirstSyncPolicy(policy)
-        }
-        if policy.enabled == false || policy.endpoint != .iCloud {
-            discardCloudKitTransport()
-        }
-        restoreLocalFirstSyncStatus()
-        restartLocalFirstSyncAutomation()
-        showToast(copy.localFirstSyncChangedToast)
-    }
-
     func syncLocalFolderNow() {
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncConfirmationRetryTask = nil
-        localFirstSyncConfirmationRetryCount = 0
-        runLocalFolderSync(
-            showToastOnSuccess: true,
-            retriesUserAttentionBlocks: true
-        )
-    }
-
-    private func runLocalFolderSync(
-        showToastOnSuccess: Bool,
-        retriesUserAttentionBlocks: Bool
-    ) {
-        guard let naturalDay = prepareNaturalDayForUserMutation() else { return }
         guard engine.preferences.dataMode == .localFirst,
               engine.preferences.localFirstSyncPolicy.enabled,
-              supportsRunnableLocalFirstSync(engine.preferences.localFirstSyncPolicy.endpoint)
+              supportsRunnableLocalFirstSync(
+                  engine.preferences.localFirstSyncPolicy.endpoint
+              )
         else {
             showToast(copy.localFirstSyncUnavailableToast)
             return
         }
-        guard isLocalFirstSyncing == false else { return }
-        guard let databaseURL else {
-            showToast(copy.ephemeralFolderSyncUnavailable)
-            return
-        }
-
-        let diagnosticOperation = diagnostics.startOperation(
-            kind: .localFirstSync,
-            endpoint: diagnosticEndpoint(
-                for: engine.preferences.localFirstSyncPolicy.endpoint
-            )
-        )
-        diagnosticOperation.stage(.transportPrepare)
-        let syncOperationID = diagnosticOperation.id.rawValue
-
-        let transport: any SyncRecordTransport
-        do {
-            transport = try prepareLocalFirstSyncRun(
-                databaseURL: databaseURL,
-                naturalDay: naturalDay,
-                retriesUserAttentionBlocks: retriesUserAttentionBlocks,
-                diagnosticOperation: diagnosticOperation
-            )
-        } catch {
-            presentPreparedLocalFirstSyncFailure(
-                error,
-                diagnosticOperation: diagnosticOperation
-            )
-            return
-        }
-        exclusiveEngineOperation = .localFirstSync(syncOperationID)
-        isLocalFirstSyncing = true
-        localFirstSyncMessage = copy.syncingWithEllipsis
-        let started = localFirstSyncRunController.start(
-            operation: { [weak self] in
-                guard let self else { throw CancellationError() }
-                try await performLocalFirstSyncRun(
-                    databaseURL: databaseURL,
-                    transport: transport,
-                    diagnosticOperation: diagnosticOperation,
-                    syncOperationID: syncOperationID,
-                    showToastOnSuccess: showToastOnSuccess
-                )
-            },
-            completion: { [weak self] completion in
-                guard let self else { return }
-                completeLocalFirstSyncRun(
-                    completion,
-                    syncOperationID: syncOperationID,
-                    diagnosticOperation: diagnosticOperation
-                )
-            }
-        )
-        guard started else {
-            diagnosticOperation.fail(
-                DiagnosticFailure(domain: .syncProtocol, code: 1)
-            )
-            finishLocalFirstSyncOperation(syncOperationID)
-            return
-        }
-    }
-
-    private func prepareLocalFirstSyncRun(
-        databaseURL: URL,
-        naturalDay: NaturalDayMoment,
-        retriesUserAttentionBlocks: Bool,
-        diagnosticOperation: DiagnosticOperation
-    ) throws -> any SyncRecordTransport {
-        let transport = try localFirstSyncTransport(
-            for: engine.preferences.localFirstSyncPolicy.endpoint,
-            databaseURL: databaseURL,
-            diagnosticOperation: diagnosticOperation
-        )
-        if retriesUserAttentionBlocks {
-            try SQLiteSyncUploadCoordinator(
-                databaseURL: databaseURL,
-                transport: transport
-            ).recoverMaterializableCorruptionBlocks()
-            try SQLiteSyncRepository(databaseURL: databaseURL)
-                .requeueJournalEntriesBlockedForUserAttention()
-        }
-        diagnosticOperation.stage(.persistenceCommit)
-        try save(
-            engine,
-            mutationAt: engine.nextMutationDate(
-                reference: naturalDay.instant
-            )
-        )
-        return transport
-    }
-
-    private func presentPreparedLocalFirstSyncFailure(
-        _ error: any Error,
-        diagnosticOperation: DiagnosticOperation
-    ) {
-        let failedAt = SQLiteLocalFirstSyncCoordinator
-            .persistedFailureTimestamp(Date())
-        let diagnosticCorrelation = diagnosticOperation
-            .failWithCorrelation(
-                persistedSyncDiagnosticFailure(for: error),
-                detail: diagnosticFailure(for: error),
-                at: failedAt
-            )
-        presentLocalFirstSyncFailure(
-            error,
-            failedAt: failedAt,
-            diagnosticCorrelation: diagnosticCorrelation
-        )
-    }
-
-    private func performLocalFirstSyncRun(
-        databaseURL: URL,
-        transport: any SyncRecordTransport,
-        diagnosticOperation: DiagnosticOperation,
-        syncOperationID: UUID,
-        showToastOnSuccess: Bool
-    ) async throws {
-        let coordinator = SQLiteLocalFirstSyncCoordinator(
-            databaseURL: databaseURL,
-            transport: transport,
-            diagnosticOperation: diagnosticOperation,
-            completesDiagnosticOperationOnSuccess: false,
-            completesDiagnosticOperationOnFailure: true
-        )
-        let result: SQLiteLocalFirstSyncResult
-        do {
-            result = try await coordinator.sync()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw LocalFirstSyncRunFailure(
-                underlying: error,
-                persistsFailure: false
-            )
-        }
-
-        do {
-            try Task.checkCancellation()
-            let syncRepository = SQLiteSyncRepository(
-                databaseURL: databaseURL
-            )
-            let unresolvedConflictCount =
-                try syncRepository.unresolvedConflicts().count
-            let timestamps = try SQLiteLocalFirstSyncCoordinator.timestamps(
-                in: syncRepository
-            )
-            diagnosticOperation.stage(.installMergedState)
-            try installLocalFirstSyncResult(
-                LocalFirstSyncInstallation(
-                    result: result,
-                    unresolvedConflictCount: unresolvedConflictCount,
-                    timestamps: timestamps
-                ),
-                databaseURL: databaseURL,
-                syncOperationID: syncOperationID,
-                showToastOnSuccess: showToastOnSuccess
-            )
-            diagnosticOperation.succeed(
-                progress: DiagnosticProgress(
-                    recordCount: result.upload.uploadedCount
-                        + result.download.fetchedCount,
-                    pendingCount: result.upload.pendingCount,
-                    appliedCount: result.download.appliedCount,
-                    conflictCount: unresolvedConflictCount
-                )
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw LocalFirstSyncRunFailure(
-                underlying: error,
-                persistsFailure: true
-            )
-        }
-    }
-
-    private func installLocalFirstSyncResult(
-        _ installation: LocalFirstSyncInstallation,
-        databaseURL: URL,
-        syncOperationID: UUID,
-        showToastOnSuccess: Bool
-    ) throws {
-        try consumePostSyncFailureForE2EIfArmed()
-        let loaded = try SQLiteEngineRepository(
-            databaseURL: databaseURL
-        ).load()
-        let moment = try dayContext.moment()
-        let previousLanguage = engine.preferences.language
-        let automationConfigurationChanged =
-            engine.preferences.dataMode != loaded.preferences.dataMode
-            || engine.preferences.localFirstSyncPolicy
-                != loaded.preferences.localFirstSyncPolicy
-        try withExclusiveEngineWriteAuthorization(
-            for: .localFirstSync(syncOperationID)
-        ) {
-            try installExternallyLoadedEngine(
-                loaded,
-                moment: moment
-            )
-        }
-        Theme.apply(engine.preferences.theme)
-        if previousLanguage != engine.preferences.language {
-            onLanguageChange?()
-        }
-        if installation.result.isAwaitingUploadConfirmation == false {
-            localFirstSyncConfirmationRetryCount = 0
-            resolveOperationFailure(.sync)
-        }
-        localFirstSyncTimestamps = installation.timestamps
-        localFirstSyncMessage = copy.localFirstSyncResult(
-            installation.result,
-            unresolvedConflictCount: installation.unresolvedConflictCount
-        )
-        if installation.result.isAwaitingUploadConfirmation {
-            scheduleUploadConfirmationRetry()
-        }
-        if showToastOnSuccess {
-            showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
-        }
-        if automationConfigurationChanged {
-            restartLocalFirstSyncAutomation()
-        }
-    }
-
-    private func completeLocalFirstSyncRun(
-        _ completion: Result<Void, any Error>,
-        syncOperationID: UUID,
-        diagnosticOperation: DiagnosticOperation
-    ) {
-        finishLocalFirstSyncOperation(syncOperationID)
-        switch completion {
-        case .success:
-            break
-        case let .failure(error) where error is CancellationError:
-            localFirstSyncConfirmationRetryCount = 0
-            diagnosticOperation.cancel()
-            localFirstSyncMessage = nil
-        case let .failure(error):
-            localFirstSyncConfirmationRetryCount = 0
-            let runFailure = error as? LocalFirstSyncRunFailure
-            let underlyingError = runFailure?.underlying ?? error
-            let persistsFailure = runFailure?.persistsFailure ?? true
-            let failedAt = SQLiteLocalFirstSyncCoordinator
-                .persistedFailureTimestamp(Date())
-            let diagnosticCorrelation = diagnosticOperation
-                .failWithCorrelation(
-                    persistedSyncDiagnosticFailure(
-                        for: underlyingError
-                    ),
-                    detail: diagnosticFailure(for: underlyingError),
-                    at: failedAt
-                )
-            presentLocalFirstSyncFailure(
-                underlyingError,
-                failedAt: failedAt,
-                diagnosticCorrelation: diagnosticCorrelation,
-                persistsFailure: persistsFailure
-            )
-        }
-    }
-
-    private func scheduleUploadConfirmationRetry() {
-        let retryExponent = min(
-            localFirstSyncConfirmationRetryCount,
-            5
-        )
-        let retryDelaySeconds = min(1 << retryExponent, 30)
-        localFirstSyncConfirmationRetryCount = min(
-            localFirstSyncConfirmationRetryCount + 1,
-            5
-        )
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncConfirmationRetryTask = Task { @MainActor [weak self] in
-            defer { self?.localFirstSyncConfirmationRetryTask = nil }
-            do {
-                try await Task.sleep(
-                    for: .seconds(retryDelaySeconds)
-                )
-            } catch {
-                return
-            }
-            guard let self,
-                  isLocalFirstSyncing == false,
-                  let databaseURL,
-                  engine.preferences.dataMode == .localFirst,
-                  engine.preferences.localFirstSyncPolicy.enabled,
-                  supportsRunnableLocalFirstSync(
-                      engine.preferences.localFirstSyncPolicy.endpoint
-                  ),
-                  (try? SQLiteSyncRepository(databaseURL: databaseURL)
-                      .journalEntries(state: .publishedLocal).isEmpty) == false
-            else { return }
-            runLocalFolderSync(
-                showToastOnSuccess: false,
-                retriesUserAttentionBlocks: false
-            )
-        }
-    }
-
-    private func finishLocalFirstSyncOperation(_ operationID: UUID) {
-        if exclusiveEngineOperation == .localFirstSync(operationID) {
-            exclusiveEngineOperation = nil
-        }
-        isLocalFirstSyncing = false
-    }
-
-    private func consumePostSyncFailureForE2EIfArmed() throws {
-        guard persistenceFailuresRemainingForE2E > 0 else { return }
-        persistenceFailuresRemainingForE2E -= 1
-        throw PersistenceFailureE2EError.injectedSaveFailure
-    }
-
-    private func presentLocalFirstSyncFailure(
-        _ error: Error,
-        failedAt: Date = Date(),
-        diagnosticCorrelation existingCorrelation:
-            DiagnosticOperationCorrelation? = nil,
-        persistsFailure: Bool = true
-    ) {
-        let failedAt = SQLiteLocalFirstSyncCoordinator
-            .persistedFailureTimestamp(failedAt)
-        let correlation: DiagnosticOperationCorrelation = if let existingCorrelation {
-            existingCorrelation
-        } else {
-            diagnostics.startOperation(
+        guard localFirstReplicationCommandTask == nil else { return }
+        localFirstReplicationCommandTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { localFirstReplicationCommandTask = nil }
+            let operation = diagnostics.startOperation(
                 kind: .localFirstSync,
                 endpoint: diagnosticEndpoint(
                     for: engine.preferences.localFirstSyncPolicy.endpoint
-                ),
-                at: failedAt
+                )
             )
-            .failWithCorrelation(
-                persistedSyncDiagnosticFailure(for: error),
-                detail: diagnosticFailure(for: error),
-                at: failedAt
-            )
-        }
-        if persistsFailure, let databaseURL {
+            localFirstReplicationDiagnosticOperationID = operation.id
+            defer {
+                if localFirstReplicationDiagnosticOperationID == operation.id {
+                    localFirstReplicationDiagnosticOperationID = nil
+                }
+            }
+            operation.stage(.transportPrepare)
             do {
-                try SQLiteLocalFirstSyncCoordinator.persistFailure(
-                    error,
-                    at: failedAt,
-                    diagnosticCorrelation: correlation,
-                    in: SQLiteSyncRepository(
-                        databaseURL: databaseURL
+                let runtime = try prepareLocalFirstReplicationRuntime()
+                _ = try await runtime.send(.enable)
+                let result = try await runtime.send(.reconcile(now: Date()))
+                try Task.checkCancellation()
+                operation.succeed(
+                    progress: DiagnosticProgress(
+                        recordCount: result.confirmedLocalPublicationCount
+                            + result.appliedRemotePublicationCount,
+                        pendingCount: result.pendingLocalPublicationCount,
+                        appliedCount: result.appliedRemotePublicationCount,
+                        conflictCount: result.actionableForkConflict?
+                            .conflicts.count ?? 0
                     )
                 )
+                installLocalFirstReplicationState(result)
+                if result.convergence == .converged {
+                    showToast(localFirstSyncMessage ?? copy.localFirstSyncChangedToast)
+                }
+            } catch is CancellationError {
+                return
             } catch {
-                diagnostics.record(
-                    .persistenceFailed(
-                        failure: AppDiagnosticFailureMapping.map(error),
-                        incidentID: correlation.incidentID
-                    )
+                localFirstReplicationLastSQLiteFailurePoint =
+                    appSQLiteFailurePoint(error)
+                localFirstReplicationLastErrorKind = String(
+                    describing: type(of: error)
+                )
+                let incidentID = operation.fail(
+                    AppDiagnosticFailureMapping.map(error)
+                )
+                presentLocalFirstReplicationFailure(
+                    error,
+                    diagnosticIncidentID: incidentID
                 )
             }
         }
-        showOperationFailure(
-            .sync,
-            error: error,
-            diagnosticIncidentID: correlation.incidentID
-        )
-        localFirstSyncMessage = operationFailure
-    }
-
-    private func installExternallyLoadedEngine(
-        _ loaded: NoonmarkEngine,
-        moment: NaturalDayMoment
-    ) throws {
-        try assertEngineWriteAllowed()
-        let previousToday = today
-        let followsToday = selectedDate == previousToday
-        let calendarFollowsToday = selectedCalendarDate == previousToday
-        let candidate = try dayRolloverCoordinator.reconcile(
-            engine: loaded,
-            moment: moment
-        ) { candidate, mutationInstant in
-            try save(candidate, mutationAt: mutationInstant)
-        }
-        engine = candidate
-        clearUndoHistory()
-        naturalDayState = moment.state
-        today = moment.today
-        dayBoundaryState = .ready(appliedThrough: moment.today)
-        if followsToday {
-            selectedDate = moment.today
-        }
-        if calendarFollowsToday {
-            selectedCalendarDate = moment.today
-        }
-        normalizeSelection()
-    }
-
-    private func supportsRunnableLocalFirstSync(_ endpoint: CloudSyncEndpointKind) -> Bool {
-        endpoint == .iCloud || endpoint == .localFolder
-    }
-
-    private func localFirstSyncTransport(
-        for endpoint: CloudSyncEndpointKind,
-        databaseURL: URL,
-        diagnosticOperation: DiagnosticOperation
-    ) throws -> any SyncRecordTransport {
-        let producerEpochID = try SQLiteSyncRepository(
-            databaseURL: databaseURL
-        ).loadOrCreateTransportProducerEpochID()
-        switch endpoint {
-        case .iCloud:
-            if cloudKitSyncConfiguration != nil {
-                return try cloudKitTransport(databaseURL: databaseURL)
-            }
-            return try ICloudDriveSyncTransport(
-                repositoryName: AppLaunchArguments.validatedRuntimeProfile
-                    .iCloudRepositoryName,
-                producerEpochID: producerEpochID,
-                diagnosticOperation: diagnosticOperation
-            )
-        case .localFolder:
-            return LocalFolderSyncTransport(
-                rootURL: Self.configuredSyncFolderURL(),
-                producerEpochID: producerEpochID,
-                diagnosticOperation: diagnosticOperation
-            )
-        case .s3, .webDAV:
-            throw ICloudDriveSyncTransportError.unavailable
-        }
-    }
-
-    private func cloudKitTransport(
-        databaseURL: URL
-    ) throws -> CloudKitSyncEngineTransport {
-        if let retainedCloudKitSyncTransport {
-            return retainedCloudKitSyncTransport
-        }
-        guard let configuration = cloudKitSyncConfiguration else {
-            throw CloudKitSyncLaunchConfigurationError.invalidArguments
-        }
-        let lease = CloudKitSyncPersistenceLease()
-        let transport = try CloudKitSyncEngineTransport(
-            containerIdentifier: configuration.containerIdentifier,
-            persistence: SQLiteCloudKitSyncPersistence(
-                databaseURL: databaseURL,
-                lease: lease
-            ),
-            zoneName: configuration.zoneName
-        )
-        retainedCloudKitSyncLease = lease
-        retainedCloudKitSyncTransport = transport
-        return transport
-    }
-
-    private func discardCloudKitTransport() {
-        guard let transport = detachCloudKitTransport() else { return }
-        Task {
-            await transport.shutdown()
-        }
-    }
-
-    func discardCloudKitTransportAndWait() async {
-        guard let transport = detachCloudKitTransport() else { return }
-        await transport.shutdown()
-    }
-
-    private func detachCloudKitTransport() -> CloudKitSyncEngineTransport? {
-        retainedCloudKitSyncLease?.invalidate()
-        retainedCloudKitSyncLease = nil
-        defer { retainedCloudKitSyncTransport = nil }
-        return retainedCloudKitSyncTransport
-    }
-
-    func deleteCloudKitLiveValidationZone() async throws {
-        guard let databaseURL else {
-            throw CloudKitSyncEngineTransportError.cloudKitFailure(
-                "CloudKit live validation requires a persistent database"
-            )
-        }
-        try await cloudKitTransport(
-            databaseURL: databaseURL
-        ).deleteLiveValidationZone()
     }
 
     func restartLocalFirstSyncAutomation() {
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncAutomationTask = nil
-        guard (try? assertEngineWriteAllowed()) != nil else { return }
-        let policy = engine.preferences.localFirstSyncPolicy
-        guard databaseURL != nil,
-              engine.preferences.dataMode == .localFirst,
-              policy.enabled,
-              supportsRunnableLocalFirstSync(policy.endpoint),
-              policy.endpoint != .iCloud || isICloudSyncEndpointAvailable,
-              policy.mode == .automatic
-        else { return }
-
-        let intervalNanoseconds = UInt64(policy.intervalSeconds) * 1_000_000_000
-        localFirstSyncAutomationTask = Task { [weak self] in
-            while Task.isCancelled == false {
-                await MainActor.run {
-                    self?.localFirstSyncConfirmationRetryCount = 0
-                    self?.runLocalFolderSync(
-                        showToastOnSuccess: false,
-                        retriesUserAttentionBlocks: false
-                    )
+        let previous = localFirstReplicationConfigurationTask
+        localFirstReplicationConfigurationTask = Task { @MainActor [weak self] in
+            if let previous {
+                _ = await previous.result
+            }
+            guard let self else { return }
+            let policy = engine.preferences.localFirstSyncPolicy
+            guard databaseURL != nil,
+                  engine.preferences.dataMode == .localFirst,
+                  policy.enabled,
+                  supportsRunnableLocalFirstSync(policy.endpoint)
+            else {
+                var disableFailure: Error?
+                if policy.enabled == false,
+                   let runtime = localFirstReplicationRuntime
+                {
+                    do {
+                        let disabled = try await runtime.send(.disable)
+                        installLocalFirstReplicationState(disabled)
+                    } catch {
+                        disableFailure = error
+                    }
                 }
+                var shutdownFailure: Error?
                 do {
-                    try await Task.sleep(nanoseconds: intervalNanoseconds)
+                    try await shutdownAndReleaseLocalFirstReplication()
                 } catch {
-                    return
+                    shutdownFailure = error
                 }
+                if let failure = disableFailure ?? shutdownFailure {
+                    localFirstReplicationLastErrorKind = String(
+                        describing: type(of: failure)
+                    )
+                    presentLocalFirstReplicationFailure(failure)
+                }
+                return
+            }
+            do {
+                if localFirstReplicationEndpointKind != nil,
+                   localFirstReplicationEndpointKind != policy.endpoint
+                {
+                    try await shutdownAndReleaseLocalFirstReplication()
+                }
+                let runtime = try prepareLocalFirstReplicationRuntime()
+                _ = try await runtime.send(.enable)
+                if policy.mode == .automatic {
+                    try await runtime.startAutomatic(
+                        interval: .seconds(policy.intervalSeconds)
+                    )
+                } else {
+                    await runtime.stopAutomatic()
+                }
+                resolveOperationFailure(.sync)
+            } catch is CancellationError {
+                return
+            } catch {
+                localFirstReplicationLastErrorKind = String(
+                    describing: type(of: error)
+                )
+                presentLocalFirstReplicationFailure(error)
             }
         }
     }
@@ -904,185 +351,79 @@ extension NoonmarkStore {
     ) {
         guard let databaseURL else { return }
         do {
-            let syncRepository = SQLiteSyncRepository(
+            if let state = try LocalFirstReplication.persistedState(
                 databaseURL: databaseURL
-            )
-            if let interruptedOperation,
-               interruptedOperation.kind == .localFirstSync,
-               interruptedOperation.outcome == .interrupted,
-               let incidentID = interruptedOperation.incidentID
-            {
-                _ = try SQLiteLocalFirstSyncCoordinator
-                    .persistInterruptedSyncFailureIfNewer(
-                        at: interruptedOperation.finishedAt,
-                        diagnosticCorrelation: DiagnosticOperationCorrelation(
-                            operationID: interruptedOperation.operationID,
-                            incidentID: incidentID
-                        ),
-                        in: syncRepository
-                    )
+            ) {
+                installLocalFirstReplicationState(state)
             }
-            localFirstSyncTimestamps =
-                try SQLiteLocalFirstSyncCoordinator.timestamps(
-                    in: syncRepository
-                )
-            guard let metadata = try syncRepository.metadata(
-                for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-            ) else { return }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let status = try decoder.decode(
-                SQLiteLocalFirstSyncStatus.self,
-                from: metadata.value
-            )
-            switch status {
-            case .idle:
-                localFirstSyncMessage = nil
-                resolveOperationFailure(.sync)
-            case let .awaitingUploadConfirmation(result, _):
-                localFirstSyncMessage = copy.localFirstSyncResult(
-                    result,
-                    unresolvedConflictCount: try syncRepository
-                        .unresolvedConflicts().count
-                )
-            case let .succeeded(result):
-                localFirstSyncMessage = copy.localFirstSyncResult(
-                    result,
-                    unresolvedConflictCount: try syncRepository.unresolvedConflicts().count
-                )
-                resolveOperationFailure(.sync)
-            case let .failed(reason, _, failedAt, diagnosticCorrelation):
-                let presentation = AppPresentation(
-                    language: engine.preferences.language
-                )
-                let failureMessage: String = if let appReason = reason.appPresentationReason {
-                    presentation
-                        .syncFailureMessage(for: appReason)
-                } else {
-                    presentation
-                        .failureMessage(for: .sync)
-                }
-                localFirstSyncMessage = failureMessage
-                guard engine.preferences.localFirstSyncPolicy.enabled else {
-                    resolveOperationFailure(.sync)
-                    return
-                }
-                restorePersistedLocalFirstSyncFailure(
-                    reason: reason,
-                    failedAt: failedAt,
-                    diagnosticCorrelation: diagnosticCorrelation,
-                    failureMessage,
-                    repository: syncRepository
-                )
+            if interruptedOperation?.kind == .localFirstSync,
+               interruptedOperation?.outcome == .interrupted
+            {
+                localFirstSyncMessage = copy
+                    .localFirstSyncInterruptedRecoveryMessage
             }
         } catch {
-            _ = recordOperationFailureEvidence(
-                .persistence,
-                error: error
-            )
-            let failureMessage = AppPresentation(
-                language: engine.preferences.language
-            ).failureMessage(for: .sync)
-            localFirstSyncMessage = failureMessage
-            showPersistentFailureMessage(
-                failureMessage,
-                context: .sync
-            )
+            presentLocalFirstReplicationFailure(error)
         }
     }
 
-    private func restorePersistedLocalFirstSyncFailure(
-        reason: SQLiteLocalFirstSyncFailureReason,
-        failedAt: Date,
-        diagnosticCorrelation: DiagnosticOperationCorrelation?,
-        _ failureMessage: String,
-        repository: SQLiteSyncRepository
-    ) {
-        let failure = reason.diagnosticFailure
-        let diagnostics = diagnostics
-        Task { [weak self] in
-            let correlation = if let diagnosticCorrelation {
-                diagnosticCorrelation
-            } else {
-                await diagnostics.persistedSyncFailureCorrelation(
-                    failure: failure,
-                    failedAt: failedAt
-                )
-            }
-            await self?.persistedSyncFailureRestoreE2EGate.waitIfArmed()
-            guard let self,
-                  engine.preferences.localFirstSyncPolicy.enabled,
-                  persistedSyncFailureStillMatches(
-                      reason: reason,
-                      failedAt: failedAt,
-                      diagnosticCorrelation: diagnosticCorrelation,
-                      repository: repository
-                  )
-            else { return }
-            diagnostics.record(
-                .persistedSyncFailureLoaded(
-                    failure: failure,
-                    operationID: correlation?.operationID,
-                    incidentID: correlation?.incidentID
-                )
-            )
-            showPersistentFailureMessage(
-                failureMessage,
-                context: .sync,
-                diagnosticIncidentID: correlation?.incidentID
-            )
+    func shutdownAndReleaseLocalFirstReplication() async throws {
+        if let runtime = localFirstReplicationRuntime {
+            _ = try await runtime.shutdown()
         }
+        localFirstReplicationCommandTask?.cancel()
+        localFirstReplicationCommandTask = nil
+        localFirstReplicationStateTask?.cancel()
+        localFirstReplicationStateTask = nil
+        localFirstReplicationRuntime = nil
+        localFirstReplicationEndpointKind = nil
+        localFirstReplicationLifecycleE2EEndpoint = nil
+        isLocalFirstSyncing = false
+        isLocalFirstSyncStopping = false
     }
 
-    private func persistedSyncFailureStillMatches(
-        reason: SQLiteLocalFirstSyncFailureReason,
-        failedAt: Date,
-        diagnosticCorrelation: DiagnosticOperationCorrelation?,
-        repository: SQLiteSyncRepository
-    ) -> Bool {
-        guard let metadata = try? repository.metadata(
-            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-        ) else { return false }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let status = try? decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: metadata.value
-        ),
-            case let .failed(
-                currentReason,
-                _,
-                currentFailedAt,
-                currentDiagnosticCorrelation
-            ) = status
-        else { return false }
-        return currentReason == reason
-            && currentFailedAt == failedAt
-            && currentDiagnosticCorrelation == diagnosticCorrelation
+    var isICloudDriveAvailable: Bool {
+        (try? ICloudDriveRepositoryLocator.defaultRootURL(
+            repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                .iCloudRepositoryName
+        )) != nil
+    }
+
+    var isICloudSyncEndpointAvailable: Bool {
+        isICloudDriveAvailable
     }
 
     static func configuredSyncFolderURL() -> URL {
-        if let path = AppLaunchArguments.value(after: "--sync-folder-url"), path.isEmpty == false {
+        if let path = AppLaunchArguments.value(after: "--sync-folder-url"),
+           path.isEmpty == false
+        {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let base = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support",
+                isDirectory: true
+            )
         return AppLaunchArguments.validatedRuntimeProfile
             .localSyncRepositoryURL(baseURL: base)
     }
 
-    static func configuredLocalFirstSyncEndpointURL(for endpoint: CloudSyncEndpointKind) -> URL? {
+    static func configuredLocalFirstSyncEndpointURL(
+        for endpoint: CloudSyncEndpointKind
+    ) -> URL? {
         switch endpoint {
         case .iCloud:
-            return try? ICloudDriveSyncTransport.defaultRootURL(
+            try? ICloudDriveRepositoryLocator.defaultRootURL(
                 repositoryName: AppLaunchArguments.validatedRuntimeProfile
                     .iCloudRepositoryName
             )
         case .localFolder:
-            return configuredSyncFolderURL()
+            configuredSyncFolderURL()
         case .s3, .webDAV:
-            return nil
+            nil
         }
     }
 
@@ -1115,23 +456,255 @@ extension NoonmarkStore {
         }
     }
 
-    private func diagnosticEndpoint(
-        for endpoint: CloudSyncEndpointKind
-    ) -> DiagnosticEndpoint {
-        switch endpoint {
+    func reportLocalFirstReplicationFailure(_ error: Error) {
+        presentLocalFirstReplicationFailure(error)
+    }
+}
+
+private extension NoonmarkStore {
+    func supportsRunnableLocalFirstSync(
+        _ endpoint: CloudSyncEndpointKind
+    ) -> Bool {
+        endpoint == .iCloud || endpoint == .localFolder
+    }
+
+    func prepareLocalFirstReplicationRuntime() throws
+        -> LocalFirstReplication
+    {
+        if let runtime = localFirstReplicationRuntime {
+            return runtime
+        }
+        guard let databaseURL else {
+            throw AppReplicationConfigurationError.unavailableEndpoint
+        }
+        let endpointKind = engine.preferences.localFirstSyncPolicy.endpoint
+        let authority = try SQLiteReplicationLedger(
+            databaseURL: databaseURL
+        ).cleanCutAuthority()
+        var endpoint: any ReplicationEndpoint
+        let generationID: UUID
+        let repositoryWasCreated: Bool
+        switch endpointKind {
         case .iCloud:
-            cloudKitSyncConfiguration == nil ? .iCloudDrive : .cloudKit
+            let iCloud = if let round = try appReplicationV2StressICloudRound() {
+                try ICloudDriveReplicationEndpoint(
+                    round: round,
+                    generationID: { authority?.generationID ?? UUID() }
+                )
+            } else {
+                try ICloudDriveReplicationEndpoint(
+                    repositoryName: AppLaunchArguments.validatedRuntimeProfile
+                        .iCloudRepositoryName,
+                    generationID: { authority?.generationID ?? UUID() }
+                )
+            }
+            endpoint = iCloud
+            generationID = iCloud.generationID
+            repositoryWasCreated = iCloud.repositoryWasCreated
         case .localFolder:
-            .localFolder
+            let folder = try ContentAddressedFileReplicationEndpoint
+                .openCleanRepository(
+                    rootURL: Self.configuredSyncFolderURL(),
+                    generationID: { authority?.generationID ?? UUID() }
+                )
+            endpoint = folder
+            generationID = folder.generationID
+            repositoryWasCreated = folder.repositoryWasCreated
         case .s3, .webDAV:
-            .none
+            throw AppReplicationConfigurationError.unavailableEndpoint
+        }
+        if Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e",
+           AppLaunchArguments.contains(
+               "--e2e-replication-v2-lifecycle-endpoint"
+           )
+        {
+            let lifecycleEndpoint = ReplicationV2LifecycleE2EEndpoint(
+                underlying: endpoint
+            )
+            endpoint = lifecycleEndpoint
+            localFirstReplicationLifecycleE2EEndpoint = lifecycleEndpoint
+        } else {
+            localFirstReplicationLifecycleE2EEndpoint = nil
+        }
+        let runtime = try LocalFirstReplication.openCleanCut(
+            databaseURL: databaseURL,
+            endpoint: endpoint,
+            generationID: generationID,
+            producerID: UUID(),
+            publicationWatermarkStore:
+                KeychainReplicationPublicationWatermarkStore(
+                    service: AppLaunchArguments.validatedRuntimeProfile
+                        .replicationWatermarkKeychainService
+                ),
+            repositoryWasCreated: repositoryWasCreated
+        )
+        localFirstReplicationRuntime = runtime
+        localFirstReplicationEndpointKind = endpointKind
+        subscribeToLocalFirstReplication(runtime)
+        return runtime
+    }
+
+    func subscribeToLocalFirstReplication(
+        _ runtime: LocalFirstReplication
+    ) {
+        localFirstReplicationStateTask?.cancel()
+        localFirstReplicationStateTask = Task { @MainActor [weak self] in
+            let stream = await runtime.states()
+            for await state in stream {
+                guard Task.isCancelled == false, let self else { return }
+                installLocalFirstReplicationState(state)
+            }
         }
     }
 
-    private func persistedSyncDiagnosticFailure(
-        for error: Error
-    ) -> DiagnosticFailure {
-        ((error as? SQLiteLocalFirstSyncError)?.failureReason
-            ?? .transportOrStorage).diagnosticFailure
+    func installLocalFirstReplicationState(
+        _ state: LocalFirstReplicationState
+    ) {
+        isLocalFirstSyncing = state.worker == .running
+        isLocalFirstSyncStopping = state.worker == .stopping
+            || state.worker == .stoppingDelayed
+        if let lastSyncedAt = state.lastSyncedAt {
+            localFirstSyncTimestamps = SQLiteLocalFirstSyncTimestamps(
+                lastSyncedAt: lastSyncedAt,
+                lastEffectiveSyncedAt: state.lastEffectiveSyncedAt
+            )
+        }
+        switch state.worker {
+        case .running:
+            localFirstSyncMessage = copy.syncingWithEllipsis
+        case .stopping, .stoppingDelayed:
+            localFirstSyncMessage = copy.localFirstSyncStopping
+        case .disabled:
+            localFirstSyncMessage = copy.localFirstSyncDisabled
+            resolveOperationFailure(.sync)
+        case .idle:
+            switch state.convergence {
+            case .converged:
+                localFirstSyncMessage = engine.preferences.language == .chinese
+                    ? "同步完成"
+                    : "Sync complete"
+                resolveOperationFailure(.sync)
+            case .waitingForEndpoint:
+                localFirstSyncMessage = engine.preferences.language == .chinese
+                    ? "等待 iCloud 上传确认"
+                    : "Waiting for iCloud upload confirmation"
+            case .blocked:
+                localFirstSyncMessage = replicationIncidentMessage(
+                    state.incident
+                )
+            }
+        }
+        if state.appliedRemotePublicationCount > 0 {
+            do {
+                try installExternallyLoadedEngineAfterReplication()
+            } catch {
+                presentLocalFirstReplicationFailure(error)
+            }
+        }
     }
+
+    func installExternallyLoadedEngineAfterReplication() throws {
+        guard let repository else { return }
+        let moment = try dayContext.moment()
+        let loaded = try repository.load()
+        try assertEngineWriteAllowed()
+        let previousToday = today
+        let followsToday = selectedDate == previousToday
+        let calendarFollowsToday = selectedCalendarDate == previousToday
+        let candidate = try dayRolloverCoordinator.reconcile(
+            engine: loaded,
+            moment: moment
+        ) { candidate, mutationInstant in
+            try save(candidate, mutationAt: mutationInstant)
+        }
+        engine = candidate
+        clearUndoHistory()
+        naturalDayState = moment.state
+        today = moment.today
+        dayBoundaryState = .ready(appliedThrough: moment.today)
+        if followsToday {
+            selectedDate = moment.today
+        }
+        if calendarFollowsToday {
+            selectedCalendarDate = moment.today
+        }
+        normalizeSelection()
+    }
+
+    func presentLocalFirstReplicationFailure(
+        _ error: Error,
+        diagnosticIncidentID: DiagnosticIncidentID? = nil
+    ) {
+        if error as? ReplicationRepositoryBootstrapError
+            == .legacyRepositoryRequiresManualReset
+        {
+            localFirstSyncMessage = engine.preferences.language == .chinese
+                ? "检测到旧同步目录。请您在 Finder 中手工删除该目录后重试；晷迹不会自动删除或迁移其中任何内容。"
+                : "A legacy sync directory was found. Delete it manually in Finder and retry; Noonmark will not delete or migrate it."
+        } else {
+            localFirstSyncMessage = AppPresentation(
+                language: engine.preferences.language
+            ).failureMessage(for: .sync)
+        }
+        showOperationFailure(
+            .sync,
+            error: error,
+            diagnosticIncidentID: diagnosticIncidentID
+        )
+    }
+
+    func replicationIncidentMessage(
+        _ incident: LocalFirstReplicationIncident?
+    ) -> String {
+        let chinese = engine.preferences.language == .chinese
+        switch incident {
+        case .endpointRequiresUserAttention:
+            return chinese ? "同步端点需要您处理" : "The sync endpoint needs attention"
+        case .endpointCorruption:
+            return chinese ? "同步仓库完整性校验失败" : "Sync repository integrity check failed"
+        case .producerForkDetected:
+            return chinese ? "检测到同步分叉，等待冲突决定" : "A sync fork needs a conflict decision"
+        case .repairBaselineRejected:
+            return chinese ? "同步修复基线被拒绝" : "The sync repair baseline was rejected"
+        case .runtimeFailure, nil:
+            return chinese ? "同步未完成，请重试" : "Sync did not complete; retry"
+        }
+    }
+
+    func diagnosticEndpoint(
+        for endpoint: CloudSyncEndpointKind
+    ) -> DiagnosticEndpoint {
+        switch endpoint {
+        case .iCloud: .iCloudDrive
+        case .localFolder: .localFolder
+        case .s3, .webDAV: .none
+        }
+    }
+}
+
+private func appReplicationV2StressICloudRound() throws
+    -> ICloudAppendOnlyTestRound?
+{
+    let isStress = AppLaunchArguments.contains(
+        "--e2e-replication-v2-stress-exercise"
+    ) || AppLaunchArguments.contains(
+        "--e2e-replication-v2-stress-verify-restart"
+    )
+    guard isStress else { return nil }
+    guard AppLaunchArguments.validatedRuntimeProfile == .e2e,
+          let sessionValue = AppLaunchArguments.value(
+              after: "--e2e-replication-v2-stress-icloud-session-id"
+          ),
+          let roundValue = AppLaunchArguments.value(
+              after: "--e2e-replication-v2-stress-icloud-round-id"
+          ),
+          let sessionID = UUID(uuidString: sessionValue),
+          let roundID = UUID(uuidString: roundValue)
+    else {
+        throw AppReplicationConfigurationError.unavailableEndpoint
+    }
+    return try ICloudAppendOnlyTestNamespace.reopenRound(
+        sessionID: sessionID,
+        roundID: roundID
+    )
 }

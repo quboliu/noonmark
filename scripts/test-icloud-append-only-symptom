@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+swift test --filter \
+  'LocalFirstReplicationTests|SQLiteReplicationLedgerTests|ContentAddressedFileReplicationEndpointTests|ICloudReplicationEvidenceTests|ICloudAppendOnlyTestNamespaceTests'
+
+icloud_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+icloud_round_one_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+icloud_round_two_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+
+export NOONMARK_LIVE_ICLOUD_SYNC=1
+export NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID="$icloud_session_id"
+export NOONMARK_ICLOUD_APPEND_ONLY_ROUND_IDS="$icloud_round_one_id,$icloud_round_two_id"
+
+echo "Live iCloud append-only V2: starting"
+echo "session_id=$icloud_session_id"
+echo "round_ids=$icloud_round_one_id,$icloud_round_two_id"
+
+swift test --skip-build --filter \
+  ICloudDriveLocalFirstSyncLiveTests/testMultipleFreshRoundsConvergeThroughRealICloudWithoutMutation
+
+echo "Live iCloud append-only V2: passed"
+echo "session_id=$icloud_session_id"
+echo "round_ids=$icloud_round_one_id,$icloud_round_two_id"
+echo "round_count=2"

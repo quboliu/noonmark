@@ -47,8 +47,8 @@ v0.2.6 build 27 候选在精确 commit `764f781076f72a80ccdefb976617ebb54b66bcda
 
 ## 永久门禁
 
-- fast：`scripts/test-unit` 固定 run controller 的取消等待与拒绝重入；`scripts/test-preferences-checkbox-interaction-target-contract` 拒绝恢复整卡 active-sync disabled，并固定 sync checkbox 的物理输入锚点。
-- symptom：`scripts/test-e2e` 用真实签名 App、WindowServer checkbox、SQLite、repository lock、退出和重启复现用户路径。
+- fast：`scripts/test-unit` 固定 V2 Runtime 合并并发 reconcile、durable generation fence、cancel 及 worker／Endpoint join；`scripts/test-preferences-checkbox-interaction-target-contract` 拒绝恢复整卡 active-sync disabled，并固定 V2 lifecycle seam 与 sync checkbox 物理输入锚点。
+- symptom：`scripts/test-e2e` 用真实签名 App、WindowServer checkbox、SQLite、受控 V2 endpoint read wait、正常本机修改、disable join、退出和重启复现用户路径。
 - release：`scripts/verify-development-validation-evidence --scope full` 要求同一 source/run 的完整 Preferences Clock 证据进入私有 DMG 发行闭环。
 
 ## 发行与回滚
@@ -58,3 +58,7 @@ v0.2.6 build 27 候选在精确 commit `764f781076f72a80ccdefb976617ebb54b66bcda
 ## 教训与永久约束
 
 停止控制不得继承被停止 operation 的 disabled environment，也不得作为同一 exclusive mutation 的普通调用者。任何可长期等待的 App operation 必须有单一 task owner、可取消依赖与 termination join；「按钮可见」不等于「用户控制可执行」。
+
+## 2026-08-11 V2 clean-cut 复核
+
+本案例记录的 0.2.5／0.2.6 V1 现场、归因与修复提交保持不变。现行 Replication V2 不再允许同步远端等待占用 App mutation gate：新的真实 App oracle 必须先证明 task mutation 成功，再通过物理 checkbox 观察 running → stopping、Endpoint join held、释放后 durable disabled，随后跨进程重启首态仍为 disabled。V2 targeted Preferences 路径已得到 SQLite probe `1 1 0 4 1 1 0` 并转绿；任何回退到 V1 repository lock 或 mutation rejection 的 automation 都由 fast gate 判红。

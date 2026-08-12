@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+required_rules=(
+  'iCloud 真实测试 append-only 铁命（最高优先级）'
+  'Noonmark-E2E/AppendOnlyLiveTests/<session-UUID>/<round-UUID>/'
+  'mutable head 在真实 iCloud 测试中必须禁用'
+  '真实 iCloud 测试不得调用 `scripts/reset-dev-data`'
+)
+for rule in "${required_rules[@]}"; do
+  if ! /usr/bin/grep -F "$rule" AGENTS.md >/dev/null; then
+    echo "missing mandatory iCloud append-only rule: $rule" >&2
+    exit 1
+  fi
+done
+
+if /usr/bin/grep -F \
+  'Application Support、iCloud 顶层根、UserDefaults' \
+  AGENTS.md >/dev/null; then
+  echo "AGENTS.md must not authorize reset-dev-data to delete iCloud" >&2
+  exit 1
+fi
+if ! /usr/bin/grep -F \
+  '所有 iCloud 资料一律保留且不得由 reset 读取、定位或修改' \
+  AGENTS.md >/dev/null; then
+  echo "AGENTS.md must make the reset iCloud-preservation boundary explicit" >&2
+  exit 1
+fi
+
+legacy_live_test="Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift"
+legacy_live_script="scripts/test-icloud-sync-live"
+live_symptom_script="scripts/test-icloud-append-only-symptom"
+stress_live_script="scripts/test-replication-v2-app-stress"
+reset_script="scripts/reset-dev-data"
+reset_boundary_helper="scripts/reset-data-boundary-helper.swift"
+
+if /usr/bin/grep -E \
+  'Mobile Documents|CloudDocs|ICLOUD_REPOSITORY|iCloudRoot|icloud_(sync|profile)_root' \
+  "$reset_script" "$reset_boundary_helper" >/dev/null; then
+  echo "reset-dev-data must not have any iCloud deletion target" >&2
+  exit 1
+fi
+
+if /usr/bin/grep -F 'removeItem(at: rootURL)' "$legacy_live_test" >/dev/null; then
+  echo "live iCloud test must never remove its repository" >&2
+  exit 1
+fi
+for live_script in \
+  "$legacy_live_script" \
+  "$live_symptom_script" \
+  "$stress_live_script"; do
+  if /usr/bin/grep -F 'scripts/reset-dev-data' "$live_script" >/dev/null; then
+    echo "live iCloud script must never reset an iCloud-backed profile" >&2
+    exit 1
+  fi
+  if /usr/bin/grep -E 'Noonmark-E2E/SyncRepository|/heads|/batches' \
+    "$live_script" >/dev/null; then
+    echo "live iCloud script must use only a fresh append-only V2 round" >&2
+    exit 1
+  fi
+  if [[ "$live_script" != "$stress_live_script" ]] &&
+    /usr/bin/grep -E '(^|[[:space:]])rm[[:space:]]|unlink|rmdir|mv[[:space:]]' \
+      "$live_script" >/dev/null; then
+    echo "live iCloud script contains a destructive filesystem command" >&2
+    exit 1
+  fi
+done
+if /usr/bin/grep -E \
+  'Mobile Documents|CloudDocs|Noonmark/SyncRepository|Noonmark-E2E/SyncRepository' \
+  "$stress_live_script" >/dev/null; then
+  echo "signed stress must pass only session/round identity to iCloud" >&2
+  exit 1
+fi
+
+append_only_sources=(
+  Sources/NoonmarkSync/ICloudDriveReplicationEndpoint.swift
+  Sources/NoonmarkSync/ContentAddressedFileReplicationEndpoint.swift
+  Sources/NoonmarkSync/FileReplicationRepositoryBootstrap.swift
+  Sources/NoonmarkSync/AppendOnlyFilePublisher.swift
+)
+if /usr/bin/grep -E \
+  'removeItem|trashItem|unlink|rmdir|Darwin\.rename|replaceItemAt|\.atomic' \
+  "${append_only_sources[@]}" >/dev/null; then
+  echo "iCloud replication path contains a destructive filesystem API" >&2
+  exit 1
+fi
+if /usr/bin/grep -E \
+  'removeItem|trashItem|unlink|rmdir|Darwin\.rename|replaceItemAt' \
+  App/NoonmarkMacApp/ReplicationV2StressE2EAutomation.swift >/dev/null; then
+  echo "signed iCloud stress automation contains remote mutation capability" >&2
+  exit 1
+fi
+if /usr/bin/grep -E \
+  'ReplicationMutableIndexPolicy|mutableIndexPolicy|v2/heads|headsURL|publishHead|replaceIndex' \
+  "${append_only_sources[@]}" >/dev/null; then
+  echo "iCloud replication path contains mutable-index capability" >&2
+  exit 1
+fi
+if /usr/bin/grep -E \
+  '\.write\(to:|O_TRUNC|O_CREAT|open\(' \
+  Sources/NoonmarkSync/ICloudDriveReplicationEndpoint.swift \
+  Sources/NoonmarkSync/ContentAddressedFileReplicationEndpoint.swift \
+  Sources/NoonmarkSync/FileReplicationRepositoryBootstrap.swift >/dev/null; then
+  echo "final-key owners must delegate writes to the append-only publisher" >&2
+  exit 1
+fi
+if /usr/bin/grep -E \
+  'deleteLiveValidationZone|deleteRecordZone' \
+  Sources/NoonmarkSync/CloudKitSyncEngineTransport.swift >/dev/null; then
+  echo "CloudKit transport contains remote deletion capability" >&2
+  exit 1
+fi
+
+echo "iCloud append-only guard: mandatory namespace and no-delete/no-overwrite boundaries verified"

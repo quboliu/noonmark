@@ -123,14 +123,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             _ = recordEarlyStartupFailure(error)
             exit(EX_CONFIG)
         }
-        do {
-            _ = try CloudKitSyncLaunchConfiguration.resolve(
-                arguments: AppLaunchArguments.values
-            )
-        } catch {
-            _ = recordEarlyStartupFailure(error, endpoint: .cloudKit)
-            exit(EX_USAGE)
-        }
         let app = NSApplication.shared
         if let inputCleanup = WindowServerInputCleanupE2EAutomation.fromCommandLine() {
             app.setActivationPolicy(.prohibited)
@@ -309,7 +301,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             store.page = .day
         }
         store.ensureVisiblePage()
-        registerCloudKitRemoteNotificationsIfNeeded()
         openMainWindow()
         if shouldOpenSettings {
             // `openMainWindow()` orders the main window on the next run-loop
@@ -358,25 +349,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     func applicationDidBecomeActive(_ notification: Notification) {
         store.refreshNaturalDay()
-        store.refreshCloudKitAccountAvailability()
-    }
-
-    func application(
-        _ application: NSApplication,
-        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-    ) {
-        _ = deviceToken
-    }
-
-    func application(
-        _ application: NSApplication,
-        didFailToRegisterForRemoteNotificationsWithError error: Error
-    ) {
-        let operation = store.diagnostics.startOperation(
-            kind: .appSession,
-            endpoint: .cloudKit
-        )
-        operation.fail(AppDiagnosticFailureMapping.map(error))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -410,10 +382,9 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             guard let self else {
                 return
             }
-            await store.finishLocalFirstSyncForTermination()
-            let succeeded =
-                await store.flushInputDraftsForTermination()
-            var terminationSucceeded = succeeded
+            let syncStopped = await store.finishLocalFirstSyncForTermination()
+            let draftsFlushed = await store.flushInputDraftsForTermination()
+            var terminationSucceeded = syncStopped && draftsFlushed
             if terminationSucceeded {
                 do {
                     try prepareForTerminationIfNeeded()
@@ -836,22 +807,6 @@ final class NoonmarkMacApp: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                 on: store,
                 fixedNaturalDayEnvironment: self.fixedNaturalDayEnvironment
             )
-        }
-    }
-
-    private func registerCloudKitRemoteNotificationsIfNeeded() {
-        guard let configuration = store.cloudKitSyncConfiguration else { return }
-        do {
-            try CloudKitEntitlementProbe.validateCurrentProcess(
-                containerIdentifier: configuration.containerIdentifier
-            )
-            NSApp.registerForRemoteNotifications()
-        } catch {
-            let operation = store.diagnostics.startOperation(
-                kind: .appSession,
-                endpoint: .cloudKit
-            )
-            operation.fail(AppDiagnosticFailureMapping.map(error))
         }
     }
 }

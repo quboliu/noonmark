@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+package_source="Sources/NoonmarkStorage/NoonmarkDataPackage.swift"
+import_e2e="App/NoonmarkMacApp/DataImportUIE2EAutomation.swift"
+full_e2e="scripts/test-e2e"
+
+for forbidden in \
+  'legacyFormatVersion' \
+  'LegacyV6DataPackageEnvelope' \
+  'LegacyV6DataPackageSnapshot' \
+  'legacyV6JSON'; do
+  if /usr/bin/grep -F "$forbidden" "$package_source" >/dev/null; then
+    echo "legacy DataPackage compatibility returned: $forbidden" >&2
+    exit 1
+  fi
+done
+
+for forbidden in \
+  'writePreviousReleaseDataPackage' \
+  'previous-release import fixture' \
+  'NoonmarkDataPackage.legacyFormatVersion'; do
+  if /usr/bin/grep -F "$forbidden" "$import_e2e" >/dev/null; then
+    echo "legacy DataPackage E2E path returned: $forbidden" >&2
+    exit 1
+  fi
+done
+
+for forbidden in \
+  "json_extract(record_payload, '$.formatVersion') = 6" \
+  "zhulong pending-gate setup lost its empty Engine or exact import baseline"; do
+  if /usr/bin/grep -F "$forbidden" "$full_e2e" >/dev/null; then
+    echo "legacy V1 pending-gate E2E oracle returned: $forbidden" >&2
+    exit 1
+  fi
+done
+
+swift test --filter \
+  'DataPackageTests/(testJSONDataPackageEncodesCurrentEnvelopeAndRoundTripsSnapshot|testJSONDataPackageRejectsPreviousV6Package)'

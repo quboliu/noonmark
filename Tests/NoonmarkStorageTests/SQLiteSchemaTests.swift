@@ -67,9 +67,49 @@ final class SQLiteSchemaTests: XCTestCase {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
 
-        XCTAssertEqual(SQLiteSchema.version, 18)
+        XCTAssertEqual(SQLiteSchema.version, 19)
         XCTAssertTrue(schema.contains("id TEXT NOT NULL"))
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS app_preferences"))
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_outbox"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_publications"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_publication_journal"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_confirmations"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_self_watermarks"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_authority"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_fork_resolutions"
+            )
+        )
+        XCTAssertTrue(
+            schema.contains(
+                "CREATE TABLE IF NOT EXISTS sync_replication_fork_conflicts"
+            )
+        )
         XCTAssertTrue(schema.contains("CREATE TABLE IF NOT EXISTS classification_canonical_name_ownership"))
         XCTAssertTrue(schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_classification_item_metadata_key"))
         XCTAssertTrue(schema.contains("CREATE TRIGGER IF NOT EXISTS claim_classification_canonical_name_owner"))
@@ -484,7 +524,7 @@ final class SQLiteSchemaTests: XCTestCase {
         )
     }
 
-    func testVersion15StorePreservesDomainDataAndCleanCutsSyncRuntime() throws {
+    func testVersion15StoreIsRejectedWithoutMigrationOrMutation() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("noonmark-v15-upgrade-\(UUID().uuidString)")
@@ -513,24 +553,31 @@ final class SQLiteSchemaTests: XCTestCase {
             15
         )
 
-        let upgraded = try repository.load()
+        let bytesBeforeOpen = try Data(contentsOf: databaseURL)
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue(
+                    "only an empty store or the current schema is supported"
+                )
+            )
+        }
 
-        XCTAssertEqual(upgraded.snapshot(), engine.snapshot())
+        XCTAssertEqual(try Data(contentsOf: databaseURL), bytesBeforeOpen)
         XCTAssertEqual(
             try integerScalar("PRAGMA user_version", at: databaseURL),
-            SQLiteSchema.version
+            15
         )
-        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'idea_entries'",
                 at: databaseURL
             ),
-            1
+            0
         )
     }
 
-    func testVersion17StorePreservesDomainAndDeviceIdentityWhileCleanCuttingSyncRuntime()
+    func testVersion17StoreIsRejectedWithoutMigrationOrMutation()
         throws
     {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -595,28 +642,119 @@ final class SQLiteSchemaTests: XCTestCase {
         )
         try downgradeDatabaseToVersion17(at: databaseURL)
 
-        let upgraded = try repository.load()
+        let bytesBeforeOpen = try Data(contentsOf: databaseURL)
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue(
+                    "only an empty store or the current schema is supported"
+                )
+            )
+        }
 
-        XCTAssertEqual(upgraded.snapshot(), engine.snapshot())
+        XCTAssertEqual(try Data(contentsOf: databaseURL), bytesBeforeOpen)
         XCTAssertEqual(
             try integerScalar("PRAGMA user_version", at: databaseURL),
-            SQLiteSchema.version
+            17
         )
-        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
-        XCTAssertNil(
-            try syncRepository.metadata(for: "legacy.sync.runtime")
-        )
-        XCTAssertEqual(try syncRepository.loadDeviceIdentity(), identity)
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM sync_terminal_rejections",
                 at: databaseURL
             ),
-            0
+            1
         )
         XCTAssertEqual(
             try integerScalar(
                 "SELECT COUNT(*) FROM sync_conflicts",
+                at: databaseURL
+            ),
+            1
+        )
+    }
+
+    func testVersion18StoreIsRejectedWithoutMigrationOrMutation()
+        throws
+    {
+        let now = Date(timeIntervalSinceReferenceDate: 810_300_000)
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-v18-upgrade-\(UUID().uuidString)"
+            )
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let repository = SQLiteEngineRepository(databaseURL: databaseURL)
+        let engine = NoonmarkEngine()
+        let chainID = try engine.createPoolTask(
+            title: "v18 升级后必须保留的任务",
+            now: now
+        )
+        try repository.save(engine)
+
+        let syncRepository = SQLiteSyncRepository(databaseURL: databaseURL)
+        let identity = SyncDeviceIdentity(
+            deviceID: SyncDeviceID("v18-device"),
+            displayName: "v18 Mac",
+            createdAt: now
+        )
+        try syncRepository.saveDeviceIdentity(identity)
+        try syncRepository.appendJournalEntry(
+            SyncJournalEntry(
+                entityType: .taskChain,
+                entityID: chainID.description,
+                changedAt: now,
+                deviceID: identity.deviceID
+            )
+        )
+        try syncRepository.saveMetadata(
+            SyncMetadataEntry(
+                key: "v18.sync.runtime",
+                value: Data("preserve-exactly".utf8),
+                updatedAt: now
+            )
+        )
+        try downgradeDatabaseToVersion18(at: databaseURL)
+
+        let bytesBeforeOpen = try Data(contentsOf: databaseURL)
+        XCTAssertThrowsError(try repository.load()) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue(
+                    "only an empty store or the current schema is supported"
+                )
+            )
+        }
+
+        XCTAssertEqual(try Data(contentsOf: databaseURL), bytesBeforeOpen)
+        XCTAssertEqual(
+            try integerScalar("PRAGMA user_version", at: databaseURL),
+            18
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM sync_device_identity WHERE device_id = 'v18-device'",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM change_journal",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM sync_metadata WHERE key = 'v18.sync.runtime'",
+                at: databaseURL
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try integerScalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'sync_replication_%'",
                 at: databaseURL
             ),
             0
@@ -1078,6 +1216,76 @@ final class SQLiteSchemaTests: XCTestCase {
                 )
             )
         }
+    }
+
+    func testCurrentVersionSchemaDriftIsRejectedBeforeEnablingWAL()
+        throws
+    {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "noonmark-schema-drift-before-wal-\(UUID().uuidString)"
+            )
+            .appendingPathExtension("sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                "CREATE TABLE unexpected_schema_object(id INTEGER)",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                "PRAGMA user_version = \(SQLiteSchema.version)",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        sqlite3_close(database)
+        database = nil
+        let bytesBeforeOpen = try Data(contentsOf: databaseURL)
+
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertThrowsError(
+            try SQLiteSchema.installOrValidate(on: database)
+        ) { error in
+            XCTAssertEqual(
+                error as? SQLiteRepositoryError,
+                .invalidStoredValue(
+                    "current database schema fingerprint does not match"
+                )
+            )
+        }
+        var journalMode: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_prepare_v2(
+                database,
+                "PRAGMA journal_mode",
+                -1,
+                &journalMode,
+                nil
+            ),
+            SQLITE_OK
+        )
+        defer { sqlite3_finalize(journalMode) }
+        XCTAssertEqual(sqlite3_step(journalMode), SQLITE_ROW)
+        XCTAssertEqual(
+            String(cString: sqlite3_column_text(journalMode, 0)),
+            "delete"
+        )
+        XCTAssertEqual(try Data(contentsOf: databaseURL), bytesBeforeOpen)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: databaseURL.path + "-wal")
+        )
     }
 
     func testSQLiteRepositoryRejectsThemeLanguageClockProjectionMismatch() throws {
@@ -1763,7 +1971,7 @@ final class SQLiteSchemaTests: XCTestCase {
         )
     }
 
-    func testDataImportReplacementRemovesOldRowsAndResetsSyncState() throws {
+    func testDataImportReplacementImportsOnlyDomainFactsAndNoSyncState() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("noonmark-import-replace-\(UUID().uuidString)")
@@ -1798,26 +2006,23 @@ final class SQLiteSchemaTests: XCTestCase {
 
         XCTAssertEqual(try repository.load().snapshot(), importedEngine.snapshot())
         XCTAssertEqual(try syncRepository.loadDeviceIdentity(), identity)
-        let importedBaseline = try syncRepository.journalEntries()
-        XCTAssertFalse(importedBaseline.isEmpty)
-        XCTAssertTrue(
-            importedBaseline.allSatisfy {
-                $0.state == .pendingUpload
-            }
-        )
-        XCTAssertTrue(
-            SyncSnapshotBaselineCoverageAuditor().isComplete(
-                snapshot: importedEngine.snapshot(),
-                journalEntries: importedBaseline
-            )
-        )
-        XCTAssertNotNil(
+        XCTAssertTrue(try syncRepository.journalEntries().isEmpty)
+        XCTAssertNil(
             try syncRepository.metadata(
                 for: SQLiteLocalFirstSyncCoordinator
                     .baselineManifestMetadataKey
             )
         )
         XCTAssertNil(try syncRepository.metadata(for: "old.sync.status"))
+        for table in replicationV2TableNames {
+            XCTAssertEqual(
+                try integerScalar(
+                    "SELECT COUNT(*) FROM \(table)",
+                    at: databaseURL
+                ),
+                0
+            )
+        }
     }
 
     func testDataImportStagingFailureLeavesExistingDatabaseUnchanged() throws {
@@ -1963,6 +2168,7 @@ private func downgradeDatabaseToVersion15(at databaseURL: URL) throws {
     try executeSQL(
         """
         PRAGMA foreign_keys = OFF;
+        \(dropReplicationV2LedgerSQL)
         DROP INDEX IF EXISTS idx_change_journal_state_changed_at;
         DROP INDEX IF EXISTS idx_sync_pending_download_dependency;
         ALTER TABLE sync_pending_download_dependencies
@@ -1999,6 +2205,7 @@ private func downgradeDatabaseToVersion17(at databaseURL: URL) throws {
     try executeSQL(
         """
         PRAGMA foreign_keys = OFF;
+        \(dropReplicationV2LedgerSQL)
         DROP INDEX IF EXISTS idx_change_journal_state_changed_at;
         ALTER TABLE change_journal RENAME TO change_journal_current;
         \(legacyChangeJournal);
@@ -2011,6 +2218,40 @@ private func downgradeDatabaseToVersion17(at databaseURL: URL) throws {
         at: databaseURL
     )
 }
+
+private func downgradeDatabaseToVersion18(at databaseURL: URL) throws {
+    try executeSQL(
+        """
+        PRAGMA foreign_keys = OFF;
+        \(dropReplicationV2LedgerSQL)
+        PRAGMA user_version = 18;
+        PRAGMA foreign_keys = ON;
+        """,
+        at: databaseURL
+    )
+}
+
+private let replicationV2TableNames = [
+    "sync_replication_outbox",
+    "sync_replication_publications",
+    "sync_replication_publication_journal",
+    "sync_replication_confirmations",
+    "sync_replication_self_watermarks",
+    "sync_replication_authority",
+    "sync_replication_fork_resolutions",
+    "sync_replication_fork_conflicts",
+]
+
+private let dropReplicationV2LedgerSQL = """
+DROP TABLE sync_replication_fork_conflicts;
+DROP TABLE sync_replication_fork_resolutions;
+DROP TABLE sync_replication_authority;
+DROP TABLE sync_replication_self_watermarks;
+DROP TABLE sync_replication_confirmations;
+DROP TABLE sync_replication_publication_journal;
+DROP TABLE sync_replication_publications;
+DROP TABLE sync_replication_outbox;
+"""
 
 private let copyLegacyChangeJournalRowsSQL = """
 INSERT INTO change_journal (

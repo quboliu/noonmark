@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "iOS development environment contract: $*" >&2
+  exit 1
+}
+
+[[ -x scripts/generate-ios-project ]] ||
+  fail "scripts/generate-ios-project is missing or not executable"
+[[ -x scripts/build-ios-app ]] ||
+  fail "scripts/build-ios-app is missing or not executable"
+[[ -x scripts/test-ios ]] ||
+  fail "scripts/test-ios is missing or not executable"
+
+scripts/generate-ios-project
+
+project_path="App/NoonmarkIOS/NoonmarkIOS.xcodeproj"
+[[ -d "$project_path" ]] || fail "generated Xcode project is missing"
+
+project_listing="$(xcodebuild -list -project "$project_path")"
+for expected in NoonmarkIOS NoonmarkIOSTests NoonmarkIOSUITests; do
+  grep -Fx "        $expected" <<< "$project_listing" >/dev/null ||
+    fail "generated project does not expose $expected"
+done
+
+grep -Fx "        NoonmarkIOS" <<< "$project_listing" >/dev/null ||
+  fail "generated project does not expose the NoonmarkIOS scheme"
+
+echo "iOS development environment contract passed"

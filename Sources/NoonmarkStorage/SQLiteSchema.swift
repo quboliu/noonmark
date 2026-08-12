@@ -50,7 +50,7 @@ private final class SQLitePreparedStoreRegistry: @unchecked Sendable {
 }
 
 public enum SQLiteSchema {
-    public static let version = 18
+    public static let version = 19
 
     public static let statements: [String] = [
         """
@@ -2411,6 +2411,233 @@ public enum SQLiteSchema {
         ON change_journal(sync_state, changed_at)
         """,
         """
+        CREATE TABLE IF NOT EXISTS sync_replication_outbox (
+            generation_id TEXT NOT NULL CHECK (length(generation_id) = 36),
+            journal_id TEXT NOT NULL REFERENCES change_journal(id),
+            captured_at_bits INTEGER NOT NULL CHECK (
+                typeof(captured_at_bits) = 'integer'
+            ),
+            confirmed_at_bits INTEGER CHECK (
+                confirmed_at_bits IS NULL
+                OR typeof(confirmed_at_bits) = 'integer'
+            ),
+            PRIMARY KEY(generation_id, journal_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_publications (
+            generation_id TEXT NOT NULL CHECK (length(generation_id) = 36),
+            producer_id TEXT NOT NULL CHECK (length(producer_id) = 36),
+            sequence INTEGER NOT NULL CHECK (sequence > 0),
+            previous_seal_digest TEXT CHECK (
+                previous_seal_digest IS NULL OR (
+                    length(previous_seal_digest) = 64
+                    AND previous_seal_digest NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            root_digest TEXT NOT NULL CHECK (
+                length(root_digest) = 64
+                AND root_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            seal_digest TEXT NOT NULL CHECK (
+                length(seal_digest) = 64
+                AND seal_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            announcement_digest TEXT NOT NULL CHECK (
+                length(announcement_digest) = 64
+                AND announcement_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            based_on_resolution_id TEXT CHECK (
+                based_on_resolution_id IS NULL OR (
+                    length(based_on_resolution_id) = 64
+                    AND based_on_resolution_id NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            sealed_at_bits INTEGER NOT NULL CHECK (
+                typeof(sealed_at_bits) = 'integer'
+            ),
+            sealed_publication BLOB NOT NULL CHECK (
+                length(sealed_publication) > 0
+            ),
+            CHECK (
+                (sequence = 1 AND previous_seal_digest IS NULL)
+                OR (sequence > 1 AND previous_seal_digest IS NOT NULL)
+            ),
+            PRIMARY KEY(generation_id, producer_id, sequence, seal_digest),
+            FOREIGN KEY(based_on_resolution_id)
+                REFERENCES sync_replication_fork_resolutions(resolution_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_publication_journal (
+            generation_id TEXT NOT NULL,
+            producer_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            seal_digest TEXT NOT NULL,
+            journal_id TEXT NOT NULL REFERENCES change_journal(id),
+            PRIMARY KEY(generation_id, producer_id, journal_id),
+            FOREIGN KEY(generation_id, producer_id, sequence, seal_digest)
+                REFERENCES sync_replication_publications(
+                    generation_id, producer_id, sequence, seal_digest
+                )
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_confirmations (
+            generation_id TEXT NOT NULL,
+            producer_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            seal_digest TEXT NOT NULL,
+            confirmed_at_bits INTEGER NOT NULL CHECK (
+                typeof(confirmed_at_bits) = 'integer'
+            ),
+            PRIMARY KEY(generation_id, producer_id, sequence, seal_digest),
+            FOREIGN KEY(generation_id, producer_id, sequence, seal_digest)
+                REFERENCES sync_replication_publications(
+                    generation_id, producer_id, sequence, seal_digest
+                )
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_self_watermarks (
+            generation_id TEXT NOT NULL,
+            producer_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK (sequence > 0),
+            seal_digest TEXT NOT NULL CHECK (
+                length(seal_digest) = 64
+                AND seal_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            updated_at_bits INTEGER NOT NULL CHECK (
+                typeof(updated_at_bits) = 'integer'
+            ),
+            PRIMARY KEY(generation_id, producer_id),
+            FOREIGN KEY(generation_id, producer_id, sequence, seal_digest)
+                REFERENCES sync_replication_publications(
+                    generation_id, producer_id, sequence, seal_digest
+                )
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_authority (
+            id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+            generation_id TEXT NOT NULL CHECK (length(generation_id) = 36),
+            producer_id TEXT NOT NULL CHECK (length(producer_id) = 36),
+            baseline_sequence INTEGER NOT NULL CHECK (baseline_sequence = 1),
+            baseline_seal_digest TEXT NOT NULL CHECK (
+                length(baseline_seal_digest) = 64
+                AND baseline_seal_digest NOT GLOB '*[^0-9a-f]*'
+            ),
+            installed_at_bits INTEGER NOT NULL CHECK (
+                typeof(installed_at_bits) = 'integer'
+            ),
+            FOREIGN KEY(
+                generation_id, producer_id, baseline_sequence,
+                baseline_seal_digest
+            ) REFERENCES sync_replication_publications(
+                generation_id, producer_id, sequence, seal_digest
+            )
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_fork_resolutions (
+            resolution_id TEXT PRIMARY KEY NOT NULL CHECK (
+                length(resolution_id) = 64
+                AND resolution_id NOT GLOB '*[^0-9a-f]*'
+            ),
+            generation_id TEXT NOT NULL CHECK (length(generation_id) = 36),
+            producer_id TEXT NOT NULL CHECK (length(producer_id) = 36),
+            fork_sequence INTEGER NOT NULL CHECK (fork_sequence > 0),
+            common_prefix_sequence INTEGER,
+            common_prefix_seal_digest TEXT CHECK (
+                common_prefix_seal_digest IS NULL OR (
+                    length(common_prefix_seal_digest) = 64
+                    AND common_prefix_seal_digest NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            state TEXT NOT NULL CHECK (
+                state IN (
+                    'detected', 'branchesValidated', 'branchesApplied',
+                    'domainConflictsResolved', 'closed'
+                )
+            ),
+            branch_evidence BLOB NOT NULL CHECK (length(branch_evidence) > 0),
+            detected_at_bits INTEGER NOT NULL CHECK (
+                typeof(detected_at_bits) = 'integer'
+            ),
+            updated_at_bits INTEGER NOT NULL CHECK (
+                typeof(updated_at_bits) = 'integer'
+            ),
+            CHECK (
+                (
+                    fork_sequence = 1
+                    AND common_prefix_sequence IS NULL
+                    AND common_prefix_seal_digest IS NULL
+                )
+                OR (
+                    fork_sequence > 1
+                    AND common_prefix_sequence = fork_sequence - 1
+                    AND common_prefix_seal_digest IS NOT NULL
+                )
+            )
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sync_replication_fork_conflicts (
+            resolution_id TEXT NOT NULL
+                REFERENCES sync_replication_fork_resolutions(resolution_id),
+            conflict_id TEXT NOT NULL REFERENCES sync_conflicts(id),
+            engine_epoch TEXT NOT NULL CHECK (length(engine_epoch) = 36),
+            engine_revision INTEGER NOT NULL CHECK (
+                typeof(engine_revision) = 'integer'
+                AND engine_revision >= 0
+            ),
+            decision TEXT NOT NULL CHECK (
+                decision IN (
+                    'unresolved', 'keepCurrent', 'acceptRemote', 'copyAsNew'
+                )
+            ),
+            decided_at_bits INTEGER CHECK (
+                decided_at_bits IS NULL
+                OR typeof(decided_at_bits) = 'integer'
+            ),
+            result_entity_type TEXT CHECK (
+                result_entity_type IS NULL
+                OR result_entity_type IN ('taskDefinition', 'taskChain')
+            ),
+            result_entity_id TEXT CHECK (
+                result_entity_id IS NULL OR length(result_entity_id) > 0
+            ),
+            recorded_at_bits INTEGER NOT NULL CHECK (
+                typeof(recorded_at_bits) = 'integer'
+            ),
+            PRIMARY KEY(
+                resolution_id, engine_epoch, engine_revision, conflict_id
+            ),
+            CHECK (
+                (
+                    decision = 'unresolved' AND decided_at_bits IS NULL
+                    AND result_entity_type IS NULL
+                    AND result_entity_id IS NULL
+                )
+                OR (
+                    decision = 'keepCurrent' AND decided_at_bits IS NOT NULL
+                    AND result_entity_type IS NULL
+                    AND result_entity_id IS NULL
+                )
+                OR (
+                    decision = 'acceptRemote' AND decided_at_bits IS NOT NULL
+                    AND result_entity_type = 'taskDefinition'
+                    AND result_entity_id IS NOT NULL
+                )
+                OR (
+                    decision = 'copyAsNew' AND decided_at_bits IS NOT NULL
+                    AND result_entity_type = 'taskChain'
+                    AND result_entity_id IS NOT NULL
+                )
+            )
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS sync_pending_download_records (
             record_id TEXT PRIMARY KEY NOT NULL CHECK (length(record_id) > 0),
             generation_id TEXT NOT NULL UNIQUE CHECK (length(generation_id) = 36),
@@ -2833,16 +3060,8 @@ extension SQLiteSchema {
         storedVersion: Int
     ) throws {
         if storedVersion == version {
-            try enableConcurrentFileBackedReads(on: database)
             try validateCurrentSchema(on: database)
-            return
-        }
-
-        if storedVersion == 15 || storedVersion == 17 {
-            try migratePreviousVersionToCurrent(
-                storedVersion: storedVersion,
-                on: database
-            )
+            try enableConcurrentFileBackedReads(on: database)
             return
         }
 
@@ -2873,143 +3092,6 @@ extension SQLiteSchema {
             throw error
         }
         try validateCurrentSchema(on: database)
-    }
-
-    /// v18 preserves domain facts while clean-cutting sync runtime state. Old
-    /// journal rows describe publication into the incompatible full-mirror
-    /// repository and therefore cannot prove coverage in the new repository.
-    /// Dropping them makes the coordinator create one complete local baseline.
-    private static func migratePreviousVersionToCurrent(
-        storedVersion: Int,
-        on database: OpaquePointer?
-    ) throws {
-        try enableConcurrentFileBackedReads(on: database)
-        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
-        do {
-            if storedVersion == 15 {
-                try execute(currentSchemaStatement(
-                    containing: "CREATE TABLE IF NOT EXISTS idea_entries"
-                ), on: database)
-            }
-            try migratePreviousChangeJournal(on: database)
-            if storedVersion == 15 {
-                try migrateVersion15PendingDownloads(on: database)
-            }
-            try execute(
-                "DELETE FROM sync_pending_download_dependencies",
-                on: database
-            )
-            try execute(
-                "DELETE FROM sync_pending_download_records",
-                on: database
-            )
-            try execute(
-                "DELETE FROM sync_terminal_rejections",
-                on: database
-            )
-            try execute("DELETE FROM sync_conflicts", on: database)
-            try execute("DELETE FROM sync_metadata", on: database)
-            try execute("PRAGMA user_version = \(version)", on: database)
-            try execute("COMMIT", on: database)
-        } catch {
-            try? execute("ROLLBACK", on: database)
-            throw error
-        }
-        try validateCurrentSchema(on: database)
-    }
-
-    private static func migratePreviousChangeJournal(
-        on database: OpaquePointer?
-    ) throws {
-        try execute(
-            "DROP INDEX IF EXISTS idx_change_journal_state_changed_at",
-            on: database
-        )
-        try execute(
-            "ALTER TABLE change_journal RENAME TO change_journal_previous",
-            on: database
-        )
-        try execute(currentSchemaStatement(
-            containing: "CREATE TABLE IF NOT EXISTS change_journal"
-        ), on: database)
-        try execute("DROP TABLE change_journal_previous", on: database)
-        try execute(currentSchemaStatement(
-            containing: "CREATE INDEX IF NOT EXISTS idx_change_journal_state_changed_at"
-        ), on: database)
-    }
-
-    private static func migrateVersion15PendingDownloads(
-        on database: OpaquePointer?
-    ) throws {
-        try execute(
-            "DROP INDEX IF EXISTS idx_sync_pending_download_dependency",
-            on: database
-        )
-        try execute(
-            "ALTER TABLE sync_pending_download_dependencies RENAME TO sync_pending_download_dependencies_v15",
-            on: database
-        )
-        try execute(
-            "ALTER TABLE sync_pending_download_records RENAME TO sync_pending_download_records_v15",
-            on: database
-        )
-        try execute(currentSchemaStatement(
-            containing: "CREATE TABLE IF NOT EXISTS sync_pending_download_records"
-        ), on: database)
-        try execute(currentSchemaStatement(
-            containing: "CREATE TABLE IF NOT EXISTS sync_pending_download_dependencies"
-        ), on: database)
-        try execute(
-            """
-            INSERT INTO sync_pending_download_records (
-                record_id, generation_id, entity_type, entity_id, operation,
-                modified_at_bits, modified_by_device_id, payload,
-                reactivation_witnesses, first_seen_at_bits,
-                last_attempted_at_bits, attempt_count
-            )
-            SELECT
-                record_id, generation_id, entity_type, entity_id, operation,
-                modified_at_bits, modified_by_device_id, payload,
-                reactivation_witnesses, first_seen_at_bits,
-                last_attempted_at_bits, attempt_count
-            FROM sync_pending_download_records_v15
-            """,
-            on: database
-        )
-        try execute(
-            """
-            INSERT INTO sync_pending_download_dependencies (
-                record_id, dependency_kind, dependency_id
-            )
-            SELECT record_id, dependency_kind, dependency_id
-            FROM sync_pending_download_dependencies_v15
-            """,
-            on: database
-        )
-        try execute(
-            "DROP TABLE sync_pending_download_dependencies_v15",
-            on: database
-        )
-        try execute(
-            "DROP TABLE sync_pending_download_records_v15",
-            on: database
-        )
-        try execute(currentSchemaStatement(
-            containing: "CREATE INDEX IF NOT EXISTS idx_sync_pending_download_dependency"
-        ), on: database)
-    }
-
-    private static func currentSchemaStatement(
-        containing declaration: String
-    ) throws -> String {
-        guard let statement = statements.first(where: {
-            $0.contains(declaration)
-        }) else {
-            throw SQLiteRepositoryError.invalidStoredValue(
-                "current schema is missing \(declaration)"
-            )
-        }
-        return statement
     }
 
     private static func preparedStoreIdentity(
@@ -3159,7 +3241,7 @@ extension SQLiteSchema {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.prepareFailed(
-                "\(lastError(database)) in \(sqlSummary(sql))",
+                "schema: \(lastError(database)) in \(sqlSummary(sql))",
                 sqliteCode: sqliteDiagnosticCode(database)
             )
         }
@@ -3229,7 +3311,7 @@ extension SQLiteSchema {
     ) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.executeFailed(
-                lastError(database),
+                "\(lastError(database)) in \(sqlSummary(sql))",
                 sqliteCode: sqliteDiagnosticCode(database)
             )
         }

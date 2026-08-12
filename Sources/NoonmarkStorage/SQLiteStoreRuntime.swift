@@ -4,6 +4,7 @@ import SQLite3
 final class SQLiteStoreRuntime: @unchecked Sendable {
     private let databaseURL: URL
     private let anchorLock = NSLock()
+    private let writerCoordinator = SQLiteStoreWriterCoordinator.shared
     private var walAnchor: OpaquePointer?
     private var isFinalizedForTermination = false
 
@@ -12,7 +13,9 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
     }
 
     fileprivate init(databaseURL: URL) {
-        self.databaseURL = databaseURL.standardizedFileURL
+        let canonicalURL = databaseURL.standardizedFileURL
+            .resolvingSymlinksInPath()
+        self.databaseURL = canonicalURL
     }
 
     deinit {
@@ -20,11 +23,26 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
     }
 
     func prepare(_ database: OpaquePointer?) throws {
+        let writeLease = acquireWriteLease()
+        defer { writeLease.release() }
         try SQLiteSchema.installOrValidate(on: database)
         try retainWALAttachment()
     }
 
+    /// SQLite WAL permits concurrent readers but still has exactly one writer.
+    /// Every repository targeting this database must hold this process-wide
+    /// lease for the complete lifetime of a write transaction. This prevents
+    /// ordinary App mutations and replication bookkeeping from surfacing
+    /// `SQLITE_BUSY` to one another.
+    func acquireWriteLease() -> SQLiteStoreWriteLease {
+        writerCoordinator.acquire(owner: self)
+    }
+
+    var writerLeaseDepth: Int { writerCoordinator.currentOwnedDepth }
+
     func finalizeForTermination() throws {
+        let writeLease = acquireWriteLease()
+        defer { writeLease.release() }
         anchorLock.lock()
         defer { anchorLock.unlock() }
         guard isFinalizedForTermination == false else {
@@ -137,6 +155,34 @@ final class SQLiteStoreRuntime: @unchecked Sendable {
     }
 }
 
+final class SQLiteStoreWriteLease {
+    // Keep the weakly registered runtime alive until the transaction releases
+    // its writer lane. Otherwise a short-lived repository expression can drop
+    // the runtime mid-transaction and a concurrent repository can create a
+    // second, unrelated lock for the same database path.
+    private let owner: SQLiteStoreRuntime
+    private let coordinator: SQLiteStoreWriterCoordinator
+    private var isReleased = false
+
+    fileprivate init(
+        owner: SQLiteStoreRuntime,
+        coordinator: SQLiteStoreWriterCoordinator
+    ) {
+        self.owner = owner
+        self.coordinator = coordinator
+    }
+
+    func release() {
+        guard isReleased == false else { return }
+        isReleased = true
+        coordinator.release()
+    }
+
+    deinit {
+        release()
+    }
+}
+
 private final class SQLiteStoreRuntimeRegistry: @unchecked Sendable {
     static let shared = SQLiteStoreRuntimeRegistry()
 
@@ -153,6 +199,7 @@ private final class SQLiteStoreRuntimeRegistry: @unchecked Sendable {
 
     func runtime(for databaseURL: URL) -> SQLiteStoreRuntime {
         let standardizedURL = databaseURL.standardizedFileURL
+            .resolvingSymlinksInPath()
         let key = standardizedURL.path
         lock.lock()
         defer { lock.unlock() }
@@ -162,5 +209,31 @@ private final class SQLiteStoreRuntimeRegistry: @unchecked Sendable {
         let runtime = SQLiteStoreRuntime(databaseURL: standardizedURL)
         runtimes[key] = WeakRuntime(runtime)
         return runtime
+    }
+}
+
+/// NoonmarkStorage has one process-wide SQLite writer authority. The App owns
+/// one primary data store, while staging databases are written sequentially as
+/// part of import. A process-wide lane is therefore both the simplest complete
+/// invariant and immune to URL aliases, inode replacement, weak runtime
+/// lifetime, and repository-specific lock drift.
+private final class SQLiteStoreWriterCoordinator: @unchecked Sendable {
+    static let shared = SQLiteStoreWriterCoordinator()
+
+    private let lock = NSRecursiveLock()
+    private var depth = 0
+
+    var currentOwnedDepth: Int { depth }
+
+    func acquire(owner: SQLiteStoreRuntime) -> SQLiteStoreWriteLease {
+        lock.lock()
+        depth += 1
+        return SQLiteStoreWriteLease(owner: owner, coordinator: self)
+    }
+
+    func release() {
+        precondition(depth > 0, "SQLite writer lease depth underflow")
+        depth -= 1
+        lock.unlock()
     }
 }

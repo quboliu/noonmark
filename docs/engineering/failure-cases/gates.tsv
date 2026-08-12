@@ -20,8 +20,8 @@ FAIL-2026-08-01-05	fast	scripts/test-diagnostic-lock-evidence-contract	scripts/c
 FAIL-2026-08-01-05	fast	scripts/test-release-gate-contract	scripts/check	真实 App 前静态／runtime preflight、同一 run ID、fresh closure manifest、signal fail-closed 与完整五方对账
 FAIL-2026-08-01-05	symptom	scripts/test-dmg-install	scripts/release-private-dmg	真实诊断导出 helper 参数与自身派生 scope 完全对账
 FAIL-2026-08-01-05	release	scripts/test-dmg-install	scripts/release-private-dmg	真实 DMG 的诊断 UI、双锁现场、隐私边界与完整证据清单
-FAIL-2026-08-02-01	fast	scripts/test-e2e-evidence-contract	scripts/check	分别约束 seed transportOrStorage 与 restart operationInterrupted 的阶段语义
-FAIL-2026-08-02-01	symptom	scripts/test-e2e	scripts/test-all	真实失败、锁等待、修改拒绝、SIGKILL、重启与 Help 菜单导出
+FAIL-2026-08-02-01	fast	scripts/test-e2e-evidence-contract	scripts/check	V2 seed failure 与 restart interrupted capsule 必须按 operation／incident／transportPrepare 精确关联，且不依赖 V1 status reason
+FAIL-2026-08-02-01	symptom	scripts/test-e2e	scripts/test-all	真实 V2 failure、endpoint wait、本机修改成功、SIGKILL、重启与 Help 菜单导出
 FAIL-2026-08-02-01	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	在 clean HEAD 的独立 worktree 以 release 配置重跑重启原因转换与诊断闭环
 FAIL-2026-08-02-02	fast	scripts/test-e2e-evidence-contract	scripts/check	约束共享物理清空／输入协议、GoToWindow suggestion ACK 与 sheet dismissal
 FAIL-2026-08-02-02	symptom	scripts/test-e2e	scripts/test-all	真实 Help 菜单、预览、Save Panel、物理路径与文件名输入
@@ -51,8 +51,9 @@ FAIL-2026-08-02-09	symptom	scripts/test-dmg-install	scripts/release-private-dmg	
 FAIL-2026-08-02-09	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 动态验收在安全 inventory 生成或绑定失败时阻断发行
 FAIL-2026-08-04-22	fast	scripts/test-sync-merge-failure-reason-contract	scripts/check	合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码，拒绝退回到裸 202
 FAIL-2026-08-04-22	symptom	scripts/test-e2e	scripts/test-all	真实同步失败、锁等待、修改拒绝、重启与 Help 菜单导出的诊断采集闭环
-FAIL-2026-08-04-23	fast	scripts/test-unit	scripts/check	上一版 SQLite v15 必须原地升级并保留资料与 sync journal，canonical JSON v6 必须导入为当前 snapshot
-FAIL-2026-08-04-23	symptom	scripts/test-e2e	scripts/test-all	真实 File → Import 必须接受 canonical JSON v6，并完成确认、SQLite 替换与重启回读
+FAIL-2026-08-04-23	fast	scripts/test-replication-v2-schema-contract	scripts/check	2026-08-11 用户决策取代旧升级承诺后，v15、v17、v18 必须零写入拒绝
+FAIL-2026-08-04-23	fast	scripts/test-development-data-clean-cut	scripts/check	2026-08-11 用户决策取代旧导入承诺后，format 6 必须拒绝且 current format 7 保持可用
+FAIL-2026-08-04-23	symptom	scripts/test-e2e	scripts/test-all	真实 File → Import 只使用 current format 7，并完成确认、SQLite 替换与重启回读
 FAIL-2026-08-03-01	fast	scripts/test-unit	scripts/check	NoonmarkCoreTests 覆盖 pinIdea/unpinIdea、tombstone 清除 pinnedAt 与恢复不复活置顶的领域语义
 FAIL-2026-08-03-01	symptom	scripts/test-e2e	scripts/test-all	真实 App pin→unpin 溢出菜单场景，菜单项陈旧无法取消置顶即判红
 FAIL-2026-08-03-02	fast	scripts/test-unit	scripts/check	IdeaInlineEditorSession 覆盖双击进入后的保存、取消、失焦与失败保留状态
@@ -177,14 +178,14 @@ FAIL-2026-08-08-01	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	
 FAIL-2026-08-08-02	fast	scripts/test-unit	scripts/check	40 次真实 SQLite 锁持有 child spawn、锁证明、release 与 exact reap 任一次错误即判红
 FAIL-2026-08-08-02	symptom	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	隔离真实 App 诊断导出路径的 SQLite 锁释放、导出与重启闭环任一失败即阻断
 FAIL-2026-08-08-02	release	scripts/test-release-diagnostic-closure	scripts/release-private-dmg	私有 DMG 签发前必须在 clean worktree 完成实际诊断 export 锁释放与重启闭环
-FAIL-2026-08-10-01	fast	scripts/test-unit	scripts/check	同步 run controller 必须拒绝重入，并在 stop 时取消及等待 active run 完成
+FAIL-2026-08-10-01	fast	scripts/test-unit	scripts/check	V2 Runtime 必须合并并发 reconcile，disable 时 durable generation fence、cancel 并等待 worker／Endpoint join
 FAIL-2026-08-10-01	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	同步中停止复选框必须保持原生物理输入能力，禁止整张同步卡片继承 disabled
-FAIL-2026-08-10-01	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 在 repository lock wait 中物理关闭同步、保存 policy、释放 mutation gate 并重启读回
+FAIL-2026-08-10-01	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 在 V2 endpoint read wait 中保持本机修改可用，物理关闭同步、等待 join 并重启读回 durable disabled
 FAIL-2026-08-10-01	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source/run 的完整 Preferences Clock 物理关闭、退出及重启证据
 FAIL-2026-08-10-02	fast	scripts/test-integration	scripts/check	真实 SQLite transport 拒绝不得污染健康 outbox，显式恢复只重排可物化 atomic unit
 FAIL-2026-08-10-02	symptom	scripts/test-e2e	scripts/test-all	真实 App 同步失败、用户 retry、SQLite status、warning 清理与重启收敛
-FAIL-2026-08-10-03	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	关闭同步的重启路径必须抑制历史全局 warning，并保留重新启用验证
-FAIL-2026-08-10-03	symptom	scripts/test-e2e	scripts/test-all	两个真实 App process 必须保留历史同步详情但不在 disabled restart 重放全局失败
+FAIL-2026-08-10-03	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	V2 disabled state 必须清除 actionable warning，重启保持 suppressed，并保留重新启用收敛验证
+FAIL-2026-08-10-03	symptom	scripts/test-e2e	scripts/test-all	三个真实 App process 必须证明 V2 failure、disable、disabled restart suppression 与重新启用收敛
 FAIL-2026-08-10-03	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source/run 的 Preferences Clock 退出与 disabled restart 证据
 FAIL-2026-08-10-04	fast	scripts/test-zhulong-inline-artifact-interaction-contract	scripts/check	内联草稿提交必须先滚动离开固定 Composer，再执行 layout、hit-test 与 WindowServer 真实点击
 FAIL-2026-08-10-04	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 必须把三项内联任务草稿滚入可点击区域、物理提交并保留回执历史
@@ -194,3 +195,69 @@ FAIL-2026-08-10-05	symptom	scripts/test-evidence-helper-lifecycle	scripts/check	
 FAIL-2026-08-10-05	release	scripts/verify-github-release-publication	scripts/push-release-tag	精确 hosted check 未首次成功或 tag job 未建立唯一 DMG 与 checksum 时不得发布
 FAIL-2026-08-11-01	fast	scripts/test-incremental-sync-contract	scripts/check	上传确认必须在 SQLiteSyncRepository 同一事务提交 journal uploaded 与本机 producer frontier；延迟确认必须 CAS 精确 durable receipt
 FAIL-2026-08-11-01	symptom	scripts/test-incremental-sync-symptom	scripts/test-all	128 项本机完整基线确认上传后不得 self-echo；另一设备仍须取得完整资料；v0.2.6 pending baseline 必须凭精确 receipt 在 pull 前恢复并写入有效同步时间
+FAIL-2026-08-11-02	fast	scripts/test-icloud-append-only-guard	scripts/check	拒绝真实 iCloud 测试删除、覆盖、profile reset、旧固定 repository、mutable head 或 append-only namespace 漂移
+FAIL-2026-08-11-02	symptom	scripts/test-icloud-append-only-symptom	scripts/test-icloud-sync-live	两个全新真实 iCloud round 必须各自双 SQLite 收敛、重启零重复 apply、运行时回报每轮 repository file count、零 mutable head，且后轮不得改变前轮 inventory 或 digest
+FAIL-2026-08-11-03	fast	scripts/test-replication-v2-schema-contract	scripts/check	current schema 必须为 v19 并含八张 V2 ledger 表；v15、v17、v18 任一路径发生迁移、改写或误开即判红
+FAIL-2026-08-11-03	symptom	scripts/test-integration	scripts/check	完整 Storage suite 必须证明所有 SQLite schema、领域资料、V1 runtime 与 V2 ledger 行为没有回归
+FAIL-2026-08-11-04	fast	scripts/test-replication-v2-recovery-contract	scripts/check	确认前中断后重启必须恢复 durable incident 与 pending publication，并幂等收敛
+FAIL-2026-08-11-04	symptom	scripts/test-integration	scripts/check	完整 Storage 回归以公开 Runtime、临时 SQLite 与文件 endpoint 捕获重启状态丢失或重复 apply
+FAIL-2026-08-11-05	fast	scripts/test-replication-v2-recovery-contract	scripts/check	promised item materialization 必须返回 typed waiting，不得形成 Runtime failure 或提前成功
+FAIL-2026-08-11-05	symptom	scripts/test-integration	scripts/check	完整 Storage 回归捕获 materialization waiting 被抛错、推进 cursor 或污染成功时间
+FAIL-2026-08-11-06	fast	scripts/test-replication-v2-recovery-contract	scripts/check	相同 producer sequence 的双 digest 必须保留并投影为 producerForkDetected，不得任选或降格为通用故障
+FAIL-2026-08-11-06	symptom	scripts/test-integration	scripts/check	完整 Storage 回归捕获 fork 被 apply、cursor 被推进、incident 丢失或成功时间污染
+FAIL-2026-08-11-07	fast	scripts/test-replication-v2-recovery-contract	scripts/check	fork evidence 必须覆盖首次分叉后的完整 immutable branch graph，任一 descendant 都须形成新 resolution ID
+FAIL-2026-08-11-07	symptom	scripts/test-integration	scripts/check	真实临时 SQLite 与文件 endpoint 必须把 fork 后续写入持久化为新的 actionable resolution，不得被旧 incident 静默吞掉
+FAIL-2026-08-11-08	fast	scripts/test-replication-v2-recovery-contract	scripts/check	无冲突 fork 必须原子修复；领域 conflict 必须 resolution-specific 持久化并经 exact keepCurrent command 闭合，漏项、过期 generation 与未授权 baseline 必须 fail-closed
+FAIL-2026-08-11-08	symptom	scripts/test-integration	scripts/check	真实临时双 SQLite 与文件 endpoint 必须贯穿 fork incident、domain merge、resolved cursor、confirmed repair baseline、空增量复核及重启零重复
+FAIL-2026-08-11-09	fast	scripts/test-replication-v2-recovery-contract	scripts/check	self-fork 必须以 CAS 原子退休旧 producer、建立新 epoch 与 exact-resolution baseline；失败 transaction 不得留下半切换状态
+FAIL-2026-08-11-09	symptom	scripts/test-integration	scripts/check	真实临时 SQLite 与文件 endpoint 必须证明 self-fork 修复、重启及后续本机 mutation 永不回到已退休 producer chain
+FAIL-2026-08-11-10	fast	scripts/test-replication-v2-recovery-contract	scripts/check	SQLite seal watermark 与 ThisDeviceOnly Keychain watermark 必须 exact match；任一方向不等都须退休旧 epoch，禁止猜测追平
+FAIL-2026-08-11-10	fast	scripts/test-replication-watermark-keychain-contract	scripts/test-replication-v2-recovery-contract	签名 App 的 provisioning、精确 Keychain group、DER entitlement、三阶段自动化与 iCloud 隔离契约不得脱钩
+FAIL-2026-08-11-10	symptom	scripts/test-integration	scripts/check	真实临时 SQLite 与文件 endpoint 必须证明 seal 后 Keychain 前中断不会发布旧 epoch，SQLite rollback 后后续 mutation 只在新 epoch 收敛
+FAIL-2026-08-11-11	fast	scripts/test-replication-v2-recovery-contract	scripts/check	含既有分类 projection 与 immutable history 的 clean-cut baseline 必须在第二份 SQLite store 精确重建，不得再触发 syncProtocol/403
+FAIL-2026-08-11-11	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实签名隔离 App 必须导入调用者资料包并完成高密度增删改、同步及重启，不得遗漏分类状态
+FAIL-2026-08-11-12	fast	scripts/test-replication-v2-recovery-contract	scripts/check	96 路 engine、replication ledger 与 sync metadata 同库读写不得暴露 SQLite code 5
+FAIL-2026-08-11-12	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实签名 App 在同步中正常写入及后续 300 次 mutation 必须零同步失败、零修改拒绝并在重启后收敛
+FAIL-2026-08-11-13	fast	scripts/test-replication-v2-recovery-contract	scripts/check	已标记 repository 的完整 V2 子树必须严格校验 grammar，未知嵌套对象或任一 symlink 均须零写入 fail-closed
+FAIL-2026-08-11-13	symptom	scripts/test-integration	scripts/check	真实临时文件系统须证明 public clean-open 不会经 V2 symlink 写入既有外部目录，且拒绝前后 inventory 完全不变
+FAIL-2026-08-11-14	fast	scripts/test-replication-v2-app-stress-contract	scripts/test-replication-v2-recovery-contract	真实资料 preflight 与签名 e2e App 必须共用资料最大日期下一日的 deterministic fixed-clock
+FAIL-2026-08-11-14	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实资料的排期与完成必须在可写自然日经签名 App、真实 append-only iCloud 与重启全链路收敛
+FAIL-2026-08-11-15	fast	scripts/test-icloud-append-only-guard	scripts/check	reset、V2 file path 与遗留 CloudKit transport 均不得保留任何 iCloud 删除、覆盖、移动或 mutable-index capability；full live runner 必须先完成 Local Folder 症状前置
+FAIL-2026-08-11-15	symptom	scripts/test-runtime-profile-isolation	scripts/check	隔离 profile reset 必须清理本机资料，同时完整保留 iCloud canary 与 append-only live test 资料
+FAIL-2026-08-11-16	fast	scripts/test-replication-v2-recovery-contract	scripts/check	首次 V2 authority transaction 必须清空未分代的 V1 pending、terminal、conflict、audit 与 metadata，同时保留领域 facts、设置、设备 identity 与失活 journal
+FAIL-2026-08-11-16	symptom	scripts/test-integration	scripts/check	完整 Storage suite 必须证明 clean cut 后只有新 mutation 进入 V2 outbox，旧 download runtime evidence 永不被消费
+FAIL-2026-08-11-17	fast	scripts/test-icloud-append-only-guard	scripts/check	V2 final-key owner 不得直接写最终路径、rename、remove 或维护 mutable head；CloudKit 不得保留远端删除入口
+FAIL-2026-08-11-17	fast	scripts/test-replication-v2-recovery-contract	scripts/check	marker 或 immutable object 在 staging 写入中断时最终键必须不存在；无 marker 的非空 root 零写入 fail-closed，可信 V2 object retry 才可用新 stage 原子 link 完整 bytes
+FAIL-2026-08-11-17	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	签名 App 大量增删改与重启后，第二 SQLite 必须从同一真实 iCloud round 精确收敛、零重复 apply，并证明旧 inventory／digest 不变
+FAIL-2026-08-11-18	fast	scripts/test-replication-v2-recovery-contract	scripts/check	相同 sealed publication 的精确 retry 不得新增永久 staging；最终键 exact match 必须在任何写入前幂等返回
+FAIL-2026-08-11-18	symptom	scripts/test-icloud-append-only-symptom	scripts/test-icloud-sync-live	两个全新真实 iCloud round 必须把来源证据限制为协议所需数量，同时维持双 SQLite 收敛、重启零重复与旧 round inventory 不变
+FAIL-2026-08-11-19	fast	scripts/test-replication-v2-recovery-contract	scripts/check	大型增量批次只能一次预校验及解码完整 context；80 组双版本 canonicalization 必须在三秒预算内保留精确结果与 provenance
+FAIL-2026-08-11-19	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	第二份独立 SQLite 必须在真实 append-only iCloud round 内完成全量收敛、精确 snapshot 对账与重启零重复 apply
+FAIL-2026-08-11-20	fast	scripts/test-replication-v2-recovery-contract	scripts/check	preferences record 只更新跨设备主题／语言版本，必须原样保留目标设备的数据模式、备份、同步端点、诗句及端点选项
+FAIL-2026-08-11-20	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实第二 SQLite 必须精确取得共享 preferences，同时保留自身 device-local preferences 并完成 restart zero replay
+FAIL-2026-08-11-21	fast	scripts/test-ui-localization-han-contract	scripts/check	新增双语同步恢复文案必须保持中文／英文 UI scalar 契约，不得形成单语遗漏
+FAIL-2026-08-11-21	symptom	scripts/check-ui-localization	scripts/check	production UI 文案必须经 typed AppCopy presentation boundary；Store 直接嵌入语言分支即判红
+FAIL-2026-08-11-22	fast	scripts/test-preferences-checkbox-interaction-target-contract	scripts/check	禁止 V1 coordinator／status／restore-race automation 重返 App 与 E2E，并固定 V2 lifecycle seam
+FAIL-2026-08-11-22	fast	scripts/test-replication-v2-recovery-contract	scripts/check	真实 SQLite fence 失败不得释放 Runtime；同一 owner 重试必须完成 endpoint join 并保留 enabled policy
+FAIL-2026-08-11-22	fast	scripts/test-e2e-evidence-contract	scripts/check	诊断闭环必须同时证明 endpoint wait 中普通 mutation 成功与真实 persistence failure 的 exact mutation 拒绝及跨重启关联
+FAIL-2026-08-11-22	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 以 V2 三进程完成同步、故障、普通 mutation、exact rejection、disable／shutdown join、重启 suppression 与重新收敛
+FAIL-2026-08-11-22	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source／run 的完整 V2 Preferences 与诊断 E2E 证据
+FAIL-2026-08-11-23	fast	scripts/test-e2e-evidence-contract	scripts/check	通用 E2E 必须要求 absolute regular profile、Data Protection Keychain signing 与稳定签名
+FAIL-2026-08-11-23	symptom	scripts/test-e2e	scripts/test-all	provisioned 真实 App 必须以 mandatory Keychain watermark 完成 V2 生命周期与跨重启诊断
+FAIL-2026-08-11-23	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费签名身份与完整 manifest 已绑定的真实 E2E 证据
+FAIL-2026-08-11-24	fast	scripts/test-e2e-evidence-contract	scripts/check	证据 inventory 必须拒绝真实 multi-link fixture，并固定 V2 transport 与诊断证据根分层
+FAIL-2026-08-11-24	symptom	scripts/test-e2e	scripts/test-all	真实诊断闭环必须完成 V2 hardlink transport、普通 mutation 与 exact rejection 关联、Help 导出及 single-link artifact inventory
+FAIL-2026-08-11-24	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费含 artifact inventory SHA 且 suite 成功的同 source／run E2E manifest
+FAIL-2026-08-11-25	fast	scripts/test-replication-v2-schema-contract	scripts/check	旧 SQLite schema 或 current-version fingerprint 漂移必须在任何 WAL、transaction、DDL 或 DML 前拒绝且主数据库 bytes 不变
+FAIL-2026-08-11-25	fast	scripts/test-development-data-clean-cut	scripts/check	只允许 current format 7，旧 decoder、adapter 或旧 E2E fixture path 任一返回即判红
+FAIL-2026-08-11-25	fast	scripts/test-replication-v2-app-stress-contract	scripts/test-replication-v2-recovery-contract	V2 Store、V2 iCloud endpoint 与 append-only namespace 均不得依赖 V1 transport helper
+FAIL-2026-08-11-26	fast	scripts/test-replication-v2-app-stress-contract	scripts/test-replication-v2-recovery-contract	中间 mutation batch 只执行真实 sync pass 并检查 durable incident，不得逐批等待 iCloud materialization
+FAIL-2026-08-11-26	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	签名 App 必须在原六分钟上限内完成高密度同步中修改、最终收敛、重启与第二 SQLite 精确对账
+FAIL-2026-08-11-27	fast	scripts/test-replication-v2-recovery-contract	scripts/check	后代已发布后重试完全相同的 pending 祖先必须零写入返回同一 receipt，不得误判 fork
+FAIL-2026-08-11-27	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	多个 publication 同时等待真实 iCloud 确认时必须继续接受修改，并完成最终收敛、重启与第二 SQLite 对账
+FAIL-2026-08-11-25	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 必须以 fresh schema 19 完成 current format 7 File → Import、确认、替换与重启回读
+FAIL-2026-08-11-25	release	scripts/verify-development-validation-evidence	scripts/release-private-dmg	私有 DMG 前必须消费同 source 的完整签名 App E2E 证据
+FAIL-2026-08-11-28	fast	scripts/test-development-data-clean-cut	scripts/check	烛龙 pending-gate 不得重新要求 format 6 V1 baseline journal，并必须固定 schema 19 clean-cut oracle
+FAIL-2026-08-11-28	symptom	scripts/test-e2e	scripts/test-all	真实签名 App 必须在 schema 19 空 Engine、零 V1／V2 同步 ledger 下保留 pending sidecar，并在 SQLite writer lock 中拒绝所有写路径
+FAIL-2026-08-11-29	fast	scripts/test-windowserver-physical-target-contract	scripts/check	WindowServer pointer readiness 必须同时要求坐标稳定与物理最前窗口 exact match，且 mouseDown 前再次校验
+FAIL-2026-08-11-29	symptom	scripts/test-e2e	scripts/test-all	完整签名 App 必须连续完成 native command exercise／restart 两次 Search、真实点击与 SQLite 对账，不得由下面的主窗截获 mouseDown

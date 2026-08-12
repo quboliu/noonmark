@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+automation="App/NoonmarkMacApp/ReplicationV2StressE2EAutomation.swift"
+symptom_gate="scripts/test-replication-v2-app-stress"
+launch_automations="App/NoonmarkMacApp/LegacyLaunchAutomations.swift"
+legacy_data_automations="App/NoonmarkMacApp/LegacyDataSyncAutomations.swift"
+sync_surface="App/NoonmarkMacApp/NoonmarkStore+Sync.swift"
+v2_icloud_surface="Sources/NoonmarkSync/ICloudDriveReplicationEndpoint.swift"
+
+require_literal() {
+  local file="$1"
+  local literal="$2"
+  local message="$3"
+
+  if ! rg -Fq -- "$literal" "$file"; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
+
+if [[ ! -f "$automation" ]]; then
+  echo "replication V2 signed App stress automation is missing" >&2
+  exit 1
+fi
+
+if [[ ! -x "$symptom_gate" ]]; then
+  echo "replication V2 signed App stress symptom gate is missing or not executable" >&2
+  exit 1
+fi
+
+require_literal "$launch_automations" \
+  "ReplicationV2StressE2EAutomation.fromCommandLine()" \
+  "replication V2 stress automation is not registered in the real App launch path"
+require_literal "$automation" \
+  'Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"' \
+  "replication V2 stress automation is not restricted to the signed e2e profile"
+require_literal "$automation" \
+  "--e2e-replication-v2-stress-backup-url" \
+  "replication V2 stress automation does not import the caller-selected backup"
+require_literal "$automation" \
+  "try await store.commitDataImport" \
+  "replication V2 stress automation bypasses the real Store import transaction"
+require_literal "$automation" \
+  "try store.commitEngineMutation" \
+  "replication V2 stress automation bypasses the real Store mutation path"
+for domain_mutation in \
+  "appendPoolNote" \
+  "addPlannedSubtask" \
+  "scheduleFromPool" \
+  "completeSubtask" \
+  "markCompleted" \
+  "appendIdea" \
+  "editIdea" \
+  "deleteIdea" \
+  "updateTheme"; do
+  require_literal "$automation" "$domain_mutation" \
+    "replication V2 stress automation omits $domain_mutation coverage"
+done
+require_literal "$automation" \
+  "mixedDomainMutationCount" \
+  "replication V2 stress result does not report mixed-domain mutations"
+require_literal "$automation" \
+  "underlyingErrorKind" \
+  "replication V2 stress result does not preserve a privacy-safe stage error kind"
+require_literal "$symptom_gate" \
+  '.mixedDomainMutationCount == 71' \
+  "replication V2 stress symptom gate does not enforce mixed-domain execution"
+require_literal "$symptom_gate" \
+  "ReplicationV2BackupDomainStressTests/testMixedDomainMutationsRemainValidAfterBackupImportAndV2Cutover" \
+  "replication V2 stress symptom gate does not preflight the supplied backup before iCloud creation"
+require_literal "$symptom_gate" \
+  'NOONMARK_REPLICATION_V2_STRESS_TODAY="$stress_natural_day"' \
+  "replication V2 backup preflight does not share the signed App natural day"
+require_literal "$symptom_gate" \
+  "--e2e-fixed-instant" \
+  "replication V2 signed App stress does not select a deterministic writable natural day"
+require_literal "$symptom_gate" \
+  '"${stress_natural_day}T16:00:00Z"' \
+  "replication V2 signed App stress does not reuse the derived natural day"
+require_literal "$automation" \
+  "store.setLocalFirstSyncEndpoint(endpointMode.kind)" \
+  "replication V2 stress automation does not select the requested real endpoint"
+require_literal "$automation" \
+  "ICloudAppendOnlyTestNamespace.beginSession" \
+  "replication V2 stress automation does not exclusively create a fresh iCloud session"
+require_literal "$automation" \
+  "ICloudAppendOnlyTestNamespace.reopenRound" \
+  "replication V2 stress automation does not strictly reopen the exact round after restart"
+require_literal "$automation" \
+  "syncLocalFolderNow()" \
+  "replication V2 stress automation bypasses the real manual sync command"
+require_literal "$automation" \
+  "runSyncPass" \
+  "replication V2 stress automation does not separate a real sync pass from final materialization convergence"
+require_literal "$automation" \
+  "state.incident == nil" \
+  "replication V2 stress sync pass does not fail immediately on a durable incident"
+if [[ "$(grep -Fc 'syncRuns += try await runSync(on: store)' "$automation")" -ne 4 ]]; then
+  echo "replication V2 stress automation serializes intermediate mutation batches on iCloud materialization" >&2
+  exit 1
+fi
+require_literal "$automation" \
+  "SQLiteReplicationLedger" \
+  "replication V2 stress automation does not reconcile the durable V2 ledger"
+require_literal "$automation" \
+  "snapshotPackage()" \
+  "replication V2 stress automation does not inspect typed diagnostic evidence"
+require_literal "$symptom_gate" \
+  "scripts/build-mac-app debug e2e" \
+  "replication V2 stress symptom gate does not build the signed isolated App"
+require_literal "$symptom_gate" \
+  "scripts/test-icloud-append-only-guard" \
+  "replication V2 stress symptom gate does not run the no-mutation guard before iCloud access"
+require_literal "$symptom_gate" \
+  "--e2e-replication-v2-stress-local-folder" \
+  "replication V2 stress does not expose its isolated Local Folder prerequisite"
+require_literal "$symptom_gate" \
+  "run_phase local-folder verify-restart" \
+  "replication V2 stress does not finish the Local Folder prerequisite"
+require_literal "$symptom_gate" \
+  "--e2e-replication-v2-stress-icloud" \
+  "replication V2 stress does not distinguish the real iCloud phase"
+require_literal "$symptom_gate" \
+  "--e2e-replication-v2-stress-icloud-session-id" \
+  "replication V2 stress symptom gate does not select a fresh iCloud session"
+require_literal "$symptom_gate" \
+  "--e2e-replication-v2-stress-icloud-round-id" \
+  "replication V2 stress symptom gate does not select a fresh iCloud round"
+require_literal "$symptom_gate" \
+  "--data-url" \
+  "replication V2 stress symptom gate does not isolate SQLite"
+require_literal "$symptom_gate" \
+  "testStressRoundConvergesIntoIndependentSQLiteAndRestartsWithoutReplay" \
+  "replication V2 stress gate does not require a second SQLite iCloud consumer"
+require_literal "$symptom_gate" \
+  'NOONMARK_REPLICATION_V2_STRESS_SOURCE_DATABASE="$icloud_database_path"' \
+  "replication V2 stress gate does not bind the second consumer to the App database truth"
+require_literal \
+  "Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift" \
+  "assertInventory" \
+  "replication V2 stress secondary consumer does not preserve prior iCloud inventory and digests"
+require_literal "$symptom_gate" \
+  'temporary_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)"' \
+  "replication V2 stress symptom gate does not canonicalize the macOS temporary root"
+require_literal "$symptom_gate" \
+  'backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"' \
+  "replication V2 stress gate must require a caller-selected backup without a repository path default"
+
+if rg -n '/Users/|/Downloads/' "$symptom_gate" >/dev/null; then
+  echo "replication V2 stress gate must not persist a user or backup path" >&2
+  exit 1
+fi
+
+require_literal "$symptom_gate" \
+  '--sync-folder-url "$local_sync_root"' \
+  "Local Folder prerequisite is not bound to the generated temporary root"
+if rg -n -- 'repository_path=' "$symptom_gate" >/dev/null; then
+  echo "replication V2 stress gate must not accept an arbitrary repository path" >&2
+  exit 1
+fi
+
+local_prerequisite_line="$(
+  grep -nF 'run_phase local-folder verify-restart' "$symptom_gate" |
+    cut -d: -f1
+)"
+first_icloud_line="$(
+  grep -nF 'run_phase icloud exercise' "$symptom_gate" |
+    cut -d: -f1
+)"
+if [[ -z "$local_prerequisite_line" || -z "$first_icloud_line" ||
+  "$local_prerequisite_line" -ge "$first_icloud_line" ]]; then
+  echo "real iCloud stress must follow the complete Local Folder App prerequisite" >&2
+  exit 1
+fi
+
+if rg -n \
+  'SQLiteLocalFirstSyncCoordinator|ICloudDriveSyncTransport|LocalFolderSyncTransport\(' \
+  "$sync_surface" "$v2_icloud_surface" >/dev/null; then
+  echo "production Store sync surface still owns a V1 coordinator or transport" >&2
+  exit 1
+fi
+
+if rg -n \
+  'ICloudSyncE2EAutomation|CloudKitSyncE2EAutomation' \
+  "$launch_automations" "$legacy_data_automations" >/dev/null; then
+  echo "real App target still contains a V1 iCloud or CloudKit automation" >&2
+  exit 1
+fi
+
+if [[ -e scripts/test-cloudkit-sync-live ]] || \
+  rg -n '^test-cloudkit-sync-live:' Makefile >/dev/null; then
+  echo "the removed CloudKit V1 live-validation entry point still exists" >&2
+  exit 1
+fi
+
+if rg -n 'CloudKit|cloudKit' \
+  App/NoonmarkMacApp/NoonmarkMacApp.swift \
+  App/NoonmarkMacApp/NoonmarkStore.swift \
+  App/NoonmarkMacApp/NoonmarkStore+Sync.swift \
+  App/NoonmarkMacApp/NoonmarkStore+NaturalDayPersistenceImport.swift \
+  App/NoonmarkMacApp/SettingsPaneContent.swift \
+  App/NoonmarkMacApp/AppCopy.swift >/dev/null; then
+  echo "the production App target still carries a CloudKit V1 runtime or UI seam" >&2
+  exit 1
+fi
+
+echo "Replication V2 signed App stress contract passed"

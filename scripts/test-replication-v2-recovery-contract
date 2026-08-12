@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+swift test \
+  --filter LocalFirstReplicationTests/testRestartRestoresPendingPublicationAfterObservationCrashAndConvergesOnce
+swift test \
+  --filter LocalFirstReplicationTests/testPromisedItemMaterializationIsWaitingRatherThanRuntimeFailure
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testRetryCompletesEveryInterruptedImmutablePublicationPrefixWithoutReplacingBytes
+swift test \
+  --filter LocalFirstReplicationTests/testProducerForkIsAnActionableIncidentRatherThanRuntimeFailure
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testSameSequenceDifferentDigestPreservesForkEvidenceAndFailsClosed
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testForkEvidenceClosureChangesWhenTheForkedProducerAddsDescendants
+swift test \
+  --filter SQLiteReplicationLedgerTests/testValidatedForkEvidencePersistsDeterministicResolutionAcrossRestart
+swift test \
+  --filter LocalFirstReplicationTests/testForkDescendantCreatesANewDurableResolutionInsteadOfBeingIgnored
+swift test \
+  --filter LocalFirstReplicationTests/testConflictFreeForkRepairsPublishesBaselineAndStaysClosedAfterRestart
+swift test \
+  --filter LocalFirstReplicationTests/testForkWithDomainConflictDoesNotApplyAdvanceCursorOrPublishBaseline
+swift test \
+  --filter LocalFirstReplicationTests/testKeepCurrentForkDecisionAtomicallyClosesAndPublishesRepairBaseline
+swift test \
+  --filter LocalFirstReplicationTests/testRepairBaselineWithoutALocallyClosedResolutionIsRejected
+swift test \
+  --filter LocalFirstReplicationTests/testSelfForkRotatesProducerEpochAndRestartNeverPublishesOnRetiredChain
+swift test \
+  --filter SQLiteReplicationLedgerTests/testProducerRotationFenceRollsBackBaselineWhenActiveEpochChanged
+swift test \
+  --filter LocalFirstReplicationTests/testKeychainAheadOfSQLiteRotatesEpochBeforePublishAndRestartsCleanly
+swift test \
+  --filter LocalFirstReplicationTests/testSQLiteAheadOfKeychainNeverPublishesOldEpochAndRecoversOnRestart
+swift test \
+  --filter LocalFirstReplicationTests/testCleanCutBaselineCarriesExistingClassificationStateToASecondStore
+swift test \
+  --filter LocalFirstReplicationTests/testRuntimeWithoutCleanCutAuthorityFailsClosedInsteadOfReadingV1Journal
+swift test \
+  --filter LocalFirstReplicationTests/testCleanCutBaselineIgnoresLegacyJournalAndCapturesOnlyLaterMutations
+swift test \
+  --filter LocalFirstReplicationTests/testDisableJoinsBlockedWorkerAndRestartsAsDurablyDisabled
+swift test \
+  --filter LocalFirstReplicationTests/testFailedShutdownFenceCanBeRetriedAndStillJoinsEndpoint
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testInterruptedStagingWriteNeverExposesAPartialFinalObject
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testExactPublishRetryDoesNotCreateAnotherPermanentStage
+swift test \
+  --filter ContentAddressedFileReplicationEndpointTests/testExactAncestorRetryRemainsIdempotentAfterDescendantPublication
+swift test \
+  --filter CurrentSyncRecordMergerTests/testLargeIncrementalBatchCanonicalizationCompletesWithinBudget
+swift test \
+  --filter SyncRecordMergerTests/testPreferenceRecordPreservesDeviceLocalConfiguration
+swift test --filter ReplicationRepositoryBootstrapTests
+swift test --filter SQLiteStoreRuntimeTests
+swift test \
+  --filter KeychainReplicationPublicationWatermarkStoreTests
+scripts/test-replication-watermark-keychain-contract
+scripts/test-replication-v2-app-stress-contract
+
+if rg -n \
+  'unfinishedJournalEntryCount|journalEntries\(|sealedJournalEntryIDs' \
+  Sources/NoonmarkStorage/LocalFirstReplication.swift >/dev/null; then
+  echo "replication V2 runtime still contains a V1 journal fallback" >&2
+  exit 1
+fi

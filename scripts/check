@@ -91,6 +91,18 @@ run_check_suite() {
   echo "==> Runtime profile isolation"
   scripts/test-runtime-profile-isolation
 
+  echo "==> iCloud append-only safety boundary"
+  scripts/test-icloud-append-only-guard
+
+  echo "==> Replication V2 schema clean-cut contract"
+  scripts/test-replication-v2-schema-contract
+
+  echo "==> Development data clean-cut contract"
+  scripts/test-development-data-clean-cut
+
+  echo "==> Replication V2 crash and materialization recovery contract"
+  scripts/test-replication-v2-recovery-contract
+
   echo "==> Validation evidence provenance"
   scripts/test-evidence-common
 
@@ -99,6 +111,9 @@ run_check_suite() {
 
   echo "==> E2E and writer-lease evidence contract"
   scripts/test-e2e-evidence-contract
+
+  echo "==> WindowServer physical target contract"
+  scripts/test-windowserver-physical-target-contract
 
   echo "==> Sync merge failure reason contract"
   scripts/test-sync-merge-failure-reason-contract

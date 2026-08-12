@@ -23,4 +23,4 @@
 
 ## 边界
 
-不改变既有 SQLite v15 → v17 升级与 JSON v6 → v7 导入支持范围。任何后续兼容范围变化必须在版本设计阶段由用户明确审核。
+2026-08-11 用户已明确审核并批准开发期 clean cut：移除 SQLite v15／v17／v18 自动迁移与 JSON v6 导入。当前只允许空库创建 schema 19、exact schema 19 打开，以及 canonical JSON format 7 导入；其余旧格式全部 fail-closed 且不得改写。未来任何兼容范围变化仍必须在版本设计阶段再次由用户明确审核。

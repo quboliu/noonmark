@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+scripts/test-icloud-append-only-guard
+
+if [[ -z "${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}" ]]; then
+  echo "real Replication V2 validation requires NOONMARK_REPLICATION_V2_STRESS_BACKUP" >&2
+  exit 1
+fi
+if [[ -z "${NOONMARK_PROVISIONING_PROFILE:-}" ]]; then
+  echo "real Replication V2 validation requires NOONMARK_PROVISIONING_PROFILE" >&2
+  exit 1
+fi
+
+scripts/test-replication-v2-app-stress
+scripts/test-icloud-sync-live
+
+echo "Replication V2 signed App and append-only real iCloud validation passed"

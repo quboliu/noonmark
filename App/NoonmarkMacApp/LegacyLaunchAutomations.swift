@@ -45,6 +45,14 @@ struct LaunchAutomation {
         append(InteractiveDemoFixtureAutomation.fromCommandLine(), to: &actions)
         append(DataRootProcessLeaseE2EAutomation.fromCommandLine(), to: &actions)
         append(
+            ReplicationWatermarkKeychainE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
+            ReplicationV2StressE2EAutomation.fromCommandLine(),
+            to: &actions
+        )
+        append(
             DiagnosticEvidenceClosureE2EAutomation.fromCommandLine(),
             to: &actions
         )
@@ -112,8 +120,6 @@ struct LaunchAutomation {
         append(LifecycleRestartE2EAutomation.fromCommandLine(), to: &actions)
         append(ReactivationAtomicityE2EAutomation.fromCommandLine(), to: &actions)
         append(DataPackageE2EAutomation.fromCommandLine(), to: &actions)
-        append(ICloudSyncE2EAutomation.fromCommandLine(), to: &actions)
-        append(CloudKitSyncE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskPoolNoteE2EAutomation.fromCommandLine(), to: &actions)
         append(TaskNoteMutationAtomicityE2EAutomation.fromCommandLine(), to: &actions)

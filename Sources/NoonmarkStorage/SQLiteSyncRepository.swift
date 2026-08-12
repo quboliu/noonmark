@@ -39,19 +39,271 @@ struct SQLiteSyncDownloadCommit {
     let auditEntries: [SyncAuditLogEntry]
     let metadata: SyncMetadataEntry
     let frontierMetadata: SyncMetadataEntry?
+    let forkResolutionTransition: SQLiteReplicationForkTransition?
+    let forkConflictDecisionCommit: SQLiteReplicationForkDecisionCommit?
+    let expectedReplicationControl: LocalFirstReplicationControl?
     let attemptedAt: Date
+}
+
+struct SQLiteReplicationForkTransition {
+    let resolutionID: ReplicationDigest
+    let expectedState: ReplicationForkResolutionState
+    let newState: ReplicationForkResolutionState
+}
+
+public enum ReplicationForkConflictDecision:
+    String,
+    Codable,
+    Equatable,
+    Sendable
+{
+    case keepCurrent
+    case acceptRemote
+    case copyAsNew
+
+    static func allowedDecisions(
+        for conflict: SyncConflict
+    ) -> [ReplicationForkConflictDecision] {
+        switch (conflict.type, conflict.entityType) {
+        case (.taskDefinitionMutation, .taskDefinition):
+            [.keepCurrent, .acceptRemote, .copyAsNew]
+        case (.historicalTraceMutation, .dayTrace),
+             (.duplicateActiveTrace, .dayTrace),
+             (.historicalSubtaskMutation, .subtask):
+            [.keepCurrent, .copyAsNew]
+        default:
+            [.keepCurrent]
+        }
+    }
+}
+
+public struct ReplicationForkConflictDecisionSelection:
+    Codable,
+    Equatable,
+    Sendable
+{
+    public let conflictID: UUID
+    public let decision: ReplicationForkConflictDecision
+
+    public init(
+        conflictID: UUID,
+        decision: ReplicationForkConflictDecision
+    ) {
+        self.conflictID = conflictID
+        self.decision = decision
+    }
+}
+
+public struct ReplicationForkDecisionResultReference:
+    Codable,
+    Equatable,
+    Sendable
+{
+    public let entityType: SyncEntityType
+    public let entityID: String
+
+    public init(entityType: SyncEntityType, entityID: String) {
+        self.entityType = entityType
+        self.entityID = entityID
+    }
+}
+
+struct SQLiteReplicationForkDecisionOutcome {
+    let selection: ReplicationForkConflictDecisionSelection
+    let resultReference: ReplicationForkDecisionResultReference?
+}
+
+struct SQLiteReplicationForkDecisionCommit {
+    let resolutionID: ReplicationDigest
+    let observedEngineGeneration: SQLiteEngineSnapshotGeneration
+    let outcomes: [SQLiteReplicationForkDecisionOutcome]
+}
+
+public struct SQLiteReplicationForkConflict: Equatable, Sendable {
+    public let conflict: SyncConflict
+    public let decision: ReplicationForkConflictDecision?
+    public let decidedAt: Date?
+    public let resultReference: ReplicationForkDecisionResultReference?
+
+    public init(
+        conflict: SyncConflict,
+        decision: ReplicationForkConflictDecision?,
+        decidedAt: Date?,
+        resultReference: ReplicationForkDecisionResultReference? = nil
+    ) {
+        self.conflict = conflict
+        self.decision = decision
+        self.decidedAt = decidedAt
+        self.resultReference = resultReference
+    }
+}
+
+public struct SQLiteReplicationForkConflictSet: Equatable, Sendable {
+    public let resolutionID: ReplicationDigest
+    public let conflicts: [SQLiteReplicationForkConflict]
+
+    let observedEngineGeneration: SQLiteEngineSnapshotGeneration
+}
+
+enum LocalFirstReplicationPolicy: String, Codable, Equatable, Sendable {
+    case enabled
+    case disabled
+}
+
+struct LocalFirstReplicationControl: Codable, Equatable, Sendable {
+    let policy: LocalFirstReplicationPolicy
+    let generation: UInt64
+    let updatedAt: Date
 }
 
 public final class SQLiteSyncRepository {
     public static let transportProducerEpochMetadataKey =
         "sync.transport.producerEpoch.v1"
+    static let localFirstReplicationControlMetadataKey =
+        "localFirst.replication.v2.control"
 
     private let databaseURL: URL
     private let storeRuntime: SQLiteStoreRuntime
 
+    private static func resultReferenceIsValid(
+        for outcome: SQLiteReplicationForkDecisionOutcome
+    ) -> Bool {
+        switch outcome.selection.decision {
+        case .keepCurrent:
+            outcome.resultReference == nil
+        case .acceptRemote:
+            outcome.resultReference?.entityType == .taskDefinition
+                && outcome.resultReference.flatMap {
+                    UUID(uuidString: $0.entityID)
+                } != nil
+        case .copyAsNew:
+            outcome.resultReference?.entityType == .taskChain
+                && outcome.resultReference.flatMap {
+                    UUID(uuidString: $0.entityID)
+                } != nil
+        }
+    }
+
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
         storeRuntime = SQLiteStoreRuntime.shared(for: databaseURL)
+    }
+
+    func loadOrInstallLocalFirstReplicationControl(
+        installedAt: Date
+    ) throws -> LocalFirstReplicationControl {
+        guard installedAt.timeIntervalSinceReferenceDate.isFinite else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control installation time is invalid"
+            )
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            if let stored = try localFirstReplicationControl(from: database) {
+                try execute("COMMIT", on: database)
+                return stored
+            }
+            let installed = LocalFirstReplicationControl(
+                policy: .enabled,
+                generation: 1,
+                updatedAt: installedAt
+            )
+            try saveMetadata(
+                SyncMetadataEntry(
+                    key: Self.localFirstReplicationControlMetadataKey,
+                    value: try ReplicationPublicationBuilder
+                        .canonicalEncoder().encode(installed),
+                    updatedAt: installedAt
+                ),
+                into: database
+            )
+            guard try localFirstReplicationControl(from: database)
+                == installed
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication control was not installed exactly"
+                )
+            }
+            try execute("COMMIT", on: database)
+            return installed
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    func transitionLocalFirstReplicationControl(
+        expectedGeneration: UInt64,
+        policy: LocalFirstReplicationPolicy,
+        updatedAt: Date
+    ) throws -> LocalFirstReplicationControl {
+        guard expectedGeneration > 0,
+              expectedGeneration < UInt64.max,
+              updatedAt.timeIntervalSinceReferenceDate.isFinite
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control transition is invalid"
+            )
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            guard let observed = try localFirstReplicationControl(
+                from: database
+            ), observed.generation == expectedGeneration else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication control generation changed"
+                )
+            }
+            let replacement = LocalFirstReplicationControl(
+                policy: policy,
+                generation: expectedGeneration + 1,
+                updatedAt: updatedAt
+            )
+            try saveMetadata(
+                SyncMetadataEntry(
+                    key: Self.localFirstReplicationControlMetadataKey,
+                    value: try ReplicationPublicationBuilder
+                        .canonicalEncoder().encode(replacement),
+                    updatedAt: updatedAt
+                ),
+                into: database
+            )
+            guard try localFirstReplicationControl(from: database)
+                == replacement
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication control transition did not commit exactly"
+                )
+            }
+            try execute("COMMIT", on: database)
+            return replacement
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    func localFirstReplicationControl() throws -> LocalFirstReplicationControl {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        guard let control = try localFirstReplicationControl(from: database)
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control is missing"
+            )
+        }
+        return control
     }
 
     public func saveDeviceIdentity(_ identity: SyncDeviceIdentity) throws {
@@ -99,6 +351,29 @@ public final class SQLiteSyncRepository {
         try saveMetadata(entry, into: database)
     }
 
+    func saveMetadata(
+        _ entry: SyncMetadataEntry,
+        expectedReplicationControl: LocalFirstReplicationControl
+    ) throws {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            try assertLocalFirstReplicationControl(
+                expectedReplicationControl,
+                in: database
+            )
+            try saveMetadata(entry, into: database)
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
     public func saveMetadata(_ entries: [SyncMetadataEntry]) throws {
         guard entries.isEmpty == false else { return }
         try validateMetadataBatch(entries)
@@ -106,8 +381,37 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
+            for entry in entries {
+                try saveMetadata(entry, into: database)
+            }
+            try execute("COMMIT", on: database)
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    func saveMetadata(
+        _ entries: [SyncMetadataEntry],
+        expectedReplicationControl: LocalFirstReplicationControl
+    ) throws {
+        guard entries.isEmpty == false else { return }
+        try validateMetadataBatch(entries)
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            try assertLocalFirstReplicationControl(
+                expectedReplicationControl,
+                in: database
+            )
             for entry in entries {
                 try saveMetadata(entry, into: database)
             }
@@ -140,6 +444,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let unfinishedCount = try query(
@@ -197,6 +503,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let storedValues: [Data] = try query(
@@ -244,6 +552,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             try SQLiteJournalCAS.insertOrValidateExact(entry, into: database)
@@ -269,6 +579,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             for entry in entries {
@@ -323,6 +635,64 @@ public final class SQLiteSyncRepository {
             }
         }
         return entries.sorted(by: journalEntryComesBefore)
+    }
+
+    func unsealedReplicationOutboxEntries(
+        generationID: UUID
+    ) throws -> [SyncJournalEntry] {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let entries = try query(
+            """
+            SELECT j.id, j.entity_type, j.entity_id, j.operation,
+                j.changed_at, j.changed_at_bits, j.device_id, j.sync_state,
+                j.retry_count, j.last_error, j.record_payload,
+                j.transport_receipt
+            FROM sync_replication_outbox o
+            JOIN change_journal j ON j.id = o.journal_id
+            LEFT JOIN sync_replication_publication_journal p
+              ON p.generation_id = o.generation_id
+             AND p.journal_id = o.journal_id
+            WHERE o.generation_id = ?
+              AND o.confirmed_at_bits IS NULL
+              AND p.journal_id IS NULL
+            """,
+            on: database
+        ) { statement in
+            bind(generationID, to: 1, in: statement)
+        } row: { statement in
+            try journalEntry(from: statement)
+        }
+        return entries.sorted(by: journalEntryComesBefore)
+    }
+
+    func pendingReplicationOutboxEntryIDs(
+        generationID: UUID
+    ) throws -> [UUID] {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        return try query(
+            """
+            SELECT journal_id
+            FROM sync_replication_outbox
+            WHERE generation_id = ? AND confirmed_at_bits IS NULL
+            ORDER BY captured_at_bits, journal_id
+            """,
+            on: database
+        ) { statement in
+            bind(generationID, to: 1, in: statement)
+        } row: { statement in
+            guard let value = sqlite3_column_text(statement, 0),
+                  let id = UUID(uuidString: String(cString: value))
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication outbox journal identity is invalid"
+                )
+            }
+            return id
+        }
     }
 
     func unfinishedJournalEntryCount() throws -> Int {
@@ -420,6 +790,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             for id in ids {
@@ -513,6 +885,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let allEntries = try journalEntries(from: database)
@@ -1003,6 +1377,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             try reconcilePendingDownloads(
@@ -1036,8 +1412,68 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
+            if let expected = commit.expectedReplicationControl {
+                try assertLocalFirstReplicationControl(
+                    expected,
+                    in: database
+                )
+            }
+            if let decisionCommit = commit.forkConflictDecisionCommit {
+                guard commit.forkResolutionTransition?.resolutionID
+                    == decisionCommit.resolutionID,
+                    commit.forkResolutionTransition?.expectedState
+                    == .branchesValidated,
+                    commit.forkResolutionTransition?.newState == .closed,
+                    decisionCommit.observedEngineGeneration
+                    == commit.observedEngineGeneration,
+                    Set(decisionCommit.outcomes.map {
+                        $0.selection.conflictID
+                    }).count == decisionCommit.outcomes.count,
+                    decisionCommit.outcomes.allSatisfy({
+                        Self.resultReferenceIsValid(for: $0)
+                    }),
+                    let conflictSet = try replicationForkConflictSet(
+                        resolutionID: decisionCommit.resolutionID,
+                        generation: decisionCommit
+                            .observedEngineGeneration,
+                        from: database
+                    ),
+                    conflictSet.conflicts.allSatisfy({
+                        $0.decision == nil && $0.decidedAt == nil
+                    }),
+                    Set(conflictSet.conflicts.map(\.conflict.id))
+                    == Set(
+                        decisionCommit.outcomes.map {
+                            $0.selection.conflictID
+                        }
+                    )
+                else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "fork conflict decision lost its exact persistence fence"
+                    )
+                }
+                let conflictByID = Dictionary(
+                    uniqueKeysWithValues: conflictSet.conflicts.map {
+                        ($0.conflict.id, $0.conflict)
+                    }
+                )
+                guard decisionCommit.outcomes.allSatisfy({ outcome in
+                    conflictByID[outcome.selection.conflictID]
+                        .map {
+                            ReplicationForkConflictDecision.allowedDecisions(
+                                for: $0
+                            ).contains(outcome.selection.decision)
+                        } ?? false
+                }) else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "fork conflict decision is not executable for its evidence"
+                    )
+                }
+            }
             try engineRepository.compareAndAdvanceEngineSnapshotGeneration(
                 observed: commit.observedEngineGeneration,
                 in: database
@@ -1071,6 +1507,86 @@ public final class SQLiteSyncRepository {
             if let frontierMetadata = commit.frontierMetadata {
                 try saveMetadata(frontierMetadata, into: database)
             }
+            if let decisionCommit = commit.forkConflictDecisionCommit {
+                for outcome in decisionCommit.outcomes {
+                    let selection = outcome.selection
+                    try run(
+                        """
+                        UPDATE sync_replication_fork_conflicts
+                        SET decision = ?, decided_at_bits = ?,
+                            result_entity_type = ?, result_entity_id = ?
+                        WHERE resolution_id = ? AND engine_epoch = ?
+                          AND engine_revision = ? AND conflict_id = ?
+                          AND decision = 'unresolved'
+                          AND decided_at_bits IS NULL
+                        """,
+                        on: database
+                    ) { statement in
+                        bind(selection.decision.rawValue, to: 1, in: statement)
+                        bindExactDate(commit.attemptedAt, to: 2, in: statement)
+                        bind(
+                            outcome.resultReference?.entityType.rawValue,
+                            to: 3,
+                            in: statement
+                        )
+                        bind(
+                            outcome.resultReference?.entityID,
+                            to: 4,
+                            in: statement
+                        )
+                        bind(
+                            decisionCommit.resolutionID.rawValue,
+                            to: 5,
+                            in: statement
+                        )
+                        bind(
+                            decisionCommit.observedEngineGeneration.epoch
+                                .uuidString.lowercased(),
+                            to: 6,
+                            in: statement
+                        )
+                        guard let revision = Int64(
+                            exactly: decisionCommit
+                                .observedEngineGeneration.revision
+                        ) else {
+                            throw SQLiteRepositoryError.invalidStoredValue(
+                                "fork conflict decision revision is invalid"
+                            )
+                        }
+                        bind(revision, to: 7, in: statement)
+                        bind(selection.conflictID, to: 8, in: statement)
+                    }
+                    guard sqlite3_changes(database) == 1 else {
+                        throw SQLiteRepositoryError.invalidStoredValue(
+                            "fork conflict decision did not update exact evidence"
+                        )
+                    }
+                }
+            }
+            if let transition = commit.forkResolutionTransition {
+                try run(
+                    """
+                    UPDATE sync_replication_fork_resolutions
+                    SET state = ?, updated_at_bits = ?
+                    WHERE resolution_id = ? AND state = ?
+                    """,
+                    on: database
+                ) { statement in
+                    bind(transition.newState.rawValue, to: 1, in: statement)
+                    bindExactDate(commit.attemptedAt, to: 2, in: statement)
+                    bind(transition.resolutionID.rawValue, to: 3, in: statement)
+                    bind(
+                        transition.expectedState.rawValue,
+                        to: 4,
+                        in: statement
+                    )
+                }
+                guard sqlite3_changes(database) == 1 else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "fork resolution changed before merge commit"
+                    )
+                }
+            }
             let durableWaitingCount = try pendingDownloads(from: database).count
             try execute("COMMIT", on: database)
             return durableWaitingCount
@@ -1086,6 +1602,8 @@ public final class SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             try saveConflict(conflict, remotePayload: remotePayload, into: database)
@@ -1114,6 +1632,200 @@ public final class SQLiteSyncRepository {
             """,
             on: database,
             row: conflict(from:)
+        )
+    }
+
+    func recordReplicationForkConflictSet(
+        resolutionID: ReplicationDigest,
+        conflicts: [SyncConflict],
+        observedEngineGeneration: SQLiteEngineSnapshotGeneration,
+        recordedAt: Date,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
+    ) throws -> SQLiteReplicationForkConflictSet {
+        guard conflicts.isEmpty == false,
+              recordedAt.timeIntervalSinceReferenceDate.isFinite,
+              let engineRevision = Int64(
+                  exactly: observedEngineGeneration.revision
+              ),
+              Set(conflicts.map(\.id)).count == conflicts.count,
+              conflicts.allSatisfy({
+                  $0.id == $0.canonicalEvidenceID
+                      && $0.resolution == .unresolved
+              })
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict set is invalid"
+            )
+        }
+        let ordered = conflicts.sorted {
+            $0.id.uuidString < $1.id.uuidString
+        }
+        let prepared = try ordered.map {
+            ($0, try validatedConflictRemotePayload($0))
+        }
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
+        try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+        do {
+            if let expectedReplicationControl {
+                try assertLocalFirstReplicationControl(
+                    expectedReplicationControl,
+                    in: database
+                )
+            }
+            let resolutionState: [String] = try query(
+                """
+                SELECT state
+                FROM sync_replication_fork_resolutions
+                WHERE resolution_id = ?
+                """,
+                on: database
+            ) { statement in
+                bind(resolutionID.rawValue, to: 1, in: statement)
+            } row: { statement in
+                try string(statement, 0)
+            }
+            guard resolutionState == [
+                ReplicationForkResolutionState.branchesValidated.rawValue
+            ] else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork conflict set lacks validated evidence"
+                )
+            }
+            let generationMatches: [Int] = try query(
+                """
+                SELECT 1
+                FROM engine_snapshot_generation
+                WHERE id = 1 AND epoch = ? AND revision = ?
+                """,
+                on: database
+            ) { statement in
+                bind(
+                    observedEngineGeneration.epoch.uuidString.lowercased(),
+                    to: 1,
+                    in: statement
+                )
+                bind(engineRevision, to: 2, in: statement)
+            } row: { _ in 1 }
+            guard generationMatches == [1] else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "engine snapshot generation changed before fork conflict persistence"
+                )
+            }
+            if let existing = try replicationForkConflictSet(
+                resolutionID: resolutionID,
+                generation: observedEngineGeneration,
+                from: database
+            ) {
+                guard existing.conflicts.map(\.conflict.id)
+                    == ordered.map(\.id)
+                else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "replication fork conflict set changed within one engine generation"
+                    )
+                }
+                try execute("COMMIT", on: database)
+                return existing
+            }
+            for (conflict, remotePayload) in prepared {
+                try saveConflict(
+                    conflict,
+                    remotePayload: remotePayload,
+                    into: database
+                )
+                try run(
+                    """
+                    INSERT INTO sync_replication_fork_conflicts(
+                        resolution_id, conflict_id, engine_epoch,
+                        engine_revision, decision, decided_at_bits,
+                        recorded_at_bits
+                    ) VALUES (?, ?, ?, ?, 'unresolved', NULL, ?)
+                    """,
+                    on: database
+                ) { statement in
+                    bind(resolutionID.rawValue, to: 1, in: statement)
+                    bind(conflict.id, to: 2, in: statement)
+                    bind(
+                        observedEngineGeneration.epoch.uuidString
+                            .lowercased(),
+                        to: 3,
+                        in: statement
+                    )
+                    bind(engineRevision, to: 4, in: statement)
+                    bindExactDate(recordedAt, to: 5, in: statement)
+                }
+            }
+            guard let stored = try replicationForkConflictSet(
+                resolutionID: resolutionID,
+                generation: observedEngineGeneration,
+                from: database
+            ), stored.conflicts.map(\.conflict.id) == ordered.map(\.id) else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork conflict set was not stored exactly"
+                )
+            }
+            try execute("COMMIT", on: database)
+            return stored
+        } catch {
+            try? execute("ROLLBACK", on: database)
+            throw error
+        }
+    }
+
+    public func replicationForkConflictSet(
+        resolutionID: ReplicationDigest
+    ) throws -> SQLiteReplicationForkConflictSet? {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        guard let generation = try latestReplicationForkConflictGeneration(
+            resolutionID: resolutionID,
+            from: database
+        ) else { return nil }
+        return try replicationForkConflictSet(
+            resolutionID: resolutionID,
+            generation: generation,
+            from: database
+        )
+    }
+
+    public func latestReplicationForkConflictSet(
+        generationID: UUID
+    ) throws -> SQLiteReplicationForkConflictSet? {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+        try applySchema(on: database)
+        let resolutionIDs: [ReplicationDigest] = try query(
+            """
+            SELECT DISTINCT r.resolution_id
+            FROM sync_replication_fork_resolutions r
+            JOIN sync_replication_fork_conflicts c
+              ON c.resolution_id = r.resolution_id
+            WHERE r.generation_id = ? AND r.state = 'branchesValidated'
+              AND c.decision = 'unresolved'
+            ORDER BY r.detected_at_bits DESC, r.resolution_id DESC
+            LIMIT 1
+            """,
+            on: database
+        ) { statement in
+            bind(generationID, to: 1, in: statement)
+        } row: { statement in
+            try replicationDigest(statement, 0)
+        }
+        guard let resolutionID = resolutionIDs.first,
+              let generation = try latestReplicationForkConflictGeneration(
+                  resolutionID: resolutionID,
+                  from: database
+              )
+        else { return nil }
+        return try replicationForkConflictSet(
+            resolutionID: resolutionID,
+            generation: generation,
+            from: database
         )
     }
 
@@ -1195,6 +1907,17 @@ public final class SQLiteSyncRepository {
             bind(limit, to: 1, in: statement)
         } row: { statement in
             try auditEntry(from: statement)
+        }
+    }
+
+    func assertLocalFirstReplicationControl(
+        _ expected: LocalFirstReplicationControl,
+        in database: OpaquePointer?
+    ) throws {
+        guard try localFirstReplicationControl(from: database) == expected else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control generation fence changed"
+            )
         }
     }
 }
@@ -1531,6 +2254,39 @@ private extension SQLiteSyncRepository {
             bind(entry.value, to: 2, in: statement)
             bind(entry.updatedAt, to: 3, in: statement)
         }
+    }
+
+    func localFirstReplicationControl(
+        from database: Database?
+    ) throws -> LocalFirstReplicationControl? {
+        let values: [Data] = try query(
+            "SELECT value FROM sync_metadata WHERE key = ?",
+            on: database
+        ) { statement in
+            bind(Self.localFirstReplicationControlMetadataKey, to: 1, in: statement)
+        } row: { statement in
+            data(statement, 0)
+        }
+        guard let value = values.first else { return nil }
+        let control: LocalFirstReplicationControl
+        do {
+            control = try ReplicationPublicationBuilder.canonicalDecoder()
+                .decode(LocalFirstReplicationControl.self, from: value)
+        } catch {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control is invalid"
+            )
+        }
+        guard control.generation > 0,
+              control.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+              try ReplicationPublicationBuilder.canonicalEncoder()
+              .encode(control) == value
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication control is not canonical"
+            )
+        }
+        return control
     }
 
     func pendingDownloads(from database: Database?) throws -> [SyncPendingDownloadRecord] {
@@ -1922,7 +2678,7 @@ private extension SQLiteSyncRepository {
     func execute(_ sql: String, on database: Database?) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.executeFailed(
-                lastError(database),
+                "sync repository writerDepth=\(storeRuntime.writerLeaseDepth): \(lastError(database)) in \(sqlSummary(sql))",
                 sqliteCode: sqliteDiagnosticCode(database)
             )
         }
@@ -1939,7 +2695,15 @@ private extension SQLiteSyncRepository {
         return statement
     }
 
+    func sqlSummary(_ sql: String) -> String {
+        sql.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.isEmpty == false }) ?? "SQLite statement"
+    }
+
     func run(_ sql: String, on database: Database?, bind: (Statement?) throws -> Void) throws {
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         let statement = try prepare(sql, on: database)
         defer { sqlite3_finalize(statement) }
         try bind(statement)
@@ -1978,6 +2742,8 @@ private extension SQLiteSyncRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             for id in ids {
@@ -2273,6 +3039,166 @@ private extension SQLiteSyncRepository {
             }
         )
         return candidates.compactMap { $0 }
+    }
+
+    func latestReplicationForkConflictGeneration(
+        resolutionID: ReplicationDigest,
+        from database: Database?
+    ) throws -> SQLiteEngineSnapshotGeneration? {
+        try query(
+            """
+            SELECT engine_epoch, engine_revision
+            FROM sync_replication_fork_conflicts
+            WHERE resolution_id = ?
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            on: database
+        ) { statement in
+            bind(resolutionID.rawValue, to: 1, in: statement)
+        } row: { statement in
+            SQLiteEngineSnapshotGeneration(
+                epoch: try uuid(statement, 0),
+                revision: try nonnegativeUInt64(statement, 1)
+            )
+        }.first
+    }
+
+    func nonnegativeUInt64(
+        _ statement: Statement?,
+        _ index: Int32
+    ) throws -> UInt64 {
+        guard sqlite3_column_type(statement, index) == SQLITE_INTEGER else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict engine revision is not an integer"
+            )
+        }
+        let value = sqlite3_column_int64(statement, index)
+        guard value >= 0 else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict engine revision is negative"
+            )
+        }
+        return UInt64(value)
+    }
+
+    func replicationDigest(
+        _ statement: Statement?,
+        _ index: Int32
+    ) throws -> ReplicationDigest {
+        guard let digest = ReplicationDigest(
+            rawValue: try string(statement, index)
+        ) else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict resolution ID is invalid"
+            )
+        }
+        return digest
+    }
+
+    func replicationForkConflictSet(
+        resolutionID: ReplicationDigest,
+        generation: SQLiteEngineSnapshotGeneration,
+        from database: Database?
+    ) throws -> SQLiteReplicationForkConflictSet? {
+        let rows: [SQLiteReplicationForkConflict] = try query(
+            """
+            SELECT conflict.id, conflict.conflict_type,
+                conflict.entity_type, conflict.entity_id,
+                conflict.local_record_id, conflict.remote_record_id,
+                conflict.remote_payload, conflict.detected_at,
+                conflict.resolution, conflict.message,
+                fork.decision, fork.decided_at_bits,
+                fork.result_entity_type, fork.result_entity_id
+            FROM sync_replication_fork_conflicts fork
+            JOIN sync_conflicts conflict ON conflict.id = fork.conflict_id
+            WHERE fork.resolution_id = ? AND fork.engine_epoch = ?
+              AND fork.engine_revision = ?
+            ORDER BY fork.conflict_id
+            """,
+            on: database
+        ) { statement in
+            bind(resolutionID.rawValue, to: 1, in: statement)
+            bind(generation.epoch.uuidString.lowercased(), to: 2, in: statement)
+            guard let revision = Int64(exactly: generation.revision) else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork conflict engine revision is invalid"
+                )
+            }
+            bind(revision, to: 3, in: statement)
+        } row: { statement in
+            let rawDecision = try string(statement, 10)
+            let decision: ReplicationForkConflictDecision?
+            switch rawDecision {
+            case "unresolved":
+                decision = nil
+            default:
+                guard let decoded = ReplicationForkConflictDecision(
+                    rawValue: rawDecision
+                ) else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "replication fork conflict decision is invalid"
+                    )
+                }
+                decision = decoded
+            }
+            let decidedAt: Date? = if sqlite3_column_type(statement, 11) == SQLITE_NULL {
+                nil
+            } else {
+                try exactDate(statement, 11)
+            }
+            guard (decision == nil) == (decidedAt == nil) else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork conflict decision time is inconsistent"
+                )
+            }
+            let resultReference: ReplicationForkDecisionResultReference?
+            if sqlite3_column_type(statement, 12) == SQLITE_NULL,
+               sqlite3_column_type(statement, 13) == SQLITE_NULL
+            {
+                resultReference = nil
+            } else {
+                guard let entityType = SyncEntityType(
+                    rawValue: try string(statement, 12)
+                ) else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "replication fork decision result type is invalid"
+                    )
+                }
+                resultReference = ReplicationForkDecisionResultReference(
+                    entityType: entityType,
+                    entityID: try string(statement, 13)
+                )
+            }
+            let decodedConflict = try conflict(from: statement)
+            let outcome = decision.map {
+                SQLiteReplicationForkDecisionOutcome(
+                    selection: ReplicationForkConflictDecisionSelection(
+                        conflictID: decodedConflict.id,
+                        decision: $0
+                    ),
+                    resultReference: resultReference
+                )
+            }
+            guard outcome.map(Self.resultReferenceIsValid(for:)) ?? (resultReference == nil)
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork decision result reference is inconsistent"
+                )
+            }
+            return SQLiteReplicationForkConflict(
+                conflict: decodedConflict,
+                decision: decision,
+                decidedAt: decidedAt,
+                resultReference: resultReference
+            )
+        }
+        guard rows.isEmpty == false else { return nil }
+        return SQLiteReplicationForkConflictSet(
+            resolutionID: resolutionID,
+            conflicts: rows,
+            observedEngineGeneration: generation
+        )
     }
 
     func conflict(from statement: Statement?) throws -> SyncConflict {

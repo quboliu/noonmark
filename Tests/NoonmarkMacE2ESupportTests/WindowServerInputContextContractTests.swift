@@ -120,6 +120,37 @@ final class WindowServerInputContextContractTests: XCTestCase {
         )
     }
 
+    func testPhysicalTargetReadinessRequiresPointerAndExactFrontWindow() {
+        XCTAssertTrue(
+            WindowServerInputContextContract.physicalTargetIsReady(
+                expectedWindowNumber: 42,
+                hitWindowNumber: 42,
+                pointerIsSettled: true
+            )
+        )
+        XCTAssertFalse(
+            WindowServerInputContextContract.physicalTargetIsReady(
+                expectedWindowNumber: 42,
+                hitWindowNumber: 7,
+                pointerIsSettled: true
+            )
+        )
+        XCTAssertFalse(
+            WindowServerInputContextContract.physicalTargetIsReady(
+                expectedWindowNumber: 42,
+                hitWindowNumber: 42,
+                pointerIsSettled: false
+            )
+        )
+        XCTAssertFalse(
+            WindowServerInputContextContract.physicalTargetIsReady(
+                expectedWindowNumber: 42,
+                hitWindowNumber: 0,
+                pointerIsSettled: true
+            )
+        )
+    }
+
     private func topology(
         windowNumber: Int = 7,
         accessibilityRole: String? = "AXWindow",

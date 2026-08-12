@@ -72,6 +72,7 @@ evidence_helper_snapshot="${runtime_evidence_dir}/helper-snapshot/NoonmarkDMGIns
 evidence_window_probe_snapshot="${runtime_evidence_dir}/probe-snapshot/NoonmarkWindowProbe"
 windowserver_input_cleanup_result="${runtime_evidence_dir}/windowserver-input-cleanup-result.txt"
 windowserver_input_cleanup_log="${runtime_evidence_dir}/windowserver-input-cleanup.log"
+diagnostic_closure_sync_root="/private/tmp/noonmark-e2e-diagnostic-closure-sync-$$"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
 suite_mode="full"
 only_mode=""
@@ -421,7 +422,17 @@ printf 'scenario\tapp_binary_sha256\tscreenshot_sha256\toracles\texternal_ax\n' 
   >"$english_scenario_ledger"
 
 scripts/reset-dev-data e2e
-scripts/build-mac-app "$configuration" e2e
+provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
+if [[ "$provisioning_profile" != /* ||
+      ! -f "$provisioning_profile" ||
+      -L "$provisioning_profile" ]]; then
+  echo "V2 E2E requires an absolute regular NOONMARK_PROVISIONING_PROFILE" >&2
+  exit 1
+fi
+NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING=1 \
+  NOONMARK_PROVISIONING_PROFILE="$provisioning_profile" \
+  NOONMARK_REQUIRE_STABLE_UI_SIGNING=1 \
+  scripts/build-mac-app "$configuration" e2e
 scripts/build-window-probe "$configuration" >/dev/null
 if [[ ! -f "$window_probe_executable_path" ||
   -L "$window_probe_executable_path" ||
@@ -1174,6 +1185,13 @@ finish_e2e_session() {
     suite_status=1
   fi
   rm -rf "/private/tmp/noonmark-e2e-preferences-clock-sync-$$"
+  if [[ "$diagnostic_closure_sync_root" =~ ^/private/tmp/noonmark-e2e-diagnostic-closure-sync-[0-9]+$ ]] &&
+    [[ ! -L "$diagnostic_closure_sync_root" ]]; then
+    rm -rf -- "$diagnostic_closure_sync_root"
+  else
+    echo "diagnostic closure sync cleanup refused an unsafe path" >&2
+    suite_status=1
+  fi
   if kill -0 "$display_assertion_pid" >/dev/null 2>&1; then
     kill "$display_assertion_pid" >/dev/null 2>&1 || true
     wait "$display_assertion_pid" 2>/dev/null || true
@@ -5962,22 +5980,14 @@ run_preferences_clock_probe() {
   local setup_log="${preferences_dir}/setup.log"
   local exercise_result="${preferences_dir}/exercise-result.txt"
   local exercise_log="${preferences_dir}/exercise.log"
-  local task_summary_screenshot="${preferences_dir}/sync-task-summary.png"
   local restart_result="${preferences_dir}/restart-result.txt"
   local restart_log="${preferences_dir}/restart.log"
-  local failure_restart_result="${preferences_dir}/failure-restart-result.txt"
-  local failure_restart_log="${preferences_dir}/failure-restart.log"
+  local status_screenshot="${preferences_dir}/sync-v2-status.png"
+  local lifecycle_screenshot="${preferences_dir}/sync-v2-lifecycle.png"
   local sync_root="/private/tmp/noonmark-e2e-preferences-clock-sync-$$"
-  local remote_bits
+  local initial_bits
   local theme_bits
   local language_bits
-  local final_header_bits
-  local final_payload_bits
-  local remote_sha256
-  local final_sha256
-  local final_snapshot_id
-  local final_snapshot_digest
-  local final_snapshot_sha256
   local sqlite_probe
   local trace_probe
 
@@ -5986,7 +5996,7 @@ run_preferences_clock_probe() {
   mkdir -p "$preferences_dir"
 
   run_terminating_ui_probe \
-    "preference logical-clock remote setup" \
+    "preference V2 baseline setup" \
     "$setup_result" \
     "$setup_log" \
     --data-url "$PWD/$preferences_db" \
@@ -5995,12 +6005,13 @@ run_preferences_clock_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-setup \
     --e2e-preferences-clock-state-url "$PWD/$state_file" \
     --e2e-preferences-clock-result-url "$PWD/$setup_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
-    "preference logical-clock native Settings exercise" \
+    "preference V2 native Settings and lifecycle exercise" \
     "$exercise_result" \
     "$exercise_log" \
     --data-url "$PWD/$preferences_db" \
@@ -6010,12 +6021,13 @@ run_preferences_clock_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-exercise \
     --e2e-preferences-clock-state-url "$PWD/$state_file" \
     --e2e-preferences-clock-result-url "$PWD/$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
-    "preference logical-clock stale-remote restart" \
+    "preference V2 disabled restart and recovery" \
     "$restart_result" \
     "$restart_log" \
     --data-url "$PWD/$preferences_db" \
@@ -6024,99 +6036,25 @@ run_preferences_clock_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
-    --e2e-persistence-failure-automation \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-verify \
     --e2e-preferences-clock-state-url "$PWD/$state_file" \
     --e2e-preferences-clock-result-url "$PWD/$restart_result"
 
-  NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
-    "persisted sync failure restart" \
-    "$failure_restart_result" \
-    "$failure_restart_log" \
-    --data-url "$PWD/$preferences_db" \
-    --sync-folder-url "$sync_root" \
-    --page settings \
-    --e2e-fixed-instant 2026-07-05T16:00:00Z \
-    --e2e-fixed-time-zone America/New_York \
-    --e2e-fixed-locale zh_Hans_SG \
-    --e2e-persisted-sync-failure-restore-race \
-    --e2e-preferences-clock-verify-failure-restart \
-    --e2e-preferences-clock-state-url "$PWD/$state_file" \
-    --e2e-preferences-clock-result-url \
-    "$PWD/$failure_restart_result"
-
-  remote_bits="$(/usr/bin/plutil -extract remoteClockBits raw -o - \
+  initial_bits="$(/usr/bin/plutil -extract initialClockBits raw -o - \
     "$state_file")"
   theme_bits="$(/usr/bin/plutil -extract themeClockBits raw -o - \
     "$state_file")"
   language_bits="$(/usr/bin/plutil -extract languageClockBits raw -o - \
     "$state_file")"
-  final_header_bits="$(/usr/bin/plutil -extract finalHeaderClockBits raw -o - \
-    "$state_file")"
-  final_payload_bits="$(/usr/bin/plutil -extract finalPayloadClockBits raw -o - \
-    "$state_file")"
-  remote_sha256="$(/usr/bin/plutil -extract remoteRecordSHA256 raw -o - \
-    "$state_file")"
-  final_sha256="$(/usr/bin/plutil -extract finalRecordSHA256 raw -o - \
-    "$state_file")"
-  final_snapshot_id="$(/usr/bin/plutil -extract finalSnapshotID raw -o - \
-    "$state_file")"
-  final_snapshot_digest="$(/usr/bin/plutil \
-    -extract finalSnapshotPayloadDigest raw -o - "$state_file")"
-  final_snapshot_sha256="$(/usr/bin/plutil \
-    -extract finalSnapshotSHA256 raw -o - "$state_file")"
-
-  if (( remote_bits >= theme_bits || theme_bits >= language_bits )); then
-    echo "preference logical-clock state did not advance exactly in order" >&2
-    exit 1
-  fi
-  if [[ "$final_header_bits" != "$language_bits" \
-    || "$final_payload_bits" != "$language_bits" ]]; then
-    echo "preference remote header/payload exact clock probe failed" >&2
-    exit 1
-  fi
-
-  if [[ "$(shasum -a 256 \
-    "${preferences_dir}/remote-future-preferences.json" \
-    | awk '{print $1}')" != "$remote_sha256" \
-    || "$(shasum -a 256 \
-      "${preferences_dir}/remote-before-local-settings.json" \
-      | awk '{print $1}')" != "$remote_sha256" \
-    || "$(shasum -a 256 \
-      "${preferences_dir}/stale-remote-reintroduced.json" \
-      | awk '{print $1}')" != "$remote_sha256" \
-    || "$(shasum -a 256 \
-      "${preferences_dir}/stale-remote-before-restart-sync.json" \
-      | awk '{print $1}')" != "$remote_sha256" \
-    || "$(shasum -a 256 \
-      "${preferences_dir}/final-local-winner-preferences.json" \
-      | awk '{print $1}')" != "$final_sha256" \
-    || "$(shasum -a 256 \
-      "${preferences_dir}/final-local-winner-snapshot.json" \
-      | awk '{print $1}')" != "$final_snapshot_sha256" ]]; then
-    echo "preference local-folder record SHA-256 evidence failed" >&2
-    exit 1
-  fi
-
-  if [[ "$(/usr/bin/plutil -extract id raw -o - \
-      "${preferences_dir}/final-local-winner-snapshot.json")" \
-      != "$final_snapshot_id" \
-    || "$(/usr/bin/plutil -extract recordCount raw -o - \
-      "${preferences_dir}/final-local-winner-snapshot.json")" != "1" \
-    || "$(/usr/bin/plutil -extract recordIDs.0.rawValue raw -o - \
-      "${preferences_dir}/final-local-winner-snapshot.json")" \
-      != "preferences:default" \
-    || "$(/usr/bin/plutil -extract payloadDigest raw -o - \
-      "${preferences_dir}/final-local-winner-snapshot.json")" \
-      != "$final_snapshot_digest" ]]; then
-    echo "preference local-folder snapshot winner evidence failed" >&2
+  if (( initial_bits >= theme_bits || theme_bits >= language_bits )); then
+    echo "preference V2 logical clock did not advance exactly" >&2
     exit 1
   fi
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$preferences_db" "
     WITH settings AS (
       SELECT
-        max(CASE WHEN key = 'app.data_mode' THEN value END) AS data_mode,
         max(CASE WHEN key = 'app.local_first_sync.enabled'
           THEN value END) AS sync_enabled,
         max(CASE WHEN key = 'app.local_first_sync.endpoint'
@@ -6128,104 +6066,45 @@ run_preferences_clock_probe() {
         max(CASE WHEN key = 'app.settings_poem.text'
           THEN value END) AS poem_text
       FROM sync_settings
-    ), preference_journal AS (
-      SELECT *
-      FROM change_journal
-      WHERE entity_type = 'appPreferences'
-        AND entity_id = 'default'
-        AND operation = 'upsert'
-    ), preference_audit AS (
-      SELECT *
-      FROM sync_audit_log
-      WHERE entity_type = 'appPreferences'
-        AND entity_id = 'default'
     )
     SELECT
       (SELECT count(*)
        FROM app_preferences
        WHERE theme = 'coolGray'
          AND language = 'chinese'
-         AND theme_language_updated_at_bits = $language_bits
-         AND theme_language_writer_id = (
-           SELECT device_id FROM sync_device_identity WHERE id = 1
-         )),
+         AND theme_language_updated_at_bits = $language_bits),
       (SELECT count(*)
        FROM settings
-       WHERE data_mode = 'localFirst'
-         AND sync_enabled = 'true'
+       WHERE sync_enabled = 'true'
          AND sync_endpoint = 'localFolder'
          AND sync_mode = 'manual'
          AND poem_enabled = 'false'
          AND poem_text = 'E2E local-only preference sentinel 6049'),
-      (SELECT count(*) FROM preference_journal),
       (SELECT count(*)
-       FROM preference_journal
-       WHERE sync_state = 'uploaded'
-         AND retry_count = 0
-         AND last_error IS NULL
-         AND record_payload IS NOT NULL
-         AND length(record_payload) > 0),
+       FROM sync_replication_outbox
+       WHERE confirmed_at_bits IS NULL),
       (SELECT count(*)
-       FROM preference_journal
-       WHERE sync_state IN (
-         'pendingUpload', 'publishedLocal',
-         'blockedUserAttention', 'blockedCorruption'
-       )),
+       FROM sync_replication_outbox
+       WHERE confirmed_at_bits IS NOT NULL),
       (SELECT count(*)
-       FROM preference_journal
-       WHERE changed_at_bits = $theme_bits
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.theme'
-         ) = 'coolGray'
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.language'
-         ) = 'english'
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.writerDeviceID.rawValue'
-         ) = (
-           SELECT device_id FROM sync_device_identity WHERE id = 1
-         )
-         AND CAST(json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.updatedAt'
-         ) AS INTEGER) = changed_at_bits),
+       FROM sync_metadata
+       WHERE key = 'localFirst.replication.v2.control'
+         AND json_extract(CAST(value AS TEXT), '$.policy') = 'enabled'),
       (SELECT count(*)
-       FROM preference_journal
-       WHERE changed_at_bits = $language_bits
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.theme'
-         ) = 'coolGray'
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.language'
-         ) = 'chinese'
-         AND json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.writerDeviceID.rawValue'
-         ) = (
-           SELECT device_id FROM sync_device_identity WHERE id = 1
-         )
-         AND CAST(json_extract(
-           CAST(record_payload AS TEXT),
-           '$.payload.updatedAt'
-         ) AS INTEGER) = changed_at_bits),
-      (SELECT count(*) FROM preference_audit),
+       FROM sync_metadata
+       WHERE key = 'localFirst.replication.v2.state'
+         AND json_extract(CAST(value AS TEXT), '$.worker') = 'idle'
+         AND json_extract(CAST(value AS TEXT), '$.convergence') = 'converged'
+         AND (
+           json_type(CAST(value AS TEXT), '$.incident') IS NULL
+           OR json_type(CAST(value AS TEXT), '$.incident') = 'null'
+         )),
       (SELECT count(*)
-       FROM preference_audit
-       WHERE direction = 'upload' AND action = 'uploaded'),
-      (SELECT count(*)
-       FROM preference_audit
-       WHERE direction = 'download' AND action = 'merged'),
-      (SELECT count(*)
-       FROM preference_audit
-       WHERE direction = 'download' AND action = 'ignored');
+       FROM sync_metadata
+       WHERE key = 'localFirst.sync.lastStatus');
   ")"
-  if [[ "$sqlite_probe" != "1 1 2 2 0 1 1 4 2 1 1" ]]; then
-    echo "preference SQLite/journal/audit exact-bit probe failed: ${sqlite_probe:-missing}" >&2
+  if [[ "$sqlite_probe" != "1 1 0 4 1 1 0" ]]; then
+    echo "preference V2 SQLite lifecycle probe failed: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
 
@@ -6233,38 +6112,39 @@ run_preferences_clock_probe() {
     /click identifier=settings.preferences.theme/ { theme = 1 }
     /click identifier=settings.preferences.language/ { language = 1 }
     /click identifier=settings.preferences.poem.enabled/ { poem = 1 }
-    /sync uploaded=2 pending=0 failed=0/ { synced = 1 }
-    /sync task-summary new=0 updated=0 rendered=true timestamps=true/ {
-      summary = 1
+    /sync v2 pending=0 converged=true timestamps=true/ { synced = 1 }
+    /sync v2 failure incident=runtimeFailure warning=visible/ { failed = 1 }
+    /sync v2 task-mutation=allowed checkbox-disable=stopping join=held/ {
+      stopping = 1
     }
-    /restart stale=/ { restarted = 1 }
-    END { print theme, language, poem, synced, summary, restarted }
+    /sync v2 disabled worker=disabled incident=cleared warning=suppressed/ {
+      disabled = 1
+    }
+    /sync v2 restart worker=disabled warning=suppressed/ { restarted = 1 }
+    END {
+      print theme, language, poem, synced, failed, stopping, disabled, restarted
+    }
   ' "${preferences_dir}/input-trace.txt")"
-  if [[ "$trace_probe" != "1 1 1 1 1 1" ]]; then
-    echo "preference WindowServer input trace probe failed: ${trace_probe:-missing}" >&2
+  if [[ "$trace_probe" != "1 1 1 1 1 1 1 1" ]]; then
+    echo "preference V2 WindowServer trace failed: ${trace_probe:-missing}" >&2
     exit 1
   fi
-  if [[ ! -s "$task_summary_screenshot" ]]; then
-    echo "preference sync task-summary screenshot is missing" >&2
+  if [[ ! -s "$status_screenshot" || ! -s "$lifecycle_screenshot" ]]; then
+    echo "preference V2 lifecycle screenshots are missing" >&2
     exit 1
   fi
 
   printf '%s\n' \
-    "remoteClockBits=$remote_bits" \
+    "initialClockBits=$initial_bits" \
     "themeClockBits=$theme_bits" \
     "languageClockBits=$language_bits" \
-    "finalHeaderClockBits=$final_header_bits" \
-    "finalPayloadClockBits=$final_payload_bits" \
-    "finalSnapshotID=$final_snapshot_id" \
-    "finalSnapshotPayloadDigest=$final_snapshot_digest" \
     "sqliteProbe=$sqlite_probe" \
     "inputTraceProbe=$trace_probe" \
     >"${preferences_dir}/probe.txt"
 
   rm -rf "$sync_root"
-  echo "E2E native Settings preference HLC, local-only boundary, sync, and restart: $preferences_db (probe=$sqlite_probe)"
+  echo "E2E native Settings, V2 disable/join, restart suppression, and recovery: $preferences_db (probe=$sqlite_probe)"
 }
-
 run_mutation_clock_probe() {
   local clock_dir="artifacts/e2e-mutation-clock"
   local clock_db="${clock_dir}/Noonmark.sqlite"
@@ -7275,6 +7155,7 @@ run_zhulong_pending_gate_probe() (
   session_file="$(find "$sidecar_dir" -type f -name '*.zhs' -print -quit)"
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$database" "
     SELECT
+      (SELECT user_version FROM pragma_user_version),
       (SELECT value
        FROM sync_settings
        WHERE key = 'app.data_mode'),
@@ -7284,25 +7165,34 @@ run_zhulong_pending_gate_probe() (
       (SELECT count(*) FROM day_traces),
       (SELECT count(*) FROM subtasks),
       (SELECT count(*)
-       FROM change_journal
-       WHERE entity_type = 'appPreferences'
-         AND entity_id = 'default'
-         AND operation = 'upsert'
-         AND device_id = 'noonmark.bootstrap'
-         AND sync_state = 'pendingUpload'
-         AND retry_count = 0
-         AND COALESCE(last_error, '') = ''
-         AND json_extract(record_payload, '$.formatVersion') = 6
-         AND json_extract(record_payload, '$.payload.theme') = 'coolGray'
-         AND json_extract(record_payload, '$.payload.language') = 'chinese'
-         AND json_extract(
-               record_payload,
-               '$.payload.writerDeviceID.rawValue'
-             ) = 'noonmark.bootstrap'),
-      (SELECT count(*) FROM change_journal);
+       FROM app_preferences
+       WHERE id = 1
+         AND theme = 'coolGray'
+         AND language = 'chinese'
+         AND theme_language_writer_id = 'noonmark.bootstrap'),
+      (SELECT count(*)
+       FROM sync_settings
+       WHERE
+         (key = 'app.backup.frequency' AND value = 'off')
+         OR (key = 'app.backup.destination' AND value = 'iCloudDrive')
+         OR (key = 'app.data_mode' AND value = 'onlineFirst')
+         OR (key = 'app.local_first_sync.enabled' AND value = 'false')
+         OR (key = 'app.local_first_sync.endpoint' AND value = 'iCloud')
+         OR (key = 'app.local_first_sync.mode' AND value = 'manual')
+         OR (key = 'app.local_first_sync.interval_seconds' AND value = '300')
+         OR (key = 'app.local_first_sync.generate_conflict_copy' AND value = 'true')
+         OR (key = 'app.local_first_sync.retention_days' AND value = '180')
+         OR (key = 'app.local_first_sync.retention_daily' AND value = '2')
+         OR (key = 'app.settings_poem.enabled' AND value = 'true')
+         OR (key = 'app.settings_poem.text' AND length(value) > 0)),
+      (SELECT count(*) FROM sync_settings),
+      (SELECT count(*) FROM change_journal),
+      (SELECT count(*) FROM sync_replication_authority),
+      (SELECT count(*) FROM sync_replication_outbox),
+      (SELECT count(*) FROM sync_replication_publications);
   ")"
-  if [[ "$sqlite_probe" != "onlineFirst 0 0 0 0 0 1 1" ]]; then
-    echo "zhulong pending-gate setup lost its empty Engine or exact import baseline: ${sqlite_probe:-missing}" >&2
+  if [[ "$sqlite_probe" != "19 onlineFirst 0 0 0 0 0 1 12 12 0 0 0 0" ]]; then
+    echo "zhulong pending-gate setup lost its schema 19 empty Engine or clean-cut local baseline: ${sqlite_probe:-missing}" >&2
     exit 1
   fi
 
@@ -10329,7 +10219,7 @@ run_diagnostic_evidence_closure_probe() {
   local scope_application=""
   local database=""
   local repository_lock=""
-  local sync_root=""
+  local sync_root="$diagnostic_closure_sync_root"
   local export_path=""
   local sentinels=""
   local diagnostic_ledger=""
@@ -10338,20 +10228,15 @@ run_diagnostic_evidence_closure_probe() {
   local seed_result="$PWD/$closure_dir/seed-result.txt"
   local stall_result="$PWD/$closure_dir/stall-result.txt"
   local restart_result="$PWD/$closure_dir/restart-result.txt"
-  local lock_holder_source="$PWD/scripts/e2e-repository-lock-holder.swift"
-  local lock_holder_binary="$PWD/$closure_dir/repository-lock-holder"
-  local lock_holder_ready="$PWD/$closure_dir/repository-lock-holder.ready"
-  local lock_holder_log="$PWD/$closure_dir/repository-lock-holder.log"
   local window_title="晷迹 · Day Todo — 7月5日"
   local restart_window_identity_directory=""
   local restart_window_identity_path=""
   local scope_temp=""
-  local seed_token stall_token restart_token helper_token lock_token
-  local seed_pid stall_pid restart_pid lock_pid window_number
+  local seed_token stall_token restart_token helper_token
+  local seed_pid stall_pid restart_pid window_number
   local scope_status=0 seed_status=0 stall_status=0 restart_status=0
-  local lock_status=0
   local failed_operation_id failed_incident_id stalled_operation_id
-  local mutation_incident_id
+  local task_count_after_mutation
 
   rm -rf "$closure_dir"
   mkdir -p "$closure_dir"
@@ -10399,10 +10284,9 @@ run_diagnostic_evidence_closure_probe() {
     echo "diagnostic closure could not read its canonical scope" >&2
     return 1
   fi
-  sync_root="${repository_lock%/*}"
   if [[ "$scope_application" != "$PWD/$app_path" ||
     "${database%/*}" != "$closure_root" ||
-    "${sync_root%/*}" != "$closure_root" ||
+    "${repository_lock%/*/*}" != "$closure_root" ||
     "${export_path%/*}" != "$closure_root" ||
     "${sentinels%/*}" != "$closure_root" ||
     "${diagnostic_ledger%/*}" != "${diagnostic_start_gate%/*}" ||
@@ -10412,7 +10296,14 @@ run_diagnostic_evidence_closure_probe() {
     echo "diagnostic closure scope escaped its captured helper boundary" >&2
     return 1
   fi
-  printf 'this path is intentionally not a directory\n' >"$sync_root"
+  if [[ ! "$sync_root" =~ ^/private/tmp/noonmark-e2e-diagnostic-closure-sync-[0-9]+$ ]] ||
+    [[ -e "$sync_root" || -L "$sync_root" ]]; then
+    echo "diagnostic closure sync repository was not a fresh isolated path" >&2
+    return 1
+  fi
+  mkdir -m 700 -- "${repository_lock%/*}"
+  mkdir -m 700 -- "$sync_root"
+
   seed_token="$(uuidgen)"
   "$PWD/$app_executable_path" \
     --data-url "$database" \
@@ -10420,6 +10311,7 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-diagnostic-evidence-seed-failure \
     --e2e-diagnostic-evidence-state-url "$state" \
     --e2e-diagnostic-evidence-result-url "$seed_result" \
@@ -10438,50 +10330,17 @@ run_diagnostic_evidence_closure_probe() {
     sleep 0.05
   done
   if [[ ! -f "$seed_result" ||
-    "$(<"$seed_result")" != "ok: seed failure persisted" ]]; then
+    "$(<"$seed_result")" != "ok: V2 seed failure persisted" ]]; then
     terminate_e2e_app >/dev/null 2>&1 || true
     wait "$seed_pid" 2>/dev/null || true
-    echo "diagnostic seed failure session did not converge" >&2
-    [[ -f "$seed_result" ]] && cat "$seed_result" >&2
-    cat "$closure_dir/seed-app.log" >&2
+    echo "diagnostic V2 seed failure did not converge" >&2
+    [[ -f "$seed_result" ]] && sed -n '1,40p' "$seed_result" >&2
+    sed -n '1,120p' "$closure_dir/seed-app.log" >&2
     return 1
   fi
   if wait "$seed_pid"; then seed_status=0; else seed_status=$?; fi
   if [[ "$seed_status" != "0" || ! -s "$state" ]]; then
     echo "diagnostic seed App did not exit cleanly with durable state" >&2
-    return 1
-  fi
-
-  rm -f "$sync_root"
-  mkdir -p "$sync_root"
-  xcrun swiftc "$lock_holder_source" -o "$lock_holder_binary"
-  lock_token="$(uuidgen)"
-  "$lock_holder_binary" \
-    "$repository_lock" \
-    "$lock_holder_ready" \
-    "$lock_token" \
-    >"$lock_holder_log" 2>&1 &
-  lock_pid=$!
-  for _ in {1..200}; do
-    if [[ -f "$lock_holder_ready" ]] || ! kill -0 "$lock_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.025
-  done
-  if [[ ! -f "$lock_holder_ready" ]] ||
-    ! awk -v pid="$lock_pid" -v token="$lock_token" -v lock="$repository_lock" '
-      NR == 1 { valid += ($0 == "status=ready") }
-      NR == 2 { valid += ($0 == "pid=" pid) }
-      NR == 3 { valid += ($0 == "token=" token) }
-      NR == 4 { valid += ($0 == "lock=" lock) }
-      END { exit !(NR == 4 && valid == 4) }
-    ' "$lock_holder_ready" ||
-    [[ "$(ps -ww -p "$lock_pid" -o command= 2>/dev/null)" != \
-      "$lock_holder_binary $repository_lock $lock_holder_ready $lock_token" ]]; then
-    kill -TERM "$lock_pid" 2>/dev/null || true
-    wait "$lock_pid" 2>/dev/null || true
-    echo "external sync-lock holder did not publish its exact identity" >&2
-    cat "$lock_holder_log" >&2
     return 1
   fi
 
@@ -10492,6 +10351,8 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-persistence-failure-automation \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-diagnostic-evidence-stall \
     --e2e-diagnostic-evidence-state-url "$state" \
     --e2e-diagnostic-evidence-result-url "$stall_result" \
@@ -10510,16 +10371,14 @@ run_diagnostic_evidence_closure_probe() {
     sleep 0.05
   done
   if [[ ! -f "$stall_result" ||
-    "$(<"$stall_result")" != "ready: stalled sync and rejected mutation" ]] ||
+    "$(<"$stall_result")" !=       "ready: stalled V2 sync committed and rejected exact mutations" ]] ||
     ! diagnostic_closure_app_process_matches \
       "$stall_pid" "$stall_token" "stall" "$database" "$sync_root"; then
     terminate_e2e_app >/dev/null 2>&1 || true
-    kill -TERM "$lock_pid" 2>/dev/null || true
     wait "$stall_pid" 2>/dev/null || true
-    wait "$lock_pid" 2>/dev/null || true
-    echo "diagnostic stalled App did not reach its durable interruption boundary" >&2
-    [[ -f "$stall_result" ]] && cat "$stall_result" >&2
-    cat "$closure_dir/stall-app.log" >&2
+    echo "diagnostic stalled App did not reach its V2 interruption boundary" >&2
+    [[ -f "$stall_result" ]] && sed -n '1,40p' "$stall_result" >&2
+    sed -n '1,120p' "$closure_dir/stall-app.log" >&2
     return 1
   fi
   if ! kill -KILL "$stall_pid"; then
@@ -10531,29 +10390,21 @@ run_diagnostic_evidence_closure_probe() {
     echo "diagnostic E2E interruption was not exact SIGKILL: $stall_status" >&2
     return 1
   fi
-  if [[ "$(ps -ww -p "$lock_pid" -o command= 2>/dev/null)" != \
-    "$lock_holder_binary $repository_lock $lock_holder_ready $lock_token" ]]; then
-    echo "refusing to release an unverified repository lock holder" >&2
-    return 1
-  fi
-  kill -TERM "$lock_pid"
-  if wait "$lock_pid"; then lock_status=0; else lock_status=$?; fi
-  if [[ "$lock_status" != "143" && "$lock_status" != "0" ]]; then
-    echo "repository lock holder exited unexpectedly: $lock_status" >&2
-    return 1
-  fi
 
   failed_operation_id="$(jq -er '.failedOperationID' "$state")"
   failed_incident_id="$(jq -er '.failedIncidentID' "$state")"
   stalled_operation_id="$(jq -er '.stalledOperationID' "$state")"
-  mutation_incident_id="$(jq -er '.mutationIncidentID' "$state")"
+  rejected_mutation_incident_id="$(
+    jq -er '.rejectedMutationIncidentID' "$state"
+  )"
+  task_count_after_mutation="$(jq -er '.taskCountAfterMutation' "$state")"
   if [[ ! "$failed_operation_id" =~ ^[0-9A-F-]{36}$ ||
     ! "$failed_incident_id" =~ ^[0-9A-F-]{36}$ ||
     ! "$stalled_operation_id" =~ ^[0-9A-F-]{36}$ ||
-    ! "$mutation_incident_id" =~ ^[0-9A-F-]{36}$ ||
-    "$failed_operation_id" == "$stalled_operation_id" ||
-    "$failed_incident_id" == "$mutation_incident_id" ]]; then
-    echo "diagnostic closure lost distinct seed and current correlations" >&2
+    ! "$rejected_mutation_incident_id" =~ ^[0-9A-F-]{36}$ ||
+    ! "$task_count_after_mutation" =~ ^[1-9][0-9]*$ ||
+    "$failed_operation_id" == "$stalled_operation_id" ]]; then
+    echo "diagnostic closure lost distinct V2 operation correlations" >&2
     return 1
   fi
 
@@ -10581,6 +10432,7 @@ run_diagnostic_evidence_closure_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
+    --e2e-replication-v2-lifecycle-endpoint \
     --e2e-diagnostic-evidence-restart \
     --e2e-diagnostic-evidence-state-url "$state" \
     --e2e-diagnostic-evidence-result-url "$restart_result" \
@@ -10606,8 +10458,8 @@ run_diagnostic_evidence_closure_probe() {
     terminate_e2e_app >/dev/null 2>&1 || true
     wait "$restart_pid" 2>/dev/null || true
     echo "diagnostic restart App did not converge before UI export" >&2
-    [[ -f "$restart_result" ]] && cat "$restart_result" >&2
-    cat "$closure_dir/restart-app.log" >&2
+    [[ -f "$restart_result" ]] && sed -n '1,40p' "$restart_result" >&2
+    sed -n '1,120p' "$closure_dir/restart-app.log" >&2
     return 1
   fi
   window_number="$(
@@ -10654,17 +10506,15 @@ run_diagnostic_evidence_closure_probe() {
     return 1
   fi
   for _ in {1..200}; do
-    if [[ "$(<"$restart_result")" == \
-      "ok: restarted evidence exported through UI" ]] ||
+    if [[ "$(<"$restart_result")" ==       "ok: restarted evidence exported through UI" ]] ||
       ! kill -0 "$restart_pid" 2>/dev/null; then
       break
     fi
     sleep 0.05
   done
-  if [[ "$(<"$restart_result")" != \
-    "ok: restarted evidence exported through UI" ]]; then
+  if [[ "$(<"$restart_result")" !=     "ok: restarted evidence exported through UI" ]]; then
     echo "diagnostic restart App rejected its UI export" >&2
-    cat "$restart_result" >&2
+    sed -n '1,40p' "$restart_result" >&2
     return 1
   fi
   if wait "$restart_pid"; then restart_status=0; else restart_status=$?; fi
@@ -10676,7 +10526,7 @@ run_diagnostic_evidence_closure_probe() {
     --arg failed_operation "$failed_operation_id" \
     --arg failed_incident "$failed_incident_id" \
     --arg stalled_operation "$stalled_operation_id" \
-    --arg mutation_incident "$mutation_incident_id" '
+    --arg rejected_incident "$rejected_mutation_incident_id" '
       ([.operationCapsules[] | select(
         .operationID.rawValue == $failed_operation
         and .incidentID.rawValue == $failed_incident
@@ -10686,31 +10536,24 @@ run_diagnostic_evidence_closure_probe() {
       )] | length) == 1
       and ([.operationCapsules[] | select(
         .operationID.rawValue == $stalled_operation
-        and .incidentID.rawValue == $mutation_incident
+        and .incidentID.rawValue == $rejected_incident
         and .kind == "localFirstSync"
-        and .lastStage == "transportLockWait"
+        and .lastStage == "transportPrepare"
         and .outcome == "interrupted"
       )] | length) == 1
       and ([.records[] | select(
         .event.code == "previousSessionInterrupted"
         and .event.operationID.rawValue == $stalled_operation
-        and .event.incidentID.rawValue == $mutation_incident
-        and .event.stage == "transportLockWait"
+        and .event.incidentID.rawValue == $rejected_incident
+        and .event.stage == "transportPrepare"
       )] | length) == 1
       and ([.records[] | select(
         .event.code == "mutationRejected"
         and .event.operationID.rawValue == $stalled_operation
-        and .event.incidentID.rawValue == $mutation_incident
-        and .event.mutationContext == "task"
-        and .event.mutationRejectionReason == "exclusiveOperationInProgress"
+        and .event.incidentID.rawValue == $rejected_incident
       )] | length) == 1
-      and ([.records[] | select(
-        .event.code == "persistedSyncFailureLoaded"
-        and .event.operationID.rawValue == $stalled_operation
-        and .event.incidentID.rawValue == $mutation_incident
-      )] | length) >= 1
     ' "$export_path" >/dev/null; then
-    echo "diagnostic export lost its exact cross-session evidence graph" >&2
+    echo "diagnostic export lost its exact V2 cross-session evidence graph" >&2
     return 1
   fi
   if [[ "$(stat -f '%z' "$export_path")" -gt 8388608 ]] ||
@@ -10720,9 +10563,8 @@ run_diagnostic_evidence_closure_probe() {
   fi
   assert_clean_app_log "diagnostic seed App" "$closure_dir/seed-app.log"
   assert_clean_app_log "diagnostic restart App" "$closure_dir/restart-app.log"
-  echo "E2E diagnostic closure: failed-sync -> lock-wait -> rejected-mutation -> SIGKILL -> restart -> locked UI export"
+  echo "E2E diagnostic closure: V2 failed-sync -> endpoint-wait -> normal commit -> exact rejection -> SIGKILL -> restart -> locked UI export"
 }
-
 run_terminating_ui_probe() {
   local label="$1"
   local result="$2"

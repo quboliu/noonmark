@@ -29,6 +29,7 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
+| 下一未发行候选（版本待分配） | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18 与 format 6 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
 | `0.2.7 (29)` 候选 | 当前 schema `18` | 当前 format `7` | 从 `0.2.6` 升级不改变 SQLite、JSON 或同步 repository 格式；confirmed upload 与本机 producer frontier 改由同一 SQLite transaction 提交，消除上传后回读自身完整基线；旧的不兼容同步 repository 继续 fail-closed，不迁移、不兼容、不自动删除 |
 | `0.2.6 (28)` | 已发行 schema `18` | 已发行 format `7` | 从 `0.2.5` 升级不改变 SQLite、JSON 或同步 repository 格式；旧的不兼容同步 repository 继续 fail-closed，不迁移、不兼容、不自动删除 |
 | `0.2.5 (24)` | 已发行 schema `18` | 已发行 format `7` | 受控 v15／v17 SQLite 原地升级至 v18；保留领域事实和设备身份，clean cut 旧同步 runtime；用户自行准备空的新 repository 后由本机 snapshot 建立 baseline |

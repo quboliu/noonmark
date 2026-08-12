@@ -1,82 +1,27 @@
 import AppKit
 import ApplicationServices
-import CryptoKit
-import Darwin
 import Foundation
 import NoonmarkCore
-import NoonmarkDiagnostics
-import NoonmarkMacRuntime
 import NoonmarkStorage
-import NoonmarkSync
 
-/// Verifies that native Settings input advances the theme/language logical
-/// clock beyond a future remote record without synchronizing local-only
-/// preferences.
-///
-/// Fixture and assertion access may use the Store directly. During the
-/// exercise, theme, language, and the local-only poem toggle are changed only
-/// through WindowServer input.
+/// Drives the native Settings controls and the V2 replication lifecycle in a
+/// signed, isolated App. V1 status metadata and transports are intentionally
+/// absent: durable state is read only through `LocalFirstReplication`.
 @MainActor
 struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
         case setup
         case exercise
         case verifyRestart
-        case verifyFailureRestart
     }
 
     private struct ProbeState: Codable {
         let formatVersion: Int
-        let remoteClockBits: UInt64
-        let remoteRecordSHA256: String
-        let localPoemText: String
+        let initialClockBits: UInt64
         var themeClockBits: UInt64?
         var languageClockBits: UInt64?
-        var themeJournalID: UUID?
-        var languageJournalID: UUID?
-        var themePayloadSHA256: String?
-        var languagePayloadSHA256: String?
-        var finalRecordSHA256: String?
-        var finalSnapshotID: String?
-        var finalSnapshotPayloadDigest: String?
-        var finalSnapshotSHA256: String?
-        var finalHeaderClockBits: UInt64?
-        var finalPayloadClockBits: UInt64?
-        var appPreferencesAuditCountAfterExercise: Int?
-    }
-
-    private struct StoredPreferenceRecord {
-        let record: SyncRecord
-        let data: Data
-
-        var sha256: String {
-            SHA256.hash(data: data)
-                .map { String(format: "%02x", $0) }
-                .joined()
-        }
-    }
-
-    private struct IncrementalRepositoryBatch: Decodable {
-        let records: [SyncRecord]
-    }
-
-    private struct StoredRepositorySnapshot {
-        let snapshot: SyncRepositorySnapshot
-        let data: Data
-
-        var sha256: String {
-            SHA256.hash(data: data)
-                .map { String(format: "%02x", $0) }
-                .joined()
-        }
-    }
-
-    private struct ExpectedPreferenceState {
-        let theme: AppTheme
-        let language: AppLanguage
-        let clock: Date
-        let writerID: String
-        let poemEnabled: Bool
+        var failureIncidentCleared: Bool
+        var disabledWorkerPersisted: Bool
     }
 
     private enum Failure: LocalizedError {
@@ -84,41 +29,34 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
 
         var errorDescription: String? {
             switch self {
-            case let .failed(message):
-                message
+            case let .failed(message): message
             }
         }
     }
 
     private static let e2eBundleIdentifier = "app.noonmark.mac.e2e"
-    private static let formatVersion = 2
-    private static let remoteDeviceID = SyncDeviceID(
-        "preferences-clock-remote-device"
-    )
-    private static let remoteTheme = AppTheme.warmPaper
-    private static let remoteLanguage = AppLanguage.english
-    private static let localTheme = AppTheme.coolGray
-    private static let localLanguage = AppLanguage.chinese
+    private static let formatVersion = 3
+    private static let initialTheme = AppTheme.warmPaper
+    private static let initialLanguage = AppLanguage.english
+    private static let finalTheme = AppTheme.coolGray
+    private static let finalLanguage = AppLanguage.chinese
     private static let localPoemText =
         "E2E local-only preference sentinel 6049"
     private static let themeIdentifier = "settings.preferences.theme"
     private static let languageIdentifier = "settings.preferences.language"
-    private static let poemIdentifier =
-        "settings.preferences.poem.enabled"
+    private static let poemIdentifier = "settings.preferences.poem.enabled"
     private static let syncEnabledIdentifier = "settings.sync.enabled"
 
     private let mode: Mode
     private let stateURL: URL
     private let resultURL: URL
     private let databaseURL: URL
-    private let syncFolderPath: String
     private let syncFolderURL: URL
 
     static func fromCommandLine() -> Self? {
         guard Bundle.main.bundleIdentifier == e2eBundleIdentifier else {
             return nil
         }
-
         let mode: Mode
         if AppLaunchArguments.contains("--e2e-preferences-clock-setup") {
             mode = .setup
@@ -130,14 +68,9 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             "--e2e-preferences-clock-verify"
         ) {
             mode = .verifyRestart
-        } else if AppLaunchArguments.contains(
-            "--e2e-preferences-clock-verify-failure-restart"
-        ) {
-            mode = .verifyFailureRestart
         } else {
             return nil
         }
-
         guard let statePath = AppLaunchArguments.value(
             after: "--e2e-preferences-clock-state-url"
         ), let resultPath = AppLaunchArguments.value(
@@ -149,13 +82,11 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         else {
             return nil
         }
-
         return Self(
             mode: mode,
             stateURL: URL(fileURLWithPath: statePath),
             resultURL: URL(fileURLWithPath: resultPath),
             databaseURL: URL(fileURLWithPath: databasePath),
-            syncFolderPath: syncFolderPath,
             syncFolderURL: URL(
                 fileURLWithPath: syncFolderPath,
                 isDirectory: true
@@ -173,223 +104,117 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                     try await exercise(on: store)
                 case .verifyRestart:
                     try await verifyRestart(on: store)
-                case .verifyFailureRestart:
-                    try await verifyFailureRestart(on: store)
                 }
                 try writeResult("ok")
             } catch {
                 AppViewTreeE2E.writeDump(beside: resultURL)
                 try? appendTrace(
-                    "failure mode=\(mode) error=\(error.localizedDescription)"
+                    "failure mode=\(mode) type=\(String(describing: type(of: error)))"
                 )
                 try? writeResult("failed: \(error.localizedDescription)")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApp.terminate(nil)
-            }
+            E2EApplicationTermination.schedule()
         }
     }
 
     private func setup(on store: NoonmarkStore) async throws {
         try validateIsolation()
         try? FileManager.default.removeItem(at: traceURL)
-
-        guard store.engine.preferences.theme == .coolGray,
-              store.engine.preferences.language == .chinese,
-              try preferenceJournalEntries().isEmpty,
+        guard store.engine.preferences.theme == Self.finalTheme,
+              store.engine.preferences.language == Self.finalLanguage,
               store.operationFailureNotice == nil
         else {
             throw Failure.failed(
-                "preference-clock setup did not start from an isolated database"
+                "preference V2 setup did not start from an isolated database"
             )
         }
 
         store.setSettingsPoemText(Self.localPoemText)
         store.setSettingsPoemEnabled(true)
+        store.setTheme(Self.initialTheme)
+        store.setLanguage(Self.initialLanguage)
         store.setLocalFirstSyncEndpoint(.localFolder)
         store.setLocalFirstSyncMode(.manual)
         store.setLocalFirstSyncEnabled(true)
-        try assertLocalOnlyPreferences(
-            in: store.engine.preferences,
+        let initialClock = store.engine.preferences.themeLanguageUpdatedAt
+        try assertPreferences(
+            in: store,
+            theme: Self.initialTheme,
+            language: Self.initialLanguage,
+            clock: initialClock,
             poemEnabled: true
         )
-        guard try preferenceJournalEntries().isEmpty,
-              store.operationFailureNotice == nil
+        try await requireConfiguredRuntime(on: store)
+        let baseline = try await runSync(on: store)
+        guard baseline.convergence == .converged,
+              baseline.incident == nil,
+              baseline.pendingLocalPublicationCount == 0,
+              baseline.lastSyncedAt != nil,
+              baseline.lastEffectiveSyncedAt != nil
         else {
             throw Failure.failed(
-                "local-only setup created an appPreferences journal entry"
+                "preference V2 setup baseline did not converge"
             )
         }
-
-        let remoteClock = try instant("2035-07-05T16:00:00Z")
-        let remoteRecord = try preferenceRecord(
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: remoteClock,
-            deviceID: Self.remoteDeviceID
-        )
-        let transport = LocalFolderSyncTransport(rootURL: syncFolderURL)
-        try await transport.pushAccepting([remoteRecord])
-        let storedRemote = try await storedPreferenceRecord(
-            transport: transport,
-            artifactName: "remote-future-preferences.json"
-        )
-        try assertPreferenceRecord(
-            storedRemote.record,
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: remoteClock,
-            deviceID: Self.remoteDeviceID
-        )
-
-        let syncResult = try await synchronize(store)
-        guard syncResult.upload.pendingCount == 0,
-              syncResult.upload.uploadedCount == 0,
-              syncResult.upload.failedCount == 0,
-              syncResult.download.fetchedCount == 1,
-              syncResult.download.appliedCount == 1,
-              syncResult.download.waitingCount == 0,
-              syncResult.download.conflictCount == 0
-        else {
-            throw Failure.failed(
-                "future remote preference setup did not merge through the "
-                    + "real local-first coordinator"
-            )
-        }
-        try assertPreferenceState(
-            in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.remoteTheme,
-                language: Self.remoteLanguage,
-                clock: remoteClock,
-                writerID: Self.remoteDeviceID.rawValue,
-                poemEnabled: true
-            )
-        )
-        guard try preferenceJournalEntries().isEmpty else {
-            throw Failure.failed(
-                "remote preference download created a local upload journal"
-            )
-        }
-
         try writeState(
             ProbeState(
                 formatVersion: Self.formatVersion,
-                remoteClockBits: exactBits(remoteClock),
-                remoteRecordSHA256: storedRemote.sha256,
-                localPoemText: Self.localPoemText,
+                initialClockBits: exactBits(initialClock),
                 themeClockBits: nil,
                 languageClockBits: nil,
-                themeJournalID: nil,
-                languageJournalID: nil,
-                themePayloadSHA256: nil,
-                languagePayloadSHA256: nil,
-                finalRecordSHA256: nil,
-                finalSnapshotID: nil,
-                finalSnapshotPayloadDigest: nil,
-                finalSnapshotSHA256: nil,
-                finalHeaderClockBits: nil,
-                finalPayloadClockBits: nil,
-                appPreferencesAuditCountAfterExercise: nil
+                failureIncidentCleared: false,
+                disabledWorkerPersisted: false
             )
         )
         try appendTrace(
-            "setup remote=\(exactBits(remoteClock)) "
-                + "recordSHA256=\(storedRemote.sha256)"
+            "setup v2 baseline=converged initial=\(exactBits(initialClock))"
         )
     }
 
     private func exercise(on store: NoonmarkStore) async throws {
         try validateIsolation()
         var state = try readState()
-        try validateSetupState(state)
-        let localWriterID = try localPreferenceWriterID(in: store)
-
-        let remoteClock = date(from: state.remoteClockBits)
-        try assertPreferenceState(
+        guard state.formatVersion == Self.formatVersion,
+              state.themeClockBits == nil,
+              state.languageClockBits == nil,
+              state.failureIncidentCleared == false,
+              state.disabledWorkerPersisted == false
+        else {
+            throw Failure.failed("preference V2 setup state is stale")
+        }
+        let initialClock = date(from: state.initialClockBits)
+        try assertPreferences(
             in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.remoteTheme,
-                language: Self.remoteLanguage,
-                clock: remoteClock,
-                writerID: Self.remoteDeviceID.rawValue,
-                poemEnabled: true
-            )
+            theme: Self.initialTheme,
+            language: Self.initialLanguage,
+            clock: initialClock,
+            poemEnabled: true
         )
-        guard try preferenceJournalEntries().isEmpty else {
-            throw Failure.failed(
-                "preference-clock exercise reopened with unexpected journal rows"
-            )
+        try await requireConfiguredRuntime(on: store)
+        guard let lifecycleEndpoint =
+            store.localFirstReplicationLifecycleE2EEndpoint
+        else {
+            throw Failure.failed("V2 lifecycle E2E endpoint is unavailable")
         }
-        let initialTransport = LocalFolderSyncTransport(
-            rootURL: syncFolderURL
-        )
-        let initialRemote = try await storedPreferenceRecord(
-            transport: initialTransport,
-            artifactName: "remote-before-local-settings.json"
-        )
-        guard initialRemote.sha256 == state.remoteRecordSHA256 else {
-            throw Failure.failed(
-                "future remote preference record changed before Settings input"
-            )
-        }
-        try assertPreferenceRecord(
-            initialRemote.record,
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: remoteClock,
-            deviceID: Self.remoteDeviceID
-        )
 
         let settingsWindow = try await visibleSettingsWindow()
         try await activate(settingsWindow)
         let input = try WindowServerInputDriver()
-
-        let themeClock = nextRepresentableDate(after: remoteClock)
+        let themeClock = nextRepresentableDate(after: initialClock)
         try await clickLeftSegment(
             identifier: Self.themeIdentifier,
             expectedWindow: settingsWindow,
             input: input,
-            beforeClock: remoteClock
+            beforeClock: initialClock
         )
-        try await waitUntil(
-            "theme click did not commit coolGray with the next exact clock"
-        ) {
-            let preferences = store.engine.preferences
-            return preferences.theme == Self.localTheme
-                && preferences.language == Self.remoteLanguage
-                && self.hasSameBits(
-                    preferences.themeLanguageUpdatedAt,
+        try await waitUntil("theme click did not advance the exact clock") {
+            store.engine.preferences.theme == Self.finalTheme
+                && store.engine.preferences.language == Self.initialLanguage
+                && hasSameBits(
+                    store.engine.preferences.themeLanguageUpdatedAt,
                     themeClock
                 )
         }
-        try assertPreferenceState(
-            in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.remoteLanguage,
-                clock: themeClock,
-                writerID: localWriterID,
-                poemEnabled: true
-            )
-        )
-        var entries = try preferenceJournalEntries()
-        guard entries.count == 1, let themeEntry = entries.first else {
-            throw Failure.failed(
-                "theme click did not create exactly one appPreferences journal"
-            )
-        }
-        let themeEnvelope = try assertPreferenceJournalEntry(
-            themeEntry,
-            theme: Self.localTheme,
-            language: Self.remoteLanguage,
-            clock: themeClock,
-            state: .pendingUpload
-        )
-        try appendTrace(
-            "theme target=\(Self.themeIdentifier) "
-                + "after=\(exactBits(themeEnvelope.updatedAt))"
-        )
 
         let languageClock = nextRepresentableDate(after: themeClock)
         try await clickLeftSegment(
@@ -398,393 +223,171 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             input: input,
             beforeClock: themeClock
         )
-        try await waitUntil(
-            "language click did not commit Chinese with the next exact clock"
-        ) {
-            let preferences = store.engine.preferences
-            return preferences.theme == Self.localTheme
-                && preferences.language == Self.localLanguage
-                && self.hasSameBits(
-                    preferences.themeLanguageUpdatedAt,
+        try await waitUntil("language click did not advance the exact clock") {
+            store.engine.preferences.theme == Self.finalTheme
+                && store.engine.preferences.language == Self.finalLanguage
+                && hasSameBits(
+                    store.engine.preferences.themeLanguageUpdatedAt,
                     languageClock
                 )
         }
-        try assertPreferenceState(
-            in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: languageClock,
-                writerID: localWriterID,
-                poemEnabled: true
-            )
-        )
-        entries = try preferenceJournalEntries()
-        guard entries.count == 2 else {
-            throw Failure.failed(
-                "language click did not retain both preference journal rows"
-            )
-        }
-        let languageEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: languageClock
-        )
-        let languageEnvelope = try assertPreferenceJournalEntry(
-            languageEntry,
-            theme: Self.localTheme,
-            language: Self.localLanguage,
-            clock: languageClock,
-            state: .pendingUpload
-        )
-        try appendTrace(
-            "language target=\(Self.languageIdentifier) "
-                + "after=\(exactBits(languageEnvelope.updatedAt))"
-        )
-
         try await clickCheckbox(
             identifier: Self.poemIdentifier,
             expectedWindow: settingsWindow,
             input: input,
             beforeClock: languageClock
         )
-        try await waitUntil(
-            "local-only poem checkbox did not turn off through WindowServer input"
-        ) {
+        try await waitUntil("local-only poem checkbox did not turn off") {
             store.engine.preferences.settingsPoemDisplayPolicy.enabled == false
         }
-        try assertPreferenceState(
+        try assertPreferences(
             in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: languageClock,
-                writerID: localWriterID,
-                poemEnabled: false
-            )
-        )
-
-        entries = try preferenceJournalEntries()
-        guard entries.count == 2 else {
-            throw Failure.failed(
-                "local-only poem mutation advanced the preference clock "
-                    + "or changed its journal"
-            )
-        }
-        let poemThemeEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: themeClock
-        )
-        let poemLanguageEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: languageClock
-        )
-        guard poemThemeEntry.id == themeEntry.id,
-              poemLanguageEntry.id == languageEntry.id
-        else {
-            throw Failure.failed(
-                "local-only poem mutation replaced a preference journal row"
-            )
-        }
-        _ = try assertPreferenceJournalEntry(
-            poemThemeEntry,
-            theme: Self.localTheme,
-            language: Self.remoteLanguage,
-            clock: themeClock,
-            state: .pendingUpload
-        )
-        _ = try assertPreferenceJournalEntry(
-            poemLanguageEntry,
-            theme: Self.localTheme,
-            language: Self.localLanguage,
+            theme: Self.finalTheme,
+            language: Self.finalLanguage,
             clock: languageClock,
-            state: .pendingUpload
-        )
-        try appendTrace(
-            "poem target=\(Self.poemIdentifier) "
-                + "clock-retained=\(exactBits(languageClock))"
+            poemEnabled: false
         )
 
-        let syncResult = try await synchronize(store)
-        // FAIL-2026-08-11-01：本机已确认的 preference batch 已由当前
-        // SQLite snapshot 覆盖，必须在上传事务推进 local frontier，不能
-        // 再以两条 download replay／ignored 审计掩盖 self-echo。
-        guard syncResult.upload.pendingCount == 2,
-              syncResult.upload.uploadedCount == 2,
-              syncResult.upload.failedCount == 0,
-              syncResult.download.fetchedCount == 0,
-              syncResult.download.appliedCount == 0,
-              syncResult.download.waitingCount == 0,
-              syncResult.download.conflictCount == 0
-        else {
+        let authority = try requireAuthority()
+        let pendingBeforeSync = try SQLiteReplicationLedger(
+            databaseURL: databaseURL
+        ).outboxSnapshot(generationID: authority.generationID)
+        guard pendingBeforeSync.pendingCount == 2 else {
             throw Failure.failed(
-                "one production sync did not consume both preference journals"
+                "shared preference input did not create exactly two V2 outbox facts"
             )
         }
-        try await assertTaskSummaryPresentation(
-            syncResult,
-            on: store,
+        let converged = try await runSync(on: store)
+        guard converged.convergence == .converged,
+              converged.incident == nil,
+              converged.pendingLocalPublicationCount == 0,
+              converged.lastSyncedAt != nil,
+              converged.lastEffectiveSyncedAt != nil
+        else {
+            throw Failure.failed("shared preferences did not converge through V2")
+        }
+        try await showSyncStatus(
             in: settingsWindow,
+            input: input,
+            beforeClock: languageClock,
+            state: converged
+        )
+
+        guard await lifecycleEndpoint.armReadFailure() else {
+            throw Failure.failed("V2 read failure seam could not be armed")
+        }
+        store.syncLocalFolderNow()
+        guard let failedCommand = store.localFirstReplicationCommandTask else {
+            throw Failure.failed("V2 failure reconcile did not start")
+        }
+        _ = await failedCommand.result
+        try await waitUntil("V2 failure did not reach the Store") {
+            guard let persisted = try LocalFirstReplication.persistedState(
+                databaseURL: databaseURL
+            ) else { return false }
+            return persisted.worker == .idle
+                && persisted.convergence == .blocked
+                && persisted.incident == .runtimeFailure
+                && store.operationFailureNotice?.context == .sync
+        }
+        try appendTrace(
+            "sync v2 failure incident=runtimeFailure warning=visible"
+        )
+
+        guard await lifecycleEndpoint.armBlockingRead() else {
+            throw Failure.failed("V2 blocking read seam could not be armed")
+        }
+        store.syncLocalFolderNow()
+        guard let blockedCommand = store.localFirstReplicationCommandTask else {
+            throw Failure.failed("V2 blocked reconcile did not start")
+        }
+        try await waitUntil("V2 reconcile did not enter blocked read") {
+            await lifecycleEndpoint.isReadBlocked()
+        }
+        let poolCountBefore = store.engine.taskPoolCount()
+        store.poolText = "Replication V2 lifecycle E2E mutation"
+        store.addPoolTask()
+        guard store.poolText.isEmpty,
+              store.engine.taskPoolCount() == poolCountBefore + 1
+        else {
+            throw Failure.failed(
+                "ordinary mutation was rejected while V2 waited on endpoint I/O"
+            )
+        }
+
+        try await clickCheckbox(
+            identifier: Self.syncEnabledIdentifier,
+            expectedWindow: settingsWindow,
             input: input,
             beforeClock: languageClock
         )
-
-        entries = try preferenceJournalEntries()
-        guard entries.count == 2,
-              entries.allSatisfy({
-                  $0.state == .uploaded
-                      && $0.retryCount == 0
-                      && $0.lastError == nil
-              }),
-              try preferenceJournalEntries(state: .pendingUpload).isEmpty,
-              try preferenceJournalEntries(state: .blockedCorruption).isEmpty
-        else {
-            throw Failure.failed(
-                "preference journals remained pending or failed after one sync"
-            )
+        try await waitUntil("V2 disable did not enter cancel and join") {
+            await lifecycleEndpoint.hasCancelStarted()
+                && store.engine.preferences.localFirstSyncPolicy.enabled == false
+                && store.isLocalFirstSyncStopping
         }
-        let uploadedThemeEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: themeClock
+        try appendTrace(
+            "sync v2 task-mutation=allowed checkbox-disable=stopping join=held"
         )
-        let uploadedLanguageEntry = try uniqueJournalEntry(
-            in: entries,
-            clock: languageClock
-        )
-        _ = try assertPreferenceJournalEntry(
-            uploadedThemeEntry,
-            theme: Self.localTheme,
-            language: Self.remoteLanguage,
-            clock: themeClock,
-            state: .uploaded
-        )
-        _ = try assertPreferenceJournalEntry(
-            uploadedLanguageEntry,
-            theme: Self.localTheme,
-            language: Self.localLanguage,
-            clock: languageClock,
-            state: .uploaded
-        )
-
-        let transport = LocalFolderSyncTransport(rootURL: syncFolderURL)
-        let finalStoredRecord = try await storedPreferenceRecord(
-            transport: transport,
-            artifactName: "final-local-winner-preferences.json"
-        )
-        let finalEnvelope = try assertPreferenceRecord(
-            finalStoredRecord.record,
-            theme: Self.localTheme,
-            language: Self.localLanguage,
-            clock: languageClock,
-            deviceID: uploadedLanguageEntry.deviceID
-        )
-        let finalStoredSnapshot = try await storedLatestSnapshot(
-            transport: transport,
-            artifactName: "final-local-winner-snapshot.json"
-        )
-        let reconstructedSnapshot = try SyncRepositorySnapshotBuilder()
-            .snapshot(
-                records: [finalStoredRecord.record],
-                memo: finalStoredSnapshot.snapshot.memo,
-                createdAt: finalStoredSnapshot.snapshot.createdAt,
-                deviceID: finalStoredSnapshot.snapshot.deviceID
-            )
-        guard finalStoredSnapshot.snapshot.recordIDs
-                == [finalStoredRecord.record.id],
-              finalStoredSnapshot.snapshot.recordCount == 1,
-              finalStoredSnapshot.snapshot.payloadDigest
-              == reconstructedSnapshot.payloadDigest,
-              finalStoredSnapshot.snapshot.id == reconstructedSnapshot.id
-        else {
-            throw Failure.failed(
-                "preference batch snapshot did not contain one reconstructible winner"
-            )
-        }
-        try assertPreferenceState(
-            in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: languageClock,
-                writerID: localWriterID,
-                poemEnabled: false
-            )
-        )
-
-        let preferenceAudit = try appPreferencesAuditEntries()
-        let uploadAudit = preferenceAudit.filter {
-            $0.direction == .upload && $0.action == "uploaded"
-        }
-        guard preferenceAudit.count == 3,
-              uploadAudit.count == 2,
-              preferenceAudit.filter({
-                  $0.direction == .download && $0.action == "merged"
-              }).count == 1,
-              preferenceAudit.filter({
-                  $0.direction == .download && $0.action == "ignored"
-              }).isEmpty
-        else {
-            throw Failure.failed(
-                "preference sync audit did not record one remote merge, "
-                    + "zero self-echo ignores, and two uploads"
-            )
+        await lifecycleEndpoint.releaseJoin()
+        _ = await blockedCommand.result
+        await settleConfiguration(on: store)
+        try await waitUntil("V2 disable did not finish durably") {
+            guard let persisted = try LocalFirstReplication.persistedState(
+                databaseURL: databaseURL
+            ) else { return false }
+            return persisted.worker == .disabled
+                && persisted.incident == nil
+                && store.engine.preferences.localFirstSyncPolicy.enabled == false
+                && store.isLocalFirstSyncing == false
+                && store.isLocalFirstSyncStopping == false
+                && store.operationFailureNotice == nil
         }
 
         state.themeClockBits = exactBits(themeClock)
         state.languageClockBits = exactBits(languageClock)
-        state.themeJournalID = uploadedThemeEntry.id
-        state.languageJournalID = uploadedLanguageEntry.id
-        state.themePayloadSHA256 = sha256(
-            try requiredPayload(uploadedThemeEntry)
-        )
-        state.languagePayloadSHA256 = sha256(
-            try requiredPayload(uploadedLanguageEntry)
-        )
-        state.finalRecordSHA256 = finalStoredRecord.sha256
-        state.finalSnapshotID = finalStoredSnapshot.snapshot.id
-        state.finalSnapshotPayloadDigest =
-            finalStoredSnapshot.snapshot.payloadDigest
-        state.finalSnapshotSHA256 = finalStoredSnapshot.sha256
-        state.finalHeaderClockBits = exactBits(finalStoredRecord.record.modifiedAt)
-        state.finalPayloadClockBits = exactBits(finalEnvelope.updatedAt)
-        state.appPreferencesAuditCountAfterExercise = preferenceAudit.count
+        state.failureIncidentCleared = true
+        state.disabledWorkerPersisted = true
         try writeState(state)
-
-        try await replaceTransportWithStaleRemote(
-            expectedSHA256: state.remoteRecordSHA256
-        )
         try appendTrace(
-            "sync uploaded=2 pending=0 failed=0 "
-                + "fetched=\(syncResult.download.fetchedCount) "
-                + "final=\(exactBits(languageClock)) "
-                + "recordSHA256=\(finalStoredRecord.sha256)"
+            "sync v2 disabled worker=disabled incident=cleared warning=suppressed"
         )
     }
 
     private func verifyRestart(on store: NoonmarkStore) async throws {
         try validateIsolation()
         let state = try readState()
-        let final = try validateExerciseState(state)
-        let languageClock = date(from: final.languageClockBits)
-        let localWriterID = try localPreferenceWriterID(in: store)
-
-        try assertPreferenceState(
+        guard state.formatVersion == Self.formatVersion,
+              let themeClockBits = state.themeClockBits,
+              let languageClockBits = state.languageClockBits,
+              state.failureIncidentCleared,
+              state.disabledWorkerPersisted,
+              themeClockBits > state.initialClockBits,
+              languageClockBits > themeClockBits
+        else {
+            throw Failure.failed("preference V2 exercise state is incomplete")
+        }
+        let languageClock = date(from: languageClockBits)
+        try assertPreferences(
             in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: languageClock,
-                writerID: localWriterID,
-                poemEnabled: false
-            )
+            theme: Self.finalTheme,
+            language: Self.finalLanguage,
+            clock: languageClock,
+            poemEnabled: false
         )
-        var entries = try preferenceJournalEntries()
-        try assertFinalJournal(entries, state: state)
-        guard try appPreferencesAuditEntries().count
-                == final.auditCountAfterExercise
+        guard let restored = try LocalFirstReplication.persistedState(
+            databaseURL: databaseURL
+        ), restored.worker == .disabled,
+        restored.incident == nil,
+        store.engine.preferences.localFirstSyncPolicy.enabled == false,
+        store.operationFailureNotice == nil,
+        AppViewTreeE2E.view(identifier: "settings.operation-failure") == nil
         else {
             throw Failure.failed(
-                "preference audit changed before the restart sync probe"
+                "disabled V2 restart replayed an historical failure warning"
             )
         }
 
-        let expectedStaleRecord = try preferenceRecord(
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: date(from: state.remoteClockBits),
-            deviceID: Self.remoteDeviceID
-        )
-        let staleRecord = try storedExactPreferenceRecord(
-            expected: expectedStaleRecord,
-            artifactName: "stale-remote-before-restart-sync.json"
-        )
-        guard staleRecord.sha256 == state.remoteRecordSHA256 else {
-            throw Failure.failed(
-                "restart did not receive the exact stale remote preference record"
-            )
-        }
-        try assertPreferenceRecord(
-            staleRecord.record,
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: date(from: state.remoteClockBits),
-            deviceID: Self.remoteDeviceID
-        )
-
-        let syncResult = try await synchronize(store)
-        try appendTrace(
-            "restart sync uploaded=\(syncResult.upload.uploadedCount) "
-                + "fetched=\(syncResult.download.fetchedCount) "
-                + "applied=\(syncResult.download.appliedCount) "
-                + "waiting=\(syncResult.download.waitingCount) "
-                + "conflicts=\(syncResult.download.conflictCount)"
-        )
-        guard syncResult.upload.pendingCount == 0,
-              syncResult.upload.uploadedCount == 0,
-              syncResult.upload.failedCount == 0,
-              syncResult.download.fetchedCount == 1,
-              syncResult.download.appliedCount == 0,
-              syncResult.download.waitingCount == 0,
-              syncResult.download.conflictCount == 0
-        else {
-            throw Failure.failed(
-                "restart stale-remote sync did not take the ignored path"
-            )
-        }
-        try assertPreferenceState(
-            in: store,
-            expected: ExpectedPreferenceState(
-                theme: Self.localTheme,
-                language: Self.localLanguage,
-                clock: languageClock,
-                writerID: localWriterID,
-                poemEnabled: false
-            )
-        )
-        entries = try preferenceJournalEntries()
-        try assertFinalJournal(entries, state: state)
-
-        let preferenceAudit = try appPreferencesAuditEntries()
-        guard preferenceAudit.count == final.auditCountAfterExercise + 1,
-              preferenceAudit.filter({
-                  $0.direction == .download && $0.action == "ignored"
-              }).count == 1,
-              preferenceAudit.filter({
-                  $0.direction == .download && $0.action == "merged"
-              }).count == 1,
-              preferenceAudit.filter({
-                  $0.direction == .upload
-              }).count == 2
-        else {
-            throw Failure.failed(
-                "restart stale remote did not remain an ignored "
-                    + "incremental fact"
-            )
-        }
-        try appendTrace(
-            "restart stale=\(state.remoteClockBits) "
-                + "winner=\(final.languageClockBits) "
-                + "journal=uploaded,uploaded baseline=retained "
-                + "local-only=retained"
-        )
-        try await assertFailClosedBaselineWarning(on: store)
-    }
-
-    private func assertFailClosedBaselineWarning(
-        on store: NoonmarkStore
-    ) async throws {
-        try await assertPreflightPersistenceFailureWarning(
-            on: store
-        )
-        try await assertPostSyncInstallFailureWarning(on: store)
-        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
-        let timestampsBefore = try SQLiteLocalFirstSyncCoordinator.timestamps(
-            in: repository
-        )
-        let baselineMetadataKey = SQLiteLocalFirstSyncCoordinator
-            .baselineManifestMetadataKey
-        let validBaselineMetadata = try repository.metadata(
-            for: baselineMetadataKey
-        )
         let settingsWindow = try await visibleSettingsWindow()
         try await activate(settingsWindow)
         let input = try WindowServerInputDriver()
@@ -792,1201 +395,145 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             identifier: "settings.sidebar.sync",
             expectedWindow: settingsWindow,
             input: input,
-            beforeClock: store.engine.preferences.themeLanguageUpdatedAt
+            beforeClock: languageClock
         )
-        _ = try await accessibilityTarget(
-            identifier: Self.syncEnabledIdentifier
-        )
-        let repositoryLock = try PreferencesClockRepositoryLock(
-            rootURL: syncFolderURL
-        )
-        defer { repositoryLock.release() }
-
-        store.poolText = "E2E 可取消同步锁等待 fixture"
-        store.addPoolTask()
-        guard store.poolText.isEmpty else {
-            throw Failure.failed(
-                "sync cancellation fixture did not create a pending upload"
-            )
-        }
-
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing,
-              case let .localFirstSync(syncOperationID) =
-              store.exclusiveEngineOperation
-        else {
-            throw Failure.failed(
-                "invalid sync baseline did not start the production sync path"
-            )
-        }
-        try await waitUntil(
-            "sync did not enter the held repository-lock wait"
-        ) {
-            guard let recorder = store.localDiagnosticRecorder else {
-                return false
-            }
-            let package = try await recorder.snapshotPackage()
-            return package.activeOperations.contains {
-                $0.id.rawValue == syncOperationID
-                    && $0.lastStage == .transportLockWait
-            }
-        }
-        let gatedSnapshot = store.engine.snapshot()
-        let gatedPolicy =
-            store.engine.preferences.localFirstSyncPolicy
-        let rejectedTaskTitle =
-            "E2E 同步期间不得写入任务"
-        store.poolText = rejectedTaskTitle
-        store.addPoolTask()
         try await clickCheckbox(
             identifier: Self.syncEnabledIdentifier,
             expectedWindow: settingsWindow,
             input: input,
-            beforeClock: store.engine.preferences.themeLanguageUpdatedAt
+            beforeClock: languageClock
         )
-        try appendTrace(
-            "sync checkbox dispatched syncing=\(store.isLocalFirstSyncing) "
-                + "stopping=\(store.isLocalFirstSyncStopping) "
-                + "enabled=\(store.engine.preferences.localFirstSyncPolicy.enabled)"
-        )
-        guard store.engine.snapshot() == gatedSnapshot,
-              store.poolText == rejectedTaskTitle
-        else {
-            throw Failure.failed(
-                "sync in-flight task gate did not reject the task mutation"
-            )
-        }
-        try await waitUntil(
-            "disabling sync did not cancel the active run and persist the policy"
-        ) {
-            store.isLocalFirstSyncing == false
-                && store.isLocalFirstSyncStopping == false
-                && store.engine.preferences.localFirstSyncPolicy.enabled == false
-        }
-        try await waitUntil(
-            "cancelled sync did not publish one non-failure terminal capsule"
-        ) {
-            guard let recorder = store.localDiagnosticRecorder else {
-                return false
-            }
-            let package = try await recorder.snapshotPackage()
-            let matchingCapsules = package.operationCapsules.filter {
-                $0.operationID.rawValue == syncOperationID
-            }
-            return package.activeOperations.contains {
-                $0.id.rawValue == syncOperationID
-            } == false
-                && matchingCapsules.count == 1
-                && matchingCapsules.first?.outcome == .cancelled
-                && matchingCapsules.first?.incidentID == nil
-                && matchingCapsules.first?.failure == nil
-        }
-        repositoryLock.release()
-        guard store.engine.preferences.localFirstSyncPolicy != gatedPolicy else {
-            throw Failure.failed(
-                "in-flight sync disable left the original enabled policy unchanged"
-            )
-        }
-        store.addPoolTask()
-        guard store.poolText.isEmpty,
-              store.engine.snapshot() != gatedSnapshot
-        else {
-            throw Failure.failed(
-                "cancelled sync did not release the task mutation gate"
-            )
-        }
-        try appendTrace(
-            "sync in-flight task-mutation=blocked "
-                + "lock-wait=observed "
-                + "checkbox-disable=cancelled-and-persisted gate=released"
-        )
-
-        try repository.saveMetadata(
-            SyncMetadataEntry(
-                key: baselineMetadataKey,
-                value: Data(#"{"invalid":"baseline"}"#.utf8),
-                updatedAt: Date()
-            )
-        )
-        store.setLocalFirstSyncEnabled(true)
+        try await requireConfiguredRuntime(on: store)
         guard store.engine.preferences.localFirstSyncPolicy.enabled else {
-            throw Failure.failed(
-                "cancelled sync could not be explicitly re-enabled"
-            )
+            throw Failure.failed("V2 sync could not be re-enabled after restart")
         }
-        let engineBeforeFailedRun = store.engine.snapshot()
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "invalid sync baseline did not restart the production sync path"
-            )
-        }
-        try await waitUntil(
-            "invalid sync baseline was silently treated as successful"
-        ) {
-            store.isLocalFirstSyncing == false
-        }
-
-        let expected = AppPresentation(
-            language: store.engine.preferences.language
-        ).syncFailureMessage(for: .baselineInvalid)
-        try await waitUntil(
-            "invalid sync baseline did not render the global warning"
-        ) {
-            guard let notice = store.operationFailureNotice,
-                  notice.context == .sync,
-                  notice.message == expected,
-                  notice.diagnosticIncidentID != nil,
-                  store.localFirstSyncMessage == expected,
-                  let failureView = AppViewTreeE2E.view(
-                      identifier: "settings.operation-failure"
-                  )
-            else {
-                return false
-            }
-            return AppViewTreeE2E.verificationText(for: failureView)
-                == expected
-        }
-        guard store.engine.snapshot() == engineBeforeFailedRun,
-              try SQLiteEngineRepository(databaseURL: databaseURL)
-              .load().snapshot() == engineBeforeFailedRun,
-              try SQLiteLocalFirstSyncCoordinator.timestamps(
-                  in: repository
-              ) == timestampsBefore
+        let retried = try await runSync(on: store)
+        guard retried.worker == .idle,
+              retried.convergence == .converged,
+              retried.incident == nil,
+              retried.pendingLocalPublicationCount == 0,
+              store.operationFailureNotice == nil
         else {
             throw Failure.failed(
-                "invalid sync baseline did not preserve data, timestamps, "
-                    + "and one visible actionable warning"
+                "re-enabled V2 sync did not clear the historical incident"
             )
         }
-
-        guard let statusMetadata = try repository.metadata(
-            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-        ) else {
-            throw Failure.failed(
-                "invalid sync baseline did not persist a failed status"
-            )
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: statusMetadata.value
+        try appendTrace(
+            "sync v2 restart worker=disabled warning=suppressed "
+                + "policy=disabled reenabled=true retry=converged"
         )
-        guard case let .failed(reason, _, _, _) = status,
-              reason == .baselineInvalid
+        try AppE2EScreenshot.captureContent(
+            of: settingsWindow,
+            to: resultURL.deletingLastPathComponent()
+                .appendingPathComponent("sync-v2-lifecycle.png")
+        )
+    }
+
+    private func requireConfiguredRuntime(on store: NoonmarkStore) async throws {
+        await settleConfiguration(on: store)
+        guard store.localFirstReplicationRuntime != nil else {
+            throw Failure.failed("V2 replication runtime did not settle")
+        }
+    }
+
+    private func settleConfiguration(on store: NoonmarkStore) async {
+        for _ in 0 ..< 8 {
+            guard let task = store.localFirstReplicationConfigurationTask else {
+                await Task.yield()
+                continue
+            }
+            _ = await task.result
+            await Task.yield()
+        }
+    }
+
+    private func runSync(
+        on store: NoonmarkStore
+    ) async throws -> LocalFirstReplicationState {
+        store.syncLocalFolderNow()
+        guard let command = store.localFirstReplicationCommandTask else {
+            throw Failure.failed("V2 manual reconcile did not start")
+        }
+        _ = await command.result
+        guard let state = try LocalFirstReplication.persistedState(
+            databaseURL: databaseURL
+        ), store.isLocalFirstSyncing == false
         else {
+            throw Failure.failed("V2 manual reconcile did not persist state")
+        }
+        guard store.operationFailureNotice == nil else {
             throw Failure.failed(
-                "invalid sync baseline persisted an incorrect sync status"
+                "V2 manual reconcile surfaced failure kind="
+                    + (store.localFirstReplicationLastErrorKind ?? "unknown")
             )
         }
+        return state
+    }
 
-        guard settingsWindow.identifier
-            == NoonmarkSettingsWindowController.windowIdentifier,
-            settingsWindow.isVisible
-        else {
-            throw Failure.failed(
-                "sync failure warning settings window is unavailable"
-            )
+    private func requireAuthority() throws
+        -> SQLiteReplicationCleanCutAuthority
+    {
+        guard let authority = try SQLiteReplicationLedger(
+            databaseURL: databaseURL
+        ).cleanCutAuthority() else {
+            throw Failure.failed("V2 clean-cut authority is missing")
+        }
+        return authority
+    }
+
+    private func showSyncStatus(
+        in settingsWindow: NSWindow,
+        input: WindowServerInputDriver,
+        beforeClock: Date,
+        state: LocalFirstReplicationState
+    ) async throws {
+        try await clickElement(
+            identifier: "settings.sidebar.sync",
+            expectedWindow: settingsWindow,
+            input: input,
+            beforeClock: beforeClock
+        )
+        try await waitUntil("V2 sync timestamps were not rendered") {
+            guard state.lastSyncedAt != nil,
+                  state.lastEffectiveSyncedAt != nil,
+                  AppViewTreeE2E.view(
+                      identifier: "settings.sync.latest-timestamp",
+                      in: settingsWindow
+                  ) != nil,
+                  AppViewTreeE2E.view(
+                      identifier: "settings.sync.latest-effective-timestamp",
+                      in: settingsWindow
+                  ) != nil
+            else { return false }
+            return true
         }
         try AppE2EScreenshot.captureContent(
             of: settingsWindow,
             to: resultURL.deletingLastPathComponent()
-                .appendingPathComponent("sync-failure-warning.png")
+                .appendingPathComponent("sync-v2-status.png")
         )
         try appendTrace(
-            "sync baseline-invalid status=failed warning=visible "
-                + "timestamps=unchanged data=unchanged"
-        )
-
-        if let validBaselineMetadata {
-            try repository.saveMetadata(validBaselineMetadata)
-        } else {
-            try repository.removeMetadata(for: baselineMetadataKey)
-        }
-        store.setLocalFirstSyncEnabled(false)
-        guard store.engine.preferences.localFirstSyncPolicy.enabled == false,
-              store.operationFailureNotice == nil,
-              store.localFirstSyncMessage == expected
-        else {
-            throw Failure.failed(
-                "disabling sync did not suppress its persisted global warning"
-            )
-        }
-        try appendTrace(
-            "sync failure persisted for restart with repairable baseline "
-                + "and disabled global warning"
-        )
-    }
-
-    private func assertPreflightPersistenceFailureWarning(
-        on store: NoonmarkStore
-    ) async throws {
-        let repository = SQLiteSyncRepository(
-            databaseURL: databaseURL
-        )
-        let timestampsBefore =
-            try SQLiteLocalFirstSyncCoordinator.timestamps(
-                in: repository
-            )
-        try store.armPersistenceFailureForE2E()
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing == false else {
-            throw Failure.failed(
-                "preflight persistence failure started stale sync work"
-            )
-        }
-        let expected = AppPresentation(
-            language: store.engine.preferences.language
-        ).failureMessage(for: .sync)
-        guard store.operationFailureNotice?.context == .sync,
-              store.operationFailureNotice?.message == expected,
-              store.localFirstSyncMessage == expected,
-              try SQLiteLocalFirstSyncCoordinator.timestamps(
-                  in: repository
-              ) == timestampsBefore
-        else {
-            throw Failure.failed(
-                "preflight persistence failure was silent or changed timestamps"
-            )
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let failedStatus = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: requiredMetadata(
-                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                in: repository
-            ).value
-        )
-        guard case let .failed(reason, _, _, _) = failedStatus,
-              reason == .transportOrStorage
-        else {
-            throw Failure.failed(
-                "preflight persistence failure was not durably typed"
-            )
-        }
-        try appendTrace(
-            "sync preflight-save status=failed warning=visible "
-                + "timestamps=unchanged"
-        )
-
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "preflight persistence recovery did not start sync"
-            )
-        }
-        try await waitUntil(
-            "preflight persistence recovery did not clear its warning"
-        ) {
-            store.isLocalFirstSyncing == false
-                && store.operationFailureNotice == nil
-        }
-        let recoveredStatus = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: requiredMetadata(
-                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                in: repository
-            ).value
-        )
-        guard case .succeeded = recoveredStatus else {
-            throw Failure.failed(
-                "preflight persistence recovery did not persist success"
-            )
-        }
-        try appendTrace(
-            "sync preflight-save recovery=succeeded warning=cleared"
-        )
-    }
-
-    private func assertPostSyncInstallFailureWarning(
-        on store: NoonmarkStore
-    ) async throws {
-        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "post-sync install failure probe did not start sync"
-            )
-        }
-        try store.armPersistenceFailureForE2E()
-        try await waitUntil(
-            "post-sync install failure was silently treated as success"
-        ) {
-            store.isLocalFirstSyncing == false
-        }
-
-        let expected = AppPresentation(
-            language: store.engine.preferences.language
-        ).failureMessage(for: .sync)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let failedStatus = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: requiredMetadata(
-                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                in: repository
-            ).value
-        )
-        guard case let .failed(
-            reason,
-            _,
-            _,
-            diagnosticCorrelation
-        ) = failedStatus,
-            reason == .transportOrStorage,
-            let diagnosticCorrelation
-        else {
-            throw Failure.failed(
-                "post-sync install failure did not persist its typed status"
-            )
-        }
-        guard let notice = store.operationFailureNotice,
-              notice.context == .sync,
-              notice.message == expected,
-              notice.diagnosticIncidentID
-              == diagnosticCorrelation.incidentID,
-              store.localFirstSyncMessage == expected
-        else {
-            throw Failure.failed(
-                "post-sync install failure did not retain its incident and status"
-            )
-        }
-        try appendTrace(
-            "sync post-install status=failed warning=visible incident=retained"
-        )
-
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "post-sync install failure recovery did not start sync"
-            )
-        }
-        try await waitUntil(
-            "post-sync install failure recovery did not clear its warning"
-        ) {
-            store.isLocalFirstSyncing == false
-                && store.operationFailureNotice == nil
-        }
-        let recoveredStatus = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: requiredMetadata(
-                SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                in: repository
-            ).value
-        )
-        guard case .succeeded = recoveredStatus else {
-            throw Failure.failed(
-                "post-sync install failure recovery did not persist success"
-            )
-        }
-        try appendTrace(
-            "sync post-install recovery=succeeded warning=cleared"
-        )
-    }
-
-    private func verifyFailureRestart(
-        on store: NoonmarkStore
-    ) async throws {
-        try validateIsolation()
-        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
-        let expected = AppPresentation(
-            language: store.engine.preferences.language
-        ).syncFailureMessage(for: .baselineInvalid)
-        try await waitUntil(
-            "disabled sync did not restore its historical status"
-        ) {
-            store.localFirstSyncMessage == expected
-        }
-        guard store.engine.preferences.localFirstSyncPolicy.enabled == false,
-              store.operationFailureNotice == nil,
-              AppViewTreeE2E.view(
-                  identifier: "settings.operation-failure"
-              ) == nil
-        else {
-            throw Failure.failed(
-                "disabled sync replayed a historical failure as a global warning"
-            )
-        }
-        guard let statusMetadata = try repository.metadata(
-            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-        ) else {
-            throw Failure.failed(
-                "persisted sync failure status disappeared after restart"
-            )
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: statusMetadata.value
-        )
-        guard case let .failed(
-            reason,
-            _,
-            _,
-            diagnosticCorrelation
-        ) = status,
-            reason == .baselineInvalid,
-            diagnosticCorrelation != nil
-        else {
-            throw Failure.failed(
-                "restart lost the disabled sync historical failure"
-            )
-        }
-        try appendTrace(
-            "sync restart status=failed warning=suppressed policy=disabled"
-        )
-
-        store.setLocalFirstSyncEnabled(true)
-        guard store.engine.preferences.localFirstSyncPolicy.enabled else {
-            throw Failure.failed(
-                "sync failure policy-change probe did not re-enable sync"
-            )
-        }
-        try await waitUntil(
-            "re-enabled sync did not restore its actionable warning"
-        ) {
-            store.operationFailureNotice?.context == .sync
-                && store.operationFailureNotice?.message == expected
-        }
-        try requirePersistedBaselineInvalidFailure(
-            on: store,
-            in: repository,
-            expectedMessage: expected,
-            decoder: decoder
-        )
-        try appendTrace(
-            "sync re-enable status=failed warning=restored"
-        )
-
-        try await assertPersistedFailureRestoreRaceIsSuppressed(
-            on: store,
-            in: repository,
-            expectedMessage: expected,
-            decoder: decoder
-        )
-
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "sync recovery did not start the production sync path"
-            )
-        }
-        try await waitUntil(
-            "successful retry did not finish or clear the old warning"
-        ) {
-            store.isLocalFirstSyncing == false
-                && store.operationFailureNotice == nil
-        }
-        let recoveredStatusMetadata = try requiredMetadata(
-            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-            in: repository
-        )
-        let recoveredStatus = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: recoveredStatusMetadata.value
-        )
-        guard case .succeeded = recoveredStatus,
-              store.localFirstSyncMessage != expected
-        else {
-            throw Failure.failed(
-                "successful retry retained the stale sync failure state"
-            )
-        }
-        try appendTrace(
-            "sync restart recovery status=succeeded "
-                + "stale-warning=cleared"
-        )
-    }
-
-    private func assertPersistedFailureRestoreRaceIsSuppressed(
-        on store: NoonmarkStore,
-        in repository: SQLiteSyncRepository,
-        expectedMessage: String,
-        decoder: JSONDecoder
-    ) async throws {
-        let settingsWindow = try await visibleSettingsWindow()
-        try await activate(settingsWindow)
-        let input = try WindowServerInputDriver()
-        let beforeClock = store.engine.preferences.themeLanguageUpdatedAt
-        try await clickElement(
-            identifier: "settings.sidebar.sync",
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-
-        try await clickCheckbox(
-            identifier: Self.syncEnabledIdentifier,
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-        try await waitUntil(
-            "restore-race fixture did not physically disable sync"
-        ) {
-            store.engine.preferences.localFirstSyncPolicy.enabled == false
-                && store.operationFailureNotice == nil
-        }
-
-        let metadata = try requiredMetadata(
-            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-            in: repository
-        )
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: metadata.value
-        )
-        guard case let .failed(reason, message, failedAt, _) = status else {
-            throw Failure.failed(
-                "restore-race fixture lost the persisted failure"
-            )
-        }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        try repository.saveMetadata(
-            SyncMetadataEntry(
-                key: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                value: try encoder.encode(
-                    SQLiteLocalFirstSyncStatus.failed(
-                        reason: reason,
-                        message: message,
-                        failedAt: failedAt,
-                        diagnosticCorrelation: nil
-                    )
-                ),
-                updatedAt: failedAt
-            )
-        )
-
-        guard store.persistedSyncFailureRestoreE2EGate.arm() else {
-            throw Failure.failed(
-                "persisted failure restore race gate was unavailable"
-            )
-        }
-        var gateReleased = false
-        defer {
-            if gateReleased == false {
-                store.persistedSyncFailureRestoreE2EGate.release()
-            }
-        }
-
-        try await clickCheckbox(
-            identifier: Self.syncEnabledIdentifier,
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-        try await waitUntil(
-            "persisted failure restore did not reach its suspended continuation"
-        ) {
-            store.engine.preferences.localFirstSyncPolicy.enabled
-                && store.persistedSyncFailureRestoreE2EGate.isWaiting
-        }
-        try await clickCheckbox(
-            identifier: Self.syncEnabledIdentifier,
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-        try await waitUntil(
-            "restore-race fixture did not disable sync while restore was suspended"
-        ) {
-            store.engine.preferences.localFirstSyncPolicy.enabled == false
-                && store.operationFailureNotice == nil
-        }
-        store.persistedSyncFailureRestoreE2EGate.release()
-        gateReleased = true
-        try await waitUntil(
-            "persisted failure restore continuation did not finish"
-        ) {
-            store.persistedSyncFailureRestoreE2EGate.isWaiting == false
-        }
-        guard store.operationFailureNotice == nil else {
-            throw Failure.failed(
-                "async persisted failure restore outlived the disabled sync policy"
-            )
-        }
-        try appendTrace(
-            "sync restore-race continuation=completed warning=suppressed "
-                + "policy=disabled"
-        )
-
-        try await clickCheckbox(
-            identifier: Self.syncEnabledIdentifier,
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-        try await waitUntil(
-            "restore-race cleanup did not restore the actionable warning"
-        ) {
-            store.engine.preferences.localFirstSyncPolicy.enabled
-                && store.operationFailureNotice?.context == .sync
-                && store.operationFailureNotice?.message == expectedMessage
-        }
-    }
-
-    private func requirePersistedBaselineInvalidFailure(
-        on store: NoonmarkStore,
-        in repository: SQLiteSyncRepository,
-        expectedMessage: String,
-        decoder: JSONDecoder
-    ) throws {
-        guard store.operationFailureNotice?.context == .sync,
-              store.operationFailureNotice?.message == expectedMessage,
-              store.localFirstSyncMessage == expectedMessage
-        else {
-            throw Failure.failed(
-                "sync policy change silently cleared the failure warning"
-            )
-        }
-        let metadata = try requiredMetadata(
-            SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-            in: repository
-        )
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: metadata.value
-        )
-        guard case let .failed(reason, _, _, _) = status,
-              reason == .baselineInvalid
-        else {
-            throw Failure.failed(
-                "sync policy change replaced the durable failure status"
-            )
-        }
-    }
-
-    private func requiredMetadata(
-        _ key: String,
-        in repository: SQLiteSyncRepository
-    ) throws -> SyncMetadataEntry {
-        guard let metadata = try repository.metadata(for: key) else {
-            throw Failure.failed(
-                "required sync metadata is missing: \(key)"
-            )
-        }
-        return metadata
-    }
-
-    private func synchronize(
-        _ store: NoonmarkStore
-    ) async throws -> SQLiteLocalFirstSyncResult {
-        guard store.isLocalFirstSyncing == false,
-              store.operationFailureNotice == nil
-        else {
-            throw Failure.failed(
-                "preference-clock sync started from a failed or busy Store"
-            )
-        }
-        store.syncLocalFolderNow()
-        guard store.isLocalFirstSyncing else {
-            throw Failure.failed(
-                "Store did not start its production local-folder sync"
-            )
-        }
-        try await waitUntil("production local-folder sync did not finish") {
-            store.isLocalFirstSyncing == false
-        }
-        guard store.operationFailureNotice == nil else {
-            throw Failure.failed(
-                "production local-folder sync surfaced an operation failure"
-            )
-        }
-        return try lastSyncResult()
-    }
-
-    private func assertTaskSummaryPresentation(
-        _ result: SQLiteLocalFirstSyncResult,
-        on store: NoonmarkStore,
-        in settingsWindow: NSWindow,
-        input: WindowServerInputDriver,
-        beforeClock: Date
-    ) async throws {
-        let unresolvedConflictCount = try SQLiteSyncRepository(
-            databaseURL: databaseURL
-        ).unresolvedConflicts().count
-        let expected = store.copy.localFirstSyncResult(
-            result,
-            unresolvedConflictCount: unresolvedConflictCount
-        )
-        guard result.upload.uploadedCount == 2,
-              result.taskChanges
-              == SQLiteSyncTaskChanges(
-                  newTaskCount: 0,
-                  updatedTaskCount: 0
-              ),
-              store.localFirstSyncMessage == expected,
-              store.localFirstSyncTimestamps
-              == SQLiteLocalFirstSyncTimestamps(
-                  lastSyncedAt: result.syncedAt,
-                  lastEffectiveSyncedAt: result.syncedAt
-              ),
-              expected == "同步完成：新增任务 0 条，更新任务 0 条"
-        else {
-            throw Failure.failed(
-                "production sync did not expose the unique-task summary"
-            )
-        }
-
-        try await clickElement(
-            identifier: "settings.sidebar.sync",
-            expectedWindow: settingsWindow,
-            input: input,
-            beforeClock: beforeClock
-        )
-        try await waitUntil(
-            "Settings sync result did not render the unique-task summary"
-        ) {
-            guard let resultView = AppViewTreeE2E.view(
-                identifier: "settings.sync.result",
-                in: settingsWindow
-            ) else {
-                return false
-            }
-            return AppViewTreeE2E.verificationText(for: resultView)
-                == expected
-        }
-        let timestampText = store.displayDateTime(result.syncedAt)
-        try await waitUntil(
-            "Settings sync timestamps did not render the successful effective sync"
-        ) {
-            guard let latest = AppViewTreeE2E.view(
-                identifier: "settings.sync.latest-timestamp",
-                in: settingsWindow
-            ), let effective = AppViewTreeE2E.view(
-                identifier:
-                "settings.sync.latest-effective-timestamp",
-                in: settingsWindow
-            ) else {
-                return false
-            }
-            return AppViewTreeE2E.verificationText(for: latest)
-                == timestampText
-                && AppViewTreeE2E.verificationText(for: effective)
-                == timestampText
-        }
-        let screenshotURL = resultURL.deletingLastPathComponent()
-            .appendingPathComponent("sync-task-summary.png")
-        try AppE2EScreenshot.captureContent(
-            of: settingsWindow,
-            to: screenshotURL
-        )
-        try appendTrace(
-            "sync task-summary new=0 updated=0 rendered=true timestamps=true"
-        )
-    }
-
-    private func lastSyncResult() throws -> SQLiteLocalFirstSyncResult {
-        let repository = SQLiteSyncRepository(databaseURL: databaseURL)
-        guard let metadata = try repository.metadata(
-            for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-        ) else {
-            throw Failure.failed("local-first sync status metadata is missing")
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: metadata.value
-        )
-        guard case let .succeeded(result) = status else {
-            throw Failure.failed(
-                "local-first sync status did not finish as succeeded"
-            )
-        }
-        return result
-    }
-
-    private func assertPreferenceState(
-        in store: NoonmarkStore,
-        expected: ExpectedPreferenceState
-    ) throws {
-        let current = store.engine.preferences
-        try assertPreferences(
-            current,
-            expected: expected
-        )
-        let persisted = try SQLiteEngineRepository(
-            databaseURL: databaseURL
-        ).load().preferences
-        try assertPreferences(
-            persisted,
-            expected: expected
+            "sync v2 pending=0 converged=true timestamps=true"
         )
     }
 
     private func assertPreferences(
-        _ preferences: AppPreferences,
-        expected: ExpectedPreferenceState
-    ) throws {
-        guard preferences.theme == expected.theme,
-              preferences.language == expected.language,
-              hasSameBits(
-                  preferences.themeLanguageUpdatedAt,
-                  expected.clock
-              ),
-              preferences.themeLanguageWriterID == expected.writerID,
-              preferences.dataMode == .localFirst,
-              preferences.localFirstSyncPolicy.enabled,
-              preferences.localFirstSyncPolicy.endpoint == .localFolder,
-              preferences.localFirstSyncPolicy.mode == .manual,
-              preferences.settingsPoemDisplayPolicy.enabled
-              == expected.poemEnabled,
-              preferences.settingsPoemDisplayPolicy.text
-              == Self.localPoemText
-        else {
-            throw Failure.failed(
-                "memory or SQLite preference state diverged from the probe vector"
-            )
-        }
-    }
-
-    private func assertLocalOnlyPreferences(
-        in preferences: AppPreferences,
+        in store: NoonmarkStore,
+        theme: AppTheme,
+        language: AppLanguage,
+        clock: Date,
         poemEnabled: Bool
     ) throws {
-        guard preferences.dataMode == .localFirst,
-              preferences.localFirstSyncPolicy.enabled,
-              preferences.localFirstSyncPolicy.endpoint == .localFolder,
-              preferences.localFirstSyncPolicy.mode == .manual,
+        let preferences = store.engine.preferences
+        guard preferences.theme == theme,
+              preferences.language == language,
+              hasSameBits(preferences.themeLanguageUpdatedAt, clock),
               preferences.settingsPoemDisplayPolicy.enabled == poemEnabled,
-              preferences.settingsPoemDisplayPolicy.text
-              == Self.localPoemText
+              preferences.settingsPoemDisplayPolicy.text == Self.localPoemText,
+              preferences.localFirstSyncPolicy.endpoint == .localFolder,
+              preferences.localFirstSyncPolicy.mode == .manual
         else {
-            throw Failure.failed(
-                "local-only preference fixture was not configured"
-            )
-        }
-    }
-
-    @discardableResult
-    private func assertPreferenceJournalEntry(
-        _ entry: SyncJournalEntry,
-        theme: AppTheme,
-        language: AppLanguage,
-        clock: Date,
-        state: SyncChangeState
-    ) throws -> AppPreferencesEnvelope {
-        guard entry.entityType == .appPreferences,
-              entry.entityID == "default",
-              entry.operation == .upsert,
-              entry.state == state,
-              entry.retryCount == 0,
-              entry.lastError == nil,
-              hasSameBits(entry.changedAt, clock)
-        else {
-            throw Failure.failed(
-                "appPreferences journal header did not match its exact clock"
-            )
-        }
-        let payload = try requiredPayload(entry)
-        let record = SyncRecord(
-            id: SyncRecordID("preferences:default"),
-            entityType: .appPreferences,
-            entityID: "default",
-            modifiedAt: entry.changedAt,
-            modifiedByDeviceID: entry.deviceID,
-            payload: payload
-        )
-        let envelope = try SyncRecordMapper().decodeAppPreferences(record)
-        guard envelope.theme == theme,
-              envelope.language == language,
-              envelope.writerDeviceID == entry.deviceID,
-              hasSameBits(envelope.updatedAt, clock),
-              hasSameBits(envelope.updatedAt, entry.changedAt)
-        else {
-            throw Failure.failed(
-                "appPreferences journal payload did not match its header"
-            )
-        }
-        return envelope
-    }
-
-    @discardableResult
-    private func assertPreferenceRecord(
-        _ record: SyncRecord,
-        theme: AppTheme,
-        language: AppLanguage,
-        clock: Date,
-        deviceID: SyncDeviceID
-    ) throws -> AppPreferencesEnvelope {
-        guard record.id == SyncRecordID("preferences:default"),
-              record.entityType == .appPreferences,
-              record.entityID == "default",
-              record.operation == .upsert,
-              record.modifiedByDeviceID == deviceID,
-              hasSameBits(record.modifiedAt, clock)
-        else {
-            throw Failure.failed(
-                "preference transport record header diverged from the probe vector"
-            )
-        }
-        let envelope = try SyncRecordMapper().decodeAppPreferences(record)
-        guard envelope.theme == theme,
-              envelope.language == language,
-              envelope.writerDeviceID == deviceID,
-              hasSameBits(envelope.updatedAt, clock),
-              hasSameBits(envelope.updatedAt, record.modifiedAt)
-        else {
-            throw Failure.failed(
-                "preference transport payload did not match its exact header clock"
-            )
-        }
-        return envelope
-    }
-
-    private func assertFinalJournal(
-        _ entries: [SyncJournalEntry],
-        state: ProbeState
-    ) throws {
-        let final = try validateExerciseState(state)
-        guard entries.count == 2,
-              try preferenceJournalEntries(state: .pendingUpload).isEmpty,
-              try preferenceJournalEntries(state: .blockedCorruption).isEmpty
-        else {
-            throw Failure.failed(
-                "final preference journal did not contain two uploaded rows"
-            )
-        }
-        let themeEntries = entries.filter {
-            $0.id == final.themeJournalID
-        }
-        let languageEntries = entries.filter {
-            $0.id == final.languageJournalID
-        }
-        guard themeEntries.count == 1,
-              languageEntries.count == 1,
-              let themeEntry = themeEntries.first,
-              let languageEntry = languageEntries.first,
-              sha256(try requiredPayload(themeEntry))
-              == final.themePayloadSHA256,
-              sha256(try requiredPayload(languageEntry))
-              == final.languagePayloadSHA256
-        else {
-            throw Failure.failed(
-                "preference journal identity or frozen payload changed on restart"
-            )
-        }
-        _ = try assertPreferenceJournalEntry(
-            themeEntry,
-            theme: Self.localTheme,
-            language: Self.remoteLanguage,
-            clock: date(from: final.themeClockBits),
-            state: .uploaded
-        )
-        _ = try assertPreferenceJournalEntry(
-            languageEntry,
-            theme: Self.localTheme,
-            language: Self.localLanguage,
-            clock: date(from: final.languageClockBits),
-            state: .uploaded
-        )
-    }
-
-    private func uniqueJournalEntry(
-        in entries: [SyncJournalEntry],
-        clock: Date
-    ) throws -> SyncJournalEntry {
-        let matches = entries.filter {
-            hasSameBits($0.changedAt, clock)
-        }
-        guard matches.count == 1, let match = matches.first else {
-            throw Failure.failed(
-                "preference journal did not contain one row for "
-                    + "\(exactBits(clock))"
-            )
-        }
-        return match
-    }
-
-    private func preferenceRecord(
-        theme: AppTheme,
-        language: AppLanguage,
-        clock: Date,
-        deviceID: SyncDeviceID
-    ) throws -> SyncRecord {
-        try SyncRecordMapper().record(
-            for: AppPreferencesEnvelope(
-                theme: theme,
-                language: language,
-                updatedAt: clock,
-                writerDeviceID: deviceID
-            ),
-            modifiedBy: deviceID
-        )
-    }
-
-    private func localPreferenceWriterID(
-        in store: NoonmarkStore
-    ) throws -> String {
-        guard let writerID = store.syncDeviceIdentity?.deviceID.rawValue,
-              writerID.isEmpty == false
-        else {
-            throw Failure.failed(
-                "local sync device identity is missing for preference provenance"
-            )
-        }
-        return writerID
-    }
-
-    private func storedPreferenceRecord(
-        transport: LocalFolderSyncTransport,
-        artifactName: String
-    ) async throws -> StoredPreferenceRecord {
-        let fetchedRecords = try await transport.bootstrapRecords()
-        let fetched = fetchedRecords.filter {
-            $0.entityType == .appPreferences
-                && $0.id == SyncRecordID("preferences:default")
-        }
-        guard fetched.count == 1, let fetchedRecord = fetched.first else {
-            throw Failure.failed(
-                "local-folder transport does not contain one preference record"
-            )
-        }
-
-        return try storedExactPreferenceRecord(
-            expected: fetchedRecord,
-            artifactName: artifactName
-        )
-    }
-
-    private func storedExactPreferenceRecord(
-        expected: SyncRecord,
-        artifactName: String
-    ) throws -> StoredPreferenceRecord {
-        let matches = try repositoryPreferenceRecords().filter {
-            $0.exactlyMatches(expected)
-        }
-        guard let storedRecord = matches.first else {
-            throw Failure.failed(
-                "incremental repository does not contain exact preference evidence"
-            )
-        }
-        let stored = StoredPreferenceRecord(
-            record: storedRecord,
-            data: try canonicalTransportRecordData(storedRecord)
-        )
-        let artifactURL = resultURL.deletingLastPathComponent()
-            .appendingPathComponent(artifactName)
-        try FileManager.default.createDirectory(
-            at: artifactURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try stored.data.write(to: artifactURL, options: .atomic)
-        return stored
-    }
-
-    private func repositoryPreferenceRecords() throws -> [SyncRecord] {
-        let batchRoot = syncFolderURL.appendingPathComponent(
-            "batches",
-            isDirectory: true
-        )
-        let producerDirectories = try FileManager.default
-            .contentsOfDirectory(
-                at: batchRoot,
-                includingPropertiesForKeys: nil
-            )
-        let batchFiles = try producerDirectories.flatMap { producer in
-            try FileManager.default.contentsOfDirectory(
-                at: producer,
-                includingPropertiesForKeys: nil
-            ).filter { $0.pathExtension == "json" }
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let seconds = Double(
-                bitPattern: try container.decode(UInt64.self)
-            )
-            guard seconds.isFinite else {
-                throw DecodingError.dataCorruptedError(
-                    in: container,
-                    debugDescription: "non-finite incremental date"
-                )
-            }
-            return Date(timeIntervalSinceReferenceDate: seconds)
-        }
-        return try batchFiles.flatMap { file in
-            try decoder.decode(
-                IncrementalRepositoryBatch.self,
-                from: Data(contentsOf: file)
-            ).records.filter {
-                $0.entityType == .appPreferences
-                    && $0.id == SyncRecordID("preferences:default")
-            }
-        }
-    }
-
-    private func storedLatestSnapshot(
-        transport: LocalFolderSyncTransport,
-        artifactName: String
-    ) async throws -> StoredRepositorySnapshot {
-        let fetchedSnapshots = try await transport.fetchSnapshots()
-        guard let fetchedSnapshot = fetchedSnapshots.last else {
-            throw Failure.failed(
-                "local-folder incremental repository has no snapshot evidence"
-            )
-        }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        let stored = StoredRepositorySnapshot(
-            snapshot: fetchedSnapshot,
-            data: try encoder.encode(fetchedSnapshot)
-        )
-
-        let artifactURL = resultURL.deletingLastPathComponent()
-            .appendingPathComponent(artifactName)
-        try stored.data.write(to: artifactURL, options: .atomic)
-        return stored
-    }
-
-    private func canonicalTransportRecordData(
-        _ record: SyncRecord
-    ) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            var container = encoder.singleValueContainer()
-            try container.encode(
-                date.timeIntervalSinceReferenceDate.bitPattern
-            )
-        }
-        return try encoder.encode(record)
-    }
-
-    private func replaceTransportWithStaleRemote(
-        expectedSHA256: String
-    ) async throws {
-        try validateSyncFolderForReplacement()
-        let remoteRecord = try preferenceRecord(
-            theme: Self.remoteTheme,
-            language: Self.remoteLanguage,
-            clock: try instant("2035-07-05T16:00:00Z"),
-            deviceID: Self.remoteDeviceID
-        )
-        guard let remoteProducerEpoch = UUID(
-            uuidString: "E0000000-0000-0000-0000-000000000005"
-        ) else {
-            throw Failure.failed("invalid remote producer fixture identity")
-        }
-        let transport = LocalFolderSyncTransport(
-            rootURL: syncFolderURL,
-            producerEpochID: remoteProducerEpoch
-        )
-        try await transport.pushAccepting([remoteRecord])
-        let stored = try storedExactPreferenceRecord(
-            expected: remoteRecord,
-            artifactName: "stale-remote-reintroduced.json"
-        )
-        guard stored.sha256 == expectedSHA256 else {
-            throw Failure.failed(
-                "reintroduced stale preference record was not byte-identical"
-            )
+            throw Failure.failed("preference V2 state diverged")
         }
     }
 
@@ -2047,46 +594,35 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         )
         try appendTrace(
             "click identifier=\(identifier) frame=\(frame) point=\(point) "
-                + "before=\(exactBits(beforeClock)) "
-                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
+                + "before=\(exactBits(beforeClock))"
         )
-        do {
-            let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
-                guard NSApp.keyWindow === expectedWindow,
-                      let currentFrame = ReadOnlyAccessibilityTarget
-                      .uniqueElement(
-                          identifier: identifier,
-                          enabled: true
-                      )?.frame
-                else {
-                    throw Failure.failed(
-                        "segmented target changed before mouseDown: \(identifier)"
-                    )
-                }
-                let currentPoint = CGPoint(
-                    x: currentFrame.minX + currentFrame.width * 0.25,
-                    y: currentFrame.midY
-                )
-                return try input.pointerCoordinate(
-                    quartzPoint: currentPoint,
-                    in: expectedWindow
+        let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.keyWindow === expectedWindow,
+                  let currentFrame = ReadOnlyAccessibilityTarget.uniqueElement(
+                      identifier: identifier,
+                      enabled: true
+                  )?.frame
+            else {
+                throw Failure.failed(
+                    "segmented target changed before mouseDown: \(identifier)"
                 )
             }
-            let coordinate = try input.pointerCoordinate(
-                quartzPoint: point,
+            return try input.pointerCoordinate(
+                quartzPoint: CGPoint(
+                    x: currentFrame.minX + currentFrame.width * 0.25,
+                    y: currentFrame.midY
+                ),
                 in: expectedWindow
             )
-            try await input.postClick(
-                at: coordinate,
-                modifiers: [],
-                resolveTarget: resolveTarget
-            )
-        } catch {
-            throw Failure.failed(
-                "WindowServer segmented click failed for \(identifier): "
-                    + error.localizedDescription
-            )
         }
+        try await input.postClick(
+            at: try input.pointerCoordinate(
+                quartzPoint: point,
+                in: expectedWindow
+            ),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
     }
 
     private func clickCheckbox(
@@ -2096,15 +632,7 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         beforeClock: Date
     ) async throws {
         _ = try await accessibilityTarget(identifier: identifier)
-        try await revealCheckbox(
-            identifier: identifier,
-            in: expectedWindow
-        )
-        try appendTrace(
-            "click identifier=\(identifier) target=scroll-document checkbox=true "
-                + "before=\(exactBits(beforeClock)) "
-                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
-        )
+        try await revealCheckbox(identifier: identifier, in: expectedWindow)
         let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
             guard NSApp.keyWindow === expectedWindow,
                   let anchor = AppViewTreeE2E.view(
@@ -2113,12 +641,10 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                   ),
                   let target = AppViewTreeE2E.checkboxInteractionTarget(
                       overlapping: anchor
-                  ),
-                  target.window === expectedWindow
+                  ), target.window === expectedWindow
             else {
                 throw Failure.failed(
-                    "checkbox interaction target changed before mouseDown: "
-                        + identifier
+                    "checkbox interaction target changed: \(identifier)"
                 )
             }
             return try input.pointerCoordinate(
@@ -2128,22 +654,15 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         }
         let coordinate = try resolveTarget()
         try appendTrace(
-            "click checkbox=\(identifier) point=\(coordinate.appKitScreenPoint) "
-                + "before=\(exactBits(beforeClock)) "
-                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
+            "click identifier=\(identifier) checkbox=true "
+                + "point=\(coordinate.appKitScreenPoint) "
+                + "before=\(exactBits(beforeClock))"
         )
-        do {
-            try await input.postClick(
-                at: coordinate,
-                modifiers: [],
-                resolveTarget: resolveTarget
-            )
-        } catch {
-            throw Failure.failed(
-                "WindowServer checkbox click failed for \(identifier): "
-                    + error.localizedDescription
-            )
-        }
+        try await input.postClick(
+            at: coordinate,
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
     }
 
     private func revealCheckbox(
@@ -2154,40 +673,20 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
               anchor.window === expectedWindow
         else {
             throw Failure.failed(
-                "checkbox anchor was not attached for scrolling: \(identifier)"
+                "checkbox anchor was not attached: \(identifier)"
             )
         }
-        // `scrollToVisible(anchor.bounds)` permits the anchor to rest on the
-        // clipping edge. The native checkbox focus ring extends beyond that
-        // SwiftUI anchor, so reveal a small vertical margin before resolving
-        // the actual WindowServer hit target.
         anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))
         expectedWindow.contentView?.layoutSubtreeIfNeeded()
         expectedWindow.displayIfNeeded()
-        do {
-            try await waitUntil(
-                "checkbox hit target was not visible after scrolling: \(identifier)"
-            ) {
-                guard let visibleAnchor = AppViewTreeE2E.view(
-                    identifier: identifier,
-                    in: expectedWindow
-                ) else {
-                    return false
-                }
-                return AppViewTreeE2E.checkboxInteractionTarget(
-                    overlapping: visibleAnchor
-                ) != nil
-            }
-        } catch {
-            let diagnostics = AppViewTreeE2E.view(
+        try await waitUntil("checkbox hit target was not visible: \(identifier)") {
+            guard let visibleAnchor = AppViewTreeE2E.view(
                 identifier: identifier,
                 in: expectedWindow
-            ).map {
-                AppViewTreeE2E.checkboxInteractionTargetDiagnostics(
-                    overlapping: $0
-                )
-            } ?? "anchor=not-visible"
-            throw Failure.failed("\(error.localizedDescription); \(diagnostics)")
+            ) else { return false }
+            return AppViewTreeE2E.checkboxInteractionTarget(
+                overlapping: visibleAnchor
+            ) != nil
         }
     }
 
@@ -2199,84 +698,56 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     ) async throws {
         let target = try await accessibilityTarget(identifier: identifier)
         guard let frame = target.frame else {
-            throw Failure.failed(
-                "accessibility click target has no frame: \(identifier)"
-            )
+            throw Failure.failed("AX target has no frame: \(identifier)")
         }
-        let point = CGPoint(x: frame.midX, y: frame.midY)
-        try appendTrace(
-            "click identifier=\(identifier) frame=\(frame) point=\(point) "
-                + "before=\(exactBits(beforeClock)) "
-                + "window=\(expectedWindow.identifier?.rawValue ?? "nil")"
-        )
-        do {
-            let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
-                guard NSApp.keyWindow === expectedWindow,
-                      let currentFrame = ReadOnlyAccessibilityTarget
-                      .uniqueElement(
-                          identifier: identifier,
-                          enabled: true
-                      )?.frame
-                else {
-                    throw Failure.failed(
-                        "accessibility target changed before mouseDown: \(identifier)"
-                    )
-                }
-                return try input.pointerCoordinate(
-                    quartzPoint: CGPoint(
-                        x: currentFrame.midX,
-                        y: currentFrame.midY
-                    ),
-                    in: expectedWindow
-                )
+        let resolveTarget = { () throws -> WindowServerInputDriver.PointerCoordinate in
+            guard NSApp.keyWindow === expectedWindow,
+                  let currentFrame = ReadOnlyAccessibilityTarget.uniqueElement(
+                      identifier: identifier,
+                      enabled: true
+                  )?.frame
+            else {
+                throw Failure.failed("AX target changed: \(identifier)")
             }
-            try await input.postClick(
-                at: try input.pointerCoordinate(
-                    quartzPoint: point,
-                    in: expectedWindow
+            return try input.pointerCoordinate(
+                quartzPoint: CGPoint(
+                    x: currentFrame.midX,
+                    y: currentFrame.midY
                 ),
-                modifiers: [],
-                resolveTarget: resolveTarget
-            )
-        } catch {
-            throw Failure.failed(
-                "WindowServer click failed for \(identifier): "
-                    + error.localizedDescription
+                in: expectedWindow
             )
         }
+        try appendTrace(
+            "click identifier=\(identifier) before=\(exactBits(beforeClock))"
+        )
+        try await input.postClick(
+            at: try input.pointerCoordinate(
+                quartzPoint: CGPoint(x: frame.midX, y: frame.midY),
+                in: expectedWindow
+            ),
+            modifiers: [],
+            resolveTarget: resolveTarget
+        )
     }
 
     private func accessibilityTarget(
         identifier: String
     ) async throws -> ReadOnlyAccessibilityTarget.Match {
         guard AXIsProcessTrusted() else {
-            throw Failure.failed(
-                "Accessibility access is unavailable for \(identifier)"
-            )
+            throw Failure.failed("Accessibility is unavailable")
         }
         var match: ReadOnlyAccessibilityTarget.Match?
-        do {
-            try await waitUntil("missing AX target \(identifier)") {
-                guard NSApp.isActive,
-                      NSApp.keyWindow?.identifier
-                      == NoonmarkSettingsWindowController.windowIdentifier,
-                      let candidate = ReadOnlyAccessibilityTarget.uniqueElement(
-                          identifier: identifier,
-                          enabled: true
-                      )
-                else {
-                    return false
-                }
-                match = candidate
-                return true
-            }
-        } catch {
-            throw Failure.failed(
-                "missing AX target \(identifier): "
-                    + ReadOnlyAccessibilityTarget.elementDiagnostics(
-                        identifier: identifier
-                    )
-            )
+        try await waitUntil("missing AX target \(identifier)") {
+            guard NSApp.isActive,
+                  NSApp.keyWindow?.identifier
+                  == NoonmarkSettingsWindowController.windowIdentifier,
+                  let candidate = ReadOnlyAccessibilityTarget.uniqueElement(
+                      identifier: identifier,
+                      enabled: true
+                  )
+            else { return false }
+            match = candidate
+            return true
         }
         guard let match else {
             throw Failure.failed("AX target disappeared: \(identifier)")
@@ -2284,53 +755,19 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
         return match
     }
 
-    private func preferenceJournalEntries(
-        state: SyncChangeState? = nil
-    ) throws -> [SyncJournalEntry] {
-        try SQLiteSyncRepository(databaseURL: databaseURL)
-            .journalEntries(state: state)
-            .filter { $0.entityType == .appPreferences }
-    }
-
-    private func appPreferencesAuditEntries() throws -> [SyncAuditLogEntry] {
-        try SQLiteSyncRepository(databaseURL: databaseURL)
-            .auditLog(limit: 100)
-            .filter { $0.entityType == .appPreferences }
-    }
-
-    private func requiredPayload(
-        _ entry: SyncJournalEntry
-    ) throws -> Data {
-        guard let payload = entry.recordPayload, payload.isEmpty == false else {
-            throw Failure.failed(
-                "appPreferences journal is missing its canonical payload"
-            )
-        }
-        return payload
-    }
-
     private func validateIsolation() throws {
-        guard Bundle.main.bundleIdentifier == Self.e2eBundleIdentifier,
-              databaseURL.path.isEmpty == false
-        else {
-            throw Failure.failed(
-                "preference-clock automation requires the E2E bundle and database"
-            )
-        }
-        try validateSyncFolderForReplacement()
-    }
-
-    private func validateSyncFolderForReplacement() throws {
-        let path = syncFolderPath
+        let path = syncFolderURL.path
         let guardedPrefix = "/private/tmp/noonmark-e2e-preferences-clock-sync-"
         let suffix = path.dropFirst(guardedPrefix.count)
-        guard path == syncFolderURL.path,
+        guard Bundle.main.bundleIdentifier == Self.e2eBundleIdentifier,
+              databaseURL.path.isEmpty == false,
               path.hasPrefix(guardedPrefix),
+              suffix.isEmpty == false,
               suffix.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
               let shellProcessID = Int32(suffix), shellProcessID > 0
         else {
             throw Failure.failed(
-                "preference-clock sync folder is outside its exact guarded /private/tmp scope"
+                "preference V2 automation escaped its isolated profile"
             )
         }
         if FileManager.default.fileExists(atPath: path) {
@@ -2338,114 +775,21 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
                 forKeys: [.isSymbolicLinkKey]
             )
             guard values.isSymbolicLink != true else {
-                throw Failure.failed(
-                    "preference-clock sync folder must not be a symbolic link"
-                )
+                throw Failure.failed("preference V2 repository is a symlink")
             }
         }
     }
 
-    private func validateSetupState(_ state: ProbeState) throws {
-        guard state.formatVersion == Self.formatVersion,
-              state.localPoemText == Self.localPoemText,
-              state.remoteClockBits
-              == exactBits(try instant("2035-07-05T16:00:00Z")),
-              state.remoteRecordSHA256.count == 64,
-              state.themeClockBits == nil,
-              state.languageClockBits == nil,
-              state.themeJournalID == nil,
-              state.languageJournalID == nil,
-              state.themePayloadSHA256 == nil,
-              state.languagePayloadSHA256 == nil,
-              state.finalRecordSHA256 == nil,
-              state.finalSnapshotID == nil,
-              state.finalSnapshotPayloadDigest == nil,
-              state.finalSnapshotSHA256 == nil,
-              state.finalHeaderClockBits == nil,
-              state.finalPayloadClockBits == nil,
-              state.appPreferencesAuditCountAfterExercise == nil
-        else {
-            throw Failure.failed(
-                "preference-clock setup state is incomplete or stale"
-            )
-        }
-    }
-
-    private func validateExerciseState(
-        _ state: ProbeState
-    ) throws -> (
-        themeClockBits: UInt64,
-        languageClockBits: UInt64,
-        themeJournalID: UUID,
-        languageJournalID: UUID,
-        themePayloadSHA256: String,
-        languagePayloadSHA256: String,
-        auditCountAfterExercise: Int
-    ) {
-        guard state.formatVersion == Self.formatVersion,
-              state.localPoemText == Self.localPoemText,
-              let themeClockBits = state.themeClockBits,
-              let languageClockBits = state.languageClockBits,
-              let themeJournalID = state.themeJournalID,
-              let languageJournalID = state.languageJournalID,
-              let themePayloadSHA256 = state.themePayloadSHA256,
-              let languagePayloadSHA256 = state.languagePayloadSHA256,
-              let finalRecordSHA256 = state.finalRecordSHA256,
-              let finalSnapshotID = state.finalSnapshotID,
-              let finalSnapshotPayloadDigest =
-              state.finalSnapshotPayloadDigest,
-              let finalSnapshotSHA256 = state.finalSnapshotSHA256,
-              let finalHeaderClockBits = state.finalHeaderClockBits,
-              let finalPayloadClockBits = state.finalPayloadClockBits,
-              let auditCount = state
-              .appPreferencesAuditCountAfterExercise,
-              themeClockBits
-              == exactBits(
-                  nextRepresentableDate(
-                      after: date(from: state.remoteClockBits)
-                  )
-              ),
-              languageClockBits
-              == exactBits(
-                  nextRepresentableDate(
-                      after: date(from: themeClockBits)
-                  )
-              ),
-              finalHeaderClockBits == languageClockBits,
-              finalPayloadClockBits == languageClockBits,
-              themePayloadSHA256.count == 64,
-              languagePayloadSHA256.count == 64,
-              finalRecordSHA256.count == 64,
-              finalSnapshotID.count == 64,
-              finalSnapshotPayloadDigest.count == 64,
-              finalSnapshotSHA256.count == 64,
-              auditCount == 3
-        else {
-            throw Failure.failed(
-                "preference-clock exercise state is incomplete or inconsistent"
-            )
-        }
-        return (
-            themeClockBits,
-            languageClockBits,
-            themeJournalID,
-            languageJournalID,
-            themePayloadSHA256,
-            languagePayloadSHA256,
-            auditCount
-        )
-    }
-
     private func waitUntil(
         _ failure: String,
-        attempts: Int = 200,
+        attempts: Int = 240,
         condition: @MainActor () async throws -> Bool
     ) async throws {
         for _ in 0 ..< attempts {
             if try await condition() {
                 return
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            try await Task.sleep(for: .milliseconds(50))
         }
         throw Failure.failed(failure)
     }
@@ -2462,28 +806,11 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func date(from bits: UInt64) -> Date {
-        Date(
-            timeIntervalSinceReferenceDate: Double(bitPattern: bits)
-        )
+        Date(timeIntervalSinceReferenceDate: Double(bitPattern: bits))
     }
 
     private func hasSameBits(_ lhs: Date, _ rhs: Date) -> Bool {
         exactBits(lhs) == exactBits(rhs)
-    }
-
-    private func instant(_ text: String) throws -> Date {
-        guard let date = ISO8601DateFormatter().date(from: text) else {
-            throw Failure.failed(
-                "invalid preference-clock instant: \(text)"
-            )
-        }
-        return date
-    }
-
-    private func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data)
-            .map { String(format: "%02x", $0) }
-            .joined()
     }
 
     private var traceURL: URL {
@@ -2534,41 +861,5 @@ struct PreferencesClockE2EAutomation: LaunchAutomationRunnable {
             atomically: true,
             encoding: .utf8
         )
-    }
-}
-
-private final class PreferencesClockRepositoryLock {
-    private var descriptor: Int32
-
-    init(rootURL: URL) throws {
-        let lockURL = rootURL.appendingPathComponent(".repository.lock")
-        descriptor = lockURL.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return Int32(-1) }
-            return open(
-                path,
-                O_CREAT | O_RDWR,
-                mode_t(S_IRUSR | S_IWUSR)
-            )
-        }
-        guard descriptor >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            let lockError = errno
-            close(descriptor)
-            descriptor = -1
-            throw POSIXError(POSIXErrorCode(rawValue: lockError) ?? .EIO)
-        }
-    }
-
-    deinit {
-        release()
-    }
-
-    func release() {
-        guard descriptor >= 0 else { return }
-        _ = flock(descriptor, LOCK_UN)
-        close(descriptor)
-        descriptor = -1
     }
 }

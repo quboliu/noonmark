@@ -40,15 +40,18 @@ private struct EngineMutationBackgroundResult<Result: Sendable>:
 }
 
 extension NoonmarkStore {
-    func finishLocalFirstSyncForTermination() async {
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncAutomationTask = nil
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncConfirmationRetryTask = nil
-        if let localFirstSyncDisableTask {
-            await localFirstSyncDisableTask.value
-        } else {
-            await localFirstSyncRunController.stop()
+    func finishLocalFirstSyncForTermination() async -> Bool {
+        localFirstReplicationConfigurationTask?.cancel()
+        localFirstReplicationConfigurationTask = nil
+        do {
+            try await shutdownAndReleaseLocalFirstReplication()
+            return true
+        } catch {
+            localFirstReplicationLastErrorKind = String(
+                describing: type(of: error)
+            )
+            reportLocalFirstReplicationFailure(error)
+            return false
         }
     }
 
@@ -63,14 +66,13 @@ extension NoonmarkStore {
     func prepareForTermination() throws {
         engineMutationLane?.drain()
         toastScheduler.cancel()
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncDisableTask?.cancel()
+        localFirstReplicationStateTask?.cancel()
+        localFirstReplicationCommandTask?.cancel()
+        localFirstReplicationConfigurationTask?.cancel()
         automaticClassificationWorkerRestartRequested = false
         automaticClassificationWorkerTask?.cancel()
         automaticClassificationBacklogDecisionTask?.cancel()
         automaticClassificationCircuitRetryTask?.cancel()
-        cloudKitAccountCheckTask?.cancel()
         zhulongProviderTask?.cancel()
         naturalDayObservation?.cancel()
         accessibilityDisplayObservation?.cancel()
@@ -366,11 +368,8 @@ extension NoonmarkStore {
             exclusiveEngineOperation = nil
             restartLocalFirstSyncAutomation()
         }
-        cancelCloudKitAccountCheck()
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncAutomationTask = nil
+        try await shutdownAndReleaseLocalFirstReplication()
         await pauseDataImportCommitForE2EIfArmed()
-        await discardCloudKitTransportAndWait()
         guard preparedDataImport?.id == preview.id else {
             throw DataImportTransactionError.previewExpired
         }
@@ -404,7 +403,6 @@ extension NoonmarkStore {
         selectedCalendarDate = today
         clearSelection()
         localFirstSyncMessage = nil
-        resetPersistedLocalFirstSyncStatus()
         preparedDataImport = nil
     }
 
@@ -448,31 +446,6 @@ extension NoonmarkStore {
             dataImportCommitContinuationForE2E = continuation
         }
         isDataImportCommitPausedForE2E = false
-    }
-
-    func resetPersistedLocalFirstSyncStatus(now: Date = Date()) {
-        guard let databaseURL else { return }
-        do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            try SQLiteSyncRepository(databaseURL: databaseURL).saveMetadata(
-                SyncMetadataEntry(
-                    key: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey,
-                    value: try encoder.encode(
-                        SQLiteLocalFirstSyncStatus.idle(since: now)
-                    ),
-                    updatedAt: now
-                )
-            )
-        } catch {
-            _ = recordOperationFailureEvidence(
-                .persistence,
-                error: error
-            )
-            localFirstSyncMessage = AppPresentation(
-                language: engine.preferences.language
-            ).failureMessage(for: .sync)
-        }
     }
 
     private func withSecurityScopedAccess<Result>(

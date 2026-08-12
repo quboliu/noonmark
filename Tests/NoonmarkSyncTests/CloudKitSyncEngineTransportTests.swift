@@ -96,25 +96,6 @@ final class CloudKitSyncEngineTransportTests: XCTestCase {
         }
     }
 
-    func testLiveValidationCleanupRejectsTheProductionZoneBeforeCloudKitAccess() async throws {
-        let transport = try CloudKitSyncEngineTransport(
-            containerIdentifier: "iCloud.app.noonmark.mac",
-            persistence: TransportPersistence(),
-            zoneName: CloudKitSyncEngineTransport.defaultZoneName,
-            automaticallySync: false
-        )
-
-        do {
-            try await transport.deleteLiveValidationZone()
-            XCTFail("the production record zone must never use the E2E cleanup path")
-        } catch {
-            XCTAssertEqual(
-                error as? CloudKitSyncEngineTransportError,
-                .liveValidationZoneRequired
-            )
-        }
-    }
-
     func testRecordSaveFailuresNeverSilentlyRecreateRemoteDeletions() {
         XCTAssertEqual(
             CloudKitRecordSaveFailurePolicy.disposition(

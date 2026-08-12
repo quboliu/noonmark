@@ -25,6 +25,7 @@ while IFS='|' read -r \
   icloud_repository_name \
   provider_keychain_service \
   sidecar_keychain_service \
+  replication_watermark_keychain_service \
   resettable; do
   [[ -n "$profile" ]] || continue
   noonmark_runtime_profile_load "$profile"
@@ -44,15 +45,18 @@ while IFS='|' read -r \
   assert_equal "$profile sidecar Keychain service" \
     "$sidecar_keychain_service" \
     "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE"
+  assert_equal "$profile replication watermark Keychain service" \
+    "$replication_watermark_keychain_service" \
+    "$NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE"
   assert_equal "$profile resettable flag" \
     "$resettable" "$NOONMARK_RUNTIME_RESETTABLE"
 done <<'PROFILES'
-production|app.noonmark.mac|NoonmarkMacApp|Noonmark|noonmark|Noonmark/SyncRepository|app.noonmark.zhulong.provider|app.noonmark.zhulong.sidecar-key|0
-development|app.noonmark.mac.development|NoonmarkMacAppDevelopment|NoonmarkDevelopment|noonmark-development|Noonmark-Development/SyncRepository|app.noonmark.zhulong.provider.development|app.noonmark.zhulong.sidecar-key.development|1
-e2e|app.noonmark.mac.e2e|NoonmarkMacAppE2E|NoonmarkE2E|noonmark-e2e|Noonmark-E2E/SyncRepository|app.noonmark.zhulong.provider.e2e|app.noonmark.zhulong.sidecar-key.e2e|1
-demo|app.noonmark.mac.demo|NoonmarkMacAppDemo|NoonmarkDemo|noonmark-demo|Noonmark-Demo/SyncRepository|app.noonmark.zhulong.provider.demo|app.noonmark.zhulong.sidecar-key.demo|1
-audit|app.noonmark.mac.audit|NoonmarkMacAppAudit|NoonmarkAudit|noonmark-audit|Noonmark-Audit/SyncRepository|app.noonmark.zhulong.provider.audit|app.noonmark.zhulong.sidecar-key.audit|1
-dmg-validation|app.noonmark.mac.dmg-validation|NoonmarkMacAppDMGValidation|NoonmarkDMGValidation|noonmark-dmg-validation|Noonmark-DMGValidation/SyncRepository|app.noonmark.zhulong.provider.dmg-validation|app.noonmark.zhulong.sidecar-key.dmg-validation|1
+production|app.noonmark.mac|NoonmarkMacApp|Noonmark|noonmark|Noonmark/SyncRepository|app.noonmark.zhulong.provider|app.noonmark.zhulong.sidecar-key|app.noonmark.replication-watermark|0
+development|app.noonmark.mac.development|NoonmarkMacAppDevelopment|NoonmarkDevelopment|noonmark-development|Noonmark-Development/SyncRepository|app.noonmark.zhulong.provider.development|app.noonmark.zhulong.sidecar-key.development|app.noonmark.replication-watermark.development|1
+e2e|app.noonmark.mac.e2e|NoonmarkMacAppE2E|NoonmarkE2E|noonmark-e2e|Noonmark-E2E/SyncRepository|app.noonmark.zhulong.provider.e2e|app.noonmark.zhulong.sidecar-key.e2e|app.noonmark.replication-watermark.e2e|1
+demo|app.noonmark.mac.demo|NoonmarkMacAppDemo|NoonmarkDemo|noonmark-demo|Noonmark-Demo/SyncRepository|app.noonmark.zhulong.provider.demo|app.noonmark.zhulong.sidecar-key.demo|app.noonmark.replication-watermark.demo|1
+audit|app.noonmark.mac.audit|NoonmarkMacAppAudit|NoonmarkAudit|noonmark-audit|Noonmark-Audit/SyncRepository|app.noonmark.zhulong.provider.audit|app.noonmark.zhulong.sidecar-key.audit|app.noonmark.replication-watermark.audit|1
+dmg-validation|app.noonmark.mac.dmg-validation|NoonmarkMacAppDMGValidation|NoonmarkDMGValidation|noonmark-dmg-validation|Noonmark-DMGValidation/SyncRepository|app.noonmark.zhulong.provider.dmg-validation|app.noonmark.zhulong.sidecar-key.dmg-validation|app.noonmark.replication-watermark.dmg-validation|1
 PROFILES
 
 if noonmark_runtime_profile_load unknown-profile 2>/dev/null; then
@@ -386,7 +390,6 @@ assert_development_state_removed() {
   local selected_path
   for selected_path in \
     "$development_data" \
-    "$development_icloud_profile_root" \
     "$development_cache" \
     "$development_state" \
     "$development_defaults" \
@@ -397,6 +400,13 @@ assert_development_state_removed() {
       exit 1
     fi
   done
+  if [[ ! -f "$development_icloud/preflight-canary" \
+    || -L "$development_icloud/preflight-canary" \
+    || "$(<"$development_icloud/preflight-canary")" != "preflight-canary" ]]; then
+    echo "$label changed the preserved iCloud canary" >&2
+    sed -n '1,160p' "$trace_path" >&2
+    exit 1
+  fi
 }
 
 assert_no_delete_action() {
@@ -454,12 +464,19 @@ if [[ "$reset_status" -ne 0 ]]; then
 fi
 for selected_path in \
   "$development_data" \
-  "$development_icloud_profile_root" \
   "$development_cache" \
   "$development_state" \
   "$defaults_state/app.noonmark.mac.development"; do
   if [[ -e "$selected_path" || -L "$selected_path" ]]; then
     echo "development reset left selected state: $selected_path" >&2
+    exit 1
+  fi
+done
+for preserved_icloud_path in \
+  "$development_icloud/development-sync-record" \
+  "$development_icloud_live/crashed-live-test-record"; do
+  if [[ ! -f "$preserved_icloud_path" || -L "$preserved_icloud_path" ]]; then
+    echo "development reset changed iCloud state: $preserved_icloud_path" >&2
     exit 1
   fi
 done
@@ -974,22 +991,23 @@ forbid_literal "$reset_boundary_helper" 'case "production"'
 while IFS='|' read -r \
   selected_profile \
   selected_data_directory \
-  selected_icloud_root \
   selected_bundle_identifier; do
   require_literal "$reset_boundary_helper" "case \"$selected_profile\":"
   require_literal "$reset_boundary_helper" \
     "dataDirectory = \"$selected_data_directory\""
   require_literal "$reset_boundary_helper" \
-    "iCloudRoot = \"$selected_icloud_root\""
-  require_literal "$reset_boundary_helper" \
     "bundleIdentifier = \"$selected_bundle_identifier\""
 done <<'BOUNDARY_PROFILES'
-development|noonmark-development|Noonmark-Development|app.noonmark.mac.development
-e2e|noonmark-e2e|Noonmark-E2E|app.noonmark.mac.e2e
-demo|noonmark-demo|Noonmark-Demo|app.noonmark.mac.demo
-audit|noonmark-audit|Noonmark-Audit|app.noonmark.mac.audit
-dmg-validation|noonmark-dmg-validation|Noonmark-DMGValidation|app.noonmark.mac.dmg-validation
+development|noonmark-development|app.noonmark.mac.development
+e2e|noonmark-e2e|app.noonmark.mac.e2e
+demo|noonmark-demo|app.noonmark.mac.demo
+audit|noonmark-audit|app.noonmark.mac.audit
+dmg-validation|noonmark-dmg-validation|app.noonmark.mac.dmg-validation
 BOUNDARY_PROFILES
+
+forbid_literal "$reset_script" 'NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME'
+forbid_literal "$reset_script" 'Library/Mobile Documents'
+forbid_literal "$reset_boundary_helper" 'Library/Mobile Documents'
 
 require_literal "$repo_root/scripts/build-mac-app" \
   'source scripts/runtime-profile-common'
@@ -1006,9 +1024,9 @@ forbid_literal "$repo_root/Sources/NoonmarkSync/CloudKitSyncLaunchConfiguration.
 forbid_literal "$repo_root/Sources/NoonmarkZhulong/KeychainZhulongSidecarKeySource.swift" \
   'service: String = Self.defaultService'
 require_literal "$repo_root/Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift" \
-  'Noonmark-E2E/LiveTests/'
+  'ICloudAppendOnlyTestNamespace.beginSession'
 forbid_literal "$repo_root/Tests/NoonmarkStorageTests/ICloudDriveLocalFirstSyncLiveTests.swift" \
-  'NoonmarkLiveTests/'
+  'removeItem(at: rootURL)'
 for build_only_script in \
   "$repo_root/scripts/build-mac-app" \
   "$repo_root/scripts/build-dmg-install-harness" \
@@ -1084,10 +1102,9 @@ scripts/test-e2e|app_bundle_name="NoonmarkE2E"
 scripts/test-e2e|app-snapshot/NoonmarkE2E.app
 scripts/test-ai-provider-live|scripts/reset-dev-data e2e
 scripts/test-ai-provider-live|app_path="dist/NoonmarkE2E.app"
-scripts/test-icloud-sync-live|scripts/reset-dev-data e2e
-scripts/test-icloud-sync-live|Noonmark-E2E/SyncRepository
-scripts/test-cloudkit-sync-live|scripts/reset-dev-data e2e
-scripts/test-cloudkit-sync-live|dist/NoonmarkE2E.app
+scripts/test-icloud-sync-live|scripts/test-icloud-append-only-guard
+scripts/test-icloud-sync-live|scripts/test-icloud-append-only-symptom
+scripts/test-icloud-append-only-symptom|NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID
 scripts/test-tencent-ime-input-latency|scripts/reset-dev-data e2e
 scripts/test-tencent-ime-input-latency|dist/NoonmarkE2E.app
 scripts/test-tencent-ime-input-matrix|scripts/reset-dev-data e2e

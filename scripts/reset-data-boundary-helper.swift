@@ -50,28 +50,22 @@ private struct RuntimeResetScope {
 
     init(profile: String) throws {
         let dataDirectory: String
-        let iCloudRoot: String
         let bundleIdentifier: String
         switch profile {
         case "development":
             dataDirectory = "noonmark-development"
-            iCloudRoot = "Noonmark-Development"
             bundleIdentifier = "app.noonmark.mac.development"
         case "e2e":
             dataDirectory = "noonmark-e2e"
-            iCloudRoot = "Noonmark-E2E"
             bundleIdentifier = "app.noonmark.mac.e2e"
         case "demo":
             dataDirectory = "noonmark-demo"
-            iCloudRoot = "Noonmark-Demo"
             bundleIdentifier = "app.noonmark.mac.demo"
         case "audit":
             dataDirectory = "noonmark-audit"
-            iCloudRoot = "Noonmark-Audit"
             bundleIdentifier = "app.noonmark.mac.audit"
         case "dmg-validation":
             dataDirectory = "noonmark-dmg-validation"
-            iCloudRoot = "Noonmark-DMGValidation"
             bundleIdentifier = "app.noonmark.mac.dmg-validation"
         default:
             throw ResetBoundaryError.invalidProfile
@@ -79,7 +73,6 @@ private struct RuntimeResetScope {
 
         relativeTargets = [
             "Library/Application Support/\(dataDirectory)",
-            "Library/Mobile Documents/com~apple~CloudDocs/\(iCloudRoot)",
             "Library/Caches/\(bundleIdentifier)",
             "Library/Saved Application State/\(bundleIdentifier).savedState"
         ]

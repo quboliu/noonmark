@@ -264,11 +264,6 @@ struct LocalFirstCloudSyncCard: View {
         return (store.copy.localFirstSyncDisabled, Theme.text3)
     }
 
-    private var displayedCloudKitConfiguration: CloudKitSyncLaunchConfiguration? {
-        guard policy.endpoint == .iCloud else { return nil }
-        return store.cloudKitSyncConfiguration
-    }
-
     var body: some View {
         SettingSection(title: store.copy.localFirstSyncTitle) {
             VStack(alignment: .leading, spacing: 10) {
@@ -341,9 +336,7 @@ struct LocalFirstCloudSyncCard: View {
                             Text(
                                 policy.enabled
                                     ? (policy.endpoint == .iCloud
-                                        ? (store.isCloudKitSyncConfigured
-                                            ? store.copy.cloudKitSyncReady
-                                            : store.copy.iCloudSyncReady)
+                                        ? store.copy.iCloudSyncReady
                                         : store.copy.localFolderSyncReady)
                                     : store.copy.localFirstSyncDisabled
                             )
@@ -351,19 +344,7 @@ struct LocalFirstCloudSyncCard: View {
                                 .foregroundStyle(Theme.text3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        if let configuration = displayedCloudKitConfiguration {
-                            SettingsInfoRow(
-                                label: store.copy.cloudKitContainerTitle,
-                                value: configuration.containerIdentifier,
-                                labelWidth: 92
-                            )
-                            SettingsInfoRow(
-                                label: store.copy.cloudKitZoneTitle,
-                                value: configuration.zoneName,
-                                labelWidth: 92,
-                                last: false
-                            )
-                        } else if let endpointURL = NoonmarkStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
+                        if let endpointURL = NoonmarkStore.configuredLocalFirstSyncEndpointURL(for: policy.endpoint) {
                             if policy.endpoint == .iCloud {
                                 SettingsInfoRow(
                                     label: store.copy.iCloudDriveLocationTitle,

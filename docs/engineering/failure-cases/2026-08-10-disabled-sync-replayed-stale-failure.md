@@ -48,8 +48,8 @@ build 27 在精确提交 `764f781076f72a80ccdefb976617ebb54b66bcda` 与同一 ev
 
 ## 永久门禁
 
-- fast：`scripts/test-preferences-checkbox-interaction-target-contract` 固定 disabled restart suppression、post-await policy recheck 与重新启用路径必须存在于真实 App automation。
-- symptom：`scripts/test-e2e` 以两个真实 App process、同一隔离 SQLite、可控 correlation continuation 和原生设置页 WindowServer 输入验证 warning 生命周期与关闭竞态。
+- fast：`scripts/test-preferences-checkbox-interaction-target-contract` 固定 V2 disabled state 必须 resolve actionable warning、跨重启保持 suppression，并保留重新启用收敛路径。
+- symptom：`scripts/test-e2e` 以三个真实 App process、同一隔离 SQLite、受控 V2 failure／blocked read 和原生设置页 WindowServer 输入验证 warning 生命周期、disable join、重启 suppression 与 recovery。
 - release：`scripts/verify-development-validation-evidence --scope full` 在私有 DMG 发行前消费同 source/run 的 Preferences Clock 退出与重启证据。
 
 ## 发行与回滚
@@ -59,3 +59,7 @@ build 27 在精确提交 `764f781076f72a80ccdefb976617ebb54b66bcda` 与同一 ev
 ## 教训与永久约束
 
 持久化 failure 是历史事实，不等于当前 actionable presentation。恢复全局错误必须同时验证 operation 仍启用；关闭功能时保留历史可见性，但不得把同一个 incident 在每次启动重新包装成新问题。
+
+## 2026-08-11 V2 clean-cut 复核
+
+本案例的 V1 历史、诊断编号分析、归因与修复提交保持不变。V2 不读取或兼容 `localFirst.sync.lastStatus`，现行 ground truth 是 durable replication control、typed incident 与 operation capsule。真实签名 Preferences 路径先建立 V2 runtime failure，再物理 disable；disabled state 必须清除 actionable incident／warning，第二次启动保持 worker disabled 与 warning suppressed，第三阶段显式重新启用并 retry 至 converged。旧 persisted-failure continuation seam 已删除并被全仓 forbidden search 取代。

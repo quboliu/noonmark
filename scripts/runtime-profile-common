@@ -13,6 +13,7 @@ noonmark_runtime_profile_load() {
   NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME=""
   NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE=""
   NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE=""
+  NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE=""
   NOONMARK_RUNTIME_RESETTABLE=""
 
   case "$profile" in
@@ -26,6 +27,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark"
       NOONMARK_RUNTIME_RESETTABLE=0
       ;;
     development)
@@ -38,6 +40,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Development/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.development"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.development"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark.development"
       NOONMARK_RUNTIME_RESETTABLE=1
       ;;
     e2e)
@@ -50,6 +53,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-E2E/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.e2e"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.e2e"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark.e2e"
       NOONMARK_RUNTIME_RESETTABLE=1
       ;;
     demo)
@@ -62,6 +66,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Demo/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.demo"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.demo"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark.demo"
       NOONMARK_RUNTIME_RESETTABLE=1
       ;;
     audit)
@@ -74,6 +79,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-Audit/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.audit"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.audit"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark.audit"
       NOONMARK_RUNTIME_RESETTABLE=1
       ;;
     dmg-validation)
@@ -86,6 +92,7 @@ noonmark_runtime_profile_load() {
       NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME="Noonmark-DMGValidation/SyncRepository"
       NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE="app.noonmark.zhulong.provider.dmg-validation"
       NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE="app.noonmark.zhulong.sidecar-key.dmg-validation"
+      NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE="app.noonmark.replication-watermark.dmg-validation"
       NOONMARK_RUNTIME_RESETTABLE=1
       ;;
     *)
@@ -132,6 +139,7 @@ noonmark_runtime_validate_all_profiles() {
   local icloud_repository_names=(__noonmark_profile_sentinel__)
   local provider_keychain_services=(__noonmark_profile_sentinel__)
   local sidecar_keychain_services=(__noonmark_profile_sentinel__)
+  local replication_watermark_keychain_services=(__noonmark_profile_sentinel__)
   local profile=""
   local value=""
   local existing=""
@@ -147,7 +155,8 @@ noonmark_runtime_validate_all_profiles() {
       "$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME" \
       "$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME" \
       "$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE" \
-      "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE"; do
+      "$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE" \
+      "$NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE"; do
       if [[ -z "$value" || "$value" == *$'\n'* ]]; then
         echo "runtime profile $profile contains an unsafe empty or multiline identity" >&2
         return 1
@@ -198,6 +207,12 @@ noonmark_runtime_validate_all_profiles() {
         return 1
       }
     done
+    for existing in "${replication_watermark_keychain_services[@]}"; do
+      [[ "$existing" != "$NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE" ]] || {
+        echo "runtime profiles share replication watermark Keychain service $existing" >&2
+        return 1
+      }
+    done
 
     bundle_identifiers+=("$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER")
     process_names+=("$NOONMARK_RUNTIME_PROCESS_NAME")
@@ -206,5 +221,8 @@ noonmark_runtime_validate_all_profiles() {
     icloud_repository_names+=("$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME")
     provider_keychain_services+=("$NOONMARK_RUNTIME_PROVIDER_KEYCHAIN_SERVICE")
     sidecar_keychain_services+=("$NOONMARK_RUNTIME_SIDECAR_KEYCHAIN_SERVICE")
+    replication_watermark_keychain_services+=(
+      "$NOONMARK_RUNTIME_REPLICATION_WATERMARK_KEYCHAIN_SERVICE"
+    )
   done
 }

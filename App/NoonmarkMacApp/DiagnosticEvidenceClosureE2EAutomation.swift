@@ -3,14 +3,17 @@ import Foundation
 import NoonmarkDiagnostics
 import NoonmarkStorage
 
-/// Drives the three-process diagnostic evidence closure used by `scripts/test-e2e`:
-/// persist one failed sync, interrupt a second sync while it waits for the
-/// repository lock, then prove that the restarted app can export the complete
-/// evidence through its real Help-menu UI.
+/// Drives the V2 three-process diagnostic closure used by `scripts/test-e2e`:
+/// persist one failed reconcile, interrupt another while the endpoint is
+/// blocked, then prove that the restarted App can export the complete typed
+/// evidence through its real Help-menu UI. The blocked endpoint must not hold
+/// a mutation lease, so an ordinary task mutation succeeds; an independently
+/// injected persistence failure must still reject the next mutation and bind
+/// that evidence to the active sync operation.
 struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
     private enum Mode {
         case seedFailure
-        case stallAndReject
+        case stallAndMutate
         case verifyRestartAndExport
     }
 
@@ -18,7 +21,8 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         var failedOperationID: UUID
         var failedIncidentID: UUID
         var stalledOperationID: UUID?
-        var mutationIncidentID: UUID?
+        var rejectedMutationIncidentID: UUID?
+        var taskCountAfterMutation: Int?
     }
 
     private static let privacySentinel =
@@ -42,6 +46,9 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         )
         guard [seeds, stalls, restarts].filter(\.self).count == 1,
               Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e",
+              AppLaunchArguments.contains(
+                  "--e2e-replication-v2-lifecycle-endpoint"
+              ),
               let statePath = AppLaunchArguments.value(
                   after: "--e2e-diagnostic-evidence-state-url"
               ),
@@ -64,15 +71,14 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
             mode = .seedFailure
             exportURL = nil
         } else if stalls {
-            mode = .stallAndReject
+            mode = .stallAndMutate
             exportURL = nil
         } else {
             guard let exportPath = AppLaunchArguments.value(
                 after: "--e2e-diagnostic-evidence-export-url"
-            ),
-                isAbsolutePath(exportPath),
-                exportPath != statePath,
-                exportPath != resultPath
+            ), isAbsolutePath(exportPath),
+            exportPath != statePath,
+            exportPath != resultPath
             else { return nil }
             mode = .verifyRestartAndExport
             exportURL = URL(fileURLWithPath: exportPath)
@@ -93,11 +99,13 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
                 switch mode {
                 case .seedFailure:
                     try await seedFailure(on: store)
-                    try writeResult("ok: seed failure persisted")
+                    try writeResult("ok: V2 seed failure persisted")
                     E2EApplicationTermination.schedule()
-                case .stallAndReject:
-                    try await stallAndReject(on: store)
-                    try writeResult("ready: stalled sync and rejected mutation")
+                case .stallAndMutate:
+                    try await stallAndMutate(on: store)
+                    try writeResult(
+                        "ready: stalled V2 sync committed and rejected exact mutations"
+                    )
                 case .verifyRestartAndExport:
                     try await verifyRestartAndExport(on: store)
                     try writeResult("ok: restarted evidence exported through UI")
@@ -112,130 +120,133 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
 
     @MainActor
     private func seedFailure(on store: NoonmarkStore) async throws {
-        guard FileManager.default.fileExists(
-            atPath: NoonmarkStore.configuredSyncFolderURL().path
-        ) else {
-            throw Failure.failed("invalid sync-root fixture is missing")
-        }
         store.setDataMode(.localFirst)
         store.setLocalFirstSyncEndpoint(.localFolder)
         store.setLocalFirstSyncMode(.manual)
         store.setLocalFirstSyncEnabled(true)
-        guard store.engine.preferences.dataMode == .localFirst,
-              store.engine.preferences.localFirstSyncPolicy.endpoint == .localFolder,
-              store.engine.preferences.localFirstSyncPolicy.mode == .manual,
-              store.engine.preferences.localFirstSyncPolicy.enabled
+        try await requireConfiguredRuntime(on: store)
+        guard let endpoint = store.localFirstReplicationLifecycleE2EEndpoint,
+              await endpoint.armReadFailure()
         else {
-            throw Failure.failed("local-folder manual sync policy was not installed")
+            throw Failure.failed("V2 diagnostic failure seam is unavailable")
         }
 
         store.syncLocalFolderNow()
-        try await waitUntil("invalid sync root did not produce a failed status") {
-            guard store.isLocalFirstSyncing == false,
-                  let correlation = try persistedFailureCorrelation(
-                      store,
-                      expectedReason: .transportOrStorage
-                  )
+        guard let command = store.localFirstReplicationCommandTask else {
+            throw Failure.failed("V2 diagnostic failure reconcile did not start")
+        }
+        _ = await command.result
+        guard let recorder = store.localDiagnosticRecorder else {
+            throw Failure.failed("file diagnostic recorder is unavailable")
+        }
+        var failedCapsule: DiagnosticOperationCapsule?
+        try await waitUntil("V2 failure did not persist exact diagnostics") {
+            guard let incidentID = store.operationFailureNotice?
+                .diagnosticIncidentID
             else { return false }
-            return store.operationFailureNotice?.context == .sync
-                && store.operationFailureNotice?.diagnosticIncidentID
-                == correlation.incidentID
+            let package = try await recorder.snapshotPackage()
+            failedCapsule = package.operationCapsules.first {
+                $0.incidentID == incidentID
+                    && $0.kind == .localFirstSync
+                    && $0.endpoint == .localFolder
+                    && $0.outcome == .failed
+            }
+            return failedCapsule != nil
         }
-        guard let correlation = try persistedFailureCorrelation(
-            store,
-            expectedReason: .transportOrStorage
-        ),
-              let recorder = store.localDiagnosticRecorder
+        guard let failedCapsule,
+              let failedIncidentID = failedCapsule.incidentID
         else {
-            throw Failure.failed("failed sync lost its persistent correlation")
+            throw Failure.failed("V2 failed sync lost its correlation")
         }
-        let package = try await recorder.snapshotPackage()
-        try assertFailedSync(
-            package,
-            operationID: correlation.operationID,
-            incidentID: correlation.incidentID
-        )
         try writeState(
             State(
-                failedOperationID: correlation.operationID.rawValue,
-                failedIncidentID: correlation.incidentID.rawValue,
+                failedOperationID: failedCapsule.operationID.rawValue,
+                failedIncidentID: failedIncidentID.rawValue,
                 stalledOperationID: nil,
-                mutationIncidentID: nil
+                rejectedMutationIncidentID: nil,
+                taskCountAfterMutation: nil
             )
         )
     }
 
     @MainActor
-    private func stallAndReject(on store: NoonmarkStore) async throws {
+    private func stallAndMutate(on store: NoonmarkStore) async throws {
         var state = try readState()
-        try await waitUntil("persisted sync failure was not restored") {
-            store.operationFailureNotice?.context == .sync
-                && store.operationFailureNotice?.diagnosticIncidentID?.rawValue
-                == state.failedIncidentID
-        }
-        store.quickText = "E2E diagnostic lock-wait seed"
-        store.addQuickTask()
-        guard store.quickText.isEmpty else {
-            throw Failure.failed("diagnostic lock-wait seed was not committed")
-        }
-        let snapshotBefore = store.engine.snapshot()
-        store.syncLocalFolderNow()
-        try await waitUntil("sync did not enter the external repository-lock wait") {
-            guard store.isLocalFirstSyncing,
-                  case let .localFirstSync(rawOperationID) =
-                  store.exclusiveEngineOperation,
-                  let recorder = store.localDiagnosticRecorder
-            else { return false }
-            let package = try await recorder.snapshotPackage()
-            return package.activeOperations.contains {
-                $0.id.rawValue == rawOperationID
-                    && $0.kind == .localFirstSync
-                    && $0.endpoint == .localFolder
-                    && $0.lastStage == .transportLockWait
-            }
-        }
-        guard case let .localFirstSync(stalledOperationID) =
-            store.exclusiveEngineOperation
+        try await requireConfiguredRuntime(on: store)
+        guard let endpoint = store.localFirstReplicationLifecycleE2EEndpoint,
+              await endpoint.armBlockingRead()
         else {
-            throw Failure.failed("stalled sync operation identity disappeared")
+            throw Failure.failed("V2 diagnostic blocking seam is unavailable")
+        }
+        guard let recorder = store.localDiagnosticRecorder else {
+            throw Failure.failed("file diagnostic recorder is unavailable")
+        }
+        let taskCountBefore = store.engine.snapshot().definitions.count
+        store.syncLocalFolderNow()
+        guard store.localFirstReplicationCommandTask != nil else {
+            throw Failure.failed("V2 diagnostic stalled reconcile did not start")
+        }
+        try await waitUntil("V2 sync did not enter endpoint wait") {
+            await endpoint.isReadBlocked()
+        }
+        var stalledOperation: DiagnosticActiveOperation?
+        try await waitUntil("V2 stalled operation was not durably active") {
+            let package = try await recorder.snapshotPackage()
+            stalledOperation = package.activeOperations.first {
+                $0.kind == .localFirstSync
+                    && $0.endpoint == .localFolder
+                    && $0.lastStage == .transportPrepare
+            }
+            return stalledOperation != nil
         }
 
         store.quickText = Self.privacySentinel
         store.addQuickTask()
-        guard store.engine.snapshot() == snapshotBefore,
-              store.quickText == Self.privacySentinel,
-              store.operationFailureNotice?.context == .taskMutation,
-              let mutationIncidentID =
-              store.operationFailureNotice?.diagnosticIncidentID
+        let taskCountAfter = store.engine.snapshot().definitions.count
+        guard store.quickText.isEmpty,
+              taskCountAfter == taskCountBefore + 1,
+              store.operationFailureNotice?.context != .taskMutation
         else {
-            throw Failure.failed("in-flight sync did not reject the exact task mutation")
-        }
-        let diagnosticOperationID = DiagnosticOperationID(
-            rawValue: stalledOperationID
-        )
-        guard let recorder = store.localDiagnosticRecorder else {
-            throw Failure.failed("file diagnostic recorder became unavailable")
-        }
-        try await waitUntil("mutation rejection was not durably recorded") {
-            let package = try await recorder.snapshotPackage()
-            return package.records.contains {
-                $0.event.code == .mutationRejected
-                    && $0.event.operationID == diagnosticOperationID
-                    && $0.event.incidentID == mutationIncidentID
-                    && $0.event.mutationContext == .task
-                    && $0.event.mutationRejectionReason
-                    == .exclusiveOperationInProgress
-            }
+            throw Failure.failed(
+                "V2 endpoint wait rejected an ordinary local mutation"
+            )
         }
         let package = try await recorder.snapshotPackage()
-        guard package.activeOperations.contains(where: {
-            $0.id == diagnosticOperationID
-                && $0.lastStage == .transportLockWait
-        }) else {
-            throw Failure.failed("stalled operation was not active at lock-wait stage")
+        guard package.records.contains(where: {
+            $0.event.code == .mutationRejected
+                && $0.event.operationID == stalledOperation?.id
+        }) == false,
+            let stalledOperation
+        else {
+            throw Failure.failed(
+                "V2 endpoint wait emitted a mutation rejection"
+            )
         }
-        state.stalledOperationID = stalledOperationID
-        state.mutationIncidentID = mutationIncidentID.rawValue
+        try store.armPersistenceFailureForE2E()
+        store.quickText = Self.privacySentinel + "_REJECTED"
+        store.addQuickTask()
+        store.disarmPersistenceFailureForE2E()
+        guard store.quickText.isEmpty == false,
+              store.engine.snapshot().definitions.count == taskCountAfter,
+              store.operationFailureNotice?.context == .taskMutation
+        else {
+            throw Failure.failed(
+                "V2 persistence failure did not reject the exact mutation"
+            )
+        }
+        var rejectedIncidentID: DiagnosticIncidentID?
+        try await waitUntil("V2 rejected mutation lost sync correlation") {
+            let package = try await recorder.snapshotPackage()
+            rejectedIncidentID = package.records.first {
+                $0.event.code == .mutationRejected
+                    && $0.event.operationID == stalledOperation.id
+            }?.event.incidentID
+            return rejectedIncidentID != nil
+        }
+        store.quickText = ""
+        state.stalledOperationID = stalledOperation.id.rawValue
+        state.rejectedMutationIncidentID = rejectedIncidentID?.rawValue
+        state.taskCountAfterMutation = taskCountAfter
         try writeState(state)
     }
 
@@ -243,11 +254,14 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
     private func verifyRestartAndExport(on store: NoonmarkStore) async throws {
         let state = try readState()
         guard let stalledOperationID = state.stalledOperationID,
-              let mutationIncidentID = state.mutationIncidentID,
+              let rejectedMutationIncidentID = state.rejectedMutationIncidentID,
+              let taskCountAfterMutation = state.taskCountAfterMutation,
+              store.engine.snapshot().definitions.count
+              == taskCountAfterMutation,
               let recorder = store.localDiagnosticRecorder,
               let exportURL
         else {
-            throw Failure.failed("restart state is incomplete")
+            throw Failure.failed("V2 diagnostic restart state is incomplete")
         }
         let failedOperationID = DiagnosticOperationID(
             rawValue: state.failedOperationID
@@ -259,28 +273,18 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
             rawValue: stalledOperationID
         )
         let rejectedIncidentID = DiagnosticIncidentID(
-            rawValue: mutationIncidentID
+            rawValue: rejectedMutationIncidentID
         )
 
-        try await waitUntil("restart evidence did not converge") {
+        try await waitUntil("V2 restart evidence did not converge") {
             let package = try await recorder.snapshotPackage()
-            guard hasRestartEvidence(
+            return hasRestartEvidence(
                 package,
                 failedOperationID: failedOperationID,
                 failedIncidentID: failedIncidentID,
                 interruptedOperationID: interruptedOperationID,
-                rejectedIncidentID: rejectedIncidentID
-            ),
-                let persistedCorrelation = try persistedFailureCorrelation(
-                    store,
-                    expectedReason: .operationInterrupted
-                )
-            else { return false }
-            return persistedCorrelation.operationID == interruptedOperationID
-                && persistedCorrelation.incidentID == rejectedIncidentID
-                && store.operationFailureNotice?.context == .sync
-                && store.operationFailureNotice?.diagnosticIncidentID
-                == rejectedIncidentID
+                rejectedMutationIncidentID: rejectedIncidentID
+            ) && store.operationFailureNotice == nil
         }
         try requireAbsent(exportURL, description: "diagnostic export")
         guard AppViewTreeE2E.activateMainWindow() else {
@@ -299,10 +303,11 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         guard exportData.count <= 8 * 1024 * 1024,
               exportData.range(of: Data(Self.privacySentinel.utf8)) == nil
         else {
-            throw Failure.failed("diagnostic export exceeded its cap or leaked task text")
+            throw Failure.failed(
+                "diagnostic export exceeded its cap or leaked task text"
+            )
         }
-        let decoder = JSONDecoder()
-        let package = try decoder.decode(
+        let package = try JSONDecoder().decode(
             DiagnosticExportPackage.self,
             from: exportData
         )
@@ -311,13 +316,28 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
             failedOperationID: failedOperationID,
             failedIncidentID: failedIncidentID,
             interruptedOperationID: interruptedOperationID,
-            rejectedIncidentID: rejectedIncidentID
+            rejectedMutationIncidentID: rejectedIncidentID
         ) else {
-            throw Failure.failed("UI export omitted required cross-session evidence")
+            throw Failure.failed("UI export omitted V2 cross-session evidence")
         }
         let health = await recorder.health()
         guard health.allocatedBytes <= 4 * 1024 * 1024 else {
-            throw Failure.failed("managed diagnostics exceeded the four-megabyte cap")
+            throw Failure.failed("managed diagnostics exceeded its capacity cap")
+        }
+    }
+
+    @MainActor
+    private func requireConfiguredRuntime(on store: NoonmarkStore) async throws {
+        for _ in 0 ..< 8 {
+            guard let task = store.localFirstReplicationConfigurationTask else {
+                await Task.yield()
+                continue
+            }
+            _ = await task.result
+            await Task.yield()
+        }
+        guard store.localFirstReplicationRuntime != nil else {
+            throw Failure.failed("V2 diagnostic runtime did not settle")
         }
     }
 
@@ -331,50 +351,9 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
               dataPath.contains("e2e-diagnostic-closure"),
               syncPath.contains("e2e-diagnostic-closure")
         else {
-            throw Failure.failed("diagnostic closure escaped the dedicated E2E profile")
-        }
-    }
-
-    private func persistedFailureCorrelation(
-        _ store: NoonmarkStore,
-        expectedReason: SQLiteLocalFirstSyncFailureReason
-    ) throws -> DiagnosticOperationCorrelation? {
-        guard let databaseURL = store.databaseURL,
-              let metadata = try SQLiteSyncRepository(databaseURL: databaseURL)
-              .metadata(
-                  for: SQLiteLocalFirstSyncCoordinator.lastStatusMetadataKey
-              )
-        else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let status = try decoder.decode(
-            SQLiteLocalFirstSyncStatus.self,
-            from: metadata.value
-        )
-        guard case let .failed(
-            reason,
-            _,
-            _,
-            diagnosticCorrelation
-        ) = status,
-            reason == expectedReason
-        else { return nil }
-        return diagnosticCorrelation
-    }
-
-    private func assertFailedSync(
-        _ package: DiagnosticExportPackage,
-        operationID: DiagnosticOperationID,
-        incidentID: DiagnosticIncidentID
-    ) throws {
-        guard package.operationCapsules.contains(where: {
-            $0.operationID == operationID
-                && $0.incidentID == incidentID
-                && $0.kind == .localFirstSync
-                && $0.endpoint == .localFolder
-                && $0.outcome == .failed
-        }) else {
-            throw Failure.failed("failed sync capsule lost its exact correlation")
+            throw Failure.failed(
+                "diagnostic closure escaped the dedicated E2E profile"
+            )
         }
     }
 
@@ -383,7 +362,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         failedOperationID: DiagnosticOperationID,
         failedIncidentID: DiagnosticIncidentID,
         interruptedOperationID: DiagnosticOperationID,
-        rejectedIncidentID: DiagnosticIncidentID
+        rejectedMutationIncidentID: DiagnosticIncidentID
     ) -> Bool {
         let failedCapsule = package.operationCapsules.contains {
             $0.operationID == failedOperationID
@@ -394,38 +373,29 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         }
         let interruptedCapsule = package.operationCapsules.contains {
             $0.operationID == interruptedOperationID
-                && $0.incidentID == rejectedIncidentID
+                && $0.incidentID == rejectedMutationIncidentID
                 && $0.kind == .localFirstSync
                 && $0.endpoint == .localFolder
-                && $0.lastStage == .transportLockWait
+                && $0.lastStage == .transportPrepare
                 && $0.outcome == .interrupted
         }
         let interruptedEvent = package.records.contains {
             $0.event.code == .previousSessionInterrupted
                 && $0.event.operationID == interruptedOperationID
-                && $0.event.incidentID == rejectedIncidentID
+                && $0.event.incidentID == rejectedMutationIncidentID
                 && $0.event.operationKind == .localFirstSync
                 && $0.event.endpoint == .localFolder
-                && $0.event.stage == .transportLockWait
+                && $0.event.stage == .transportPrepare
         }
-        let rejection = package.records.contains {
+        let rejectedMutation = package.records.contains {
             $0.event.code == .mutationRejected
                 && $0.event.operationID == interruptedOperationID
-                && $0.event.incidentID == rejectedIncidentID
-                && $0.event.mutationContext == .task
-                && $0.event.mutationRejectionReason
-                == .exclusiveOperationInProgress
-        }
-        let restoredFailure = package.records.contains {
-            $0.event.code == .persistedSyncFailureLoaded
-                && $0.event.operationID == interruptedOperationID
-                && $0.event.incidentID == rejectedIncidentID
+                && $0.event.incidentID == rejectedMutationIncidentID
         }
         return failedCapsule
             && interruptedCapsule
             && interruptedEvent
-            && rejection
-            && restoredFailure
+            && rejectedMutation
     }
 
     private func waitUntil(
@@ -434,7 +404,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
         delayNanoseconds: UInt64 = 25_000_000,
         condition: @MainActor () async throws -> Bool
     ) async throws {
-        for _ in 0..<attempts {
+        for _ in 0 ..< attempts {
             if try await condition() {
                 return
             }
@@ -444,8 +414,10 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
     }
 
     private func readState() throws -> State {
-        let decoder = JSONDecoder()
-        return try decoder.decode(State.self, from: Data(contentsOf: stateURL))
+        try JSONDecoder().decode(
+            State.self,
+            from: Data(contentsOf: stateURL)
+        )
     }
 
     private func writeState(_ state: State) throws {
@@ -477,8 +449,7 @@ struct DiagnosticEvidenceClosureE2EAutomation: LaunchAutomationRunnable {
 
         var errorDescription: String? {
             switch self {
-            case let .failed(message):
-                message
+            case let .failed(message): message
             }
         }
     }

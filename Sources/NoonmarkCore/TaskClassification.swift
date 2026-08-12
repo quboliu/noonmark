@@ -4105,7 +4105,10 @@ extension NoonmarkEngine {
     package func inheritCurrentClassification(
         from sourceChainID: TaskChainID,
         to targetChainID: TaskChainID,
-        now: Date
+        now: Date,
+        changeRecordID: UUID = UUID(),
+        planID: UUID = UUID(),
+        interactionID: UUID = UUID()
     ) throws -> Bool {
         guard now.timeIntervalSinceReferenceDate.isFinite else {
             throw NoonmarkError.invalidInput("classification audit time must be finite")
@@ -4116,9 +4119,6 @@ extension NoonmarkEngine {
             return false
         }
         let before = currentClassificationPreview(for: targetChainID)
-        let changeRecordID = UUID()
-        let planID = UUID()
-        let interactionID = UUID()
         let baseRevision = classificationState.revision
         let mutation = ClassificationMutationContext(
             source: .inherited(fromChainID: sourceChainID),

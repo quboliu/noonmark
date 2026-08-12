@@ -433,6 +433,8 @@ public final class SQLiteEngineRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let oldSnapshot = try authoritativeSourceSnapshot(
@@ -464,29 +466,8 @@ public final class SQLiteEngineRepository {
         let stagedRepository = SQLiteEngineRepository(databaseURL: stagedURL)
         try stagedRepository.save(snapshot)
         if let deviceIdentity {
-            let stagedSyncRepository = SQLiteSyncRepository(
-                databaseURL: stagedURL
-            )
-            try stagedSyncRepository.saveDeviceIdentity(deviceIdentity)
-            let baselineCreatedAt = Date()
-            let baselineEntries = try SyncSnapshotBaselineBuilder()
-                .journalEntries(
-                    from: snapshot,
-                    modifiedBy: deviceIdentity.deviceID,
-                    createdAt: baselineCreatedAt
-                )
-            let manifest = SQLiteSyncBaselineManifest(
-                createdAt: baselineCreatedAt,
-                entries: baselineEntries
-            )
-            try stagedSyncRepository.saveBaselineJournal(
-                baselineEntries,
-                manifestMetadata: try manifest.metadata(
-                    key: SQLiteLocalFirstSyncCoordinator
-                        .baselineManifestMetadataKey,
-                    updatedAt: baselineCreatedAt
-                )
-            )
+            try SQLiteSyncRepository(databaseURL: stagedURL)
+                .saveDeviceIdentity(deviceIdentity)
         }
         _ = try stagedRepository.load()
 
@@ -509,6 +490,8 @@ public final class SQLiteEngineRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let oldSnapshot = try authoritativeSourceSnapshot(
@@ -845,6 +828,8 @@ public final class SQLiteEngineRepository {
         defer { sqlite3_close(database) }
 
         try applySchema(on: database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
         do {
             let oldSnapshot = try authoritativeSourceSnapshot(
@@ -1445,6 +1430,8 @@ private extension SQLiteEngineRepository {
         defer { sqlite3_close(source) }
         let destination = try openDatabase()
         defer { sqlite3_close(destination) }
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         sqlite3_busy_timeout(destination, 5000)
 
         guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
@@ -1526,7 +1513,7 @@ private extension SQLiteEngineRepository {
     func execute(_ sql: String, on database: Database?) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw SQLiteRepositoryError.executeFailed(
-                lastError(database),
+                "engine repository writerDepth=\(storeRuntime.writerLeaseDepth): \(lastError(database)) in \(sqlSummary(sql))",
                 sqliteCode: sqliteDiagnosticCode(database)
             )
         }
@@ -1544,6 +1531,8 @@ private extension SQLiteEngineRepository {
     }
 
     func run(_ sql: String, on database: Database?, bind: (Statement?) throws -> Void) throws {
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         let statement = try prepare(sql, on: database)
         defer { sqlite3_finalize(statement) }
         try bind(statement)
@@ -4107,6 +4096,57 @@ private extension SQLiteEngineRepository {
     func appendJournalEntries(_ entries: [SyncJournalEntry], into database: Database?) throws {
         for entry in entries {
             try SQLiteJournalCAS.insertOrValidateExact(entry, into: database)
+            try run(
+                """
+                INSERT INTO sync_replication_outbox(
+                    generation_id, journal_id, captured_at_bits,
+                    confirmed_at_bits
+                )
+                SELECT generation_id, ?, ?, NULL
+                FROM sync_replication_authority
+                WHERE id = 1
+                ON CONFLICT(generation_id, journal_id) DO NOTHING
+                """,
+                on: database
+            ) { statement in
+                bind(entry.id, to: 1, in: statement)
+                try bindExactDate(entry.changedAt, to: 2, in: statement)
+            }
+            let authorities = try query(
+                """
+                SELECT generation_id
+                FROM sync_replication_authority
+                WHERE id = 1
+                """,
+                on: database
+            ) { statement in
+                try uuid(statement, 0)
+            }
+            guard authorities.isEmpty || authorities.count == 1 else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication authority is missing or duplicated"
+                )
+            }
+            if let authority = authorities.first {
+                let matches = try query(
+                    """
+                    SELECT 1
+                    FROM sync_replication_outbox
+                    WHERE generation_id = ? AND journal_id = ?
+                      AND captured_at_bits = ?
+                    """,
+                    on: database
+                ) { statement in
+                    bind(authority, to: 1, in: statement)
+                    bind(entry.id, to: 2, in: statement)
+                    try bindExactDate(entry.changedAt, to: 3, in: statement)
+                } row: { _ in 1 }
+                guard matches == [1] else {
+                    throw SQLiteRepositoryError.invalidStoredValue(
+                        "replication outbox capture did not match its journal fact"
+                    )
+                }
+            }
         }
     }
 }

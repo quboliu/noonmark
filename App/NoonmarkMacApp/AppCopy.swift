@@ -311,6 +311,12 @@ struct AppCopy {
     var localFirstSyncEnabled: String { language == .chinese ? "启用同步" : "Enable sync" }
     var localFirstSyncDisabled: String { language == .chinese ? "同步已关闭" : "Sync is off" }
     var localFirstSyncStopping: String { language == .chinese ? "正在关闭同步" : "Stopping sync" }
+    var localFirstSyncInterruptedRecoveryMessage: String {
+        language == .chinese
+            ? "上次同步被中断；V2 运行时会从已确认边界继续。"
+            : "The previous sync was interrupted; V2 will resume from its confirmed boundary."
+    }
+
     var syncAutomaticIntervalTitle: String { language == .chinese ? "自动间隔" : "Automatic interval" }
     func syncAutomaticInterval(_ seconds: Int) -> String {
         if seconds < 60 {
@@ -360,20 +366,6 @@ struct AppCopy {
         language == .chinese
             ? "同步仓库已写入 iCloud Drive 本机镜像；云端上传由系统完成，可能存在短暂延迟。"
             : "The repository is written to the local iCloud Drive mirror; system upload may be briefly delayed."
-    }
-
-    var cloudKitSyncReady: String {
-        language == .chinese
-            ? "同步记录通过 CloudKit private database 交换；系统调度可能带来短暂延迟。"
-            : "Records sync through the CloudKit private database; system scheduling may introduce a short delay."
-    }
-
-    var cloudKitContainerTitle: String {
-        language == .chinese ? "CloudKit container" : "CloudKit container"
-    }
-
-    var cloudKitZoneTitle: String {
-        language == .chinese ? "CloudKit zone" : "CloudKit zone"
     }
 
     var remoteEndpointPlanned: String {

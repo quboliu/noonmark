@@ -1,5 +1,84 @@
 import Foundation
 
+package struct IndependentPoolTaskCopyRequest {
+    package struct Source {
+        package let chainID: TaskChainID
+        package let title: String
+        package let descriptionText: String?
+        package let noteBodies: [String]
+        package let plannedSubtasks: [PlannedSubtask]
+
+        package init(
+            chainID: TaskChainID,
+            title: String,
+            descriptionText: String?,
+            noteBodies: [String],
+            plannedSubtasks: [PlannedSubtask]
+        ) {
+            self.chainID = chainID
+            self.title = title
+            self.descriptionText = descriptionText
+            self.noteBodies = noteBodies
+            self.plannedSubtasks = plannedSubtasks
+        }
+    }
+
+    package struct DestinationIdentity {
+        package let chainID: TaskChainID
+        package let definitionID: TaskDefinitionID
+        package let noteIDs: [TaskNoteEntryID]
+        package let plannedSubtaskIDs: [PlannedSubtaskID]
+        package let lineageIDs: [SubtaskLineageID]
+
+        package init(
+            chainID: TaskChainID,
+            definitionID: TaskDefinitionID,
+            noteIDs: [TaskNoteEntryID],
+            plannedSubtaskIDs: [PlannedSubtaskID],
+            lineageIDs: [SubtaskLineageID]
+        ) {
+            self.chainID = chainID
+            self.definitionID = definitionID
+            self.noteIDs = noteIDs
+            self.plannedSubtaskIDs = plannedSubtaskIDs
+            self.lineageIDs = lineageIDs
+        }
+    }
+
+    package struct ClassificationIdentity {
+        package let changeRecordID: UUID
+        package let planID: UUID
+        package let interactionID: UUID
+
+        package init(
+            changeRecordID: UUID,
+            planID: UUID,
+            interactionID: UUID
+        ) {
+            self.changeRecordID = changeRecordID
+            self.planID = planID
+            self.interactionID = interactionID
+        }
+    }
+
+    package let source: Source
+    package let destination: DestinationIdentity
+    package let classification: ClassificationIdentity
+    package let now: Date
+
+    package init(
+        source: Source,
+        destination: DestinationIdentity,
+        classification: ClassificationIdentity,
+        now: Date
+    ) {
+        self.source = source
+        self.destination = destination
+        self.classification = classification
+        self.now = now
+    }
+}
+
 public struct SnapshotUndoOutcome: Equatable, Sendable {
     public let automaticClassificationCancelledChainIDs: [TaskChainID]
     public let automaticClassificationRestoredChainIDs: [TaskChainID]
@@ -689,6 +768,137 @@ public final class NoonmarkEngine {
         definition.plannedSubtasks = nextPlannedSubtasks
         definitions[definition.id] = definition
         try touchChain(chainID, now: now)
+    }
+
+    package func acceptRemoteTaskDefinitionAsForwardRevision(
+        _ remoteDefinition: TaskDefinition,
+        conflictedDefinitionID: TaskDefinitionID,
+        forwardDefinitionID: TaskDefinitionID,
+        now: Date
+    ) throws {
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              remoteDefinition.id == conflictedDefinitionID,
+              let conflicted = definitions[conflictedDefinitionID],
+              conflicted.chainID == remoteDefinition.chainID,
+              definitions[forwardDefinitionID] == nil
+        else {
+            throw NoonmarkError.invalidInput(
+                "remote task definition resolution is not bound to current facts"
+            )
+        }
+        try ensureActiveChain(conflicted.chainID)
+        var current = try currentDefinition(for: conflicted.chainID)
+        let maximumSequence = definitions.values
+            .filter { $0.chainID == conflicted.chainID }
+            .map(\.sequence)
+            .max() ?? current.sequence
+        guard maximumSequence < Int.max else {
+            throw NoonmarkError.invalidTransition(
+                "task definition sequence is exhausted"
+            )
+        }
+        let forward = TaskDefinition(
+            id: forwardDefinitionID,
+            chainID: conflicted.chainID,
+            sequence: maximumSequence + 1,
+            title: remoteDefinition.title,
+            descriptionText: remoteDefinition.descriptionText,
+            plannedSubtasks: remoteDefinition.plannedSubtasks,
+            now: now
+        )
+
+        try current.markContentModified(at: now)
+        current.supersededAt = now
+        current.supersededByDefinitionID = forward.id
+        var reboundTraces: [DayTrace] = []
+        for value in traces.values
+        where value.definitionID == current.id && value.status == .pending {
+            var trace = value
+            try trace.markContentModified(at: now)
+            trace.definitionID = forward.id
+            reboundTraces.append(trace)
+        }
+
+        definitions[current.id] = current
+        definitions[forward.id] = forward
+        for trace in reboundTraces {
+            traces[trace.id] = trace
+        }
+        try touchChain(conflicted.chainID, now: now)
+        try snapshot().validateIntegrity()
+    }
+
+    @discardableResult
+    package func copyTaskAsIndependentPoolTask(
+        _ request: IndependentPoolTaskCopyRequest
+    ) throws -> TaskChainID {
+        let source = request.source
+        let destination = request.destination
+        let now = request.now
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              chains[source.chainID] != nil,
+              chains[destination.chainID] == nil,
+              definitions[destination.definitionID] == nil,
+              source.noteBodies.count == destination.noteIDs.count,
+              source.plannedSubtasks.count
+              == destination.plannedSubtaskIDs.count,
+              source.plannedSubtasks.count == destination.lineageIDs.count,
+              Set(destination.noteIDs).count == destination.noteIDs.count,
+              Set(destination.plannedSubtaskIDs).count
+              == destination.plannedSubtaskIDs.count,
+              Set(destination.lineageIDs).count
+              == destination.lineageIDs.count
+        else {
+            throw NoonmarkError.invalidInput(
+                "replication conflict copy identities are invalid"
+            )
+        }
+        let normalizedTitle = try normalizeTitle(
+            source.title,
+            allowsEmpty: true
+        )
+        let notes = try zip(source.noteBodies, destination.noteIDs).map {
+            try TaskNoteEntry(id: $0.1, body: $0.0, now: now)
+        }
+        let copiedPlannedSubtasks = zip(
+            source.plannedSubtasks,
+            zip(destination.plannedSubtaskIDs, destination.lineageIDs)
+        ).enumerated().map { index, value in
+            PlannedSubtask(
+                id: value.1.0,
+                lineageID: value.1.1,
+                title: value.0.title,
+                difficulty: value.0.difficulty,
+                position: index + 1,
+                now: now
+            )
+        }
+        let chain = TaskChain(
+            id: destination.chainID,
+            noteEntries: notes,
+            now: now
+        )
+        let definition = TaskDefinition(
+            id: destination.definitionID,
+            chainID: destination.chainID,
+            sequence: 1,
+            title: normalizedTitle,
+            descriptionText: source.descriptionText,
+            plannedSubtasks: copiedPlannedSubtasks,
+            now: now
+        )
+        chains[chain.id] = chain
+        definitions[definition.id] = definition
+        _ = try inheritCurrentClassification(
+            from: source.chainID,
+            to: destination.chainID,
+            now: now,
+            changeRecordID: request.classification.changeRecordID,
+            planID: request.classification.planID,
+            interactionID: request.classification.interactionID
+        )
+        try snapshot().validateIntegrity()
+        return destination.chainID
     }
 
     @discardableResult

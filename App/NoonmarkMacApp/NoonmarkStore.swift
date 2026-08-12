@@ -171,41 +171,6 @@ struct AppOperationFailureNotice: Equatable, Identifiable {
     }
 }
 
-@MainActor
-final class PersistedSyncFailureRestoreE2EGate {
-    private(set) var isWaiting = false
-    private var isArmed = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func arm() -> Bool {
-        guard Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e",
-              AppLaunchArguments.contains(
-                  "--e2e-persisted-sync-failure-restore-race"
-              ),
-              isArmed == false,
-              continuation == nil
-        else { return false }
-        isArmed = true
-        return true
-    }
-
-    func waitIfArmed() async {
-        guard isArmed else { return }
-        isWaiting = true
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-        isWaiting = false
-        isArmed = false
-    }
-
-    func release() {
-        guard let continuation else { return }
-        self.continuation = nil
-        continuation.resume()
-    }
-}
-
 enum ZhulongProviderSettingsFeedbackTone: Equatable {
     case progress
     case success
@@ -1080,7 +1045,6 @@ final class NoonmarkStore: ObservableObject {
     @Published var localFirstSyncMessage: String?
     @Published var localFirstSyncTimestamps:
         SQLiteLocalFirstSyncTimestamps?
-    @Published var cloudKitAccountAvailability: CloudKitAccountAvailability?
     @Published var diagnosticHealth: DiagnosticHealth?
     @Published var isDiagnosticActionRunning = false
     @Published var today: LocalDate
@@ -1114,13 +1078,16 @@ final class NoonmarkStore: ObservableObject {
         diagnostics: diagnostics
     )
     let toastScheduler = LatestTransientMessageScheduler()
-    let localFirstSyncRunController = LocalFirstSyncRunController<Void>()
-    let persistedSyncFailureRestoreE2EGate =
-        PersistedSyncFailureRestoreE2EGate()
-    var localFirstSyncAutomationTask: Task<Void, Never>?
-    var localFirstSyncConfirmationRetryTask: Task<Void, Never>?
-    var localFirstSyncDisableTask: Task<Void, Never>?
-    var localFirstSyncConfirmationRetryCount = 0
+    var localFirstReplicationRuntime: LocalFirstReplication?
+    var localFirstReplicationEndpointKind: CloudSyncEndpointKind?
+    var localFirstReplicationLifecycleE2EEndpoint:
+        ReplicationV2LifecycleE2EEndpoint?
+    var localFirstReplicationStateTask: Task<Void, Never>?
+    var localFirstReplicationCommandTask: Task<Void, Never>?
+    var localFirstReplicationConfigurationTask: Task<Void, Never>?
+    var localFirstReplicationLastSQLiteFailurePoint: String?
+    var localFirstReplicationLastErrorKind: String?
+    var localFirstReplicationDiagnosticOperationID: DiagnosticOperationID?
     var automaticClassificationWorkerTask: Task<Void, Never>?
     var automaticClassificationWorkerRestartRequested = false
     var pendingAutomaticClassificationProviderReconciliation:
@@ -1133,7 +1100,6 @@ final class NoonmarkStore: ObservableObject {
     var automaticClassificationBacklogDecisionTask: Task<Void, Never>?
     var automaticClassificationCircuitRetryTask: Task<Void, Never>?
     var automaticClassificationDiagnosticSnapshotFingerprint: String?
-    var cloudKitAccountCheckTask: Task<Void, Never>?
     var zhulongProviderTask: Task<Void, Never>?
     var zhulongProviderTaskID: UUID?
     var zhulongProviderTaskSessionID: ZhulongSessionID?
@@ -1141,8 +1107,6 @@ final class NoonmarkStore: ObservableObject {
     var zhulongProviderHealthCheckTaskID: UUID?
     var naturalDayObservation: NaturalDayObservation?
     var accessibilityDisplayObservation: AnyCancellable?
-    var retainedCloudKitSyncTransport: CloudKitSyncEngineTransport?
-    var retainedCloudKitSyncLease: CloudKitSyncPersistenceLease?
     var undoStack: [UndoEntry] = []
     var redoStack: [RedoEntry] = []
     var engineRevision: UInt64 = 0
@@ -1328,14 +1292,13 @@ final class NoonmarkStore: ObservableObject {
     }
 
     deinit {
-        localFirstSyncAutomationTask?.cancel()
-        localFirstSyncConfirmationRetryTask?.cancel()
-        localFirstSyncDisableTask?.cancel()
+        localFirstReplicationStateTask?.cancel()
+        localFirstReplicationCommandTask?.cancel()
+        localFirstReplicationConfigurationTask?.cancel()
         automaticClassificationWorkerRestartRequested = false
         automaticClassificationWorkerTask?.cancel()
         automaticClassificationBacklogDecisionTask?.cancel()
         automaticClassificationCircuitRetryTask?.cancel()
-        cloudKitAccountCheckTask?.cancel()
         zhulongProviderHealthCheckTask?.cancel()
         metricKitDiagnosticSubscriber?.stop()
     }

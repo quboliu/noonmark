@@ -1,10 +1,10 @@
 @testable import NoonmarkSync
 import XCTest
 
-final class ICloudDriveSyncTransportTests: XCTestCase {
+final class ICloudDriveRepositoryLocatorTests: XCTestCase {
     func testRootResolverRequiresAnAvailableAppleAccount() {
         XCTAssertThrowsError(
-            try ICloudDriveSyncTransport.resolvedRootURL(
+            try ICloudDriveRepositoryLocator.resolvedRootURL(
                 repositoryName: "Noonmark/SyncRepository",
                 ubiquitousContainerURL: URL(fileURLWithPath: "/ubiquity", isDirectory: true),
                 cloudDocsURL: URL(fileURLWithPath: "/CloudDocs", isDirectory: true),
@@ -13,14 +13,14 @@ final class ICloudDriveSyncTransportTests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(
-                error as? ICloudDriveSyncTransportError,
+                error as? ICloudDriveRepositoryLocationError,
                 .accountUnavailable
             )
         }
     }
 
     func testRootResolverPrefersTheEntitledUbiquityContainer() throws {
-        let rootURL = try ICloudDriveSyncTransport.resolvedRootURL(
+        let rootURL = try ICloudDriveRepositoryLocator.resolvedRootURL(
             repositoryName: "Noonmark/SyncRepository",
             ubiquitousContainerURL: URL(fileURLWithPath: "/ubiquity", isDirectory: true),
             cloudDocsURL: URL(fileURLWithPath: "/CloudDocs", isDirectory: true),
@@ -32,7 +32,7 @@ final class ICloudDriveSyncTransportTests: XCTestCase {
     }
 
     func testRootResolverUsesCloudDocsForTheAdHocDevelopmentBundle() throws {
-        let rootURL = try ICloudDriveSyncTransport.resolvedRootURL(
+        let rootURL = try ICloudDriveRepositoryLocator.resolvedRootURL(
             repositoryName: "Noonmark/SyncRepository",
             ubiquitousContainerURL: nil,
             cloudDocsURL: URL(fileURLWithPath: "/CloudDocs", isDirectory: true),
@@ -45,7 +45,7 @@ final class ICloudDriveSyncTransportTests: XCTestCase {
 
     func testRootResolverRejectsACloudDocsFallbackThatIsNotPresent() {
         XCTAssertThrowsError(
-            try ICloudDriveSyncTransport.resolvedRootURL(
+            try ICloudDriveRepositoryLocator.resolvedRootURL(
                 repositoryName: "Noonmark/SyncRepository",
                 ubiquitousContainerURL: nil,
                 cloudDocsURL: URL(fileURLWithPath: "/CloudDocs", isDirectory: true),
@@ -54,7 +54,7 @@ final class ICloudDriveSyncTransportTests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(
-                error as? ICloudDriveSyncTransportError,
+                error as? ICloudDriveRepositoryLocationError,
                 .driveUnavailable
             )
         }

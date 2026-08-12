@@ -84,7 +84,7 @@
 | `audit` | `app.noonmark.mac.audit` | `noonmark-audit` | `Noonmark-Audit/SyncRepository` |
 | `dmg-validation` | `app.noonmark.mac.dmg-validation` | `noonmark-dmg-validation` | `Noonmark-DMGValidation/SyncRepository` |
 
-- `scripts/reset-dev-data <profile>` 必须显式接收 `development`、`e2e`、`demo`、`audit` 或 `dmg-validation` 之一，只终止和删除所选 profile 拥有的 process、Application Support、iCloud 顶层根、UserDefaults、cache、saved state 与 sidecar key。缺参数、`production`、未知 profile、路径重叠、symlink 或进程无法确认终止时，必须在任何副作用前 fail-closed。
+- `scripts/reset-dev-data <profile>` 必须显式接收 `development`、`e2e`、`demo`、`audit` 或 `dmg-validation` 之一，只终止和删除所选 profile 拥有的 process、Application Support、UserDefaults、cache、saved state 与 sidecar key；所有 iCloud 资料一律保留且不得由 reset 读取、定位或修改。缺参数、`production`、未知 profile、路径重叠、symlink 或进程无法确认终止时，必须在任何副作用前 fail-closed。
 - build 与 package 是纯产物操作，不执行 reset、不启动 App，也不读取任何运行资料。会运行 App 的开发、E2E、Demo、Audit 与 DMG validation 入口必须先 reset 自己的固定非生产 profile；不得以启动参数、环境变量或临时目录把 production 身份改造成测试身份。
 - 非生产数据采用 clean cut：不迁移、不备份、不复用旧 schema。E2E 可以在单次套件内保留本轮隔离数据库以验证重启与持久化；下一轮套件必须由相同 profile reset 后重建，不得回读上一轮 fixture。
 - Keychain 中的 Provider API 凭证属于开发者凭证，不是测试历史，clean cut 不得删除；不得扫描整个 Keychain、iCloud Drive 或 `$HOME`，也不得删除用户通过 NSSavePanel 自选路径导出的数据包。
@@ -96,6 +96,16 @@
 - 真实 App 故障闭环必须在 `e2e` profile 走完“同步失败／停滞 → transport lock wait → 任务修改被拒绝 → 非正常终止 → 重启 → Help 菜单导出”，并对账 operation／incident、previous-session interruption、持久化失败、4 MiB／8 MiB 容量和隐私哨兵。该闭环证明证据可采集，不等于已经定位或修复最初的同步故障。
 - production DMG 只做 checksum、只读挂载、strict code-sign、版本身份、Mach-O UUID、dSYM、binary SHA 与 source-linked SHA 静态门禁，并固定证明 `production_app_executed=false`。需要对该 package 做 WindowServer、SQLite、重启或 DiagnosticReports 动态验收时，只能运行从精确 production package 受控派生并重新签名的 `dmg-validation` App；诊断故障导出闭环则固定运行 `e2e` profile。
 - 发行物为稳定 Apple Development 签名的 DMG，由用户自行下载、安装和启动。本地开发机在 push 前运行 `make check`、真实 E2E 与 `scripts/release-private-dmg` 全集作为发布前自测；本地证据不上传，不被 tag publisher 消费，也不是线上发布依赖。发版唯一入口是 tag 触发的 `.github/workflows/release-publish.yml`：它先验证该精确 commit 的 GitHub-hosted `ci.yml` 子集已成功，然后打包签名并发布公开 GitHub Release，不重跑子集。GitHub workflow 不得声明 `self-hosted` runner；真实 WindowServer、TCC、腾讯输入法与安装验证只留在本地自测全集。CI 产物为分发正本（操作见 `.github/RELEASING.md`）。产物只有 Apple Development 签名：不得宣称 Developer ID、notarization、staple 或 Gatekeeper 分发已经完成。
+
+## iCloud 真实测试 append-only 铁命（最高优先级）
+
+- iCloud 中任何已经存在的目录、文件或其他对象一律不得删除、覆盖、替换、截断、移动或改名；这项禁令同时覆盖 production、所有非生产 profile、历史测试资料以及本轮测试新建的资料，没有“测试结束清理”例外。
+- Agent、测试、App automation 与脚本只允许在 `Noonmark-E2E/AppendOnlyLiveTests/<session-UUID>/<round-UUID>/` 下创建全新对象。每个 session 必须使用新的随机 UUID；每轮测试必须再使用新的随机 round UUID。目标 round 路径在开始前若已经存在，必须在任何写入前 fail-closed，不得复用。
+- 真实 iCloud 测试只允许 exclusive-create。禁止 `removeItem`、`trashItem`、`unlink`、`rmdir`、`rm`、覆盖式 `write`、`rename`／atomic replace、可变 head 更新以及任何具备删除或覆盖语义的 API；即使目标位于本轮新目录内也不允许。
+- content-addressed chunk、root、seal 与 immutable announcement 可以创建；mutable head 在真实 iCloud 测试中必须禁用，发现性只能来自 immutable announcement。若实现无法在禁用 mutable index 后完成同步，测试必须失败，不得放宽铁命。
+- 真实 iCloud 测试不得调用 `scripts/reset-dev-data`，不得运行会清理 iCloud repository 的旧 live test／旧脚本，也不得扫描整个 iCloud Drive。只可检查本轮全新 session／round 子树和必要的 Apple metadata evidence。
+- 测试完成后，本轮 iCloud 子树永久保留。结果必须记录 session UUID、round UUID、创建对象数量与 typed verdict，但不得记录用户资料、payload、绝对路径、Apple Account 身份或既有 iCloud inventory。
+- 任何真实 iCloud 写入前，必须先通过仓库的 append-only 静态门禁和本地非 iCloud 症状门禁；任一门禁未通过时禁止开始真实 iCloud 测试。
 
 ## Agent skills
 

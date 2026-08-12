@@ -2019,6 +2019,9 @@ final class SQLiteSyncRepositoryTests: XCTestCase {
                     auditEntries: auditEntries,
                     metadata: replacementMetadata,
                     frontierMetadata: nil,
+                    forkResolutionTransition: nil,
+                    forkConflictDecisionCommit: nil,
+                    expectedReplicationControl: nil,
                     attemptedAt: now.addingTimeInterval(2)
                 )
             )

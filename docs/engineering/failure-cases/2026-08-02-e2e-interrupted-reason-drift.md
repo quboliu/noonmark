@@ -67,8 +67,8 @@ NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e debug
 
 ## 永久门禁
 
-- Fast：`scripts/test-e2e-evidence-contract` 由 `scripts/check` 强制执行，分别约束 seed 与 restart 的 exact expected reason，并拒绝无阶段参数的读取。
-- Symptom：`scripts/test-e2e` 由 `scripts/test-all` 强制执行真实失败、锁等待、修改拒绝、SIGKILL、重启、Help 菜单导出和持久化对账。
+- Fast：`scripts/test-e2e-evidence-contract` 由 `scripts/check` 强制执行；当前 V2 clean cut 不再读取 V1 status reason，而是精确约束 seed failed capsule、restart interrupted capsule、operation／incident 与 `transportPrepare` stage。
+- Symptom：`scripts/test-e2e` 由 `scripts/test-all` 强制执行真实 V2 failure、endpoint wait、本机修改成功、SIGKILL、重启、Help 菜单导出和持久化对账。
 - Release：`scripts/test-release-diagnostic-closure` 从 clean HEAD 建立仓库父目录内的临时 detached worktree，运行 targeted closure 并归档独立证据；`scripts/release-private-dmg` 强制调用该入口，不覆盖主工作树的 full E2E evidence。
 - 映射登记：`docs/engineering/failure-cases/gates.tsv`。
 
@@ -81,3 +81,7 @@ NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 scripts/test-e2e debug
 - 同一个状态 reader 服务不同生命周期阶段时，阶段语义必须成为显式输入，不能藏在 helper 内部。
 - “有失败 correlation”不等于“失败原因正确”；诊断闭环要同时对账原因、operation、incident、阶段与 outcome。
 - 真实症状门禁应覆盖重启后的语义转换，单测各自通过不能证明跨进程状态机闭合。
+
+## 2026-08-11 V2 clean-cut 复核
+
+本案例的 V1 历史、归因和修复提交保持不变。Replication V2 不兼容 V1 status metadata，因此现行门禁已删除 `SQLiteLocalFirstSyncFailureReason` oracle：seed 只接受真实 V2 failed operation capsule，异常终止后的 restart 只接受同一 stalled operation 的 `.interrupted` capsule及 `previousSessionInterrupted` event。V2 远端等待不再占用 mutation gate，所以原有「修改拒绝」断言被反向替换为「本机修改提交成功且没有 `mutationRejected`」。2026-08-11 的真实签名 targeted closure 已以最终 evidence manifest `suite_exit_status=0` 转绿。

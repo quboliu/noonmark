@@ -27,6 +27,18 @@ struct SQLiteSyncDownloadObservation {
     var hasMoreRemoteChanges: Bool
 }
 
+struct SQLiteReplicationForkApplyResult {
+    let result: SQLiteSyncDownloadResult
+    let closed: Bool
+    let conflicts: [SyncConflict]
+}
+
+private struct SQLiteSyncDownloadDisposition {
+    let result: SQLiteSyncDownloadResult
+    let committed: Bool
+    let conflicts: [SyncConflict]
+}
+
 public final class SQLiteSyncDownloadCoordinator {
     private let engineRepository: SQLiteEngineRepository
     private let syncRepository: SQLiteSyncRepository
@@ -123,23 +135,201 @@ public final class SQLiteSyncDownloadCoordinator {
         )
     }
 
+    func downloadAndMergeReplicationRecords(
+        _ fetchedRecords: [SyncRecord],
+        detectedAt: Date,
+        cursorMetadata: SyncMetadataEntry,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
+    ) throws -> SQLiteSyncDownloadResult {
+        let pending = try syncRepository.pendingDownloads()
+        let terminalRejections = try syncRepository
+            .terminalRejectionEvidence()
+        return try downloadAndMergeObservation(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: fetchedRecords,
+            detectedAt: detectedAt,
+            frontierMetadata: cursorMetadata,
+            hasMoreRemoteChanges: false,
+            expectedReplicationControl: expectedReplicationControl
+        ).result
+    }
+
+    func downloadAndMergeReplicationFork(
+        _ evidence: ReplicationForkEvidence,
+        detectedAt: Date,
+        cursorMetadata: SyncMetadataEntry,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
+    ) throws -> SQLiteReplicationForkApplyResult {
+        let pending = try syncRepository.pendingDownloads()
+        let terminalRejections = try syncRepository
+            .terminalRejectionEvidence()
+        let disposition = try downloadAndMerge(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: evidence.branches.flatMap(\.records),
+            detectedAt: detectedAt,
+            frontierMetadata: cursorMetadata,
+            closingForkResolutionID: evidence.resolutionID,
+            forkConflictDecisionCommit: nil,
+            expectedReplicationControl: expectedReplicationControl
+        )
+        return SQLiteReplicationForkApplyResult(
+            result: disposition.result,
+            closed: disposition.committed,
+            conflicts: disposition.conflicts
+        )
+    }
+
+    func resolveReplicationForkConflicts(
+        _ evidence: ReplicationForkEvidence,
+        decisions: [ReplicationForkConflictDecisionSelection],
+        decidedAt: Date,
+        cursorMetadata: SyncMetadataEntry,
+        repairBaselineRecords: [SyncRecord] = [],
+        expectedManifest: ReplicationForkResolutionManifest? = nil,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
+    ) throws -> SQLiteReplicationForkApplyResult {
+        guard decidedAt.timeIntervalSinceReferenceDate.isFinite,
+              decisions.isEmpty == false,
+              Set(decisions.map(\.conflictID)).count == decisions.count,
+              repairBaselineRecords.isEmpty == (expectedManifest == nil),
+              expectedManifest?.resolutionID == evidence.resolutionID
+                  || expectedManifest == nil,
+              expectedManifest?.decidedAt?
+                  .timeIntervalSinceReferenceDate.bitPattern
+                  == decidedAt.timeIntervalSinceReferenceDate.bitPattern
+                  || expectedManifest == nil,
+              let conflictSet = try syncRepository
+                  .replicationForkConflictSet(
+                      resolutionID: evidence.resolutionID
+                  )
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict decision input is invalid"
+            )
+        }
+        let expectedConflictIDs = conflictSet.conflicts.map(\.conflict.id)
+        guard conflictSet.conflicts.allSatisfy({
+            $0.decision == nil && $0.decidedAt == nil
+        }), Set(decisions.map(\.conflictID)) == Set(expectedConflictIDs),
+            decisions.count == expectedConflictIDs.count
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict decisions do not cover the exact set"
+            )
+        }
+        let branchRecords = evidence.branches.flatMap(\.records)
+        let branchEvidence = Set(branchRecords.map(SyncRecordEvidenceID.init))
+        let observedEngine = try engineRepository.loadObservedSnapshot()
+        guard observedEngine.generation
+            == conflictSet.observedEngineGeneration
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine snapshot changed before fork conflict decision"
+            )
+        }
+        let decisionResolution = try ReplicationForkDecisionResolver()
+            .resolve(
+                snapshot: observedEngine.snapshot,
+                conflictSet: conflictSet,
+                evidence: evidence,
+                decisions: decisions,
+                decidedAt: decidedAt
+            )
+        if let expectedManifest {
+            let actualOutcomes = decisionResolution.outcomes.map { outcome in
+                ReplicationForkResolutionOutcome(
+                    conflictID: outcome.selection.conflictID,
+                    decision: protocolDecision(
+                        from: outcome.selection.decision
+                    ),
+                    resultReference: outcome.resultReference.map {
+                        ReplicationForkResolutionResultReference(
+                            entityType: $0.entityType,
+                            entityID: $0.entityID
+                        )
+                    }
+                )
+            }.sorted {
+                $0.conflictID.uuidString < $1.conflictID.uuidString
+            }
+            guard actualOutcomes == expectedManifest.outcomes else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "replication fork manifest does not match deterministic replay"
+                )
+            }
+        }
+        guard decisionResolution.rejectedEvidence.isSubset(of: branchEvidence)
+        else {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "replication fork conflict is not bound to branch evidence"
+            )
+        }
+        let acceptedRecords = branchRecords.filter {
+            decisionResolution.rejectedEvidence.contains(
+                SyncRecordEvidenceID(record: $0)
+            )
+                == false
+        } + repairBaselineRecords
+        let pending = try syncRepository.pendingDownloads()
+        let terminalRejections = try syncRepository
+            .terminalRejectionEvidence()
+        let disposition = try downloadAndMerge(
+            pending: pending,
+            terminalRejections: terminalRejections,
+            fetchedRecords: acceptedRecords,
+            detectedAt: decidedAt,
+            frontierMetadata: cursorMetadata,
+            closingForkResolutionID: evidence.resolutionID,
+            forkConflictDecisionCommit: SQLiteReplicationForkDecisionCommit(
+                resolutionID: evidence.resolutionID,
+                observedEngineGeneration: conflictSet
+                    .observedEngineGeneration,
+                outcomes: decisionResolution.outcomes
+            ),
+            decisionBaseSnapshot: decisionResolution.baseSnapshot,
+            decisionObservedEngine: observedEngine,
+            expectedReplicationControl: expectedReplicationControl
+        )
+        return SQLiteReplicationForkApplyResult(
+            result: disposition.result,
+            closed: disposition.committed,
+            conflicts: disposition.conflicts
+        )
+    }
+
+    private func protocolDecision(
+        from decision: ReplicationForkConflictDecision
+    ) -> ReplicationForkResolutionDecision {
+        switch decision {
+        case .keepCurrent: .keepCurrent
+        case .acceptRemote: .acceptRemote
+        case .copyAsNew: .copyAsNew
+        }
+    }
+
     private func downloadAndMergeObservation(
         pending: [SyncPendingDownloadRecord],
         terminalRejections: [SyncTerminalRejection],
         fetchedRecords: [SyncRecord],
         detectedAt: Date,
         frontierMetadata: SyncMetadataEntry?,
-        hasMoreRemoteChanges: Bool
+        hasMoreRemoteChanges: Bool,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
     ) throws -> SQLiteSyncDownloadObservation {
-        let result = try downloadAndMerge(
+        let disposition = try downloadAndMerge(
             pending: pending,
             terminalRejections: terminalRejections,
             fetchedRecords: fetchedRecords,
             detectedAt: detectedAt,
-            frontierMetadata: frontierMetadata
+            frontierMetadata: frontierMetadata,
+            closingForkResolutionID: nil,
+            forkConflictDecisionCommit: nil,
+            expectedReplicationControl: expectedReplicationControl
         )
         return SQLiteSyncDownloadObservation(
-            result: result,
+            result: disposition.result,
             fetchedRecords: fetchedRecords,
             hasMoreRemoteChanges: hasMoreRemoteChanges
         )
@@ -150,12 +340,82 @@ public final class SQLiteSyncDownloadCoordinator {
         terminalRejections: [SyncTerminalRejection],
         fetchedRecords: [SyncRecord],
         detectedAt: Date,
-        frontierMetadata: SyncMetadataEntry?
-    ) throws -> SQLiteSyncDownloadResult {
+        frontierMetadata: SyncMetadataEntry?,
+        closingForkResolutionID: ReplicationDigest?,
+        forkConflictDecisionCommit: SQLiteReplicationForkDecisionCommit?,
+        decisionBaseSnapshot: NoonmarkSnapshot? = nil,
+        decisionObservedEngine: SQLiteObservedEngineSnapshot? = nil,
+        expectedReplicationControl: LocalFirstReplicationControl? = nil
+    ) throws -> SQLiteSyncDownloadDisposition {
         let records = combinedRecords(
             pending: pending.map(\.record),
             fetched: fetchedRecords
         )
+        if closingForkResolutionID != nil,
+           records.isEmpty,
+           forkConflictDecisionCommit == nil
+        {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "fork branch graph contains no mergeable records"
+            )
+        }
+        if records.isEmpty, let forkConflictDecisionCommit {
+            guard closingForkResolutionID
+                == forkConflictDecisionCommit.resolutionID,
+                let frontierMetadata
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "empty fork decision lacks exact resolution metadata"
+                )
+            }
+            let observedEngine = try decisionObservedEngine
+                ?? engineRepository.loadObservedSnapshot()
+            guard observedEngine.generation
+                == forkConflictDecisionCommit.observedEngineGeneration
+            else {
+                throw SQLiteRepositoryError.invalidStoredValue(
+                    "engine snapshot changed before fork conflict decision"
+                )
+            }
+            _ = try syncRepository.commitDownloadedMerge(
+                SQLiteSyncDownloadCommit(
+                    sourceSnapshot: observedEngine.snapshot,
+                    snapshot: decisionBaseSnapshot
+                        ?? observedEngine.snapshot,
+                    observedEngineGeneration: observedEngine.generation,
+                    conflicts: [],
+                    waiting: [],
+                    terminal: [],
+                    observedPending: pending,
+                    auditEntries: [],
+                    metadata: try downloadMetadata(
+                        fetchedCount: 0,
+                        detectedAt: detectedAt
+                    ),
+                    frontierMetadata: frontierMetadata,
+                    forkResolutionTransition: SQLiteReplicationForkTransition(
+                        resolutionID: forkConflictDecisionCommit.resolutionID,
+                        expectedState: .branchesValidated,
+                        newState: .closed
+                    ),
+                    forkConflictDecisionCommit: forkConflictDecisionCommit,
+                    expectedReplicationControl: expectedReplicationControl,
+                    attemptedAt: detectedAt
+                )
+            )
+            return SQLiteSyncDownloadDisposition(
+                result: SQLiteSyncDownloadResult(
+                    fetchedCount: 0,
+                    appliedCount: forkConflictDecisionCommit.outcomes.filter {
+                        $0.selection.decision != .keepCurrent
+                    }.count,
+                    waitingCount: 0,
+                    conflictCount: 0
+                ),
+                committed: true,
+                conflicts: []
+            )
+        }
         guard records.isEmpty == false else {
             var metadata = [
                 try downloadMetadata(
@@ -166,18 +426,38 @@ public final class SQLiteSyncDownloadCoordinator {
             if let frontierMetadata {
                 metadata.append(frontierMetadata)
             }
-            try syncRepository.saveMetadata(metadata)
-            return SQLiteSyncDownloadResult(
-                fetchedCount: 0,
-                appliedCount: 0,
-                waitingCount: 0,
-                conflictCount: 0
+            if let expectedReplicationControl {
+                try syncRepository.saveMetadata(
+                    metadata,
+                    expectedReplicationControl: expectedReplicationControl
+                )
+            } else {
+                try syncRepository.saveMetadata(metadata)
+            }
+            return SQLiteSyncDownloadDisposition(
+                result: SQLiteSyncDownloadResult(
+                    fetchedCount: 0,
+                    appliedCount: 0,
+                    waitingCount: 0,
+                    conflictCount: 0
+                ),
+                committed: true,
+                conflicts: []
             )
         }
 
-        let observedEngine = try engineRepository.loadObservedSnapshot()
+        let observedEngine = try decisionObservedEngine
+            ?? engineRepository.loadObservedSnapshot()
+        if let forkConflictDecisionCommit,
+           observedEngine.generation
+           != forkConflictDecisionCommit.observedEngineGeneration
+        {
+            throw SQLiteRepositoryError.invalidStoredValue(
+                "engine snapshot changed before fork conflict decision"
+            )
+        }
         let currentSnapshot = try ValidatedSyncSnapshot(
-            observedEngine.snapshot
+            decisionBaseSnapshot ?? observedEngine.snapshot
         )
         let mergeResult = try mergeToFixedPoint(
             records: records,
@@ -216,6 +496,36 @@ public final class SQLiteSyncDownloadCoordinator {
             return outcome.disposition != .waiting
                 && waitingRecordIDs.contains(observed.record.id) == false
         }
+        let projectedResult = SQLiteSyncDownloadResult(
+            fetchedCount: fetchedRecords.count,
+            appliedCount: mergeResult.appliedRecordIDs.count
+                + (forkConflictDecisionCommit?.outcomes.filter {
+                    $0.selection.decision != .keepCurrent
+                }.count ?? 0),
+            waitingCount: mergeResult.waitingRecords.count,
+            conflictCount: mergeResult.conflicts.count
+        )
+        if closingForkResolutionID != nil,
+           mergeResult.waitingRecords.isEmpty == false
+            || mergeResult.conflicts.isEmpty == false
+        {
+            if let closingForkResolutionID,
+               mergeResult.conflicts.isEmpty == false
+            {
+                _ = try syncRepository.recordReplicationForkConflictSet(
+                    resolutionID: closingForkResolutionID,
+                    conflicts: mergeResult.conflicts,
+                    observedEngineGeneration: observedEngine.generation,
+                    recordedAt: detectedAt,
+                    expectedReplicationControl: expectedReplicationControl
+                )
+            }
+            return SQLiteSyncDownloadDisposition(
+                result: projectedResult,
+                committed: false,
+                conflicts: mergeResult.conflicts
+            )
+        }
         let durableWaitingCount = try syncRepository.commitDownloadedMerge(
             SQLiteSyncDownloadCommit(
                 sourceSnapshot: observedEngine.snapshot,
@@ -234,15 +544,31 @@ public final class SQLiteSyncDownloadCoordinator {
                     detectedAt: detectedAt
                 ),
                 frontierMetadata: frontierMetadata,
+                forkResolutionTransition: closingForkResolutionID.map {
+                    SQLiteReplicationForkTransition(
+                        resolutionID: $0,
+                        expectedState: .branchesValidated,
+                        newState: .closed
+                    )
+                },
+                forkConflictDecisionCommit: forkConflictDecisionCommit,
+                expectedReplicationControl: expectedReplicationControl,
                 attemptedAt: detectedAt
             )
         )
 
-        return SQLiteSyncDownloadResult(
-            fetchedCount: fetchedRecords.count,
-            appliedCount: mergeResult.appliedRecordIDs.count,
-            waitingCount: durableWaitingCount,
-            conflictCount: mergeResult.conflicts.count
+        return SQLiteSyncDownloadDisposition(
+            result: SQLiteSyncDownloadResult(
+                fetchedCount: fetchedRecords.count,
+                appliedCount: mergeResult.appliedRecordIDs.count
+                    + (forkConflictDecisionCommit?.outcomes.filter {
+                        $0.selection.decision != .keepCurrent
+                    }.count ?? 0),
+                waitingCount: durableWaitingCount,
+                conflictCount: mergeResult.conflicts.count
+            ),
+            committed: true,
+            conflicts: mergeResult.conflicts
         )
     }
 

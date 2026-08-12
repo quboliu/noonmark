@@ -73,6 +73,16 @@ public enum WindowServerInputContextViolation: Equatable, Sendable {
 }
 
 public enum WindowServerInputContextContract {
+    public static func physicalTargetIsReady(
+        expectedWindowNumber: Int,
+        hitWindowNumber: Int,
+        pointerIsSettled: Bool
+    ) -> Bool {
+        expectedWindowNumber > 0
+            && pointerIsSettled
+            && hitWindowNumber == expectedWindowNumber
+    }
+
     public static func violation(
         expectedTopology: WindowServerInputTopology,
         current: WindowServerInputContextSnapshot,

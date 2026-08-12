@@ -184,28 +184,6 @@ public final actor CloudKitSyncEngineTransport: SyncRecordTransport {
         try await session.acknowledgeInbox(frontier)
     }
 
-    public func deleteLiveValidationZone() async throws {
-        guard zoneID.zoneName.hasPrefix(Self.liveValidationZonePrefix),
-              zoneID.zoneName.count > Self.liveValidationZonePrefix.count
-        else {
-            throw CloudKitSyncEngineTransportError.liveValidationZoneRequired
-        }
-        let availability = try await accountAvailability()
-        guard availability.canSync else {
-            throw CloudKitSyncEngineTransportError.accountUnavailable(
-                availability
-            )
-        }
-        do {
-            _ = try await resolvedContainer().privateCloudDatabase
-                .deleteRecordZone(withID: zoneID)
-        } catch let error as CKError where error.code == .zoneNotFound {
-            return
-        } catch {
-            throw translatedCloudKitError(error)
-        }
-    }
-
     public func shutdown() async {
         if let syncEngine {
             await syncEngine.cancelOperations()

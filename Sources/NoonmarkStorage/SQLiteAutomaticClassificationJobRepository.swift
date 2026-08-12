@@ -368,6 +368,8 @@ public final class SQLiteAutomaticClassificationJobRepository {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
         try storeRuntime.prepare(database)
+        let writeLease = storeRuntime.acquireWriteLease()
+        defer { writeLease.release() }
         try SQLiteAutomaticClassificationJobSQL.execute(
             "BEGIN IMMEDIATE TRANSACTION",
             on: database

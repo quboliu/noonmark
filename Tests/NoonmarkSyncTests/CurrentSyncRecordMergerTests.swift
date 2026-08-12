@@ -559,6 +559,54 @@ final class CurrentSyncRecordMergerTests: XCTestCase {
         }
     }
 
+    func testLargeIncrementalBatchCanonicalizationCompletesWithinBudget()
+        throws
+    {
+        let engine = NoonmarkEngine()
+        var chainIDs: [TaskChainID] = []
+        for index in 0 ..< 80 {
+            chainIDs.append(
+                try engine.createPoolTask(
+                    title: "批量同步任务 \(index)",
+                    now: now
+                )
+            )
+        }
+        let mapper = SyncRecordMapper()
+        let baseline = try mapper.records(
+            from: engine.snapshot(),
+            modifiedBy: SyncDeviceID("batch-baseline")
+        )
+        for (index, chainID) in chainIDs.prefix(40).enumerated() {
+            try engine.updatePoolTask(
+                chainID: chainID,
+                title: "批量同步任务 \(index) 已修改",
+                now: now.addingTimeInterval(1)
+            )
+        }
+        let updated = try mapper.records(
+            from: engine.snapshot(),
+            modifiedBy: SyncDeviceID("batch-updated")
+        )
+        let incoming = baseline + updated
+        let startedAt = ContinuousClock.now
+
+        let batch = try CurrentSyncRecordMerger(mapper: mapper)
+            .prepareTransportBatch(
+                existingRecords: [],
+                incomingRecords: incoming
+            )
+        let elapsed = startedAt.duration(to: .now)
+
+        XCTAssertEqual(batch.records.count, Set(incoming.map(\.id)).count)
+        XCTAssertEqual(batch.provenanceGroups.count, batch.records.count)
+        XCTAssertLessThan(
+            elapsed,
+            .seconds(3),
+            "batch canonicalization took \(elapsed)"
+        )
+    }
+
     func testProvenanceKeepsExactSourceThatCarriesReactivationWitness() throws {
         let chainID = TaskChainID(
             UUID(uuidString: "A3000000-0000-0000-0000-000000000001")!

@@ -43,20 +43,14 @@ fi
 process_name="$NOONMARK_RUNTIME_PROCESS_NAME"
 bundle_identifier="$NOONMARK_RUNTIME_BUNDLE_IDENTIFIER"
 data_root="$canonical_home/Library/Application Support/$NOONMARK_RUNTIME_DATA_DIRECTORY_NAME"
-icloud_sync_root="$canonical_home/Library/Mobile Documents/com~apple~CloudDocs/$NOONMARK_RUNTIME_ICLOUD_REPOSITORY_NAME"
 cache_path="$canonical_home/Library/Caches/$bundle_identifier"
 saved_state_path="$canonical_home/Library/Saved Application State/$bundle_identifier.savedState"
-icloud_profile_root="${icloud_sync_root%/SyncRepository}"
 
 guarded_paths=(
   "$canonical_home"
   "$canonical_home/Library"
   "$canonical_home/Library/Application Support"
   "$data_root"
-  "$canonical_home/Library/Mobile Documents"
-  "$canonical_home/Library/Mobile Documents/com~apple~CloudDocs"
-  "$icloud_profile_root"
-  "$icloud_sync_root"
   "$canonical_home/Library/Caches"
   "$canonical_home/Library/Saved Application State"
   "$cache_path"
@@ -439,7 +433,6 @@ captured_defaults_snapshot=""
 
 removed_paths=(
   "$data_root"
-  "$icloud_profile_root"
   "$cache_path"
   "$saved_state_path"
 )
@@ -463,4 +456,4 @@ case "$process_status" in
     ;;
 esac
 
-echo "Noonmark $profile data reset: local, iCloud sync, defaults, and sidecar key"
+echo "Noonmark $profile data reset: local, defaults, cache, saved state, and sidecar key; iCloud preserved"

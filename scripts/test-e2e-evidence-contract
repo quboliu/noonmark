@@ -90,6 +90,17 @@ if [[ ! -s "$inventory" ]] ||
   exit 1
 fi
 
+mkdir -p "$evidence_root/multilink"
+printf 'transport-hardlink\n' >"$evidence_root/multilink/staged"
+ln "$evidence_root/multilink/staged" "$evidence_root/multilink/published"
+if evidence_inventory \
+  "$repo_root" \
+  "$evidence_root/unsafe-inventory.sha256" \
+  "$evidence_root/multilink" >/dev/null 2>&1; then
+  echo "evidence inventory accepted a multi-link transport artifact" >&2
+  exit 1
+fi
+
 require_literal() {
   local path="$1"
   local literal="$2"
@@ -293,7 +304,7 @@ require_literal \
   'let guardedPrefix = "/private/tmp/noonmark-e2e-preferences-clock-sync-"'
 require_literal \
   App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
-  'let path = syncFolderPath'
+  'let path = syncFolderURL.path'
 require_literal \
   App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift \
   'suffix.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 })'
@@ -924,44 +935,94 @@ require_literal scripts/test-e2e "run_windowserver_input_cleanup"
 require_literal \
   scripts/test-e2e \
   "--e2e-windowserver-input-cleanup-result-url"
+require_literal \
+  scripts/test-e2e \
+  'V2 E2E requires an absolute regular NOONMARK_PROVISIONING_PROFILE'
+require_literal \
+  scripts/test-e2e \
+  'NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING=1'
+require_literal \
+  scripts/test-e2e \
+  'NOONMARK_REQUIRE_STABLE_UI_SIGNING=1'
+require_literal \
+  scripts/test-e2e \
+  'diagnostic_closure_sync_root="/private/tmp/noonmark-e2e-diagnostic-closure-sync-$$"'
+require_literal \
+  scripts/test-e2e \
+  'diagnostic closure sync repository was not a fresh isolated path'
+require_literal \
+  scripts/test-e2e \
+  'mkdir -m 700 -- "${repository_lock%/*}"'
+forbid_literal \
+  scripts/test-e2e \
+  'sync_root="${repository_lock%/*}"'
 
 diagnostic_closure_source="App/NoonmarkMacApp/DiagnosticEvidenceClosureE2EAutomation.swift"
 diagnostic_seed_function="$fixture_root/diagnostic-seed.swift"
+diagnostic_stall_function="$fixture_root/diagnostic-stall.swift"
 diagnostic_restart_function="$fixture_root/diagnostic-restart.swift"
-diagnostic_correlation_function="$fixture_root/diagnostic-correlation.swift"
+diagnostic_restart_evidence_function="$fixture_root/diagnostic-restart-evidence.swift"
 sed -n \
-  '/^    private func seedFailure(/,/^    private func stallAndReject(/p' \
+  '/^    private func seedFailure(/,/^    private func stallAndMutate(/p' \
   "$diagnostic_closure_source" \
   | tr -d '[:space:]' >"$diagnostic_seed_function"
 sed -n \
-  '/^    private func verifyRestartAndExport(/,/^    private func validateIsolation(/p' \
+  '/^    private func stallAndMutate(/,/^    private func verifyRestartAndExport(/p' \
+  "$diagnostic_closure_source" \
+  | tr -d '[:space:]' >"$diagnostic_stall_function"
+sed -n \
+  '/^    private func verifyRestartAndExport(/,/^    private func requireConfiguredRuntime(/p' \
   "$diagnostic_closure_source" \
   | tr -d '[:space:]' >"$diagnostic_restart_function"
 sed -n \
-  '/^    private func persistedFailureCorrelation(/,/^    private func assertFailedSync(/p' \
+  '/^    private func hasRestartEvidence(/,/^    private func waitUntil(/p' \
   "$diagnostic_closure_source" \
-  | tr -d '[:space:]' >"$diagnostic_correlation_function"
-if [[ "$(grep -oF \
-  'persistedFailureCorrelation(store,expectedReason:.transportOrStorage)' \
-  "$diagnostic_seed_function" | wc -l | tr -d ' ')" != "2" ]]; then
-  echo "diagnostic seed does not require transportOrStorage for both persistent reads" >&2
+  | tr -d '[:space:]' >"$diagnostic_restart_evidence_function"
+require_literal \
+  "$diagnostic_seed_function" \
+  'awaitendpoint.armReadFailure()'
+require_literal \
+  "$diagnostic_seed_function" \
+  '$0.outcome==.failed'
+require_literal \
+  "$diagnostic_stall_function" \
+  'awaitendpoint.armBlockingRead()'
+require_literal \
+  "$diagnostic_stall_function" \
+  'taskCountAfter==taskCountBefore+1'
+require_literal \
+  "$diagnostic_stall_function" \
+  'trystore.armPersistenceFailureForE2E()'
+require_literal \
+  "$diagnostic_stall_function" \
+  'store.engine.snapshot().definitions.count==taskCountAfter'
+require_literal \
+  "$diagnostic_stall_function" \
+  'store.operationFailureNotice?.context==.taskMutation'
+require_literal \
+  "$diagnostic_stall_function" \
+  '$0.event.code==.mutationRejected&&$0.event.operationID==stalledOperation.id'
+require_literal \
+  "$diagnostic_stall_function" \
+  'state.rejectedMutationIncidentID=rejectedIncidentID?.rawValue'
+require_literal \
+  "$diagnostic_restart_function" \
+  'store.operationFailureNotice==nil'
+require_literal \
+  "$diagnostic_restart_evidence_function" \
+  '$0.event.code==.mutationRejected&&$0.event.operationID==interruptedOperationID&&$0.event.incidentID==rejectedMutationIncidentID'
+require_literal \
+  scripts/test-e2e \
+  'ready: stalled V2 sync committed and rejected exact mutations'
+require_literal \
+  scripts/test-e2e \
+  '.rejectedMutationIncidentID'
+if rg -n \
+  'SQLiteLocalFirstSyncCoordinator|SQLiteLocalFirstSyncStatus|persistedFailureCorrelation|exclusiveOperationInProgress' \
+  "$diagnostic_closure_source" >/dev/null; then
+  echo "diagnostic closure still depends on V1 state or the V1 mutation gate" >&2
   exit 1
 fi
-require_literal \
-  "$diagnostic_restart_function" \
-  'persistedFailureCorrelation(store,expectedReason:.operationInterrupted)'
-require_literal \
-  "$diagnostic_correlation_function" \
-  'expectedReason:SQLiteLocalFirstSyncFailureReason'
-require_literal \
-  "$diagnostic_correlation_function" \
-  'reason==expectedReason'
-forbid_literal \
-  "$diagnostic_seed_function" \
-  'persistedFailureCorrelation(store)'
-forbid_literal \
-  "$diagnostic_restart_function" \
-  'persistedFailureCorrelation(store)'
 
 diagnostic_export_function="$fixture_root/diagnostic-export.swift"
 diagnostic_text_replacement_function="$fixture_root/diagnostic-text-replacement.swift"
@@ -1005,6 +1066,20 @@ if [[ "$(grep -oF 'diagnostic_closure_app_process_matches' \
   echo "diagnostic closure still performs an immediate launch identity assertion" >&2
   exit 1
 fi
+if [[ "$(grep -oF -- '--e2e-replication-v2-lifecycle-endpoint' \
+  "$diagnostic_closure_runner_function" | wc -l | tr -d ' ')" != "3" ]]; then
+  echo "diagnostic closure does not bind all three App processes to V2" >&2
+  exit 1
+fi
+require_literal \
+  "$diagnostic_closure_runner_function" \
+  'normal commit -> exact rejection -> SIGKILL -> restart'
+require_literal \
+  "$diagnostic_closure_runner_function" \
+  '--arg rejected_incident "$rejected_mutation_incident_id"'
+require_literal \
+  "$diagnostic_closure_runner_function" \
+  '.event.incidentID.rawValue == $rejected_incident'
 if [[ "$(grep -oF 'tryreplaceFocusedTextField(' \
   "$diagnostic_export_function" | wc -l | tr -d ' ')" != "2" ]]; then
   echo "diagnostic export does not share one exact text replacement protocol" >&2

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+contract="Sources/NoonmarkMacE2ESupport/WindowServerInputContextContract.swift"
+driver="App/NoonmarkMacApp/WindowServerInputDriver.swift"
+
+require_literal() {
+  local path="$1"
+  local literal="$2"
+  if ! grep -F -- "$literal" "$path" >/dev/null; then
+    echo "$path is missing WindowServer physical target contract: $literal" >&2
+    exit 1
+  fi
+}
+
+require_literal "$contract" 'public static func physicalTargetIsReady('
+require_literal "$contract" 'hitWindowNumber == expectedWindowNumber'
+require_literal "$driver" 'NSWindow.windowNumber('
+require_literal "$driver" 'WindowServerInputContextContract.physicalTargetIsReady('
+require_literal "$driver" 'try requirePhysicalTarget('
+require_literal "$driver" 'case physicalTargetUnavailable('
+
+if rg -n '\[DEBUG-window-route-' App Sources Tests >/dev/null; then
+  echo "temporary WindowServer routing instrumentation survived cleanup" >&2
+  exit 1
+fi
+
+swift test --filter \
+  'WindowServerInputContextContractTests/testPhysicalTargetReadinessRequiresPointerAndExactFrontWindow'

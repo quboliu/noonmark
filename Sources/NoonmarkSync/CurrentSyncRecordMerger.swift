@@ -110,6 +110,20 @@ private struct CurrentSyncReactivationEvidence {
     var witnesses: [ChainReactivationEnvelope] = []
 }
 
+private struct CurrentSyncPreparedContextRecord {
+    let record: SyncRecord
+    let evidenceID: SyncRecordEvidenceID
+    let day: Day?
+    let chain: TaskChain?
+    let trace: DayTrace?
+    let witnesses: [ChainReactivationEnvelope]
+}
+
+private struct CurrentSyncPreparedContextInput {
+    let existing: [CurrentSyncPreparedContextRecord]
+    let incoming: [CurrentSyncPreparedContextRecord]
+}
+
 struct ImmutableSyncRecordCASCandidate {
     var record: SyncRecord
     var exactData: Data?
@@ -306,14 +320,18 @@ struct CurrentSyncRecordMerger {
         incomingRecords: [SyncRecord]
     ) throws -> CurrentSyncTransportBatch {
         do {
-            let mergeContext = try prepareContext(
+            let preparedContextInput = try prepareContextInput(
                 existingRecords: existingRecords,
                 incomingRecords: incomingRecords
             )
+            let mergeContext = try prepareContext(
+                from: preparedContextInput,
+                excludingIncomingEvidenceIDs: []
+            )
             let canonical = try canonicalIncomingRecords(
                 publishingOrder(incomingRecords),
-                existingRecords: existingRecords,
-                context: mergeContext
+                context: mergeContext,
+                preparedContextInput: preparedContextInput
             )
             try preflightCurrentMerges(
                 existingRecords: existingRecords,
@@ -338,8 +356,8 @@ struct CurrentSyncRecordMerger {
 
     private func canonicalIncomingRecords(
         _ records: [SyncRecord],
-        existingRecords: [SyncRecord],
-        context: CurrentSyncRecordMergeContext
+        context: CurrentSyncRecordMergeContext,
+        preparedContextInput: CurrentSyncPreparedContextInput
     ) throws -> (
         records: [SyncRecord],
         provenanceGroups: [SyncRecordProvenanceGroup]
@@ -408,8 +426,8 @@ struct CurrentSyncRecordMerger {
                     let provenance = try minimalLiveProvenance(
                         ordered,
                         canonical: canonical,
-                        allIncomingRecords: records,
-                        existingRecords: existingRecords
+                        fullContext: context,
+                        preparedContextInput: preparedContextInput
                     )
                     contributingEvidenceIDs = provenance.contributing
                     supersededEvidenceIDs = provenance.superseded
@@ -454,8 +472,8 @@ struct CurrentSyncRecordMerger {
     private func minimalLiveProvenance(
         _ evidence: [SyncRecordEvidence],
         canonical: SyncRecord,
-        allIncomingRecords: [SyncRecord],
-        existingRecords: [SyncRecord]
+        fullContext: CurrentSyncRecordMergeContext,
+        preparedContextInput: CurrentSyncPreparedContextInput
     ) throws -> (
         contributing: Set<SyncRecordEvidenceID>,
         superseded: Set<SyncRecordEvidenceID>
@@ -474,16 +492,16 @@ struct CurrentSyncRecordMerger {
             var withoutCandidate = live
             withoutCandidate.remove(at: index)
             let retainedEvidenceIDs = Set(withoutCandidate.map(\.id))
-            let reducedIncomingRecords = allIncomingRecords.filter { record in
-                let evidenceID = SyncRecordEvidenceID(record: record)
-                return groupEvidenceIDs.contains(evidenceID) == false
-                    || retainedEvidenceIDs.contains(evidenceID)
-            }
             do {
-                let reducedContext = try prepareContext(
-                    existingRecords: existingRecords,
-                    incomingRecords: reducedIncomingRecords
+                let reducedContext = try foldNeedsReducedContext(
+                    withoutCandidate
                 )
+                    ? prepareContext(
+                        from: preparedContextInput,
+                        excludingIncomingEvidenceIDs: groupEvidenceIDs
+                            .subtracting(retainedEvidenceIDs)
+                    )
+                    : fullContext
                 let folded = try foldCurrentEvidence(
                     withoutCandidate,
                     context: reducedContext
@@ -500,6 +518,33 @@ struct CurrentSyncRecordMerger {
             }
         }
         return (Set(live.map(\.id)), superseded)
+    }
+
+    private func foldNeedsReducedContext(
+        _ evidence: [SyncRecordEvidence]
+    ) throws -> Bool {
+        let upserts = evidence.map(\.record).filter {
+            $0.operation == .upsert
+        }
+        guard upserts.count > 1,
+              let entityType = upserts.first?.entityType
+        else { return false }
+        switch entityType {
+        case .taskChain:
+            return try Set(upserts.map {
+                try mapper.decodeTaskChain($0).state
+            }).count > 1
+        case .dayTrace:
+            let statuses = try Set(upserts.map {
+                try mapper.decodeDayTrace($0).status
+            })
+            return statuses.contains(.pending)
+                && statuses.contains(where: { $0 != .pending })
+        case .day, .taskCycleSeries, .taskDefinition, .subtask, .ideaEntry,
+             .appPreferences, .classificationBaseline,
+             .classificationCommit, .traceClassificationEvent:
+            return false
+        }
     }
 
     private func preflightCurrentMerges(
@@ -535,46 +580,156 @@ struct CurrentSyncRecordMerger {
         }
     }
 
-    private func prepareContext(
+    private func prepareContextInput(
         existingRecords: [SyncRecord],
         incomingRecords: [SyncRecord]
-    ) throws -> CurrentSyncRecordMergeContext {
-        for record in existingRecords {
+    ) throws -> CurrentSyncPreparedContextInput {
+        var cache: [
+            SyncRecordEvidenceID: CurrentSyncPreparedContextRecord
+        ] = [:]
+        func prepared(
+            _ record: SyncRecord
+        ) throws -> CurrentSyncPreparedContextRecord {
+            let evidenceID = SyncRecordEvidenceID(record: record)
+            if let cached = cache[evidenceID] {
+                guard cached.record.exactlyMatches(record) else {
+                    throw CurrentSyncRecordBatchError.invalidCurrentRecord(
+                        recordID: record.id,
+                        reason: .inconsistentRecordHeaders
+                    )
+                }
+                return cached
+            }
             try validateBatchRecord(record)
+            let value = try preparedContextRecord(
+                record,
+                evidenceID: evidenceID,
+                includeWitnesses: true
+            )
+            cache[evidenceID] = value
+            return value
         }
-        for record in incomingRecords {
-            try validateBatchRecord(record)
+
+        return try CurrentSyncPreparedContextInput(
+            existing: existingRecords.map(prepared),
+            incoming: incomingRecords.map(prepared)
+        )
+    }
+
+    private func preparedContextRecord(
+        _ record: SyncRecord,
+        evidenceID: SyncRecordEvidenceID? = nil,
+        includeWitnesses: Bool
+    ) throws -> CurrentSyncPreparedContextRecord {
+        var day: Day?
+        var chain: TaskChain?
+        var trace: DayTrace?
+        var witnesses: [ChainReactivationEnvelope] = []
+        if record.operation == .upsert {
+            switch record.entityType {
+            case .day:
+                day = try mapper.decodeDay(record)
+            case .taskChain:
+                let decoded = try mapper.decodeTaskChain(record)
+                chain = decoded
+                if includeWitnesses {
+                    witnesses = try reactivationWitnesses(
+                        in: record,
+                        for: decoded
+                    )
+                }
+            case .dayTrace:
+                trace = try mapper.decodeDayTrace(record)
+            case .taskCycleSeries, .taskDefinition, .subtask, .ideaEntry,
+                 .appPreferences, .classificationBaseline,
+                 .classificationCommit, .traceClassificationEvent:
+                break
+            }
+        }
+        return CurrentSyncPreparedContextRecord(
+            record: record,
+            evidenceID: evidenceID ?? SyncRecordEvidenceID(record: record),
+            day: day,
+            chain: chain,
+            trace: trace,
+            witnesses: witnesses
+        )
+    }
+
+    private func prepareContext(
+        from input: CurrentSyncPreparedContextInput,
+        excludingIncomingEvidenceIDs excluded:
+            Set<SyncRecordEvidenceID>
+    ) throws -> CurrentSyncRecordMergeContext {
+        let active = input.existing + input.incoming.filter {
+            excluded.contains($0.evidenceID) == false
         }
 
         let reactivationAuthorizations = reactivationAuthorizations(
-            existingRecords: existingRecords,
-            incomingRecords: incomingRecords
+            from: active
         )
         let authorizationContext = CurrentSyncRecordMergeContext(
             authorizedReactivationChainIDs: reactivationAuthorizations.chainIDs,
             authorizedTraceReactivations: reactivationAuthorizations.tracePairs
         )
 
-        var canonicalRecords: [SyncRecordID: SyncRecord] = [:]
-        for record in existingRecords where record.isMergeAuthorizationContext {
-            try mergeAuthorizationRecord(
-                record,
-                into: &canonicalRecords,
-                context: authorizationContext
-            )
-        }
-        for record in incomingRecords where record.isMergeAuthorizationContext {
-            try mergeAuthorizationRecord(
-                record,
-                into: &canonicalRecords,
-                context: authorizationContext
-            )
+        var canonicalRecords: [
+            SyncRecordID: CurrentSyncPreparedContextRecord
+        ] = [:]
+        for candidate in active
+        where candidate.record.isMergeAuthorizationContext {
+            guard let existing = canonicalRecords[candidate.record.id] else {
+                canonicalRecords[candidate.record.id] = candidate
+                continue
+            }
+            do {
+                let merged = try merge(
+                    existing: existing.record,
+                    incoming: candidate.record,
+                    context: authorizationContext
+                )
+                if merged.exactlyMatches(existing.record) {
+                    canonicalRecords[candidate.record.id] = existing
+                } else if merged.exactlyMatches(candidate.record) {
+                    canonicalRecords[candidate.record.id] = candidate
+                } else {
+                    canonicalRecords[candidate.record.id] = try preparedContextRecord(
+                        merged,
+                        includeWitnesses: false
+                    )
+                }
+            } catch {
+                throw CurrentSyncRecordBatchError.invalidCurrentRecord(
+                    recordID: candidate.record.id,
+                    reason: SyncRecordMergeFailureReason(underlying: error)
+                )
+            }
         }
 
-        return try mergeContext(
-            from: Array(canonicalRecords.values),
-            reactivationAuthorizations: reactivationAuthorizations
+        var context = CurrentSyncRecordMergeContext(
+            authorizedReactivationChainIDs: reactivationAuthorizations.chainIDs,
+            authorizedTraceReactivations: reactivationAuthorizations.tracePairs
         )
+        for canonical in canonicalRecords.values {
+            if let day = canonical.day {
+                context.daysByDate[day.date] = day
+            }
+            if let chain = canonical.chain {
+                context.chainsByID[chain.id] = chain
+            }
+        }
+        return context
+    }
+
+    private func reactivationAuthorizations(
+        from records: [CurrentSyncPreparedContextRecord]
+    ) -> CurrentSyncReactivationAuthorizations {
+        let evidence = CurrentSyncReactivationEvidence(
+            chains: records.compactMap(\.chain),
+            traces: records.compactMap(\.trace),
+            witnesses: records.flatMap(\.witnesses)
+        )
+        return reactivationAuthorizations(from: evidence)
     }
 
     func reactivationAuthorizations(
@@ -583,16 +738,24 @@ struct CurrentSyncRecordMerger {
     ) -> CurrentSyncReactivationAuthorizations {
         let existing = reactivationEvidence(from: existingRecords)
         let incoming = reactivationEvidence(from: incomingRecords)
-        let allChains = existing.chains + incoming.chains
-        let allTraces = existing.traces + incoming.traces
-        let allWitnesses = existing.witnesses + incoming.witnesses
+        return reactivationAuthorizations(
+            from: CurrentSyncReactivationEvidence(
+                chains: existing.chains + incoming.chains,
+                traces: existing.traces + incoming.traces,
+                witnesses: existing.witnesses + incoming.witnesses
+            )
+        )
+    }
 
+    private func reactivationAuthorizations(
+        from evidence: CurrentSyncReactivationEvidence
+    ) -> CurrentSyncReactivationAuthorizations {
         var authorizations = CurrentSyncReactivationAuthorizations()
-        for witness in allWitnesses {
-            guard allChains.contains(witness.abandonedChain) else {
+        for witness in evidence.witnesses {
+            guard evidence.chains.contains(witness.abandonedChain) else {
                 continue
             }
-            for chain in allChains {
+            for chain in evidence.chains {
                 let authorizesChainOnly =
                     witness.abandonedTrace == nil
                         && witness.authorizesRestoredSuccessor(
@@ -604,11 +767,11 @@ struct CurrentSyncRecordMerger {
                     continue
                 }
                 guard let abandonedTrace = witness.abandonedTrace,
-                      allTraces.contains(abandonedTrace)
+                      evidence.traces.contains(abandonedTrace)
                 else {
                     continue
                 }
-                for trace in allTraces
+                for trace in evidence.traces
                 where witness.authorizesRestoredSuccessor(
                     chain: chain,
                     trace: trace
@@ -673,63 +836,6 @@ struct CurrentSyncRecordMerger {
                 reason: SyncRecordMergeFailureReason(underlying: error)
             )
         }
-    }
-
-    private func mergeAuthorizationRecord(
-        _ record: SyncRecord,
-        into canonicalRecords: inout [SyncRecordID: SyncRecord],
-        context: CurrentSyncRecordMergeContext
-    ) throws {
-        do {
-            try validate(record)
-            guard let existing = canonicalRecords[record.id] else {
-                canonicalRecords[record.id] = record
-                return
-            }
-            canonicalRecords[record.id] = try merge(
-                existing: existing,
-                incoming: record,
-                context: context
-            )
-        } catch {
-            throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                recordID: record.id,
-                reason: SyncRecordMergeFailureReason(underlying: error)
-            )
-        }
-    }
-
-    private func mergeContext(
-        from canonicalRecords: [SyncRecord],
-        reactivationAuthorizations: CurrentSyncReactivationAuthorizations
-    ) throws -> CurrentSyncRecordMergeContext {
-        var context = CurrentSyncRecordMergeContext(
-            authorizedReactivationChainIDs: reactivationAuthorizations.chainIDs,
-            authorizedTraceReactivations: reactivationAuthorizations.tracePairs
-        )
-        for record in canonicalRecords where record.operation == .upsert {
-            do {
-                switch record.entityType {
-                case .day:
-                    let day = try mapper.decodeDay(record)
-                    context.daysByDate[day.date] = day
-                case .taskChain:
-                    let chain = try mapper.decodeTaskChain(record)
-                    context.chainsByID[chain.id] = chain
-                case .taskCycleSeries, .taskDefinition, .dayTrace, .subtask, .ideaEntry,
-                     .appPreferences,
-                     .classificationBaseline, .classificationCommit,
-                     .traceClassificationEvent:
-                    break
-                }
-            } catch {
-                throw CurrentSyncRecordBatchError.invalidCurrentRecord(
-                    recordID: record.id,
-                    reason: SyncRecordMergeFailureReason(underlying: error)
-                )
-            }
-        }
-        return context
     }
 
     private func publishingOrder(_ records: [SyncRecord]) -> [SyncRecord] {

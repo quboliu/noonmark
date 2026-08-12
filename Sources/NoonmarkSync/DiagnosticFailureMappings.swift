@@ -1,9 +1,8 @@
 import NoonmarkDiagnostics
 
-extension ICloudDriveSyncTransportError: DiagnosticFailureProviding {
+extension ICloudDriveRepositoryLocationError: DiagnosticFailureProviding {
     public var diagnosticFailure: DiagnosticFailure {
         let code = switch self {
-        case .unavailable: 101
         case .accountUnavailable: 102
         case .driveUnavailable: 103
         }
@@ -59,7 +58,6 @@ extension CloudKitSyncEngineTransportError: DiagnosticFailureProviding {
         case .invalidServerRecordSystemFields: 304
         case .unexpectedRemoteRecordDeletion: 305
         case .recordZoneDeleted: 306
-        case .liveValidationZoneRequired: 307
         case .syncScopeChanged: 308
         case .cloudKitFailure: 309
         case .missingEntitlement: 310

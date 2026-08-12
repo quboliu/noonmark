@@ -68,7 +68,9 @@ cloudkit_environment="${NOONMARK_CLOUDKIT_ENVIRONMENT:-}"
 codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
 require_stable_ui_signing="${NOONMARK_REQUIRE_STABLE_UI_SIGNING:-0}"
 provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
+data_protection_keychain_signing="${NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING:-0}"
 cloudkit_signing_enabled=0
+data_protection_keychain_signing_enabled=0
 stable_codesigning_enabled=0
 release_symbols_enabled=0
 linked_binary_sha256=""
@@ -78,11 +80,14 @@ build_git_commit=""
 build_date=""
 decoded_profile=""
 claimed_entitlements=""
+data_protection_entitlements=""
 release_build_identity_content=""
 
 cleanup() {
   [[ -z "$decoded_profile" ]] || rm -f "$decoded_profile"
   [[ -z "$claimed_entitlements" ]] || rm -f "$claimed_entitlements"
+  [[ -z "$data_protection_entitlements" ]] ||
+    rm -f "$data_protection_entitlements"
   [[ -z "$release_build_identity_content" ]] ||
     rm -f "$release_build_identity_content"
 }
@@ -104,6 +109,34 @@ plist_array_contains() {
     | grep -Fqx "$2"
 }
 
+plist_array_authorizes_team_identifier() {
+  local key_path="$1"
+  local exact_identifier="$2"
+  local team_identifier="$3"
+  local plist_path="$4"
+
+  plist_array_contains \
+    "$key_path" \
+    "$exact_identifier" \
+    "$plist_path" ||
+    plist_array_contains \
+      "$key_path" \
+      "${team_identifier}.*" \
+      "$plist_path"
+}
+
+case "$data_protection_keychain_signing" in
+  0)
+    ;;
+  1)
+    data_protection_keychain_signing_enabled=1
+    ;;
+  *)
+    echo "NOONMARK_DATA_PROTECTION_KEYCHAIN_SIGNING must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
+
 if [[ -n "$cloudkit_container_id" ]]; then
   cloudkit_signing_enabled=1
   if [[ ! "$cloudkit_container_id" =~ ^iCloud\.[A-Za-z0-9.-]+$ ]]; then
@@ -122,17 +155,23 @@ if [[ -n "$cloudkit_container_id" ]]; then
       exit 1
       ;;
   esac
+fi
+
+if [[ "$cloudkit_signing_enabled" -eq 1 ||
+      "$data_protection_keychain_signing_enabled" -eq 1 ]]; then
   if [[ -z "$codesign_identity" || "$codesign_identity" == "-" ]]; then
-    echo "CloudKit build requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
+    echo "provisioned build requires a non-ad-hoc NOONMARK_CODESIGN_IDENTITY" >&2
     exit 1
   fi
-  if [[ -z "$provisioning_profile" || ! -f "$provisioning_profile" ]]; then
-    echo "CloudKit build requires an existing NOONMARK_PROVISIONING_PROFILE" >&2
+  if [[ "$provisioning_profile" != /* ||
+        ! -f "$provisioning_profile" ||
+        -L "$provisioning_profile" ]]; then
+    echo "provisioned build requires an absolute regular NOONMARK_PROVISIONING_PROFILE" >&2
     exit 1
   fi
-  decoded_profile="$(mktemp -t noonmark-cloudkit-profile.XXXXXX)"
+  decoded_profile="$(mktemp -t noonmark-provisioning-profile.XXXXXX)"
   if ! security cms -D -i "$provisioning_profile" >"$decoded_profile"; then
-    echo "CloudKit provisioning profile could not be decoded" >&2
+    echo "provisioning profile could not be decoded" >&2
     exit 1
   fi
   PROFILE_PLIST="$decoded_profile" swift -e '
@@ -147,7 +186,7 @@ guard let profile = value as? [String: Any],
       expiration > Date()
 else {
     FileHandle.standardError.write(
-        Data("CloudKit provisioning profile is expired or malformed\n".utf8)
+        Data("provisioning profile is expired or malformed\n".utf8)
     )
     exit(1)
 }
@@ -161,9 +200,12 @@ else {
   profile_bundle_identifier="${profile_app_identifier#*.}"
   if [[ -z "$profile_team_identifier" \
         || "$profile_bundle_identifier" != "$bundle_identifier" ]]; then
-    echo "CloudKit provisioning profile does not authorize $bundle_identifier" >&2
+    echo "provisioning profile does not authorize $bundle_identifier" >&2
     exit 1
   fi
+fi
+
+if [[ "$cloudkit_signing_enabled" -eq 1 ]]; then
   if ! plist_array_contains \
     "Entitlements:com.apple.developer.icloud-container-identifiers" \
     "$cloudkit_container_id" \
@@ -186,6 +228,17 @@ else {
   if [[ "$(plist_value "Entitlements:com.apple.developer.aps-environment" "$decoded_profile")" \
         != "$aps_environment" ]]; then
     echo "CloudKit provisioning profile APNs environment does not match $aps_environment" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$data_protection_keychain_signing_enabled" -eq 1 ]]; then
+  if ! plist_array_authorizes_team_identifier \
+    "Entitlements:keychain-access-groups" \
+    "$profile_app_identifier" \
+    "$profile_team_identifier" \
+    "$decoded_profile"; then
+    echo "provisioning profile does not authorize the exact Keychain group" >&2
     exit 1
   fi
 fi
@@ -368,6 +421,14 @@ if [[ "$cloudkit_signing_enabled" -eq 1 ]]; then
 </dict>
 </plist>
 PLIST
+  if [[ "$data_protection_keychain_signing_enabled" -eq 1 ]]; then
+    /usr/libexec/PlistBuddy \
+      -c "Add :keychain-access-groups array" \
+      "$entitlements_path"
+    /usr/libexec/PlistBuddy \
+      -c "Add :keychain-access-groups:0 string $profile_app_identifier" \
+      "$entitlements_path"
+  fi
   codesign \
     --force \
     --sign "$codesign_identity" \
@@ -397,6 +458,69 @@ PLIST
       "CloudKit" \
       "$claimed_entitlements"; then
     echo "signed app does not contain the expected CloudKit array entitlements" >&2
+    exit 1
+  fi
+  signed_team_identifier="$(
+    codesign --display --verbose=4 "$bundle_dir" 2>&1 \
+      | awk -F= '/^TeamIdentifier=/{print $2}'
+  )"
+  if [[ "$signed_team_identifier" != "$profile_team_identifier" ]]; then
+    echo "signed app team does not match the provisioning profile" >&2
+    exit 1
+  fi
+  if [[ "$data_protection_keychain_signing_enabled" -eq 1 ]] &&
+    ! plist_array_contains \
+      "keychain-access-groups" \
+      "$profile_app_identifier" \
+      "$claimed_entitlements"; then
+    echo "signed CloudKit app does not contain its exact Keychain group" >&2
+    exit 1
+  fi
+elif [[ "$data_protection_keychain_signing_enabled" -eq 1 ]]; then
+  cp "$provisioning_profile" "${contents_dir}/embedded.provisionprofile"
+  data_protection_entitlements="$(
+    mktemp -t noonmark-data-protection-keychain-entitlements.XXXXXX
+  )"
+  cat >"$data_protection_entitlements" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.application-identifier</key>
+  <string>${profile_app_identifier}</string>
+  <key>com.apple.developer.team-identifier</key>
+  <string>${profile_team_identifier}</string>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>${profile_app_identifier}</string>
+  </array>
+</dict>
+</plist>
+PLIST
+  codesign \
+    --force \
+    --sign "$codesign_identity" \
+    --entitlements "$data_protection_entitlements" \
+    --generate-entitlement-der \
+    "$bundle_dir" >/dev/null
+
+  claimed_entitlements="$(
+    mktemp -t noonmark-data-protection-keychain-claims.XXXXXX
+  )"
+  codesign --display --entitlements - --xml "$bundle_dir" \
+    >"$claimed_entitlements" 2>/dev/null
+  if [[ "$(plist_value "com.apple.application-identifier" "$claimed_entitlements")" \
+        != "$profile_app_identifier" \
+        || "$(plist_value "com.apple.developer.team-identifier" "$claimed_entitlements")" \
+        != "$profile_team_identifier" ]]; then
+    echo "signed app does not contain exact Keychain scalar entitlements" >&2
+    exit 1
+  fi
+  if ! plist_array_contains \
+    "keychain-access-groups" \
+    "$profile_app_identifier" \
+    "$claimed_entitlements"; then
+    echo "signed app does not contain its exact Keychain access group" >&2
     exit 1
   fi
   signed_team_identifier="$(

@@ -115,6 +115,23 @@ public enum NoonmarkRuntimeProfile: String, CaseIterable, Sendable {
         }
     }
 
+    public var replicationWatermarkKeychainService: String {
+        switch self {
+        case .production:
+            "app.noonmark.replication-watermark"
+        case .development:
+            "app.noonmark.replication-watermark.development"
+        case .e2e:
+            "app.noonmark.replication-watermark.e2e"
+        case .demo:
+            "app.noonmark.replication-watermark.demo"
+        case .audit:
+            "app.noonmark.replication-watermark.audit"
+        case .dmgValidation:
+            "app.noonmark.replication-watermark.dmg-validation"
+        }
+    }
+
     public var isResettable: Bool {
         self != .production
     }

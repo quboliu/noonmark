@@ -201,6 +201,9 @@ extension NoonmarkStore {
     }
 
     private var activeDiagnosticOperationID: DiagnosticOperationID? {
+        if let localFirstReplicationDiagnosticOperationID {
+            return localFirstReplicationDiagnosticOperationID
+        }
         guard case let .localFirstSync(operationID) = exclusiveEngineOperation
         else { return nil }
         return DiagnosticOperationID(rawValue: operationID)

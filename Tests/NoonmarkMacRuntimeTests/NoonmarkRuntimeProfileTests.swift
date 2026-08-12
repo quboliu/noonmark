@@ -5,14 +5,23 @@ import XCTest
 
 final class NoonmarkRuntimeProfileTests: XCTestCase {
     func testEverySignedBundleIdentityResolvesToItsExactRuntimeScope() throws {
-        let expected: [(NoonmarkRuntimeProfile, String, String, String, String, String)] = [
+        let expected: [(
+            NoonmarkRuntimeProfile,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String
+        )] = [
             (
                 .production,
                 "app.noonmark.mac",
                 "noonmark",
                 "Noonmark/SyncRepository",
                 "app.noonmark.zhulong.provider",
-                "app.noonmark.zhulong.sidecar-key"
+                "app.noonmark.zhulong.sidecar-key",
+                "app.noonmark.replication-watermark"
             ),
             (
                 .development,
@@ -20,7 +29,8 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
                 "noonmark-development",
                 "Noonmark-Development/SyncRepository",
                 "app.noonmark.zhulong.provider.development",
-                "app.noonmark.zhulong.sidecar-key.development"
+                "app.noonmark.zhulong.sidecar-key.development",
+                "app.noonmark.replication-watermark.development"
             ),
             (
                 .e2e,
@@ -28,7 +38,8 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
                 "noonmark-e2e",
                 "Noonmark-E2E/SyncRepository",
                 "app.noonmark.zhulong.provider.e2e",
-                "app.noonmark.zhulong.sidecar-key.e2e"
+                "app.noonmark.zhulong.sidecar-key.e2e",
+                "app.noonmark.replication-watermark.e2e"
             ),
             (
                 .demo,
@@ -36,7 +47,8 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
                 "noonmark-demo",
                 "Noonmark-Demo/SyncRepository",
                 "app.noonmark.zhulong.provider.demo",
-                "app.noonmark.zhulong.sidecar-key.demo"
+                "app.noonmark.zhulong.sidecar-key.demo",
+                "app.noonmark.replication-watermark.demo"
             ),
             (
                 .audit,
@@ -44,7 +56,8 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
                 "noonmark-audit",
                 "Noonmark-Audit/SyncRepository",
                 "app.noonmark.zhulong.provider.audit",
-                "app.noonmark.zhulong.sidecar-key.audit"
+                "app.noonmark.zhulong.sidecar-key.audit",
+                "app.noonmark.replication-watermark.audit"
             ),
             (
                 .dmgValidation,
@@ -52,12 +65,21 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
                 "noonmark-dmg-validation",
                 "Noonmark-DMGValidation/SyncRepository",
                 "app.noonmark.zhulong.provider.dmg-validation",
-                "app.noonmark.zhulong.sidecar-key.dmg-validation"
+                "app.noonmark.zhulong.sidecar-key.dmg-validation",
+                "app.noonmark.replication-watermark.dmg-validation"
             )
         ]
 
         XCTAssertEqual(NoonmarkRuntimeProfile.allCases.count, expected.count)
-        for (profile, bundleIdentifier, dataDirectory, repository, providerService, sidecarService) in expected {
+        for (
+            profile,
+            bundleIdentifier,
+            dataDirectory,
+            repository,
+            providerService,
+            sidecarService,
+            watermarkService
+        ) in expected {
             XCTAssertEqual(
                 try NoonmarkRuntimeProfile.resolve(bundleIdentifier: bundleIdentifier),
                 profile
@@ -67,6 +89,10 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
             XCTAssertEqual(profile.iCloudRepositoryName, repository)
             XCTAssertEqual(profile.providerKeychainService, providerService)
             XCTAssertEqual(profile.sidecarKeychainService, sidecarService)
+            XCTAssertEqual(
+                profile.replicationWatermarkKeychainService,
+                watermarkService
+            )
         }
     }
 
@@ -78,6 +104,10 @@ final class NoonmarkRuntimeProfileTests: XCTestCase {
         XCTAssertEqual(Set(profiles.map(\.iCloudRepositoryName)).count, profiles.count)
         XCTAssertEqual(Set(profiles.map(\.providerKeychainService)).count, profiles.count)
         XCTAssertEqual(Set(profiles.map(\.sidecarKeychainService)).count, profiles.count)
+        XCTAssertEqual(
+            Set(profiles.map(\.replicationWatermarkKeychainService)).count,
+            profiles.count
+        )
 
         for profile in profiles where profile != .production {
             XCTAssertFalse(

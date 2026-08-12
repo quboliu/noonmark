@@ -308,6 +308,22 @@ _Avoid_: 同步目录, 云盘目录
 一台设备首次把既有的完整本地任务事实带入同步时形成的可验证起点；只有整个起点被同步端点接纳，首次同步才算成功。它不是数据包副本，也不得覆盖另一台设备的分歧历史。
 _Avoid_: 同步快照, 全库覆盖, 数据包同步
 
+**复制发布**:
+一台安装把一组 canonical 本机事实封装成 content-addressed chunks、root manifest、seal 与 immutable announcement 后形成的不可变同步证据；只有全部内容通过 digest 校验且 seal 有效，接收端才可应用。mutable head 只用于加速发现，不构成发布事实。
+_Avoid_: 同步文件, 可变 head, 上传中的资料
+
+**发布确认**:
+同步端点对 exact immutable **复制发布**的 typed positive evidence。确认可以乱序、重复或部分到达，必须集合化、单调持久，并只允许本机 watermark 推进到最长连续 confirmed prefix；文件存在、本机写入成功、空 pending 或无 error 都不是确认。
+_Avoid_: 写入成功, 已排队, head 已存在
+
+**producer epoch**:
+一份 App 安装在一个同步 repository generation 内拥有的 ThisDeviceOnly 发布身份。不同安装不共享 epoch；rollback、fork repair 或 watermark 不一致会退休旧 epoch 并建立新 epoch，不能猜测追平或复用旧 sequence。
+_Avoid_: 设备账号, 同步设备 ID, 全局 writer
+
+**同步分叉 resolution**:
+针对同一 producer／sequence 出现不同 immutable digest 时，对两个分支进行验证、应用、领域冲突处理并 durable closed 的恢复事实。resolution 不任意选择 winner；多台安装可以各自建立新 producer epoch，但必须引用同一个 deterministic resolutionID 后才能发布 repair baseline。
+_Avoid_: LWW 覆盖, 删除冲突文件, 选最新 head
+
 **定时备份**:
 按计划把当前任务事实导出成可恢复 **数据包**，写入用户配置的 iCloud Drive、S3 或其他对象存储。它是旁路备份，不是双向同步，也不是第二个主数据模式。
 _Avoid_: 自动双向同步, 第二事实源, 数据库文件同步

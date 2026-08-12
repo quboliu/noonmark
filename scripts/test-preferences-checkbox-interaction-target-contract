@@ -7,6 +7,8 @@ cd "$repo_root"
 tree_source="App/NoonmarkMacApp/AppViewTreeE2E.swift"
 settings_source="App/NoonmarkMacApp/SettingsPaneContent.swift"
 automation_source="App/NoonmarkMacApp/PreferencesClockE2EAutomation.swift"
+lifecycle_source="App/NoonmarkMacApp/ReplicationV2LifecycleE2EEndpoint.swift"
+sync_source="App/NoonmarkMacApp/NoonmarkStore+Sync.swift"
 
 rg -F 'static func checkboxInteractionTarget(' "$tree_source" >/dev/null
 rg -F 'anchorFrame.contains(' "$tree_source" >/dev/null
@@ -22,29 +24,44 @@ if rg -n '^[[:space:]]*\.disabled\(store\.isLocalFirstSyncing\)[[:space:]]*$' \
   exit 1
 fi
 rg -F 'try await clickCheckbox(' "$automation_source" >/dev/null
-rg -F 'checkbox-disable=cancelled-and-persisted gate=released' \
+rg -F 'sync v2 task-mutation=allowed checkbox-disable=stopping join=held' \
   "$automation_source" >/dev/null
-rg -F 'sync restart status=failed warning=suppressed policy=disabled' \
+rg -F 'sync v2 disabled worker=disabled incident=cleared warning=suppressed' \
   "$automation_source" >/dev/null
-rg -F 'sync restore-race continuation=completed warning=suppressed ' \
+rg -F 'sync v2 restart worker=disabled warning=suppressed ' \
   "$automation_source" >/dev/null
-restore_wait_line="$(rg -n -F \
-  'await self?.persistedSyncFailureRestoreE2EGate.waitIfArmed()' \
-  'App/NoonmarkMacApp/NoonmarkStore+Sync.swift' | head -1 | cut -d: -f1)"
-policy_recheck_line="$(awk -v start="$restore_wait_line" '
-  NR > start && index($0, "engine.preferences.localFirstSyncPolicy.enabled,") {
+rg -F 'actor ReplicationV2LifecycleE2EEndpoint: ReplicationEndpoint' \
+  "$lifecycle_source" >/dev/null
+rg -F 'func armReadFailure() -> Bool' "$lifecycle_source" >/dev/null
+rg -F 'func armBlockingRead() -> Bool' "$lifecycle_source" >/dev/null
+rg -F 'await underlying.cancelAndJoin()' "$lifecycle_source" >/dev/null
+rg -F 'Bundle.main.bundleIdentifier == "app.noonmark.mac.e2e"' \
+  "$sync_source" >/dev/null
+rg -F '"--e2e-replication-v2-lifecycle-endpoint"' \
+  "$sync_source" >/dev/null
+disabled_line="$(rg -n -F 'case .disabled:' "$sync_source" \
+  | head -1 | cut -d: -f1)"
+notice_clear_line="$(awk -v start="$disabled_line" '
+  NR > start && index($0, "resolveOperationFailure(.sync)") {
     print NR
     exit
   }
-' 'App/NoonmarkMacApp/NoonmarkStore+Sync.swift')"
-[[ -n "$restore_wait_line" && -n "$policy_recheck_line" ]] || {
-  echo "Persisted sync failure restore lost its post-await policy check" >&2
+' "$sync_source")"
+[[ -n "$disabled_line" && -n "$notice_clear_line" ]] || {
+  echo "V2 disabled state no longer suppresses the actionable sync warning" >&2
   exit 1
 }
 rg -F 'AppViewTreeE2E.attachedView(identifier: identifier)' "$automation_source" >/dev/null
 rg -F 'anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))' "$automation_source" >/dev/null
-rg -F 'checkbox hit target was not visible after scrolling' "$automation_source" >/dev/null
+rg -F 'checkbox hit target was not visible:' "$automation_source" >/dev/null
 rg -F 'AppViewTreeE2E.checkboxInteractionTarget(' "$automation_source" >/dev/null
-rg -F 'checkbox interaction target changed before mouseDown' "$automation_source" >/dev/null
+rg -F 'checkbox interaction target changed:' "$automation_source" >/dev/null
+
+if rg -n \
+  'PersistedSyncFailureRestoreE2EGate|SQLiteLocalFirstSyncCoordinator|SQLiteLocalFirstSyncStatus|e2e-persisted-sync-failure-restore-race' \
+  App/NoonmarkMacApp scripts/test-e2e >/dev/null; then
+  echo "V1 persisted-failure automation escaped the V2 clean cut" >&2
+  exit 1
+fi
 
 echo "Preferences checkbox interaction target contract passed"

@@ -5,12 +5,12 @@ import XCTest
 final class DiagnosticFailureMappingTests: XCTestCase {
     func testICloudEndpointFailuresHaveStableSafeCodes() {
         XCTAssertEqual(
-            ICloudDriveSyncTransportError.accountUnavailable
+            ICloudDriveRepositoryLocationError.accountUnavailable
                 .diagnosticFailure,
             DiagnosticFailure(domain: .syncProtocol, code: 102)
         )
         XCTAssertEqual(
-            ICloudDriveSyncTransportError.driveUnavailable
+            ICloudDriveRepositoryLocationError.driveUnavailable
                 .diagnosticFailure,
             DiagnosticFailure(domain: .syncProtocol, code: 103)
         )

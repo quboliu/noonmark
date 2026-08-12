@@ -7,7 +7,7 @@
 - 引入提交：待回溯；故障由分类真实 Simulator 症状门禁暴露
 - Git author／committer：基线提交记录中的仓库 author；本次未提交
 - 实际修改者：未知
-- 修复提交：`00c17fa`
+- 修复提交：`00c17fa8b1d48e1c6b3dc1af8f89dc3c63fbdb6a`
 
 ## 用户症状与影响
 

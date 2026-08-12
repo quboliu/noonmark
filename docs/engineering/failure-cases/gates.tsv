@@ -208,3 +208,5 @@ FAIL-2026-08-11-07	fast	scripts/test-ios-target-contract	scripts/check	iOS 飞�
 FAIL-2026-08-11-07	symptom	scripts/test-ios-simulator	scripts/test-all	真实 iPhone Simulator 必须验证加入 Sticky Note 后飞光来源仍在、并完成 Sticky Note 生命周期
 FAIL-2026-08-11-08	fast	scripts/test-ios-target-contract	scripts/check	分类目录必须保留真实硬删除确认路径和单一 alert presentation contract
 FAIL-2026-08-11-08	symptom	scripts/test-ios-simulator	scripts/test-all	真实 iPhone Simulator 必须搜索、归档、恢复、确认硬删除分类并验证目录消失
+FAIL-2026-08-12-09	fast	scripts/test-ios-target-contract	scripts/check	iOS 数据包必须通过原生 document picker，并保留稳定的导入／导出文件面板测试
+FAIL-2026-08-12-09	symptom	scripts/test-ios-simulator	scripts/test-all	真实 iPhone Simulator 必须打开并取消数据包导入／导出文件面板

@@ -33,7 +33,7 @@
 | 日历与复盘 | 月视图、日期选择、日统计和复盘编辑已接入；日历使用长 ScrollView 避免 List 递归布局 | Simulator 月份切换、长滚动、复盘保存与重启回读 |
 | 重复计划 | 创建、模板说明、计划子任务新增／改名／难度／删除、编辑、跳过、停止、轨迹和年度日历映射已接入；Simulator 已验证创建、模板回读与展开摘要 | 编辑、跳过、停止和重启回读的独立症状 gate |
 | 设置与分类 | 外观、语言、诗句、备份、数据模式、同步端点／策略、分类目录创建／改名／归档／恢复和详情分类编辑已接入 | Simulator 偏好、同步策略与分类目录完整回读 |
-| 数据包 | `NoonmarkDataPackage` JSON export/import、完整性校验和 SQLite 替换已接入 | Simulator 文件面板导出、导入确认和重启回读 |
+| 数据包 | `NoonmarkDataPackage` JSON export/import、完整性校验、SQLite 替换、导入确认和原生 iOS 文件面板已接入；导出临时文件在 picker 完成后清理 | Simulator 文件面板导入／导出打开与取消、提供的 JSON 导入和重启回读 |
 | 同步 | iOS 已接入 local-first coordinator 的真实 transport 选择；缺 entitlement／container 时 fail-closed；Simulator 不宣称同步成功 | 真实 iOS entitlement、CloudKit account、iCloud Drive 与双端冲突运行证据 |
 | 烛龙 | provider 配置、Keychain API key、加密 session sidecar、七类任务选择、按任务 scope 授权和 streaming UI 已接入；task plan 会形成可审阅 Todo diff，daily review 会形成事实快照草稿，task-pool analysis 使用 typed evidence contract；写入仍需显式授权 | 明确 provider endpoint/key 后的 live AI smoke、失败恢复、planning delegated workflow 与 artifact 真实 Simulator gate，以及敏感信息门禁 |
 | 诊断与生命周期 | iOS bounded diagnostic bootstrap、MetricKit subscriber、Help 导出文档和前后台 flush 已接入 | 真实故障闭环、隐私哨兵、4 MiB／8 MiB 容量及主动导出症状 gate |
@@ -62,10 +62,11 @@
 - 固定 Simulator focused UI gate：`testUserCanClassifyAndPersistTaskInSimulator` 通过，覆盖分类目录创建、任务分类选择和强制终止／重启回读。
 - 固定 Simulator focused UI gate：`testUserCanCreateRecurringPlanInSimulator` 通过，覆盖重复计划模板子任务创建、编辑表单回读和展开摘要。
 - 固定 Simulator focused UI gate：`testUserCanSaveDailyReviewAndReadItAfterRestartInSimulator` 通过，覆盖日历长滚动、复盘保存和强制终止／重启回读；首次 List 递归布局故障登记为 `FAIL-2026-08-11-03`。
+- 固定 Simulator focused UI gate：`testUserCanOpenAndCancelDataPackageFileFlowsInSimulator` 通过，覆盖真实 JSON 导入／导出系统文件面板的打开、取消和连续路径；SwiftUI exporter 不呈现故障登记为 `FAIL-2026-08-12-09`。
 - 固定 Simulator focused UI gate：`testUserCanPinRestoreAndDeleteFlylightInSimulator` 通过，覆盖 Sticky Note pin／移除、飞光删除、回收站恢复、正文编辑、关闭回收站和强制终止／重启回读；目录切换故障登记为 `FAIL-2026-08-11-06`。
 - `xcodebuild ... iphonesimulator build`：iOS app 及共享 Core/AI/Zhulong/Diagnostics/Storage/Sync targets 构建通过。
 - `scripts/test-ios-target-contract`：compact root、日历长滚动、飞光生命周期和复盘症状入口的 fail-closed contract 通过。
-- `scripts/test-failure-case-gates`：83 个故障门禁登记与入口校验通过；本轮完整 `make check` 自然退出 0，DMG evidence contract、release gate aggregation 和所有既有 fast／symptom contract 均通过。此前一次中止来自人为停止 helper 后的错误现场，不作为产品失败证据。
+- `scripts/test-failure-case-gates`：现有故障门禁登记与入口校验通过；本轮完整 `make check` 自然退出 0，DMG evidence contract、release gate aggregation 和所有既有 fast／symptom contract 均通过。此前一次中止来自人为停止 helper 后的错误现场，不作为产品失败证据。
 - 用户提供的 `noonmark-backup-2026-08-11.json` 已在固定 development Simulator 完成事务性导入、重启回读和真实页面显示；SQLite 对账为 252 个 days、938 条 day traces、1035 条 task chains 和 31 条 idea entries，local-first sync 保持关闭。
 - `make build-app`：`development` profile 的真实 Mac App 产物构建、签名和任务优先级交互类型检查通过。
 - 首轮 compact 根容器故障已由 XCTest accessibility hierarchy 定位并修复，案例登记为 `FAIL-2026-08-11-02`。

@@ -1,5 +1,6 @@
 @testable import NoonmarkSync
 import CryptoKit
+import Darwin
 import XCTest
 
 final class ReplicationRepositoryBootstrapTests: XCTestCase {
@@ -104,6 +105,89 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
 
         XCTAssertEqual(results[0], results[1])
         XCTAssertTrue([first, second].contains(results[0].generationID))
+        XCTAssertEqual(
+            try inventory(root).map(\.relativePath),
+            [FileReplicationRepositoryBootstrap.markerFilename, "v2"]
+        )
+    }
+
+    func testBootstrapWaitsForActiveMarkerPublicationBeforeInspectingTree()
+        async throws
+    {
+        let root = makeRepositoryURL()
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let rootDescriptor = open(
+            root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+        )
+        XCTAssertGreaterThanOrEqual(rootDescriptor, 0)
+        guard rootDescriptor >= 0 else {
+            return
+        }
+        defer {
+            close(rootDescriptor)
+        }
+
+        var lockResult: Int32
+        repeat {
+            lockResult = flock(rootDescriptor, LOCK_EX)
+        } while lockResult != 0 && errno == EINTR
+        XCTAssertEqual(lockResult, 0)
+        guard lockResult == 0 else {
+            return
+        }
+        defer {
+            _ = flock(rootDescriptor, LOCK_UN)
+        }
+
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(
+                "v2/staging/markers",
+                isDirectory: true
+            ),
+            withIntermediateDirectories: true
+        )
+        let winnerID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000004"
+        )!
+        let losingID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000005"
+        )!
+        let markerData = try ReplicationPublicationBuilder
+            .canonicalEncoder().encode(
+                ReplicationRepositoryDescriptor(
+                    formatVersion: FileReplicationRepositoryBootstrap
+                        .formatVersion,
+                    generationID: winnerID
+                )
+            )
+        let activePublisher = Task.detached {
+            try await Task.sleep(for: .milliseconds(100))
+            defer { _ = flock(rootDescriptor, LOCK_UN) }
+            return try AppendOnlyFilePublisher(rootURL: root).publish(
+                markerData,
+                to: FileReplicationRepositoryBootstrap.markerFilename,
+                stagingArea: "markers"
+            )
+        }
+
+        let opened: ReplicationRepositoryDescriptor
+        do {
+            opened = try FileReplicationRepositoryBootstrap.openOrCreate(
+                at: root,
+                generationID: { losingID }
+            )
+        } catch {
+            _ = try await activePublisher.value
+            throw error
+        }
+
+        let publicationResult = try await activePublisher.value
+        XCTAssertEqual(publicationResult, .published)
+        XCTAssertEqual(opened.generationID, winnerID)
         XCTAssertEqual(
             try inventory(root).map(\.relativePath),
             [FileReplicationRepositoryBootstrap.markerFilename, "v2"]

@@ -76,6 +76,24 @@ public enum FileReplicationRepositoryBootstrap {
     ) throws -> ReplicationRepositoryOpenResult {
         let root = rootURL.standardizedFileURL
         try prepareRoot(root, fileManager: fileManager)
+        return try withExclusiveBootstrapLock(at: root) {
+            try openOrCreateLocked(
+                at: root,
+                fileManager: fileManager,
+                generationID: generationID,
+                markerWriteByteLimitForTesting: markerWriteByteLimitForTesting
+            )
+        }
+    }
+}
+
+private extension FileReplicationRepositoryBootstrap {
+    static func openOrCreateLocked(
+        at root: URL,
+        fileManager: FileManager,
+        generationID: @Sendable () -> UUID,
+        markerWriteByteLimitForTesting: Int?
+    ) throws -> ReplicationRepositoryOpenResult {
         let markerURL = root.appendingPathComponent(markerFilename)
         let children = try fileManager.contentsOfDirectory(
             at: root,
@@ -149,9 +167,34 @@ public enum FileReplicationRepositoryBootstrap {
             throw ReplicationRepositoryBootstrapError.cannotCreateMarker
         }
     }
-}
 
-private extension FileReplicationRepositoryBootstrap {
+    static func withExclusiveBootstrapLock<Result>(
+        at root: URL,
+        _ operation: () throws -> Result
+    ) throws -> Result {
+        let descriptor = root.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(
+                path,
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard descriptor >= 0 else {
+            throw ReplicationRepositoryBootstrapError.invalidBoundary
+        }
+        defer { close(descriptor) }
+
+        var lockResult: Int32
+        repeat {
+            lockResult = flock(descriptor, LOCK_EX)
+        } while lockResult != 0 && errno == EINTR
+        guard lockResult == 0 else {
+            throw ReplicationRepositoryBootstrapError.invalidBoundary
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try operation()
+    }
+
     static func prepareRoot(
         _ root: URL,
         fileManager: FileManager

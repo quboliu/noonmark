@@ -4,7 +4,7 @@
 
 - 生效日期：2026-08-05
 - 当前已发行基线：`0.2.6 (28)`；精确 commit 为 `12ed27bf5d43077744a65c932703f2051f6d4ca4`，由 annotated tag `v0.2.6` 绑定。
-- 当前未发行 trial candidate：`0.3.1 (37)`；采用 schema 19 Replication V2 clean cut，并包含飞光 Markdown 换行根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
+- 当前未发行 trial candidate：`0.3.1 (38)`；采用 schema 19 Replication V2 clean cut，并包含飞光 Markdown 换行与 repository bootstrap staging 竞态根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
 - 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
 本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
@@ -31,7 +31,8 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| `0.3.1 (37)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18、format 6、V1 或无 marker 非空 repository 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (38)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18、format 6、V1 或无 marker 非空 repository 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (37)` 退役候选 | current schema `19` | current format `7` | 推送前完整门禁捕获 bootstrap 把另一个活跃 writer 的 staging 中间态误判成 legacy repository；未 push、未打包、未交付或复用 |
 | `0.3.1 (36)` 退役候选 | current schema `19` | current format `7` | review 证明 trial、tag、真实安装与 hosted publisher 尚未共同强制该 SHA 的成功 CI，公开 publisher 也缺少 package 前与发布前的 live authority 闭环；陈旧普通 PR 会因 current base 前进而假红；不得重打、覆盖、交付或复用 |
 | `0.3.1 (35)` 退役候选 | current schema `19` | current format `7` | review 证明 identical-tree amend、未 push synthetic merge、首次 identity 前历史 build 回退复用，以及通用 PR 假红仍未被机器边界覆盖；不得重打、覆盖、交付或复用 |
 | `0.3.1 (34)` 退役候选 | current schema `19` | current format `7` | review 证明 shallow CI、build 回退再恢复、首次同 build 绑定与 docs／empty follow-up commit 仍可绕过首版完整性检查；不得重打、覆盖、交付或复用 |

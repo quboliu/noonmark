@@ -8,7 +8,7 @@
 - 加重提交：`885d0843be615bcab4357848e90a8851f00f71ed`（`fix(release): harden GitHub signing readiness`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1eb996ab6ddb2c5ae19c680042643d1d56`（exclusive output）、`461fb598d80ed548669295f08137d2dd7108f47a`（package evidence authority）；build 30、31、32、33、34、35、36 已退役，后续验证由 `0.3.1 (37)` 继续；案例保持处理中
+- 修复提交：`84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea`（trial 状态与版本身份）、`314bbf1eb996ab6ddb2c5ae19c680042643d1d56`（exclusive output）、`461fb598d80ed548669295f08137d2dd7108f47a`（package evidence authority）；build 30、31、32、33、34、35、36、37 已退役，后续验证由 `0.3.1 (38)` 继续；案例保持处理中
 
 ## 用户症状与影响
 
@@ -54,7 +54,7 @@ commit `84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea` 已新增显式 pre-tag trial 
 - Red（症状）：旧入口拒绝 `--trial`，且无 tag 时默认入口在 package 前退出 1。
 - Green（fast）：`scripts/test-release-version-contract` 已在 `0.3.0 (30)` 上通过；版本、ledger、tagged／trial verifier 均被聚合入口固定。
 - Green（symptom）：`scripts/test-release-trial-contract` 已以隔离 Git／命令 fixture 证明 trial 与 tagged 前置分流、共享阶段的 exact order／arguments、full verifier 期间 manifest replacement 拒绝，以及 tag／retired／非最新 candidate 拒绝；`scripts/test-release-trial-output-contract` 已证明 manifest-authoritative 新输出、source／manifest tamper 拒绝、既有输出不可变、canonical basename 与 symlink 边界。
-- Green（release）：build 31 已在其精确 commit 上真实完成完整 pre-tag trial DMG 门禁；后续源码与门禁变化已依次退休 build 31、32、33、34、35 与 36，`0.3.1 (37)` 必须重新取得完整门禁证据。
+- Green（release）：build 31 已在其精确 commit 上真实完成完整 pre-tag trial DMG 门禁；后续源码与门禁变化已依次退休 build 31、32、33、34、35、36 与 37，`0.3.1 (38)` 必须重新取得完整门禁证据。
 
 ## 永久门禁
 
@@ -64,7 +64,7 @@ commit `84a1b113835bd3d4ce800f7ef24ac0e3ed57d4ea` 已新增显式 pre-tag trial 
 
 ## 发行与回滚
 
-build 29、30、31、32、33、34、35、36 永久退役且不覆盖。后续候选只能生成独立命名的 `0.3.1 (37)` trial；精确 `main` 按用户要求先 push 并等待 hosted CI，再进入私有出包，但不建立或 push tag、不触发 GitHub Release。任何本机、双 Mac 或 soak 故障都停止扩大试用并退休当前 build；下一候选使用更大 build，不移动 tag、不降级资料、不恢复 V1，也不触碰既有 iCloud 对象。
+build 29、30、31、32、33、34、35、36、37 永久退役且不覆盖。后续候选只能生成独立命名的 `0.3.1 (38)` trial；精确 `main` 按用户要求先 push 并等待 hosted CI，再进入私有出包，但不建立或 push tag、不触发 GitHub Release。任何本机、双 Mac 或 soak 故障都停止扩大试用并退休当前 build；下一候选使用更大 build，不移动 tag、不降级资料、不恢复 V1，也不触碰既有 iCloud 对象。
 
 ## 教训与永久约束
 

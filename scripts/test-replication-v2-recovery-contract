@@ -58,7 +58,7 @@ swift test \
   --filter CurrentSyncRecordMergerTests/testLargeIncrementalBatchCanonicalizationCompletesWithinBudget
 swift test \
   --filter SyncRecordMergerTests/testPreferenceRecordPreservesDeviceLocalConfiguration
-swift test --filter ReplicationRepositoryBootstrapTests
+scripts/test-replication-bootstrap-concurrency
 swift test --filter SQLiteStoreRuntimeTests
 swift test \
   --filter KeychainReplicationPublicationWatermarkStoreTests

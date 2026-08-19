@@ -69,7 +69,7 @@ block parser 会把相邻普通正文行组合成同一 paragraph，并用 `\n` 
 
 风险等级为 A：共享 Markdown inline renderer 会影响飞光、Sticky Note、任务详情与烛龙文本。回归重点是 inline 格式仍可解析、block 分层不变、既有卡片高度与置顶可视区不漂移。未通过 fast、真实飞光 symptom、Demo fixture 与完整 `make check` 前不进入发行。若验证发现共享消费者回归，只回滚本次 renderer、E2E 与 fixture 修复提交；不迁移、不重写任何用户正文，因为持久化数据从未损坏。
 
-修复改变了 build 32 分配后的源码，因此 `0.3.0 (32)` 已退役且不得分发；build 33、34、35、36 又因 source identity 历史、remote／hosted CI authority、发布前重验与 PR transition 门禁缺口退役。重新发行保持用户批准的营销版本 `0.3.1`，当前验证候选为 build 37，不覆盖既有本机 trial 文件。
+修复改变了 build 32 分配后的源码，因此 `0.3.0 (32)` 已退役且不得分发；build 33、34、35、36 又因 source identity 历史、remote／hosted CI authority、发布前重验与 PR transition 门禁缺口退役，build 37 在推送前门禁捕获 bootstrap staging 竞态后退役。重新发行保持用户批准的营销版本 `0.3.1`，当前验证候选为 build 38，不覆盖既有本机 trial 文件。
 
 ## 教训与永久约束
 

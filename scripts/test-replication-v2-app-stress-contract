@@ -139,9 +139,10 @@ require_literal "$symptom_gate" \
 require_literal "$symptom_gate" \
   "scripts/test-icloud-append-only-guard" \
   "replication V2 stress symptom gate does not run the no-mutation guard before iCloud access"
-require_literal "$symptom_gate" \
-  "scripts/test-replication-bootstrap-concurrency" \
-  "replication V2 stress symptom gate does not run the fast authority gate before iCloud access"
+if rg -Fq -- "scripts/test-replication-bootstrap-concurrency" "$symptom_gate"; then
+  echo "real iCloud stress must not transitively invoke the resetting fast authority gate" >&2
+  exit 1
+fi
 require_literal "$symptom_gate" \
   "--e2e-replication-v2-stress-local-folder" \
   "replication V2 stress does not expose its isolated Local Folder prerequisite"
@@ -166,6 +167,18 @@ require_literal "$symptom_gate" \
 require_literal "$symptom_gate" \
   'underlyingErrorKind == "ICloudReplicationRepositoryAuthorityError"' \
   "replication V2 authority fault does not require its typed runtime error"
+require_literal "$automation" \
+  "authorityErrorVerdict" \
+  "replication V2 authority fault does not expose its exact privacy-safe verdict"
+require_literal "$symptom_gate" \
+  'authorityErrorVerdict == "divergentMarkerVersion"' \
+  "replication V2 authority fault does not require the exact divergent-marker verdict"
+if ! rg -Uq \
+  'guard let diagnostics = await diagnosticCounts\(on: store\) else \{\n[[:space:]]*throw FailureCode\.diagnosticsMissing\n[[:space:]]*\}' \
+  "$automation"; then
+  echo "replication V2 authority fault must fail closed when diagnostics are unavailable" >&2
+  exit 1
+fi
 require_literal "$symptom_gate" \
   'convergence == "blocked-authority"' \
   "replication V2 authority fault does not require the fail-closed verdict"

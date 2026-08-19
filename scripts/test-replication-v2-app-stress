@@ -5,7 +5,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 scripts/test-icloud-append-only-guard
-scripts/test-replication-bootstrap-concurrency
 source scripts/runtime-profile-common
 
 backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"
@@ -94,6 +93,7 @@ wait_for_result() {
           .status == "ok"
           and .phase == $phase
           and .underlyingErrorKind == "ICloudReplicationRepositoryAuthorityError"
+          and .authorityErrorVerdict == "divergentMarkerVersion"
           and .pendingOutboxCount == 0
           and .confirmedOutboxCount == 0
           and .lastSyncedPresent == false
@@ -124,7 +124,7 @@ wait_for_result() {
         --arg phase "$expected_phase" \
         "$result_filter" "$result_path" >/dev/null; then
         jq -c \
-          '{status,phase,errorCode,underlyingErrorKind,pendingOutboxCount,convergence,diagnosticSyncFailedCount,mutationRejectionCount,diagnosticFailureDomain,diagnosticFailureCode,diagnosticFailureStage,sqliteFailurePoint}' \
+          '{status,phase,errorCode,underlyingErrorKind,authorityErrorVerdict,pendingOutboxCount,convergence,diagnosticSyncFailedCount,mutationRejectionCount,diagnosticFailureDomain,diagnosticFailureCode,diagnosticFailureStage,sqliteFailurePoint}' \
           "$result_path" >&2
         return 1
       fi

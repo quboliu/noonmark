@@ -635,6 +635,12 @@ private extension NoonmarkStore {
         _ error: Error,
         diagnosticIncidentID: DiagnosticIncidentID? = nil
     ) {
+        localFirstReplicationLastErrorKind = String(
+            describing: type(of: error)
+        )
+        localFirstReplicationLastAuthorityVerdict = (
+            error as? ICloudReplicationRepositoryAuthorityError
+        )?.rawValue
         if error as? ReplicationRepositoryBootstrapError
             == .legacyRepositoryRequiresManualReset
         {

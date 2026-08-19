@@ -2,6 +2,14 @@
 import XCTest
 
 final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
+    func testAuthorityFailureVerdictIsExactAndPrivacySafe() {
+        XCTAssertEqual(
+            ICloudReplicationRepositoryAuthorityError
+                .divergentMarkerVersion.rawValue,
+            "divergentMarkerVersion"
+        )
+    }
+
     func testIndependentMirrorsDeriveOneCanonicalGenerationAndMarker()
         throws
     {

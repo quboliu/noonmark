@@ -130,6 +130,7 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         let phase: String
         let errorCode: String?
         let underlyingErrorKind: String?
+        let authorityErrorVerdict: String?
         let importedTaskCount: Int
         let createdCount: Int
         let editedCount: Int
@@ -264,6 +265,8 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
                     errorCode: code,
                     underlyingErrorKind:
                     stagedFailure?.underlyingErrorKind,
+                    authorityErrorVerdict:
+                    store.localFirstReplicationLastAuthorityVerdict,
                     importedTaskCount: 0,
                     createdCount: 0,
                     editedCount: 0,
@@ -300,6 +303,7 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
                         phase: mode.rawValue,
                         errorCode: FailureCode.resultWriteFailed.rawValue,
                         underlyingErrorKind: nil,
+                        authorityErrorVerdict: nil,
                         importedTaskCount: 0,
                         createdCount: 0,
                         editedCount: 0,
@@ -433,6 +437,9 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         }
         guard store.localFirstReplicationLastErrorKind
             == "ICloudReplicationRepositoryAuthorityError",
+            store.localFirstReplicationLastAuthorityVerdict
+            == ICloudReplicationRepositoryAuthorityError
+                .divergentMarkerVersion.rawValue,
             let failureMessage = store.localFirstSyncMessage,
             failureMessage.isEmpty == false
         else {
@@ -448,14 +455,9 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         guard inventoryBefore == inventoryAfter else {
             throw FailureCode.authorityRepositoryMutated
         }
-        let diagnostics = await diagnosticCounts(on: store)
-            ?? DiagnosticCounts(
-                succeededSyncOperations: 0,
-                failedSyncOperations: 0,
-                mutationRejections: 0,
-                firstFailure: nil,
-                firstFailureStage: nil
-            )
+        guard let diagnostics = await diagnosticCounts(on: store) else {
+            throw FailureCode.diagnosticsMissing
+        }
         guard diagnostics.failedSyncOperations == 0,
               diagnostics.mutationRejections == 0
         else {
@@ -467,6 +469,8 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
             errorCode: nil,
             underlyingErrorKind:
             store.localFirstReplicationLastErrorKind,
+            authorityErrorVerdict:
+            store.localFirstReplicationLastAuthorityVerdict,
             importedTaskCount: 0,
             createdCount: 0,
             editedCount: 0,
@@ -1053,6 +1057,7 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
             phase: mode.rawValue,
             errorCode: nil,
             underlyingErrorKind: nil,
+            authorityErrorVerdict: nil,
             importedTaskCount: workload.importedTasks,
             createdCount: workload.created,
             editedCount: workload.edited,

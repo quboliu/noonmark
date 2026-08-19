@@ -1087,6 +1087,7 @@ final class NoonmarkStore: ObservableObject {
     var localFirstReplicationConfigurationTask: Task<Void, Never>?
     var localFirstReplicationLastSQLiteFailurePoint: String?
     var localFirstReplicationLastErrorKind: String?
+    var localFirstReplicationLastAuthorityVerdict: String?
     var localFirstReplicationDiagnosticOperationID: DiagnosticOperationID?
     var automaticClassificationWorkerTask: Task<Void, Never>?
     var automaticClassificationWorkerRestartRequested = false

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NoonmarkMacRuntime
+import NoonmarkMacUIContract
 import SwiftUI
 
 enum MarkdownEditorStyle {
@@ -1260,10 +1261,7 @@ struct MarkdownInlineText: View {
     }
 
     static func attributed(_ source: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: source,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-        )) ?? AttributedString(source)
+        MacUIMarkdownInlineRenderer.attributed(source)
     }
 }
 

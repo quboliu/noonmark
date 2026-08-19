@@ -391,7 +391,10 @@ public extension DemoStoryText {
             ideaWalkthroughSurprise: "可用性走查的意外发现：空标题占位比想象中更容易误触，值得单独跟进。",
             ideaDataCaliber: "周报数据口径的注释要不要单独维护？下周对齐前别再改模板。",
             ideaHandoffTemplate: "交接材料里的接口清单可以抽成模板，下个项目直接复用。",
-            ideaReleaseWorkarounds: "审阅发布说明时想到：已知限制应该附上临时绕过方法，减少支持成本。",
+            ideaReleaseWorkarounds: """
+            审阅发布说明时想到：已知限制要写清影响范围
+            并附上可执行的临时绕过方法。
+            """,
             ideaStickyAttention: "连续用了十天，Sticky Note 比长清单更能压住注意力，写进复盘。",
             ideaDataCaliberRestored: "数据口径注释确认由周报模板统一维护，恢复这条留作月底跟进提醒。",
             reviewSummary: { "第 \($0) 天：完成了计划中的关键推进，并保留真实任务轨迹。" },
@@ -614,7 +617,10 @@ public extension DemoStoryText {
             ideaWalkthroughSurprise: "Walkthrough surprise: the empty-title placeholder is easy to trigger by accident.",
             ideaDataCaliber: "Maintain the weekly report's data-caliber notes separately? Align next week.",
             ideaHandoffTemplate: "The interface list in the handoff materials could become a reusable template.",
-            ideaReleaseWorkarounds: "Release notes thought: ship known limitations with temporary workarounds.",
+            ideaReleaseWorkarounds: """
+            Release notes: explain known limitations' impact
+            and include an actionable workaround.
+            """,
             ideaStickyAttention: "Ten days in, Sticky Notes hold attention better than long lists — log it.",
             ideaDataCaliberRestored: "Data-caliber notes stay in the weekly template; restored as a month-end reminder.",
             reviewSummary: { "Day \($0): Made the planned key progress and kept a real task trail." },

@@ -203,6 +203,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
     public let editedIdeaCount: Int
     public let tombstonedIdeaCount: Int
     public let ideaTimelineTombstoneLeakCount: Int
+    public let multilineIdeaCount: Int
     public let stickyNoteCount: Int
     public let restoredIdeaCount: Int
 
@@ -403,6 +404,11 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         require(
             ideaTimelineTombstoneLeakCount == 0,
             "飞光时间线不包含墓碑",
+            into: &missing
+        )
+        require(
+            multilineIdeaCount > 0,
+            "至少一条飞光保留作者输入的换行",
             into: &missing
         )
         require(stickyNoteCount >= 3, "至少三条 Sticky Note", into: &missing)
@@ -655,6 +661,7 @@ public struct NoonmarkDemoCoverageReport: Codable, Equatable, Sendable {
         }
         tombstonedIdeaCount = snapshot.ideas.count { $0.isDeleted }
         ideaTimelineTombstoneLeakCount = ideaTimeline.count { $0.isDeleted }
+        multilineIdeaCount = ideaTimeline.count { $0.body.contains("\n") }
         stickyNoteCount = engine.pinnedIdeas().count
         self.restoredIdeaCount = restoredIdeaCount
     }

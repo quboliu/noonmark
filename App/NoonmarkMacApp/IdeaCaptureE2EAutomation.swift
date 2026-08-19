@@ -18,8 +18,13 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
         case verify
     }
 
-    private static let alphaDraft = "## e2e Flylight alpha\n- second line https://example.com/@user #SwiftUI @\"Client Work\""
-    private static let alphaBody = "## e2e Flylight alpha\n- second line https://example.com/@user"
+    private static let alphaBody = """
+    ## e2e Flylight alpha
+    - second line https://example.com/@user
+    soft break one
+    soft break two
+    """
+    private static let alphaDraft = alphaBody + " #SwiftUI @\"Client Work\""
     private static let alphaEditedBody = "## e2e Flylight alpha edited\n- second line https://example.com/@user"
     private static let alphaCategoryName = "Client Work"
     private static let alphaLabelName = "SwiftUI"
@@ -123,7 +128,7 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             ComposerDraft(
                 text: Self.alphaDraft,
                 body: Self.alphaBody,
-                suggestionsCheckpoint: "## e2e Flylight alpha\n- second line https://example.com/@user #"
+                suggestionsCheckpoint: Self.alphaBody + " #"
             ),
             store: store,
             mainWindow: mainWindow,
@@ -138,9 +143,19 @@ struct IdeaCaptureE2EAutomation: LaunchAutomationRunnable {
             AppViewTreeE2E.view(
                 identifier: "ideas.card.markdown.\(alpha.id).1",
                 in: mainWindow
-            ).flatMap(AppViewTreeE2E.verificationText) == "list"
+            ).flatMap(AppViewTreeE2E.verificationText) == "list",
+            let softBreakParagraph = AppViewTreeE2E.view(
+                identifier: "ideas.card.markdown.\(alpha.id).2",
+                in: mainWindow
+            ),
+            AppViewTreeE2E.verificationText(for: softBreakParagraph) == "paragraph",
+            (30 ... 48).contains(
+                AppViewTreeE2E.frameInWindow(for: softBreakParagraph).height
+            )
         else {
-            throw Failure.failed("Flylight card did not render Markdown blocks")
+            throw Failure.failed(
+                "Flylight card did not preserve authored Markdown line breaks"
+            )
         }
         try await Task.sleep(nanoseconds: 250_000_000)
         try assertComposerDoesNotOverlapCollection(in: mainWindow)

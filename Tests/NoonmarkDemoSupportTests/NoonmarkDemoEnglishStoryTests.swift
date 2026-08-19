@@ -75,10 +75,10 @@ struct NoonmarkDemoEnglishStoryTests {
         #expect(engine.pinnedIdeas().count == 3)
     }
 
-    @Test("英文飞光正文保持单行卡片长度")
-    func keepsIdeaBodiesOnOneLine() throws {
-        // 飞光时间线的演示验收要求置顶卡片全部渲染在可视区内；正文折行会加高
-        // 卡片并把最旧的置顶卡片挤出视口。英文正文必须与中文一样保持单行。
+    @Test("英文置顶飞光保持单行并由非置顶飞光覆盖作者换行")
+    func keepsPinnedIdeasCompactAndCoversAuthoredLineBreaks() throws {
+        // 置顶卡片必须全部留在可视区；非置顶时间线则保留一条作者换行，
+        // 让中文与英文演示都能直接体验 Markdown 换行渲染。
         let fixture = try NoonmarkDemoFixture.make(
             anchorDate: anchorDate,
             language: .english
@@ -88,6 +88,12 @@ struct NoonmarkDemoEnglishStoryTests {
         for body in bodies {
             #expect(body.count <= 88)
         }
+        #expect(fixture.engine.pinnedIdeas().allSatisfy {
+            $0.body.contains("\n") == false
+        })
+        #expect(fixture.engine.ideaTimeline().contains {
+            $0.body.contains("\n")
+        })
     }
 
     @Test("英文文案表与英文故事数据不含 CJK 字符")

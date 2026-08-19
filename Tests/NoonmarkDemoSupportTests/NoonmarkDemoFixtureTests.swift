@@ -313,6 +313,7 @@ struct NoonmarkDemoFixtureTests {
         #expect(fixture.report.editedIdeaCount == 5)
         #expect(fixture.report.tombstonedIdeaCount == 1)
         #expect(fixture.report.ideaTimelineTombstoneLeakCount == 0)
+        #expect(fixture.report.multilineIdeaCount == 1)
         #expect(fixture.report.stickyNoteCount == 3)
         #expect(fixture.report.restoredIdeaCount == 1)
         #expect(fixture.report.isComplete)

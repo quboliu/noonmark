@@ -64,7 +64,7 @@
 - 通用 `scripts/check` 不再对真实工作树强制 current fingerprint 相等或 exact-HEAD source verifier，只保留隔离 fixture。hosted `ci.yml` 固定 full history 并 checkout `pull_request.head.sha`；`scripts/verify-release-source-transition` 对 PR 先求 current base 与精确 PR head 的唯一 merge-base，只在 identity 相对该 merge-base 或 push first parent 发生变化时审计真实 candidate transition。无共同祖先或多 merge-base fail-closed，普通陈旧 PR 不因 base 前进消费 build。
 - 新增 `scripts/verify-release-candidate-authority <commit>` 作为唯一组合边界：先要求参数精确等于 `HEAD`，再依序执行完整 source history、live remote 与 exact-SHA hosted CI 三项审计。trial、tagged verifier、真实 `scripts/test-dmg-install`、tag publisher 和 hosted workflow 全部消费这个共享入口，避免调用点再次漏掉某一层。
 - `scripts/release-private-dmg` 在 full evidence 和 package manifest SHA 对账后、调用 trial publisher 前重新执行整个 trial verifier。tag-triggered hosted workflow 在 package 前执行共享 candidate authority，并在 `gh release create` 前再次执行同一入口，阻断 package 期间的远端或 CI 漂移。
-- build 32、33、34、35、36 与 37 标为 `retired`；按用户决定保持营销版本 `0.3.1`，建立 build 38 validation candidate。既有错误 trial 保留作证据但禁止分发，不覆盖、不重签；build 37 在推送前完整门禁捕获独立的 bootstrap staging 竞态，因此没有 push 或打包。
+- build 32、33、34、35、36、37 与 38 标为 `retired`；按用户决定保持营销版本 `0.3.1`，建立 build 39 validation candidate。既有错误 trial 保留作证据但禁止分发，不覆盖、不重签；build 37 在推送前完整门禁捕获独立的 bootstrap staging 竞态，build 38 绑定修复 commit 后又因案例闭环改变 tracked source 而退役，两者都没有 push 或打包。
 
 ## 验证结果
 
@@ -72,8 +72,8 @@
 - Red：同 build 重新绑定后的即时检查判红，但追加无关文档 commit 后首版 verifier 错误转绿，精确证明相邻 commit 检查会遗忘违规历史。
 - Red：新增 shallow、首次同 build introduction、exact HEAD、tracked docs fingerprint 与历史 build rollback／reuse fixture；旧实现分别报出接受浅历史、忽略 tracked docs 与复用旧 build。第三轮又由 `scripts/test-release-origin-main-contract` 先判红为缺少 live remote verifier，preidentity-history fixture 判红为旧 verifier 接受 identity 前历史 build 复用；review 的 identical-tree amend 与 synthetic merge 运行 fixture 均证明本地推断单独不足。
 - Red：第四轮 `scripts/test-release-trial-contract` 先证明编排缺少复制前重验，再证明 CI verdict 为失败时旧 trial verifier 仍放行；`scripts/test-release-source-transition-contract` 证明 current base 前进会让陈旧普通 PR 错误触发 source audit；`scripts/test-release-version-contract` 依次暴露 tag、真实 install 与 hosted publisher 缺少 exact-SHA CI／source／remote authority。
-- Green（fast）：`scripts/test-release-trial-contract` 已覆盖完整历史、preidentity maximum、amend／synthetic remote mismatch、hosted CI failure、最终复制前重验与更大 build；`scripts/test-release-origin-main-contract` 覆盖 exact、amended、follow-up、synthetic 与 missing origin；`scripts/test-release-source-transition-contract` 覆盖普通 PR／push 跳过、陈旧 PR merge-base 与 identity transition 强制审计；`scripts/test-release-version-contract` 固定共享 candidate authority，以及 trial、tag、真实 install、tag publisher 和 hosted workflow 的统一消费与发布前重验；`scripts/test-github-hosted-workflow-boundary` 固定 hosted workflow 通过共享入口消费 exact CI，五者均已退出 0。其余 fast 与真实 `dmg-validation` 安装路径待 build 38 clean commit 完成后回填，在此之前案例保持处理中。
-- 真实发行仍必须在精确 pushed clean commit 上完成同一 evidence run 的 `make check`、完整签名 App E2E、writer lease 与 `0.3.1 (38)` validation package；这些是交付门禁，不以静态 contract 结果替代。
+- Green（fast）：`scripts/test-release-trial-contract` 已覆盖完整历史、preidentity maximum、amend／synthetic remote mismatch、hosted CI failure、最终复制前重验与更大 build；`scripts/test-release-origin-main-contract` 覆盖 exact、amended、follow-up、synthetic 与 missing origin；`scripts/test-release-source-transition-contract` 覆盖普通 PR／push 跳过、陈旧 PR merge-base 与 identity transition 强制审计；`scripts/test-release-version-contract` 固定共享 candidate authority，以及 trial、tag、真实 install、tag publisher 和 hosted workflow 的统一消费与发布前重验；`scripts/test-github-hosted-workflow-boundary` 固定 hosted workflow 通过共享入口消费 exact CI，五者均已退出 0。其余 fast 与真实 `dmg-validation` 安装路径待 build 39 clean commit 完成后回填，在此之前案例保持处理中。
+- 真实发行仍必须在精确 pushed clean commit 上完成同一 evidence run 的 `make check`、完整签名 App E2E、writer lease 与 `0.3.1 (39)` validation package；这些是交付门禁，不以静态 contract 结果替代。
 
 ## 永久门禁
 
@@ -83,7 +83,7 @@
 
 ## 发行与回滚
 
-风险等级为 P。`0.3.0 (32)` 与 `0.3.1 (33)`、`(34)`、`(35)`、`(36)`、`(37)` 已退役，不删除现有文件但禁止分发。`0.3.1 (38)` 只有在 full-history source binding、live `origin/main == HEAD`、exact-SHA hosted CI、完整 `make check`、真实签名 App E2E、writer lease、DMG 静态门禁与受控 `dmg-validation` 全绿后才可作为修复验证依据。任一失败即停止候选并使用更大 build；不覆盖旧 DMG，不建立或移动 tag，不操作 production 资料或 iCloud 对象。灰度仍为第一台 Mac、第二台实体 Mac 与连续 72 小时 soak；监控只使用 hosted CI、版本／commit／SHA evidence、typed state 与用户主动导出的有界诊断。
+风险等级为 P。`0.3.0 (32)` 与 `0.3.1 (33)`、`(34)`、`(35)`、`(36)`、`(37)`、`(38)` 已退役，不删除现有文件但禁止分发。`0.3.1 (39)` 只有在 full-history source binding、live `origin/main == HEAD`、exact-SHA hosted CI、完整 `make check`、真实签名 App E2E、writer lease、DMG 静态门禁与受控 `dmg-validation` 全绿后才可作为修复验证依据。任一失败即停止候选并使用更大 build；不覆盖旧 DMG，不建立或移动 tag，不操作 production 资料或 iCloud 对象。灰度仍为第一台 Mac、第二台实体 Mac 与连续 72 小时 soak；监控只使用 hosted CI、版本／commit／SHA evidence、typed state 与用户主动导出的有界诊断。
 
 ## 教训与永久约束
 

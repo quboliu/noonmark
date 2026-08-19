@@ -1,13 +1,13 @@
 # FAIL-2026-08-19-03：Replication bootstrap 把活跃 staging 误判成旧仓库
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T10:56:53-04:00
 - 影响版本／构建：未发行 `0.3.1 (37)` candidate，source commit `05e543f725b5de1b1977edf711dede1e4cd52dac`
 - 引入提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`2bd4734e5af061fe3709fa7ffdfee199808c1b5d`（`fix(sync): serialize replication repository bootstrap`）
 
 ## 用户症状与影响
 
@@ -57,7 +57,7 @@
 - Red：受控 tracer 在旧实现上稳定返回 `legacyRepositoryRequiresManualReset`。
 - Green（聚焦）：同一 tracer 修复后通过，约 108 ms；完整 `ReplicationRepositoryBootstrapTests` 9 项、0 失败，包括并发 winner、中断写 fail-closed、symlink 与未知 subtree 边界。
 - Green（原受害组）：`swift test --filter NoonmarkSyncTests` 运行 320 项、0 失败。
-- 完整 `make check` 与最终候选门禁待修复 commit、全新 build identity 完成后回填；在此之前案例保持「处理中」。
+- Green（门禁）：`scripts/test-failure-case-gates` 已登记并校验 110 个案例；release version contract、SwiftFormat、SwiftLint 与 ShellCheck 均退出 0。最终候选仍须重新运行完整 `make check`、真实签名 App E2E、writer lease 与 DMG release chain，不能用聚焦结果替代发行门禁。
 
 ## 永久门禁
 
@@ -66,7 +66,7 @@
 
 ## 发行与回滚
 
-风险等级为 P：这是同步 repository 首次建立的数据边界。build 37 在推送与出包前退役，不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`，修复候选必须使用更大的全新 build。若 advisory lock 在本机或签名 App 路径失败，立即停止候选并 revert 独立修复 commit；不得取消锁、增加等待超时、自动清理 staging、读取 production 或修改任何既有 iCloud 对象。
+风险等级为 P：这是同步 repository 首次建立的数据边界。build 37 在推送与出包前退役；build 38 绑定根因修复 commit 后，又因案例闭环与发行身份文件改变 tracked source 而退役。两者都不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`，最终闭环候选使用 build 39。若 advisory lock 在本机或签名 App 路径失败，立即停止候选并 revert 独立修复 commit；不得取消锁、增加等待超时、自动清理 staging、读取 production 或修改任何既有 iCloud 对象。
 
 灰度顺序保持完整本机门禁、指定用户第一台 Mac、第二台实体 Mac 与连续 72 小时 soak。监控只使用 typed bootstrap／sync state、耗时与用户主动导出的有界诊断，不记录 repository 路径、对象名、正文、payload、账号或原始 Error。
 

@@ -4,8 +4,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-scripts/verify-release-source-identity
-scripts/verify-origin-main-candidate
 marketing_version="$(scripts/release-version marketing-version)"
 expected_tag="v${marketing_version}"
 if ! git show-ref --verify --quiet "refs/tags/${expected_tag}"; then
@@ -23,5 +21,7 @@ if [[ "$tag_commit" != "$head_commit" ]]; then
   echo "release tag ${expected_tag} points to ${tag_commit}, not current ${head_commit}" >&2
   exit 1
 fi
+
+scripts/verify-release-candidate-authority "$head_commit"
 
 echo "Release version tag verified: ${expected_tag} -> ${head_commit}"

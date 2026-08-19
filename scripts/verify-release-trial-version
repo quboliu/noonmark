@@ -14,8 +14,6 @@ if [[ "$#" -ne 0 ]]; then
   exit 64
 fi
 
-scripts/verify-release-source-identity
-scripts/verify-origin-main-candidate
 marketing_version="$(scripts/release-version marketing-version)"
 build_number="$(scripts/release-version build-number)"
 ledger_file="release/BUILD-LEDGER.tsv"
@@ -62,5 +60,8 @@ expected_tag="v${marketing_version}"
 if git show-ref --verify --quiet "refs/tags/${expected_tag}"; then
   fail "pre-tag trial requires ${expected_tag} to be absent"
 fi
+
+head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+scripts/verify-release-candidate-authority "$head_commit"
 
 echo "Pre-tag trial version verified: ${marketing_version} (${build_number})"

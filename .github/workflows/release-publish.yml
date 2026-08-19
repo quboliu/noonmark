@@ -77,8 +77,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG} (build ${BUILD})"
 
-      - name: Verify prior GitHub-hosted CI
-        run: scripts/verify-github-hosted-ci "$GITHUB_SHA"
+      - name: Verify release candidate authority
+        run: scripts/verify-release-candidate-authority "$GITHUB_SHA"
 
       - name: Package toolchain
         run: |
@@ -196,6 +196,7 @@ jobs:
             exit 1
           fi
           rm -f "$RELEASE_VIEW_ERROR"
+          scripts/verify-release-candidate-authority "$GITHUB_SHA"
           gh release create "$TAG" \
             dist/Noonmark.dmg \
             dist/Noonmark.dmg.sha256 \

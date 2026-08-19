@@ -87,6 +87,33 @@ stored_source_fingerprint="${BASH_REMATCH[1]}"
   fail "origin/main candidate verifier is missing or not executable"
 [[ -x scripts/verify-release-source-transition ]] ||
   fail "release source transition verifier is missing or not executable"
+[[ -x scripts/verify-github-hosted-ci ]] ||
+  fail "hosted CI verifier is missing or not executable"
+[[ -x scripts/verify-release-candidate-authority ]] ||
+  fail "shared candidate authority verifier is missing or not executable"
+
+authority_verifier="scripts/verify-release-candidate-authority"
+authority_source_line="$(
+  awk '$0 == "scripts/verify-release-source-identity" { print NR }' \
+    "$authority_verifier"
+)"
+authority_remote_line="$(
+  awk '$0 == "scripts/verify-origin-main-candidate" { print NR }' \
+    "$authority_verifier"
+)"
+authority_hosted_line="$(
+  awk '$0 == "scripts/verify-github-hosted-ci \"$candidate_commit\"" { print NR }' \
+    "$authority_verifier"
+)"
+[[ "$authority_source_line" =~ ^[1-9][0-9]*$ &&
+  "$authority_remote_line" =~ ^[1-9][0-9]*$ &&
+  "$authority_hosted_line" =~ ^[1-9][0-9]*$ ]] ||
+  fail "shared candidate authority gates are missing or ambiguous"
+((authority_source_line < authority_remote_line &&
+  authority_remote_line < authority_hosted_line)) ||
+  fail "shared candidate authority gates are out of order"
+rg -F '[[ "$candidate_commit" == "$head_commit" ]]' "$authority_verifier" \
+  >/dev/null || fail "shared candidate authority does not bind its input to HEAD"
 
 rg -F 'scripts/release-version marketing-version' scripts/build-mac-app >/dev/null ||
   fail "App build does not read the tracked marketing version"
@@ -103,18 +130,12 @@ rg -F 'scripts/verify-release-trial-version' "$release_script" >/dev/null ||
   fail "private release entry does not expose the pre-tag trial verifier"
 [[ -x scripts/verify-release-trial-version ]] ||
   fail "pre-tag trial version verifier is missing or not executable"
-rg -F 'scripts/verify-release-source-identity' scripts/verify-release-trial-version \
-  >/dev/null ||
-  fail "pre-tag trial verifier does not bind the tracked release source"
-rg -F 'scripts/verify-origin-main-candidate' scripts/verify-release-trial-version \
-  >/dev/null ||
-  fail "pre-tag trial verifier does not require the exact pushed main commit"
-rg -F 'scripts/verify-release-source-identity' scripts/verify-release-version-tag \
-  >/dev/null ||
-  fail "tag verifier does not bind the tracked release source"
-rg -F 'scripts/verify-origin-main-candidate' scripts/verify-release-version-tag \
-  >/dev/null ||
-  fail "tag verifier does not require the exact pushed main commit"
+rg -F 'scripts/verify-release-candidate-authority "$head_commit"' \
+  scripts/verify-release-trial-version >/dev/null ||
+  fail "pre-tag trial verifier does not require shared candidate authority"
+rg -F 'scripts/verify-release-candidate-authority "$head_commit"' \
+  scripts/verify-release-version-tag >/dev/null ||
+  fail "tag verifier does not require shared candidate authority"
 rg -F 'fetch-depth: 0' .github/workflows/release-publish.yml >/dev/null ||
   fail "release workflow does not fetch the annotated version tag"
 rg -F 'fetch-depth: 0' .github/workflows/ci.yml >/dev/null ||
@@ -129,32 +150,64 @@ rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||
   fail "release version tag verifier does not require an annotated tag"
 rg -F 'release/BUILD-LEDGER.tsv' docs/engineering/versioning-and-private-release.md >/dev/null ||
   fail "version governance does not document the build ledger"
-rg -F 'scripts/verify-release-source-identity' scripts/test-dmg-install >/dev/null ||
-  fail "real DMG install gate does not consume candidate source identity"
-rg -F 'scripts/verify-origin-main-candidate' scripts/test-dmg-install >/dev/null ||
-  fail "real DMG install gate does not consume pushed main authority"
-install_source_gate_line="$(
-  awk '$0 == "scripts/verify-release-source-identity" { print NR }' \
-    scripts/test-dmg-install
-)"
-install_remote_gate_line="$(
-  awk '$0 == "scripts/verify-origin-main-candidate" { print NR }' \
+rg -F 'scripts/verify-release-candidate-authority "$head_commit"' \
+  scripts/test-dmg-install \
+  >/dev/null ||
+  fail "real DMG install gate does not consume shared candidate authority"
+install_authority_gate_line="$(
+  awk '$0 == "scripts/verify-release-candidate-authority \"$head_commit\"" { print NR }' \
     scripts/test-dmg-install
 )"
 install_runtime_setup_line="$(
   awk '$0 == "source scripts/runtime-profile-common" { print NR }' \
     scripts/test-dmg-install
 )"
-[[ "$install_source_gate_line" =~ ^[1-9][0-9]*$ &&
-  "$install_remote_gate_line" =~ ^[1-9][0-9]*$ &&
+[[ "$install_authority_gate_line" =~ ^[1-9][0-9]*$ &&
   "$install_runtime_setup_line" =~ ^[1-9][0-9]*$ ]] ||
-  fail "real DMG install source, remote, or runtime gate is ambiguous"
-((install_source_gate_line < install_remote_gate_line &&
-  install_remote_gate_line < install_runtime_setup_line)) ||
+  fail "real DMG install authority or runtime gate is ambiguous"
+((install_authority_gate_line < install_runtime_setup_line)) ||
   fail "real DMG install audits candidate authority after runtime profile setup"
 
-rg -F 'scripts/verify-origin-main-candidate' scripts/push-release-tag >/dev/null ||
-  fail "tag publisher does not share the pushed main authority"
+release_workflow=".github/workflows/release-publish.yml"
+workflow_authority_lines="$(
+  rg -n -F 'scripts/verify-release-candidate-authority "$GITHUB_SHA"' \
+    "$release_workflow" | cut -d: -f1 || true
+)"
+workflow_package_line="$(
+  rg -n -F 'scripts/package-dmg release' "$release_workflow" |
+    head -n 1 | cut -d: -f1 || true
+)"
+workflow_publish_line="$(
+  rg -n -F 'gh release create "$TAG"' "$release_workflow" |
+    head -n 1 | cut -d: -f1 || true
+)"
+workflow_first_authority="$(sed -n '1p' <<<"$workflow_authority_lines")"
+workflow_last_authority="$(sed -n '$p' <<<"$workflow_authority_lines")"
+[[ "$(awk 'NF { count += 1 } END { print count + 0 }' \
+  <<<"$workflow_authority_lines")" -eq 2 ]] ||
+  fail "hosted release must check shared candidate authority exactly twice"
+for line in \
+  "$workflow_first_authority" \
+  "$workflow_last_authority" \
+  "$workflow_package_line" \
+  "$workflow_publish_line"; do
+  [[ "$line" =~ ^[1-9][0-9]*$ ]] ||
+    fail "hosted release candidate authority wiring is incomplete"
+done
+((workflow_first_authority < workflow_package_line &&
+  workflow_package_line < workflow_last_authority &&
+  workflow_last_authority < workflow_publish_line)) ||
+  fail "hosted release candidate authority is not checked before package and publish"
+
+trial_verifier_count="$(
+  rg -c -F 'scripts/verify-release-trial-version' scripts/release-private-dmg
+)"
+[[ "$trial_verifier_count" -eq 2 ]] ||
+  fail "trial release does not recheck candidate authority before publication"
+
+rg -F 'scripts/verify-release-candidate-authority "$head_commit"' \
+  scripts/push-release-tag >/dev/null ||
+  fail "tag publisher does not share candidate authority"
 rg -F 'scripts/test-release-origin-main-contract' scripts/check >/dev/null ||
   fail "origin/main candidate contract is absent from scripts/check"
 rg -F 'scripts/test-release-source-transition-contract' scripts/check >/dev/null ||

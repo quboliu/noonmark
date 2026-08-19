@@ -157,7 +157,7 @@ FAIL-2026-08-07-09	fast	scripts/test-hosted-check-budget-contract	scripts/check	
 FAIL-2026-08-07-09	symptom	scripts/test-dmg-evidence-contract	scripts/check	完整 DMG evidence matrix 必须由聚合 check 执行完毕，不得被旧 hosted 外层预算截断
 FAIL-2026-08-07-09	release	scripts/verify-github-release-publication	scripts/push-release-tag	Release 未验证精确 hosted CI、签名、DMG 与 checksum 时不得发布
 FAIL-2026-08-07-10	fast	scripts/test-github-hosted-workflow-boundary	scripts/check	拒绝任何 self-hosted workflow、重复 CI job、tag 重跑 scripts/check 或 tag publisher 消费本地 evidence
-FAIL-2026-08-07-10	symptom	scripts/verify-github-hosted-ci	scripts/push-release-tag	精确 commit 在所有 event 只接受单一 CI run，必须为 main push、首次成功且唯一 macos-15 job
+FAIL-2026-08-07-10	symptom	scripts/verify-release-candidate-authority	scripts/push-release-tag	共享 authority 必须消费 hosted CI；精确 commit 在所有 event 只接受单一 CI run，必须为 main push、首次成功且唯一 macos-15 job
 FAIL-2026-08-07-10	release	scripts/verify-github-release-publication	scripts/push-release-tag	tag run 只接受唯一 macos-15 package job 与唯一 DMG／checksum asset
 FAIL-2026-08-07-11	fast	scripts/test-swiftformat-toolchain-contract	scripts/check	拒绝浮动 Homebrew SwiftFormat，并固定版本、官方资产 checksum、共享调用入口与 CI 安装边界
 FAIL-2026-08-07-11	symptom	scripts/format	scripts/check	全部 Swift source 必须由固定 SwiftFormat 0.62.1 全量 lint 且无格式漂移
@@ -273,9 +273,9 @@ FAIL-2026-08-12-03	fast	scripts/test-replication-incomplete-local-view	scripts/t
 FAIL-2026-08-12-03	symptom	scripts/test-replication-incomplete-local-view	scripts/test-all	真实临时 filesystem 必须从 changed retry、逐 item 乱序与读取期消失收敛到完整连续事实，不得永久 stall、泄漏 raw Cocoa error 或静默 stable 截断
 FAIL-2026-08-19-01	fast	scripts/test-unit	scripts/check	NoonmarkMacUIContractTests 必须保留普通 Markdown 换行、粗体与链接语义
 FAIL-2026-08-19-01	symptom	scripts/test-e2e	scripts/test-all	真实飞光物理输入与提交后必须以 Markdown paragraph 几何证明普通换行仍为两行
-FAIL-2026-08-19-02	fast	scripts/test-release-version-contract	scripts/check	VERSION／ledger 结构、PR-head conditional transition、live remote wiring 与真实 install gate 顺序必须一致
-FAIL-2026-08-19-02	fast	scripts/test-release-trial-contract	scripts/check	隔离 Git fixture 对 shallow、首次及 preidentity 历史 build 复用、历史 binding 回退复用、docs／empty follow-up、source mutation、amend 与 synthetic merge 均须持续 fail-closed；只有更大 build 的精确 pushed HEAD 可转绿
+FAIL-2026-08-19-02	fast	scripts/test-release-version-contract	scripts/check	VERSION／ledger 结构、共享 candidate authority 内部顺序、PR-head conditional transition，以及 trial／tag／真实 install／tag publisher／hosted workflow 的统一消费与发布前重验必须一致
+FAIL-2026-08-19-02	fast	scripts/test-release-trial-contract	scripts/check	隔离 Git fixture 对 shallow、首次及 preidentity 历史 build 复用、历史 binding 回退复用、docs／empty follow-up、source mutation、amend、synthetic merge 与 hosted CI failure 均须持续 fail-closed；只有更大 build 的精确 pushed、CI-success HEAD 可转绿
 FAIL-2026-08-19-02	fast	scripts/test-release-origin-main-contract	scripts/check	live origin/main 只接受精确 HEAD；missing origin、amend、未 push follow-up 与 synthetic merge 必须 fail-closed
-FAIL-2026-08-19-02	fast	scripts/test-release-source-transition-contract	scripts/check	普通 PR／push 不冒充发行候选；identity 相对 base／first parent 变化时必须调用真实 source audit
-FAIL-2026-08-19-02	symptom	scripts/test-dmg-install	scripts/release-private-dmg	精确 candidate package 必须先证明 build 历史与 live origin/main authority，再以受控 dmg-validation 身份证明实际安装 App 的版本、build 与 commit
-FAIL-2026-08-19-02	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 必须在完整历史 source audit、live remote 对账及真实安装、交互、退出、重启与诊断身份全绿后才可暴露
+FAIL-2026-08-19-02	fast	scripts/test-release-source-transition-contract	scripts/check	普通 PR／push 不冒充发行候选；PR 只在 identity 相对唯一 merge-base 变化、push 只在相对 first parent 变化时调用真实 source audit
+FAIL-2026-08-19-02	symptom	scripts/test-dmg-install	scripts/release-private-dmg	精确 candidate package 必须先证明 build 历史、live origin/main 与 exact-SHA hosted CI authority，再以受控 dmg-validation 身份证明实际安装 App 的版本、build 与 commit
+FAIL-2026-08-19-02	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 必须在完整历史 source audit、live remote、hosted CI 及真实安装、交互、退出、重启与诊断身份全绿，并于最终复制前重验 authority 后才可暴露

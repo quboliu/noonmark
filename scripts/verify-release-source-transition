@@ -18,12 +18,22 @@ event_name="${NOONMARK_CI_EVENT_NAME:-}"
 comparison_commit=""
 case "$event_name" in
   pull_request)
-    comparison_commit="${NOONMARK_CI_BASE_SHA:-}"
+    base_commit="${NOONMARK_CI_BASE_SHA:-}"
+    [[ "$base_commit" =~ ^[0-9a-f]+$ &&
+      ("${#base_commit}" -eq 40 || "${#base_commit}" -eq 64) ]] ||
+      fail "pull request base commit is invalid"
+    git cat-file -e "${base_commit}^{commit}" 2>/dev/null ||
+      fail "pull request base commit is unavailable"
+    merge_bases=()
+    while IFS= read -r merge_base; do
+      [[ -n "$merge_base" ]] && merge_bases+=("$merge_base")
+    done < <(git merge-base --all "$base_commit" HEAD 2>/dev/null)
+    [[ "${#merge_bases[@]}" -eq 1 ]] ||
+      fail "pull request must have exactly one merge base"
+    comparison_commit="${merge_bases[0]}"
     [[ "$comparison_commit" =~ ^[0-9a-f]+$ &&
       ("${#comparison_commit}" -eq 40 || "${#comparison_commit}" -eq 64) ]] ||
-      fail "pull request base commit is invalid"
-    git cat-file -e "${comparison_commit}^{commit}" 2>/dev/null ||
-      fail "pull request base commit is unavailable"
+      fail "pull request merge base is invalid"
     ;;
   push)
     comparison_commit="$(git rev-parse --verify 'HEAD^1' 2>/dev/null || true)"

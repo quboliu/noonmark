@@ -42,6 +42,8 @@ git -C "$fixture" config user.email noonmark@example.invalid
 git -C "$fixture" add scripts release source.txt
 git -C "$fixture" commit -qm 'test: establish source identity'
 base_commit="$(git -C "$fixture" rev-parse HEAD)"
+base_branch="$(git -C "$fixture" branch --show-current)"
+[[ -n "$base_branch" ]] || fail "fixture did not establish a branch"
 
 (
   cd "$fixture"
@@ -75,9 +77,16 @@ follow_up_commit="$(git -C "$fixture" rev-parse HEAD)"
 [[ "$(wc -l <"$trace" | tr -d ' ')" == "1" ]] ||
   fail "ordinary pull request incorrectly invoked candidate source audit"
 
+git -C "$fixture" switch -qc stale-pr
+printf '%s\n' 'stale ordinary pull request source' >"$fixture/source.txt"
+git -C "$fixture" add source.txt
+git -C "$fixture" commit -qm 'test: advance stale ordinary pull request'
+git -C "$fixture" switch -q "$base_branch"
+
 printf '%s\n' 'identity=two' >"$fixture/release/CURRENT-BUILD-SOURCE"
 git -C "$fixture" add release/CURRENT-BUILD-SOURCE
 git -C "$fixture" commit -qm 'test: change source identity'
+identity_commit="$(git -C "$fixture" rev-parse HEAD)"
 (
   cd "$fixture"
   NOONMARK_CI_EVENT_NAME=push \
@@ -96,6 +105,18 @@ git -C "$fixture" commit -qm 'test: change source identity'
 ) || fail "identity-changing pull request was rejected before its source audit"
 [[ "$(wc -l <"$trace" | tr -d ' ')" == "3" ]] ||
   fail "identity-changing pull request did not invoke source audit"
+
+git -C "$fixture" switch -q stale-pr
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=pull_request \
+    NOONMARK_CI_BASE_SHA="$identity_commit" \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "stale ordinary pull request was rejected"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "3" ]] ||
+  fail "stale ordinary pull request incorrectly invoked candidate source audit"
+git -C "$fixture" switch -q "$base_branch"
 
 if (
   cd "$fixture"

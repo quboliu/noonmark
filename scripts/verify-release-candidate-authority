@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release candidate authority: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 1 ]]; then
+  echo "usage: scripts/verify-release-candidate-authority <commit>" >&2
+  exit 64
+fi
+
+candidate_commit="$1"
+[[ "$candidate_commit" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "candidate commit must be a full SHA"
+head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+[[ "$candidate_commit" == "$head_commit" ]] ||
+  fail "candidate commit does not match HEAD"
+
+scripts/verify-release-source-identity
+scripts/verify-origin-main-candidate
+scripts/verify-github-hosted-ci "$candidate_commit"
+
+echo "Release candidate authority verified: ${candidate_commit}"

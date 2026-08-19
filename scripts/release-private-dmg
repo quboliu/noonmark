@@ -59,6 +59,7 @@ if [[ "$(shasum -a 256 "$package_manifest" | awk '{print $1}')" != \
 fi
 
 if [[ "$mode" == "trial" ]]; then
+  scripts/verify-release-trial-version
   scripts/publish-trial-dmg \
     "$repo_root/dist/Noonmark.dmg" \
     "$package_manifest" \

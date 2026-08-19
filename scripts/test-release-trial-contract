@@ -15,6 +15,10 @@ trial_verifier="scripts/verify-release-trial-version"
 source_verifier="scripts/verify-release-source-identity"
 source_fingerprint="scripts/release-source-fingerprint"
 origin_verifier="scripts/verify-origin-main-candidate"
+hosted_ci_verifier="scripts/verify-github-hosted-ci"
+candidate_authority_verifier="scripts/verify-release-candidate-authority"
+[[ -x "$candidate_authority_verifier" ]] ||
+  fail "shared candidate authority verifier is missing or not executable"
 
 for required in \
   'usage: scripts/release-private-dmg [--trial <absolute-output-dmg>]' \
@@ -123,6 +127,7 @@ printf '%s\n' \
   'verify-dmg dist/Noonmark.dmg' \
   'test-dmg-install dist/Noonmark.dmg' \
   'verify-development-validation-evidence --scope full' \
+  'verify-release-trial-version' \
   "publish-trial-dmg $entry_fixture/dist/Noonmark.dmg $entry_fixture/dist/Noonmark.dmg.manifest $package_manifest_sha256 $trial_output" \
   >"$expected_trial_trace"
 if ! cmp -s "$expected_trial_trace" "$trial_trace"; then
@@ -181,13 +186,23 @@ cp \
   "$source_verifier" \
   "$source_fingerprint" \
   "$origin_verifier" \
+  "$candidate_authority_verifier" \
   scripts/release-version \
   "$version_fixture/scripts/"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  '[[ "$#" -eq 1 ]]' \
+  '[[ "$1" == "$(git rev-parse --verify HEAD^{commit})" ]]' \
+  '[[ "${NOONMARK_HOSTED_CI_FIXTURE:-success}" == "success" ]]' \
+  >"$version_fixture/$hosted_ci_verifier"
 chmod +x \
   "$version_fixture/scripts/verify-release-trial-version" \
   "$version_fixture/scripts/verify-release-source-identity" \
   "$version_fixture/scripts/release-source-fingerprint" \
   "$version_fixture/scripts/verify-origin-main-candidate" \
+  "$version_fixture/scripts/verify-github-hosted-ci" \
+  "$version_fixture/scripts/verify-release-candidate-authority" \
   "$version_fixture/scripts/release-version"
 cp release/VERSION release/BUILD-LEDGER.tsv "$version_fixture/release/"
 printf '%s\n' 'original candidate source' \
@@ -228,6 +243,13 @@ git -C "$version_origin" symbolic-ref HEAD refs/heads/main
   cd "$version_fixture"
   scripts/verify-release-trial-version >/dev/null
 ) || fail "fresh highest candidate without a tag was rejected"
+if (
+  cd "$version_fixture"
+  NOONMARK_HOSTED_CI_FIXTURE=failed \
+    scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a candidate whose hosted CI failed"
+fi
 
 amended_fixture="$fixture_root/amended-version"
 git clone -q "$version_origin" "$amended_fixture"
@@ -256,6 +278,8 @@ cp \
   "$source_verifier" \
   "$source_fingerprint" \
   "$origin_verifier" \
+  "$candidate_authority_verifier" \
+  "$version_fixture/scripts/verify-github-hosted-ci" \
   scripts/release-version \
   "$synthetic_fixture/scripts/"
 chmod +x "$synthetic_fixture/scripts/"*
@@ -327,6 +351,8 @@ cp \
   "$source_verifier" \
   "$source_fingerprint" \
   "$origin_verifier" \
+  "$candidate_authority_verifier" \
+  "$version_fixture/scripts/verify-github-hosted-ci" \
   scripts/release-version \
   "$introduction_fixture/scripts/"
 chmod +x "$introduction_fixture/scripts/"*

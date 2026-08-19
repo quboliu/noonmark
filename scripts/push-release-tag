@@ -22,7 +22,6 @@ scripts/verify-release-version-tag
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   fail "source worktree must be clean"
 fi
-scripts/verify-origin-main-candidate
 
 tag="v$(scripts/release-version marketing-version)"
 head_commit="$(git rev-parse HEAD)"
@@ -49,7 +48,7 @@ elif ! rg -qi 'release not found|HTTP 404' "$release_error"; then
 fi
 
 scripts/verify-github-release-readiness
-scripts/verify-github-hosted-ci "$head_commit"
+scripts/verify-release-candidate-authority "$head_commit"
 gh api --method GET \
   "repos/${repo}/actions/workflows/release-publish.yml/runs" \
   -f head_sha="$head_commit" \

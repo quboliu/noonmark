@@ -69,9 +69,12 @@ done
 if rg -F 'run: scripts/check' "$release_workflow" >/dev/null; then
   fail "release publication repeats the already successful main CI subset"
 fi
-rg -F 'run: scripts/verify-github-hosted-ci "$GITHUB_SHA"' \
+rg -F 'run: scripts/verify-release-candidate-authority "$GITHUB_SHA"' \
   "$release_workflow" >/dev/null ||
-  fail "release publication does not consume the exact hosted CI result"
+  fail "release publication does not consume shared candidate authority"
+rg -F 'scripts/verify-github-hosted-ci "$candidate_commit"' \
+  scripts/verify-release-candidate-authority >/dev/null ||
+  fail "shared candidate authority does not consume the exact hosted CI result"
 for local_evidence_consumer in \
   scripts/verify-release-static-preflight \
   scripts/verify-development-validation-evidence \

@@ -48,7 +48,7 @@ source commit `92c92fdc` 的 `.github/workflows/ci.yml` 明确声明 `runs-on: [
 ## 永久门禁
 
 - fast：`scripts/test-github-hosted-workflow-boundary`，由 `scripts/check` 强制调用；拒绝任何 workflow 出现 `self-hosted`，固定三条单职责 workflow 和单 job 边界，并禁止 tag release 重跑 `scripts/check`。
-- symptom：`scripts/verify-github-hosted-ci`，由 `scripts/push-release-tag` 强制调用；精确 commit 在所有 event 中必须只有一次 CI run，该 run 必须是 main push，且唯一 job 必须是首次成功的 `macos-15` hosted job。
+- symptom：`scripts/verify-release-candidate-authority`，由 `scripts/push-release-tag` 强制调用；共享入口必须继续消费 `scripts/verify-github-hosted-ci`，令精确 commit 在所有 event 中只有一次 CI run，该 run 必须是 main push，且唯一 job 必须是首次成功的 `macos-15` hosted job。
 - release：`scripts/verify-github-release-publication`，由 `scripts/push-release-tag` 强制调用；tag run 必须只有一个 `macos-15` package job，并建立唯一 DMG 与 checksum asset。
 
 ## 发行与回滚

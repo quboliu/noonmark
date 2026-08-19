@@ -16,7 +16,7 @@ if rg -Fq -- 'initialLocalSnapshot.coordinatedURL' "$authority_source"; then
   exit 1
 fi
 if ! rg -Uq \
-  'finalSnapshot = try ICloudReplicationRepositoryAuthority\n[[:space:]]*\.markerVersions\(atCoordinatedURL: coordinatedURL\)\n([[:space:]]*\} catch \{\n[[:space:]]*finalReadFailed = true\n[[:space:]]*\}\n)?[[:space:]]*NSFileCoordinator\.removeFilePresenter\(self\.presenter\)\n[[:space:]]*removalState\.markRemoved\(\)\n[[:space:]]*\}' \
+  'private func finishObservation\(\) throws\n[[:space:]]*-> ICloudMarkerAuthorityFinalObservation\n[[:space:]]*\{\n([^\n]*\n){0,24}[[:space:]]*NSFileCoordinator\(\)\.coordinate\(\n[[:space:]]*readingItemAt: markerURL,\n[[:space:]]*options: \[\],\n[[:space:]]*error: &coordinationError\n[[:space:]]*\) \{ coordinatedURL in\n([^\n]*\n){0,8}[[:space:]]*finalSnapshot = try ICloudReplicationRepositoryAuthority\n[[:space:]]*\.markerVersions\(atCoordinatedURL: coordinatedURL\)\n([[:space:]]*\} catch \{\n[[:space:]]*finalReadFailed = true\n[[:space:]]*\}\n)?[[:space:]]*NSFileCoordinator\.removeFilePresenter\(self\.presenter\)\n[[:space:]]*removalState\.markRemoved\(\)\n[[:space:]]*\}' \
   "$authority_source"; then
   echo "the final marker snapshot and presenter removal must share one coordinated read accessor" >&2
   exit 1

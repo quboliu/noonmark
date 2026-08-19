@@ -16,6 +16,25 @@ final class DiagnosticFailureMappingTests: XCTestCase {
         )
     }
 
+    func testICloudAuthorityFailuresHaveStableSafeCodes() {
+        let expected: [
+            (ICloudReplicationRepositoryAuthorityError, Int)
+        ] = [
+            (.invalidRepositoryScope, 441),
+            (.invalidMarkerVersion, 442),
+            (.divergentMarkerVersion, 443),
+            (.unavailableMarkerVersion, 444),
+            (.existingAuthorityMarkerUnavailable, 445)
+        ]
+
+        for (error, code) in expected {
+            XCTAssertEqual(
+                error.diagnosticFailure,
+                DiagnosticFailure(domain: .syncProtocol, code: code)
+            )
+        }
+    }
+
     func testCloudKitAssociatedTextDoesNotCrossMappingBoundary() {
         let canary = "PRIVATE-TASK-TITLE-7Q9X"
         let failure = CloudKitSyncEngineTransportError

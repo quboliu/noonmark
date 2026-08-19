@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
+export NOONMARK_LIVE_ICLOUD_SYNC=1
 swift test --filter \
   'LocalFirstReplicationTests|SQLiteReplicationLedgerTests|ContentAddressedFileReplicationEndpointTests|ICloudReplicationEvidenceTests|ICloudAppendOnlyTestNamespaceTests'
 
@@ -11,7 +12,6 @@ icloud_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
 icloud_round_one_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
 icloud_round_two_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
 
-export NOONMARK_LIVE_ICLOUD_SYNC=1
 export NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID="$icloud_session_id"
 export NOONMARK_ICLOUD_APPEND_ONLY_ROUND_IDS="$icloud_round_one_id,$icloud_round_two_id"
 

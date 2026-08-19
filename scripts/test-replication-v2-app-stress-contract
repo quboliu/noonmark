@@ -179,6 +179,24 @@ if ! rg -Uq \
   echo "replication V2 authority fault must fail closed when diagnostics are unavailable" >&2
   exit 1
 fi
+require_literal "$automation" \
+  "diagnostics.failedSyncOperations == 1" \
+  "replication V2 authority fault must require one failed sync diagnostic capsule"
+require_literal "$automation" \
+  "DiagnosticFailure(domain: .syncProtocol, code: 443)" \
+  "replication V2 authority fault must bind diagnostics to the divergent-marker code"
+require_literal "$automation" \
+  "diagnostics.firstFailure?.domain.rawValue" \
+  "replication V2 authority result must report the observed diagnostic failure domain"
+require_literal "$symptom_gate" \
+  '.diagnosticSyncFailedCount == 1' \
+  "replication V2 authority fault must require one failed sync diagnostic capsule"
+require_literal "$symptom_gate" \
+  '.diagnosticFailureDomain == "syncProtocol"' \
+  "replication V2 authority fault must require the safe sync diagnostic domain"
+require_literal "$symptom_gate" \
+  '.diagnosticFailureCode == 443' \
+  "replication V2 authority fault must require the divergent-marker diagnostic code"
 require_literal "$symptom_gate" \
   'convergence == "blocked-authority"' \
   "replication V2 authority fault does not require the fail-closed verdict"

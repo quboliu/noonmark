@@ -458,8 +458,11 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         guard let diagnostics = await diagnosticCounts(on: store) else {
             throw FailureCode.diagnosticsMissing
         }
-        guard diagnostics.failedSyncOperations == 0,
-              diagnostics.mutationRejections == 0
+        guard diagnostics.succeededSyncOperations == 0,
+              diagnostics.failedSyncOperations == 1,
+              diagnostics.mutationRejections == 0,
+              diagnostics.firstFailure
+              == DiagnosticFailure(domain: .syncProtocol, code: 443)
         else {
             throw FailureCode.diagnosticFailure
         }
@@ -486,9 +489,11 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
             diagnostics.succeededSyncOperations,
             diagnosticSyncFailedCount: diagnostics.failedSyncOperations,
             mutationRejectionCount: diagnostics.mutationRejections,
-            diagnosticFailureDomain: nil,
-            diagnosticFailureCode: nil,
-            diagnosticFailureStage: nil,
+            diagnosticFailureDomain:
+            diagnostics.firstFailure?.domain.rawValue,
+            diagnosticFailureCode: diagnostics.firstFailure?.code,
+            diagnosticFailureStage:
+            diagnostics.firstFailureStage?.rawValue,
             sqliteFailurePoint: nil
         )
     }

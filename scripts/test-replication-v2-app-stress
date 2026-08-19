@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
+export NOONMARK_LIVE_ICLOUD_SYNC=1
 scripts/test-icloud-append-only-guard
 source scripts/runtime-profile-common
 
@@ -105,8 +106,11 @@ wait_for_result() {
           and .deletedCount == 0
           and .mixedDomainMutationCount == 0
           and .syncRunCount == 0
-          and .diagnosticSyncFailedCount == 0
-          and .mutationRejectionCount == 0'
+          and .diagnosticSyncSucceededCount == 0
+          and .diagnosticSyncFailedCount == 1
+          and .mutationRejectionCount == 0
+          and .diagnosticFailureDomain == "syncProtocol"
+          and .diagnosticFailureCode == 443'
       else
         result_filter='
           .status == "ok"

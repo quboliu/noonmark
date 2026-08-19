@@ -92,6 +92,7 @@ run_check_suite() {
   scripts/test-runtime-profile-isolation
 
   echo "==> iCloud append-only safety boundary"
+  scripts/test-live-icloud-reset-sentinel
   scripts/test-icloud-append-only-guard
 
   echo "==> Replication V2 schema clean-cut contract"

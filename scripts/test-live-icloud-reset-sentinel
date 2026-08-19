@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+reset_script="scripts/reset-dev-data"
+expected="refusing to reset while a live iCloud validation is active"
+sentinel_line="$(
+  grep -nF 'NOONMARK_LIVE_ICLOUD_SYNC:-0' "$reset_script" |
+    head -n 1 | cut -d: -f1
+)"
+profile_line="$(
+  grep -nF 'noonmark_runtime_validate_all_profiles' "$reset_script" |
+    head -n 1 | cut -d: -f1
+)"
+bootstrap_line="$(
+  grep -nF 'script_dir=' "$reset_script" |
+    head -n 1 | cut -d: -f1
+)"
+if [[ -z "$sentinel_line" || -z "$profile_line" ||
+  -z "$bootstrap_line" || "$sentinel_line" -ge "$bootstrap_line" ||
+  "$sentinel_line" -ge "$profile_line" ]]; then
+  echo "live iCloud reset sentinel must run before reset bootstrap" >&2
+  exit 1
+fi
+
+export NOONMARK_LIVE_ICLOUD_SYNC=1
+for invocation in direct bash relative env-wrapper; do
+  status=0
+  output=""
+  case "$invocation" in
+    direct)
+      output="$(scripts/reset-dev-data production 2>&1)" || status=$?
+      ;;
+    bash)
+      output="$(/bin/bash scripts/reset-dev-data production 2>&1)" || status=$?
+      ;;
+    relative)
+      output="$(./scripts/reset-dev-data production 2>&1)" || status=$?
+      ;;
+    env-wrapper)
+      output="$(
+        /usr/bin/env NOONMARK_RESET_SENTINEL_PROBE=1 \
+          /bin/bash scripts/reset-dev-data production 2>&1
+      )" || status=$?
+      ;;
+  esac
+  if [[ "$status" -eq 0 || "$output" != "$expected" ]]; then
+    echo "live iCloud reset sentinel failed for $invocation invocation" >&2
+    exit 1
+  fi
+done
+
+echo "Live iCloud reset sentinel rejected direct and indirect reset calls"

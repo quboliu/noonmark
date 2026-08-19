@@ -18,4 +18,4 @@ fi
 
 scripts/reset-dev-data audit
 swift test \
-  --filter 'ReplicationRepositoryBootstrapTests|ICloudReplicationRepositoryAuthorityTests|ContentAddressedFileReplicationEndpointTests.testICloudEndpoint'
+  --filter 'ReplicationRepositoryBootstrapTests|ICloudReplicationRepositoryAuthorityTests|ContentAddressedFileReplicationEndpointTests.testICloudEndpoint|DiagnosticFailureMappingTests.testICloudAuthorityFailuresHaveStableSafeCodes'

@@ -10,6 +10,21 @@ extension ICloudDriveRepositoryLocationError: DiagnosticFailureProviding {
     }
 }
 
+extension ICloudReplicationRepositoryAuthorityError:
+    DiagnosticFailureProviding
+{
+    public var diagnosticFailure: DiagnosticFailure {
+        let code = switch self {
+        case .invalidRepositoryScope: 441
+        case .invalidMarkerVersion: 442
+        case .divergentMarkerVersion: 443
+        case .unavailableMarkerVersion: 444
+        case .existingAuthorityMarkerUnavailable: 445
+        }
+        return DiagnosticFailure(domain: .syncProtocol, code: code)
+    }
+}
+
 extension SyncRecordTransportError: DiagnosticFailureProviding {
     public var diagnosticFailure: DiagnosticFailure {
         let code = switch self {

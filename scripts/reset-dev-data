@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${NOONMARK_LIVE_ICLOUD_SYNC:-0}" == "1" ]]; then
+  echo "refusing to reset while a live iCloud validation is active" >&2
+  exit 1
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/runtime-profile-common
 source "$script_dir/runtime-profile-common"

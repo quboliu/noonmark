@@ -37,30 +37,6 @@ stress_live_script="scripts/test-replication-v2-app-stress"
 reset_script="scripts/reset-dev-data"
 reset_boundary_helper="scripts/reset-data-boundary-helper.swift"
 
-assert_no_reset_dependency() {
-  local script="$1"
-  local visited="$2"
-  local dependency
-
-  case "$visited" in
-    *"|$script|"*) return 0 ;;
-  esac
-  visited="${visited}|${script}|"
-  while IFS= read -r dependency; do
-    if [[ "$dependency" == "scripts/reset-dev-data" ]]; then
-      echo "real iCloud script reaches reset-dev-data through $script" >&2
-      return 1
-    fi
-    if [[ -f "$dependency" ]]; then
-      assert_no_reset_dependency "$dependency" "$visited" || return 1
-    fi
-  done < <(
-    /usr/bin/sed -E -n \
-      's/^[[:space:]]*(source[[:space:]]+)?(scripts\/[A-Za-z0-9._\/-]+).*$/\2/p' \
-      "$script" | /usr/bin/sort -u
-  )
-}
-
 if /usr/bin/grep -E \
   'Mobile Documents|CloudDocs|ICLOUD_REPOSITORY|iCloudRoot|icloud_(sync|profile)_root' \
   "$reset_script" "$reset_boundary_helper" >/dev/null; then
@@ -92,13 +68,38 @@ for live_script in \
     exit 1
   fi
 done
+if ! /usr/bin/grep -F \
+  'NOONMARK_LIVE_ICLOUD_SYNC:-0' \
+  "$reset_script" >/dev/null; then
+  echo "reset-dev-data must reject the inherited live iCloud sentinel" >&2
+  exit 1
+fi
 for live_entrypoint in \
   scripts/test-replication-v2-real-validation \
   "$legacy_live_script" \
   "$live_symptom_script" \
   "$stress_live_script"; do
-  assert_no_reset_dependency "$live_entrypoint" ""
+  if ! /usr/bin/grep -F \
+    'export NOONMARK_LIVE_ICLOUD_SYNC=1' \
+    "$live_entrypoint" >/dev/null; then
+    echo "real iCloud entrypoint must export the reset sentinel: $live_entrypoint" >&2
+    exit 1
+  fi
+  sentinel_line="$(
+    /usr/bin/grep -nF 'export NOONMARK_LIVE_ICLOUD_SYNC=1' \
+      "$live_entrypoint" | /usr/bin/head -n 1 | /usr/bin/cut -d: -f1
+  )"
+  if [[ "$sentinel_line" -gt 10 ]]; then
+    echo "real iCloud reset sentinel must be established at entry: $live_entrypoint" >&2
+    exit 1
+  fi
 done
+if rg -n \
+  'unset[[:space:]]+NOONMARK_LIVE_ICLOUD_SYNC|NOONMARK_LIVE_ICLOUD_SYNC=(0|false)' \
+  scripts >/dev/null; then
+  echo "no script may clear the inherited live iCloud reset sentinel" >&2
+  exit 1
+fi
 if /usr/bin/grep -E \
   'Mobile Documents|CloudDocs|Noonmark/SyncRepository|Noonmark-E2E/SyncRepository' \
   "$stress_live_script" >/dev/null; then

@@ -5,7 +5,7 @@
 - 首次发现：2026-08-19T00:00:00-04:00/2026-08-19T23:59:59-04:00
 - 影响版本／构建：未发行 `0.3.1 (40)` candidate；没有 push、打包或分发
 - 引入提交：`973ff77d1b223140f4a22fc3593f6dbd98772a7e`（`fix(sync): close iCloud authority observation gaps`，把 version gain／lose 无条件记为分歧）
-- 扩大提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`，把同一错误模型扩大至 `presentedItemDidChange` 与 writer relinquish）
+- 扩大提交：`5cd07d248e2c1a5e067d0645334b362fce561e18`（`fix(sync): finish authority validation on every path`，把同一错误模型扩大至 `presentedItemDidChange`）与 `ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`，再扩大至 writer relinquish）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 首轮修复提交：`c2e1221bccdafe5e19709e1347d1d48b7392a24a`（`fix(sync): revalidate iCloud presenter evidence`，双轴 review 后仍需补 mixed-evidence 优先级与最终观察窗口门禁）
@@ -19,7 +19,7 @@
 
 ## 时间线
 
-- `973ff77` 为关闭 operation 中的 marker 变化窗口加入 `NSFilePresenter`，但把 version gain／lose 无条件折算成分歧；`ce87b511` 随后把 `presentedItemDidChange` 与 `relinquishPresentedItem(toWriter:)` 纳入同一个无条件 Boolean。
+- `973ff77` 为关闭 operation 中的 marker 变化窗口加入 `NSFilePresenter`，但把 version gain／lose 无条件折算成分歧；`5cd07d2` 随后加入 `presentedItemDidChange`，`ce87b511` 再把 `relinquishPresentedItem(toWriter:)` 纳入同一个无条件 Boolean。
 - readiness 修复 `124cb0037c22cc7e03c659c97db2d8a725f0caca` 后，完整 `make check`、签名 App E2E、旧随机 authority 零写入拒绝与一组 fresh deterministic App stress 均通过。
 - 第二组真实 multi-round symptom gate 建立 session `84fed39d-2a74-4abb-94ce-527657412215`；首轮 `00d76ffc-1657-4bd2-b4e5-6f9a2915566e` 回报 `divergentMarkerVersion`，第二轮 `86158ea3-15cf-4389-a614-43436b7ac202` 未启动。
 - 只读 probe 严格限制在失败 round：marker 为 canonical regular file，73 bytes，ubiquitous／uploaded 为 true，uploading／unresolved 为 false，无 upload error；current 与唯一 other version bytes 完全相同，non-local 与 unresolved version 数量均为零，marker generation 精确等于当前 repository scope 的 deterministic generation。
@@ -59,7 +59,7 @@ scripts/test-icloud-append-only-symptom
 
 ## 根因与破坏机制
 
-`ICloudMarkerVersionPresenter` 把 Foundation 的“发生了需要重新观察的事件”错误建模成“authority bytes 已经改变”。`973ff77` 先对 version gain／lose 设置单一 Boolean，`ce87b511` 再加入 `presentedItemDidChange` 与 writer relinquish；结束时只要该 Boolean 为 true 就抛出 `divergentMarkerVersion`。
+`ICloudMarkerVersionPresenter` 把 Foundation 的“发生了需要重新观察的事件”错误建模成“authority bytes 已经改变”。`973ff77` 先对 version gain／lose 设置单一 Boolean，`5cd07d2` 加入 `presentedItemDidChange`，`ce87b511` 再加入 writer relinquish；结束时只要该 Boolean 为 true 就抛出 `divergentMarkerVersion`。
 
 这个模型违背 Foundation 回调语义：attribute change、同 bytes version inventory 变化和 writer intent 都是合法事件。它们应触发重新验证，而不是直接成为分歧结论。真实 iCloud 的协调活动触发了该 Boolean，即使最终所有可见 marker bytes 完全相同，post-validation 仍被假阳性覆盖。
 
@@ -83,7 +83,7 @@ scripts/test-icloud-append-only-symptom
 
 ## 永久门禁
 
-- fast：`scripts/test-replication-bootstrap-concurrency` 运行真实 Foundation presenter 的 no-op writer intent 红转绿用例，并继续覆盖 bytes 真正改变、version 分歧、unavailable、mixed-evidence divergence 优先、post-snapshot 最终观察窗口与注册／注销平衡；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。
+- fast：`scripts/test-replication-bootstrap-concurrency` 运行真实 Foundation presenter 的 no-op writer intent 红转绿用例，并继续覆盖 bytes 真正改变、version 分歧、unavailable、mixed-evidence divergence 优先、post-snapshot 最终观察窗口与注册／注销平衡；同一入口以 source contract 固定 final snapshot 与 presenter removal 必须位于同一个 coordinated read accessor。由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。
 - symptom：`scripts/test-icloud-append-only-symptom` 每次建立一个全新 session 与两个全新 round，要求两轮均通过真实 iCloud 收敛、重启零重复 apply，且后轮不得改变前轮 inventory／digest；由 `scripts/test-icloud-sync-live` 强制调用。旧失败对象永久保留，不清理。
 
 ## 发行、风险、回滚、灰度与监控

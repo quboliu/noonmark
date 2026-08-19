@@ -15,6 +15,12 @@ if rg -Fq -- 'initialLocalSnapshot.coordinatedURL' "$authority_source"; then
   echo "a coordinated marker URL must not escape its read accessor" >&2
   exit 1
 fi
+if ! rg -Uq \
+  'finalSnapshot = try ICloudReplicationRepositoryAuthority\n[[:space:]]*\.markerVersions\(atCoordinatedURL: coordinatedURL\)\n([[:space:]]*\} catch \{\n[[:space:]]*finalReadFailed = true\n[[:space:]]*\}\n)?[[:space:]]*NSFileCoordinator\.removeFilePresenter\(self\.presenter\)\n[[:space:]]*removalState\.markRemoved\(\)\n[[:space:]]*\}' \
+  "$authority_source"; then
+  echo "the final marker snapshot and presenter removal must share one coordinated read accessor" >&2
+  exit 1
+fi
 
 scripts/reset-dev-data audit
 swift test \

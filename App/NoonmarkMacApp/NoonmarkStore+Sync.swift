@@ -489,13 +489,13 @@ private extension NoonmarkStore {
             let iCloud = if let round = try appReplicationV2StressICloudRound() {
                 try ICloudDriveReplicationEndpoint(
                     round: round,
-                    preferredGenerationID: authority?.generationID
+                    existingGenerationID: authority?.generationID
                 )
             } else {
                 try ICloudDriveReplicationEndpoint(
                     repositoryName: AppLaunchArguments.validatedRuntimeProfile
                         .iCloudRepositoryName,
-                    preferredGenerationID: authority?.generationID
+                    existingGenerationID: authority?.generationID
                 )
             }
             endpoint = iCloud

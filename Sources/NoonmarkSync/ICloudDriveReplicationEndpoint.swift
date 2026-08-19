@@ -239,24 +239,24 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
     private let boundary: Boundary
     private let files: ContentAddressedFileReplicationEndpoint
     private let downloadRequest: (URL) throws -> Void
+    private let repositoryAuthorityDescriptor:
+        ReplicationRepositoryDescriptor?
     private let repositoryAuthorityValidation: @Sendable () async throws
+        -> Void
+    private let repositoryAuthorityPostValidation: @Sendable () async throws
         -> Void
 
     public init(
         round: ICloudAppendOnlyTestRound,
-        preferredGenerationID: UUID? = nil
+        existingGenerationID: UUID? = nil
     ) throws {
         let repositoryScope = ICloudAppendOnlyTestNamespace.relativeRoot
             + "/" + round.sessionID.uuidString.lowercased()
             + "/" + round.roundID.uuidString.lowercased()
-        let proposedGenerationID = try ICloudReplicationRepositoryAuthority
-            .generationID(
-                for: repositoryScope,
-                preferred: preferredGenerationID
-            )
-        let result = try FileReplicationRepositoryBootstrap.openOrCreateWithStatus(
+        let result = try ICloudReplicationRepositoryAuthority.openRepository(
             at: round.rootURL,
-            generationID: { proposedGenerationID }
+            scope: repositoryScope,
+            existingGenerationID: existingGenerationID
         )
         self.round = round
         rootURL = round.rootURL
@@ -276,38 +276,25 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         downloadRequest = {
             try FileManager.default.startDownloadingUbiquitousItem(at: $0)
         }
-        repositoryAuthorityValidation = Self.authorityValidation(
-            rootURL: round.rootURL,
-            descriptor: result.descriptor
-        )
+        repositoryAuthorityDescriptor = result.descriptor
+        repositoryAuthorityValidation = {}
+        repositoryAuthorityPostValidation = {}
         namespace = "icloud-append-only-" + round.sessionID.uuidString
             .lowercased() + "-" + round.roundID.uuidString.lowercased()
-        try ICloudReplicationRepositoryAuthority
-            .validateLocallyAvailableMarkerVersions(
-                at: round.rootURL.appendingPathComponent(
-                    FileReplicationRepositoryBootstrap.markerFilename
-                ),
-                expected: result.descriptor
-            )
     }
 
     public init(
         repositoryName: String,
-        preferredGenerationID: UUID? = nil
+        existingGenerationID: UUID? = nil
     ) throws {
         let resolvedRoot = try ICloudDriveRepositoryLocator.defaultRootURL(
             repositoryName: repositoryName
         )
-        let proposedGenerationID = try ICloudReplicationRepositoryAuthority
-            .generationID(
-                for: repositoryName,
-                preferred: preferredGenerationID
-            )
-        let result = try FileReplicationRepositoryBootstrap
-            .openOrCreateWithStatus(
-                at: resolvedRoot,
-                generationID: { proposedGenerationID }
-            )
+        let result = try ICloudReplicationRepositoryAuthority.openRepository(
+            at: resolvedRoot,
+            scope: repositoryName,
+            existingGenerationID: existingGenerationID
+        )
         round = nil
         rootURL = resolvedRoot
         self.generationID = result.descriptor.generationID
@@ -322,18 +309,10 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         downloadRequest = {
             try FileManager.default.startDownloadingUbiquitousItem(at: $0)
         }
-        repositoryAuthorityValidation = Self.authorityValidation(
-            rootURL: resolvedRoot,
-            descriptor: result.descriptor
-        )
+        repositoryAuthorityDescriptor = result.descriptor
+        repositoryAuthorityValidation = {}
+        repositoryAuthorityPostValidation = {}
         namespace = "icloud-" + files.namespace
-        try ICloudReplicationRepositoryAuthority
-            .validateLocallyAvailableMarkerVersions(
-                at: resolvedRoot.appendingPathComponent(
-                    FileReplicationRepositoryBootstrap.markerFilename
-                ),
-                expected: result.descriptor
-            )
     }
 
     init(
@@ -344,6 +323,8 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
             try Data(contentsOf: $0)
         },
         repositoryAuthorityValidation: @escaping @Sendable () async throws
+            -> Void = {},
+        repositoryAuthorityPostValidation: @escaping @Sendable () async throws
             -> Void = {},
         downloadRequest: @escaping (URL) throws -> Void
     ) {
@@ -359,7 +340,10 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
             fileDataReader: fileDataReader
         )
         self.downloadRequest = downloadRequest
+        repositoryAuthorityDescriptor = nil
         self.repositoryAuthorityValidation = repositoryAuthorityValidation
+        self.repositoryAuthorityPostValidation =
+            repositoryAuthorityPostValidation
         namespace = "icloud-" + files.namespace
     }
 
@@ -367,8 +351,9 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         sealed publication: SealedReplicationPublication
     ) async throws -> ReplicationPublicationReceipt {
         try validateBoundary()
-        try await repositoryAuthorityValidation()
-        return try await files.publish(sealed: publication)
+        return try await withRepositoryAuthority {
+            try await files.publish(sealed: publication)
+        }
     }
 
     public func observe(
@@ -376,17 +361,20 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
     ) async throws -> [ReplicationPublicationObservation] {
         guard receipts.isEmpty == false else { return [] }
         try validateBoundary()
-        try await repositoryAuthorityValidation()
-        return try receipts.map { receipt in
-            let states = try receipt.objects.map { object in
-                ICloudReplicationEvidenceClassifier.classify(
-                    try evidence(for: object)
+        return try await withRepositoryAuthority {
+            try receipts.map { receipt in
+                let states = try receipt.objects.map { object in
+                    ICloudReplicationEvidenceClassifier.classify(
+                        try evidence(for: object)
+                    )
+                }
+                return ReplicationPublicationObservation(
+                    reference: receipt.reference,
+                    state: ICloudReplicationEvidenceClassifier.aggregate(
+                        states
+                    )
                 )
             }
-            return ReplicationPublicationObservation(
-                reference: receipt.reference,
-                state: ICloudReplicationEvidenceClassifier.aggregate(states)
-            )
         }
     }
 
@@ -395,55 +383,56 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         budget: ReplicationReadBudget
     ) async throws -> ReplicationReadPage {
         try validateBoundary()
-        try await repositoryAuthorityValidation()
-        var isAwaitingMaterialization = false
-        for url in try regularJSONFilesInBoundary() {
-            if try requestDownloadIfNeeded(at: url) == false {
-                isAwaitingMaterialization = true
+        return try await withRepositoryAuthority {
+            var isAwaitingMaterialization = false
+            for url in try regularJSONFilesInBoundary() {
+                if try requestDownloadIfNeeded(at: url) == false {
+                    isAwaitingMaterialization = true
+                }
             }
-        }
-        if isAwaitingMaterialization {
-            return ReplicationReadPage(
-                publications: [],
-                cursor: cursor,
-                hasMore: false,
-                openedByteCount: 0,
-                state: .awaitingMaterialization
-            )
-        }
-        do {
-            return try await files.read(after: cursor, budget: budget)
-        } catch let error as FileReplicationEndpointError {
-            let missingURL: URL
-            switch error {
-            case let .announcementGap(
-                producerID,
-                missingSequence,
-                highestObservedSequence
-            ):
-                guard missingSequence > 0,
-                      missingSequence <= highestObservedSequence
-                else {
+            if isAwaitingMaterialization {
+                return ReplicationReadPage(
+                    publications: [],
+                    cursor: cursor,
+                    hasMore: false,
+                    openedByteCount: 0,
+                    state: .awaitingMaterialization
+                )
+            }
+            do {
+                return try await files.read(after: cursor, budget: budget)
+            } catch let error as FileReplicationEndpointError {
+                let missingURL: URL
+                switch error {
+                case let .announcementGap(
+                    producerID,
+                    missingSequence,
+                    highestObservedSequence
+                ):
+                    guard missingSequence > 0,
+                          missingSequence <= highestObservedSequence
+                    else {
+                        throw error
+                    }
+                    missingURL = rootURL.appendingPathComponent(
+                        "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/\(String(format: "%020llu", missingSequence))",
+                        isDirectory: true
+                    ).standardizedFileURL
+                case let .objectNotMaterialized(relativeKey):
+                    missingURL = try descendantURL(relativeKey: relativeKey)
+                default:
                     throw error
                 }
-                missingURL = rootURL.appendingPathComponent(
-                    "v2/announcements/\(generationID.uuidString.lowercased())/\(producerID.uuidString.lowercased())/\(String(format: "%020llu", missingSequence))",
-                    isDirectory: true
-                ).standardizedFileURL
-            case let .objectNotMaterialized(relativeKey):
-                missingURL = try descendantURL(relativeKey: relativeKey)
-            default:
-                throw error
+                try validateDescendant(missingURL)
+                try downloadRequest(missingURL)
+                return ReplicationReadPage(
+                    publications: [],
+                    cursor: cursor,
+                    hasMore: true,
+                    openedByteCount: 0,
+                    state: .awaitingMaterialization
+                )
             }
-            try validateDescendant(missingURL)
-            try downloadRequest(missingURL)
-            return ReplicationReadPage(
-                publications: [],
-                cursor: cursor,
-                hasMore: true,
-                openedByteCount: 0,
-                state: .awaitingMaterialization
-            )
         }
     }
 
@@ -453,20 +442,32 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 }
 
 private extension ICloudDriveReplicationEndpoint {
-    nonisolated static func authorityValidation(
-        rootURL: URL,
-        descriptor: ReplicationRepositoryDescriptor
-    ) -> @Sendable () async throws -> Void {
-        let markerURL = rootURL.appendingPathComponent(
-            FileReplicationRepositoryBootstrap.markerFilename
-        )
-        return {
-            try await ICloudReplicationRepositoryAuthority
-                .validateMarkerVersions(
-                    at: markerURL,
-                    expected: descriptor
+    func withRepositoryAuthority<Result: Sendable>(
+        _ operation: () async throws -> Result
+    ) async throws -> Result {
+        if let repositoryAuthorityDescriptor {
+            let lease = try await ICloudReplicationRepositoryAuthority
+                .beginValidatedMarkerAuthority(
+                    at: rootURL.appendingPathComponent(
+                        FileReplicationRepositoryBootstrap.markerFilename
+                    ),
+                    expected: repositoryAuthorityDescriptor
                 )
+            do {
+                let result = try await operation()
+                try await ICloudReplicationRepositoryAuthority
+                    .finishValidatedMarkerAuthority(lease)
+                return result
+            } catch {
+                ICloudReplicationRepositoryAuthority
+                    .cancelValidatedMarkerAuthority(lease)
+                throw error
+            }
         }
+        try await repositoryAuthorityValidation()
+        let result = try await operation()
+        try await repositoryAuthorityPostValidation()
+        return result
     }
 
     func validateBoundary() throws {

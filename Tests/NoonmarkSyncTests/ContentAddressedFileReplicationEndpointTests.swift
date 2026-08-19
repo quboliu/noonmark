@@ -173,6 +173,34 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
         }
     }
 
+    func testICloudEndpointCompletesPostAuthorityValidationAfterEveryOperation()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let publication = try publication(sequence: 1)
+        let validations = AuthorityValidationRecorder()
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            repositoryAuthorityPostValidation: {
+                validations.record()
+            },
+            downloadRequest: { _ in }
+        )
+
+        let receipt = try await endpoint.publish(sealed: publication)
+        _ = try await endpoint.observe(pending: [receipt])
+        _ = try await endpoint.read(
+            after: .origin,
+            budget: ReplicationReadBudget(
+                maximumPublications: 10,
+                maximumBytes: 1_000_000
+            )
+        )
+
+        XCTAssertEqual(validations.count, 3)
+    }
+
     func testFirstPublicationLargerThanByteBudgetStillAdvancesCursor()
         async throws
     {
@@ -1128,6 +1156,21 @@ private final class DownloadRequestRecorder: @unchecked Sendable {
 
     func snapshot() -> [URL] {
         lock.withLock { urls }
+    }
+}
+
+private final class AuthorityValidationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var validationCount = 0
+
+    var count: Int {
+        lock.withLock { validationCount }
+    }
+
+    func record() {
+        lock.withLock {
+            validationCount += 1
+        }
     }
 }
 

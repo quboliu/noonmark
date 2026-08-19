@@ -11,6 +11,7 @@ public enum ReplicationRepositoryBootstrapError:
     case invalidMarker
     case cannotCreateMarker
     case markerPublicationInProgress
+    case markerUnavailableForExistingAuthority
 }
 
 public struct ReplicationRepositoryDescriptor:
@@ -69,24 +70,61 @@ public enum FileReplicationRepositoryBootstrap {
         )
     }
 
+    static func openExistingWithStatus(
+        at rootURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> ReplicationRepositoryOpenResult {
+        let root = rootURL.standardizedFileURL
+        try requireExistingRoot(root)
+        return try withExclusiveBootstrapLock(at: root) {
+            let children: [URL]
+            do {
+                children = try fileManager.contentsOfDirectory(
+                    at: root,
+                    includingPropertiesForKeys: nil,
+                    options: []
+                )
+            } catch {
+                throw ReplicationRepositoryBootstrapError
+                    .markerUnavailableForExistingAuthority
+            }
+            guard children.contains(where: {
+                $0.lastPathComponent == markerFilename
+            }) else {
+                throw ReplicationRepositoryBootstrapError
+                    .markerUnavailableForExistingAuthority
+            }
+            return try openPublishedRepository(
+                at: root,
+                children: children,
+                fileManager: fileManager,
+                unreadableMarkerError:
+                .markerUnavailableForExistingAuthority
+            )
+        }
+    }
+
     static func openOrCreateWithStatus(
         at rootURL: URL,
         fileManager: FileManager = .default,
         generationID: @Sendable () -> UUID = UUID.init,
         markerWriteByteLimitForTesting: Int?,
-        bootstrapLockAttemptForTesting: (@Sendable () -> Void)? = nil
+        bootstrapLockContendedForTesting: (@Sendable () -> Void)? = nil,
+        markerAbsenceObservedForTesting: (@Sendable () throws -> Void)? = nil
     ) throws -> ReplicationRepositoryOpenResult {
         let root = rootURL.standardizedFileURL
         try prepareRoot(root, fileManager: fileManager)
         return try withExclusiveBootstrapLock(
             at: root,
-            onLockAttempt: bootstrapLockAttemptForTesting
+            onLockContention: bootstrapLockContendedForTesting
         ) {
             try openOrCreateLocked(
                 at: root,
                 fileManager: fileManager,
                 generationID: generationID,
-                markerWriteByteLimitForTesting: markerWriteByteLimitForTesting
+                markerWriteByteLimitForTesting: markerWriteByteLimitForTesting,
+                markerAbsenceObservedForTesting:
+                markerAbsenceObservedForTesting
             )
         }
     }
@@ -97,43 +135,56 @@ private extension FileReplicationRepositoryBootstrap {
         at root: URL,
         fileManager: FileManager,
         generationID: @Sendable () -> UUID,
-        markerWriteByteLimitForTesting: Int?
+        markerWriteByteLimitForTesting: Int?,
+        markerAbsenceObservedForTesting: (@Sendable () throws -> Void)?
     ) throws -> ReplicationRepositoryOpenResult {
         let markerURL = root.appendingPathComponent(markerFilename)
-        let children = try fileManager.contentsOfDirectory(
+        if let result = try openPublishedRepositoryIfPresent(
             at: root,
-            includingPropertiesForKeys: nil,
-            options: []
-        )
-        if children.contains(where: { $0.lastPathComponent == markerFilename }) {
-            try validateKnownRootChildren(children)
-            let descriptor = try readMarker(at: markerURL)
-            try validateV2Tree(
-                at: root,
-                generationID: descriptor.generationID,
-                fileManager: fileManager
-            )
-            return ReplicationRepositoryOpenResult(
-                descriptor: descriptor,
-                createdRepository: false
-            )
+            fileManager: fileManager
+        ) {
+            return result
         }
         let descriptor = ReplicationRepositoryDescriptor(
             formatVersion: formatVersion,
             generationID: generationID()
         )
         let data = try canonicalData(descriptor)
+        try markerAbsenceObservedForTesting?()
+        if let result = try openPublishedRepositoryIfPresent(
+            at: root,
+            fileManager: fileManager
+        ) {
+            return result
+        }
+        let children = try directoryChildren(root, fileManager: fileManager)
         if children.isEmpty == false {
-            switch try markerStagingState(
-                at: root,
-                expectedMarkerData: data,
-                fileManager: fileManager
-            ) {
-            case .recoverable:
-                break
-            case .inProgress:
-                throw ReplicationRepositoryBootstrapError
-                    .markerPublicationInProgress
+            do {
+                switch try markerStagingState(
+                    at: root,
+                    expectedMarkerData: data,
+                    fileManager: fileManager
+                ) {
+                case .recoverable:
+                    break
+                case .inProgress:
+                    if let result = try openPublishedRepositoryIfPresent(
+                        at: root,
+                        fileManager: fileManager
+                    ) {
+                        return result
+                    }
+                    throw ReplicationRepositoryBootstrapError
+                        .markerPublicationInProgress
+                }
+            } catch {
+                if let result = try openPublishedRepositoryIfPresent(
+                    at: root,
+                    fileManager: fileManager
+                ) {
+                    return result
+                }
+                throw error
             }
         }
         do {
@@ -183,7 +234,7 @@ private extension FileReplicationRepositoryBootstrap {
 
     static func withExclusiveBootstrapLock<Result>(
         at root: URL,
-        onLockAttempt: (@Sendable () -> Void)?,
+        onLockContention: (@Sendable () -> Void)? = nil,
         _ operation: () throws -> Result
     ) throws -> Result {
         let descriptor = root.withUnsafeFileSystemRepresentation { path in
@@ -198,11 +249,25 @@ private extension FileReplicationRepositoryBootstrap {
         }
         defer { close(descriptor) }
 
-        onLockAttempt?()
         var lockResult: Int32
-        repeat {
-            lockResult = flock(descriptor, LOCK_EX)
-        } while lockResult != 0 && errno == EINTR
+        if let onLockContention {
+            repeat {
+                lockResult = flock(descriptor, LOCK_EX | LOCK_NB)
+            } while lockResult != 0 && errno == EINTR
+            if lockResult != 0 {
+                guard errno == EWOULDBLOCK || errno == EAGAIN else {
+                    throw ReplicationRepositoryBootstrapError.invalidBoundary
+                }
+                onLockContention()
+            }
+        } else {
+            lockResult = -1
+        }
+        if lockResult != 0 {
+            repeat {
+                lockResult = flock(descriptor, LOCK_EX)
+            } while lockResult != 0 && errno == EINTR
+        }
         guard lockResult == 0 else {
             throw ReplicationRepositoryBootstrapError.invalidBoundary
         }
@@ -243,6 +308,65 @@ private extension FileReplicationRepositoryBootstrap {
         else {
             throw ReplicationRepositoryBootstrapError.invalidBoundary
         }
+    }
+
+    static func requireExistingRoot(_ root: URL) throws {
+        guard root.path != "/" else {
+            throw ReplicationRepositoryBootstrapError.invalidBoundary
+        }
+        var metadata = stat()
+        guard lstat(root.path, &metadata) == 0 else {
+            if errno == ENOENT {
+                throw ReplicationRepositoryBootstrapError
+                    .markerUnavailableForExistingAuthority
+            }
+            throw ReplicationRepositoryBootstrapError.invalidBoundary
+        }
+        guard metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_mode & S_IFMT != S_IFLNK
+        else {
+            throw ReplicationRepositoryBootstrapError.invalidBoundary
+        }
+    }
+
+    static func openPublishedRepositoryIfPresent(
+        at root: URL,
+        fileManager: FileManager
+    ) throws -> ReplicationRepositoryOpenResult? {
+        let children = try directoryChildren(root, fileManager: fileManager)
+        guard children.contains(where: {
+            $0.lastPathComponent == markerFilename
+        }) else {
+            return nil
+        }
+        return try openPublishedRepository(
+            at: root,
+            children: children,
+            fileManager: fileManager,
+            unreadableMarkerError: .invalidMarker
+        )
+    }
+
+    static func openPublishedRepository(
+        at root: URL,
+        children: [URL],
+        fileManager: FileManager,
+        unreadableMarkerError: ReplicationRepositoryBootstrapError
+    ) throws -> ReplicationRepositoryOpenResult {
+        try validateKnownRootChildren(children)
+        let descriptor = try readMarker(
+            at: root.appendingPathComponent(markerFilename),
+            unreadableError: unreadableMarkerError
+        )
+        try validateV2Tree(
+            at: root,
+            generationID: descriptor.generationID,
+            fileManager: fileManager
+        )
+        return ReplicationRepositoryOpenResult(
+            descriptor: descriptor,
+            createdRepository: false
+        )
     }
 
     static func validateKnownRootChildren(_ children: [URL]) throws {
@@ -316,14 +440,11 @@ private extension FileReplicationRepositoryBootstrap {
                 throw ReplicationRepositoryBootstrapError
                     .markerPublicationInProgress
             }
-            guard data.count <= expectedMarkerData.count,
-                  expectedMarkerData.starts(with: data)
-            else {
+            guard data == expectedMarkerData else {
                 throw ReplicationRepositoryBootstrapError
                     .legacyRepositoryRequiresManualReset
             }
-            foundCompleteMarker = foundCompleteMarker
-                || data == expectedMarkerData
+            foundCompleteMarker = true
         }
         return foundCompleteMarker ? .recoverable : .inProgress
     }
@@ -553,20 +674,21 @@ private extension FileReplicationRepositoryBootstrap {
     }
 
     static func readMarker(
-        at url: URL
+        at url: URL,
+        unreadableError: ReplicationRepositoryBootstrapError = .invalidMarker
     ) throws -> ReplicationRepositoryDescriptor {
         var metadata = stat()
         guard lstat(url.path, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_mode & S_IFMT != S_IFLNK
         else {
-            throw ReplicationRepositoryBootstrapError.invalidMarker
+            throw unreadableError
         }
         let data: Data
         do {
             data = try Data(contentsOf: url, options: [.mappedIfSafe])
         } catch {
-            throw ReplicationRepositoryBootstrapError.invalidMarker
+            throw unreadableError
         }
         let descriptor: ReplicationRepositoryDescriptor
         do {

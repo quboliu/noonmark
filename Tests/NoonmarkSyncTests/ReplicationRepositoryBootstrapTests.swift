@@ -172,7 +172,7 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
                 at: root,
                 generationID: { losingID },
                 markerWriteByteLimitForTesting: nil,
-                bootstrapLockAttemptForTesting: {
+                bootstrapLockContendedForTesting: {
                     lockAttempted.signal()
                 }
             ).descriptor
@@ -236,7 +236,7 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? ReplicationRepositoryBootstrapError,
-                .markerPublicationInProgress
+                .legacyRepositoryRequiresManualReset
             )
         }
         XCTAssertEqual(try Data(contentsOf: interruptedStages[0]).count, 5)
@@ -271,7 +271,7 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: stage), markerData)
     }
 
-    func testPartialRemoteMarkerStageReportsInProgressWithoutWriting()
+    func testPartialRemoteMarkerStageRequiresManualResetWithoutWriting()
         throws
     {
         let root = makeRepositoryURL()
@@ -291,11 +291,40 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? ReplicationRepositoryBootstrapError,
-                .markerPublicationInProgress
+                .legacyRepositoryRequiresManualReset
             )
         }
 
         XCTAssertEqual(try inventory(root), before)
+    }
+
+    func testAdoptsMarkerPublishedBetweenInitialAndStagingScans() throws {
+        let root = makeRepositoryURL()
+        let winnerID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000010"
+        )!
+        let proposedID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000011"
+        )!
+        let markerData = try canonicalMarkerData(generationID: winnerID)
+        _ = try markerStageURL(root: root)
+
+        let result = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: { proposedID },
+                markerWriteByteLimitForTesting: nil,
+                markerAbsenceObservedForTesting: {
+                    _ = try AppendOnlyFilePublisher(rootURL: root).publish(
+                        markerData,
+                        to: FileReplicationRepositoryBootstrap.markerFilename,
+                        stagingArea: "markers"
+                    )
+                }
+            )
+
+        XCTAssertEqual(result.descriptor.generationID, winnerID)
+        XCTAssertFalse(result.createdRepository)
     }
 
     func testDivergentRemoteMarkerStageFailsClosedWithoutWriting() throws {

@@ -1,14 +1,15 @@
 # FAIL-2026-08-19-03：Replication bootstrap 活跃 staging 误判与跨 Mac authority 分歧
 
-- 状态：已修复
+- 状态：处理中
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T10:56:53-04:00
-- 影响版本／构建：未发行 `0.3.1 (37)`、`(38)` 与 `(39)` candidate；三者都没有 push、打包或分发
+- 影响版本／构建：未发行 `0.3.1 (37)`、`(38)`、`(39)` 与 `(40)` candidate；四者都没有 push、打包或分发
 - 引入提交：`6a16e02bbaaf10b7e7d2cdcc2b10db5e3d141d73`（`feat(sync): replace legacy synchronization with replication v2`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 首轮修复提交：`2bd4734e5af061fe3709fa7ffdfee199808c1b5d`（`fix(sync): serialize replication repository bootstrap`，只修复同机并发）
-- 修复提交：`ab9bf607334be0f76ccb924777fa91c16188f3e1`（`fix(sync): converge iCloud repository bootstrap authority`）
+- 第二轮修复提交：`ab9bf607334be0f76ccb924777fa91c16188f3e1`（`fix(sync): converge iCloud repository bootstrap authority`，终审后证实仍不完整）
+- 第三轮修复提交：待确定
 
 ## 用户症状与影响
 
@@ -28,6 +29,9 @@
 - build 39 双轴 review 随后证明 `flock` 不具备跨 Mac authority，且 100 ms sleep 不能证明 opener 已尝试获取锁；案例重新转为处理中，build 39 退役。
 - 本机 Xcode SDK 的 `Foundation/NSFileVersion.h` 进一步证明 `otherVersionsOfItem` 不包含尚未下载的版本；全量观测还必须调用 `getNonlocalVersionsOfItem`，并对 non-local version 做 coordinated read。原首轮修复没有这层证据。
 - 新 tracer 先以显式 semaphore 证明 opener 已到达 `flock` 前，再发布 winner；另以两个独立 mirror、远端完整／部分／分歧 stage，以及 injected non-local marker version 固定跨设备边界。
+- build 40 双轴终审再发现四项反例：semaphore 在真正调用 `flock` 前已经放行，不能证明发生锁竞争；marker 可在首次 root scan 与 staging scan 之间出现并被误报 legacy；SQLite 中旧随机 authority 可在空 iCloud mirror 发布与新客户端确定性 authority 不同的 marker；部分可读 stage 被改成 `markerPublicationInProgress`，破坏 `FAIL-2026-08-11-17` 已固定的人工重置契约。
+- 同一终审根据本机 Xcode SDK 的 `NSFileVersion.h` 确认，全量版本观察必须在单次 coordinated read 内注册实现 gain／lose 回调的 `NSFilePresenter`、枚举 local versions 并调用 non-local API，而且 presenter 必须跨越实际 remote operation。只做操作前后两个独立 snapshot 仍有漏报窗口。
+- 用户批准兼容边界：旧随机 authority 只有在原 final marker 确实可见且 bytes 一致时才可采用；若 marker 缺失或不可用，必须零写入 fail-closed，等待原 marker 可见。不得自动改写、迁移、fallback 或以 stage 代替 final marker。
 
 ## 复现与定位证据
 
@@ -40,8 +44,10 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - 两个独立 mirror 必须从同一稳定 scope 推导完全相同的 generation 与 canonical marker；
 - 即使已有本机 authority，空或含 NUL 的 repository scope 也必须拒绝；
 - injected non-local marker 与 current marker 不同必须返回 `divergentMarkerVersion`；
-- 只有完整 exact marker stage 可以继续 append-only publication，部分 exact prefix 只能返回 `markerPublicationInProgress` 且零写入，分歧 stage 继续按 corruption／legacy 边界 fail-closed；
+- 只有完整 exact marker stage 可以继续 append-only publication；任何可读的部分、空、超长或分歧 stage 都必须按 `legacyRepositoryRequiresManualReset` 零写入 fail-closed，以保持 `FAIL-2026-08-11-17` 契约；只有 stage bytes 本身暂时不可读时才可回报 `markerPublicationInProgress`；
 - endpoint 的 publish、非空 observe 与 read 都必须在任何 object I/O 前消费同一 authority validator。
+- 真实 `flock(LOCK_EX | LOCK_NB)` 必须先返回 `EWOULDBLOCK`／`EAGAIN`，测试握手才可放行 publisher；marker 若在首次 absence 与 staging scan 之间出现，fresh scan 必须采用已经发布的 winner。
+- presenter 必须在 operation 期间真实出现在 `NSFileCoordinator.filePresenters`，结束与任何错误路径后都必须平衡注销；non-local inventory API 不可用时 operation 不得执行。
 
 ## 排除的假设
 
@@ -62,20 +68,22 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 
 ## 根因修复设计
 
-- 保留 directory `flock`，但只把它声明为同机 task／process 的临界区；测试用显式 semaphore 在 `flock` 调用前握手，不再依赖时间猜测。
+- 保留 directory `flock`，但只把它声明为同机 task／process 的临界区；测试先用 non-blocking `flock` 取得真实 `EWOULDBLOCK`／`EAGAIN` 证据，再通过 semaphore 放行，不再依赖时间或“即将尝试”的假握手。
 - 对没有既有本机 clean-cut authority 的 iCloud repository，以 domain-separated SHA-256 对稳定 repository scope 取 128 bit，并设置 RFC variant 与 UUIDv8 version。两台当前版本 Mac 即使完全离线初始化，也会生成相同 canonical marker bytes。
-- 若 SQLite 已有 clean-cut authority，继续优先使用该 generation；若本机 marker 已可见，bootstrap 仍读取并采用 exact 既有 marker，避免静默替换已经存在的随机 V2 authority。
-- 没有 final marker但只有 marker staging 时，完整 exact canonical bytes 可以由 append-only publisher补齐同一 final key；部分 exact prefix 返回 typed in-progress 且零写入；超长、分歧、非 canonical 名称或未知 subtree 全部 fail-closed。
-- iCloud endpoint 初始化时校验 current 与本机可用 versions；每次 publish、非空 observe 与 read 前，再用 coordinated read 对账 current、操作前后本机 versions，以及 `getNonlocalVersionsOfItem` 返回的全部 non-local versions。完全相同版本可共存；非 canonical、不可读、current 变化或任一 bytes 分歧都 fail-closed，不 resolve、不删除。
+- 若 SQLite 没有 authority，或既有 authority 等于当前 scope 推导值，才允许以确定性 generation 打开／建立 repository；若 SQLite authority 是历史随机值，只允许只读打开可见 final marker并核对 generation。final marker 缺失或不可用时保持 mirror inventory 不变，回报 typed unavailable，不以 stage 补发。
+- 没有 final marker但只有 marker staging时，只有没有历史随机 authority 的 fresh deterministic bootstrap 可以用完整 exact canonical bytes 补齐同一 final key；可读的部分、空、超长、分歧、非 canonical 名称或未知 subtree 全部按 corruption／legacy 边界 fail-closed。
+- 每次 publish、非空 observe 与 read 前，在 coordinated read 内注册 marker `NSFilePresenter`、读取 current 与 local versions并调用 `getNonlocalVersionsOfItem`；presenter 持续覆盖实际 operation，再做 post snapshot，并在 coordinated read 内注销后排空回调。current、版本 inventory 或任一 bytes 变化、非 canonical、不可读都 fail-closed，不 resolve、不删除。初始化仅负责 bootstrap；完整 authority window 固定由每次 remote operation 承担。
 - 这套设计以确定性 authority 消除当前版本 fresh bootstrap 的 split-brain 来源，并以 version validator 阻断已出现的分歧；它不宣称 iCloud Drive 获得 server CAS，也不以本机门禁替代双实体 Mac 灰度。
 
 ## 当前验证结果
 
 - Red（同机）：受控 active staging tracer 在旧实现稳定返回 `legacyRepositoryRequiresManualReset`。
 - Red（review）：两个独立 mirror 的旧随机 generator 产生不同 marker；100 ms sleep 无法证明 opener 到达锁点；只调用 `otherVersionsOfItem` 漏掉 SDK 定义的 non-local versions。
-- Green（聚焦）：确定性 generation、既有 authority、scope validation、本机 exact／divergent versions、injected non-local divergence、完整／部分／分歧 staging、显式 lock handshake 与 endpoint preflight 均已转绿。
-- Green（原受害组）：加入 non-local validator 后，`swift test --filter NoonmarkSyncTests` 运行 330 项、0 失败。
-- Green（闭环）：完整修复已由 commit `ab9bf607334be0f76ccb924777fa91c16188f3e1` 独立承载，案例与 fast／symptom 门禁映射已经回填。完整 `make check`、双轴 review、真实签名 App E2E、writer lease 与 DMG release chain 仍是 build 40 发行门禁，不能用案例已修复替代发行就绪。
+- Red（build 40 终审）：旧随机 authority 在 marker 缺失时仍可发布新 marker；marker 在两次 scan 之间出现会被误判；partial stage 返回错误的 in-progress；lock hook 在真实 contention 前触发；presenter 没有跨越 operation。
+- Green（第三轮聚焦）：旧随机 authority 的 absent／empty／stage-only mirror 全部零写入，只有可见且 matching final marker 可采用；derived authority 可重建空 mirror但拒绝不同 marker；marker scan race、partial-stage 人工重置、真实 `EWOULDBLOCK` 握手均已转绿。
+- Green（authority window）：fake session 固定 pre／post marker 与 inventory 变化；真实 Foundation runtime证明 presenter 在 operation 内注册并在成功／non-local unavailable 错误后平衡注销；endpoint publish、非空 observe 与 read 都执行 post validation。聚焦共 31 项、0 失败。
+- Green（原受害组）：完整 `NoonmarkSyncTests` 运行 342 项、0 失败。
+- 待完成：第三轮修复 commit、`make check`、双轴终审、真实签名 App E2E、writer lease 与 release chain。完成并回填精确 commit 前，本案例保持「处理中」。
 
 ## 永久门禁
 
@@ -85,7 +93,7 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 
 ## 发行、风险、回滚、灰度与监控
 
-风险等级为 P：这是同步 repository 首次建立与跨设备 generation authority。build 37、38 与 39 全部在 push／出包前退役，不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`，当前闭环候选为全新的 build 40。
+风险等级为 P：这是同步 repository 首次建立与跨设备 generation authority。build 37、38、39 与 40 全部在 push／出包前退役，不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`。新 build 只可在第三轮修复 commit 确定并通过终审后分配。
 
 回滚为整体 revert 独立 sync 修复 commit 并退休受影响 candidate；不得取消 authority validation、恢复随机 fresh iCloud generation、增加 sleep／timeout、自动清理 staging、resolve file versions、读取 production 或修改任何既有 iCloud 对象。由于所有新增远端动作仍是 append-only exact publication，回滚不需要也不允许远端删除。
 

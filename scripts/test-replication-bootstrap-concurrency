@@ -6,4 +6,4 @@ cd "$repo_root"
 
 scripts/reset-dev-data audit
 swift test \
-  --filter 'ReplicationRepositoryBootstrapTests|ICloudReplicationRepositoryAuthorityTests|ContentAddressedFileReplicationEndpointTests.testICloudEndpointChecksMarkerAuthorityBeforeEveryRemoteOperation'
+  --filter 'ReplicationRepositoryBootstrapTests|ICloudReplicationRepositoryAuthorityTests|ContentAddressedFileReplicationEndpointTests.testICloudEndpoint'

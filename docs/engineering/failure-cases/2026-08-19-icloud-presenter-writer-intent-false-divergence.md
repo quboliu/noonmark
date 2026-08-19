@@ -1,12 +1,14 @@
-# FAIL-2026-08-19-04：iCloud presenter 写入意图误报 authority 分歧
+# FAIL-2026-08-19-04：iCloud presenter 事件误报 authority 分歧
 
 - 状态：处理中
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T00:00:00-04:00/2026-08-19T23:59:59-04:00
 - 影响版本／构建：未发行 `0.3.1 (40)` candidate；没有 push、打包或分发
-- 引入提交：`973ff77d1b223140f4a22fc3593f6dbd98772a7e`（`fix(sync): close iCloud authority observation gaps`）
+- 引入提交：`973ff77d1b223140f4a22fc3593f6dbd98772a7e`（`fix(sync): close iCloud authority observation gaps`，把 version gain／lose 无条件记为分歧）
+- 扩大提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`，把同一错误模型扩大至 `presentedItemDidChange` 与 writer relinquish）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
+- 首轮修复提交：`c2e1221bccdafe5e19709e1347d1d48b7392a24a`（`fix(sync): revalidate iCloud presenter evidence`，双轴 review 后仍需补 mixed-evidence 优先级与最终观察窗口门禁）
 - 修复提交：待回填
 
 ## 用户症状与影响
@@ -17,14 +19,16 @@
 
 ## 时间线
 
-- `973ff77` 为关闭 operation 中的 marker 变化窗口加入 `NSFilePresenter`，但把 `presentedItemDidChange`、version gain／lose 和 `relinquishPresentedItem(toWriter:)` 全部无条件折算成分歧。
+- `973ff77` 为关闭 operation 中的 marker 变化窗口加入 `NSFilePresenter`，但把 version gain／lose 无条件折算成分歧；`ce87b511` 随后把 `presentedItemDidChange` 与 `relinquishPresentedItem(toWriter:)` 纳入同一个无条件 Boolean。
 - readiness 修复 `124cb0037c22cc7e03c659c97db2d8a725f0caca` 后，完整 `make check`、签名 App E2E、旧随机 authority 零写入拒绝与一组 fresh deterministic App stress 均通过。
 - 第二组真实 multi-round symptom gate 建立 session `84fed39d-2a74-4abb-94ce-527657412215`；首轮 `00d76ffc-1657-4bd2-b4e5-6f9a2915566e` 回报 `divergentMarkerVersion`，第二轮 `86158ea3-15cf-4389-a614-43436b7ac202` 未启动。
 - 只读 probe 严格限制在失败 round：marker 为 canonical regular file，73 bytes，ubiquitous／uploaded 为 true，uploading／unresolved 为 false，无 upload error；current 与唯一 other version bytes 完全相同，non-local 与 unresolved version 数量均为零，marker generation 精确等于当前 repository scope 的 deterministic generation。
+- 现有 live 诊断只证明发生了假分歧，没有记录具体 callback kind；因此不能断言现场来自 gain／lose、`presentedItemDidChange` 或 writer relinquish 中的哪一种。归因只到上述可由 Git 证明的错误模型与扩大提交，不猜测单一触发事件。
 - 本机 Xcode 26.2 SDK header 证明 `presentedItemDidChange` 可以只表示 attributes 改变，`relinquishPresentedItem(toWriter:)` 只表示某个 writer 正在请求协调，并不证明 bytes 已改变。
 - 新增原生 Foundation 红用例在 marker bytes 前后完全相同时只触发 writer intent；旧实现稳定回报 `divergentMarkerVersion`。
 - 第一版修复尝试在 presenter reacquirer 内再次建立普通 `NSFileCoordinator` read，聚焦测试发生死锁。测试进程被终止且没有接触 production 或 iCloud；该方案被删除。
 - 当前实现改为在 presenter 回调中收集实际 marker／version bytes，并在同一个最终 coordinated read 内取得最后 snapshot 后注销 presenter、排空回调。相同 canonical bytes 只记为 revalidated equivalent；不同 bytes 或不可读仍 fail-closed。
+- `c2e1221` 双轴 review 发现两项阻断：一次 unavailable 会覆盖此前已经确定的 divergent bytes；原有 native change test 又在进入新 `finishObservation()` 前已经失败，不能证明最后 snapshot／注销窗口。修复把 accumulator 收口为单一单调 typed state，令 divergent 永远优先，并新增真实 observer 的 post-snapshot／pre-finish 改写及独立 finish-snapshot rejection 测试。
 
 ## 复现与证据
 
@@ -42,7 +46,7 @@ scripts/test-icloud-append-only-symptom
 - Apple metadata 已完成上传，且没有上传错误；
 - 应用仍回报 `divergentMarkerVersion`。
 
-最小 deterministic 红用例为 `ICloudReplicationRepositoryAuthorityTests.testNativePresenterDoesNotTreatWriterIntentAsDivergence`。它在真实临时文件上登记原生 presenter，以 `NSFileCoordinator` 发出不改 bytes 的 writer intent；旧实现因 `relinquishPresentedItem(toWriter:)` 无条件设置 `authorityChanged = true` 而判红。该用例直接固定用户门禁中的错误类型，不以 mock callback 或 build 成功代替症状。
+最小 deterministic 红用例为 `ICloudReplicationRepositoryAuthorityTests.testNativePresenterDoesNotTreatWriterIntentAsDivergence`。它在真实临时文件上登记原生 presenter，以 `NSFileCoordinator` 发出不改 bytes 的 writer intent；`ce87b511` 路径因 `relinquishPresentedItem(toWriter:)` 无条件设置 `authorityChanged = true` 而判红。该用例固定可证的最小错误机制；真实 multi-round gate仍负责覆盖现场症状，不能把此用例冒充具体 live callback kind 的证明。
 
 ## 排除的假设
 
@@ -55,14 +59,14 @@ scripts/test-icloud-append-only-symptom
 
 ## 根因与破坏机制
 
-`ICloudMarkerVersionPresenter` 把 Foundation 的“发生了需要重新观察的事件”错误建模成“authority bytes 已经改变”。旧实现对 `presentedItemDidChange`、`presentedItemDidGain`、`presentedItemDidLose` 和 writer relinquish 一律设置单一 Boolean；结束时只要该 Boolean 为 true 就抛出 `divergentMarkerVersion`。
+`ICloudMarkerVersionPresenter` 把 Foundation 的“发生了需要重新观察的事件”错误建模成“authority bytes 已经改变”。`973ff77` 先对 version gain／lose 设置单一 Boolean，`ce87b511` 再加入 `presentedItemDidChange` 与 writer relinquish；结束时只要该 Boolean 为 true 就抛出 `divergentMarkerVersion`。
 
 这个模型违背 Foundation 回调语义：attribute change、同 bytes version inventory 变化和 writer intent 都是合法事件。它们应触发重新验证，而不是直接成为分歧结论。真实 iCloud 的协调活动触发了该 Boolean，即使最终所有可见 marker bytes 完全相同，post-validation 仍被假阳性覆盖。
 
 ## 根因修复
 
 - 用 typed observation verdict 取代无信息量的 `authorityChanged` Boolean：`stable`、`revalidatedEquivalent`、`unavailable`、`divergent`。
-- presenter 回调读取实际 current／version bytes；只有与 expected canonical marker 不同的 bytes 才形成 `divergent`，读取失败形成 `unavailable`，相同 bytes 形成 `revalidatedEquivalent`。
+- presenter 回调读取实际 current／version bytes；只有与 expected canonical marker 不同的 bytes 才形成 `divergent`，读取失败形成 `unavailable`，相同 bytes 形成 `revalidatedEquivalent`。该 verdict 是单调状态：一旦取得 different bytes，后续 unavailable 不得把确定分歧降级成 waiting。
 - writer relinquish 先按 Foundation 契约放行 writer，只在写入完成后的 reacquirer 采样 current marker；单纯 writer intent 不再直接判定分歧。
 - finish 在同一个 coordinated read 内取得最终 local snapshot并注销 presenter，随后排空 presenter queue；这关闭了“最后 snapshot 已读、presenter 尚未移除”的竞态窗口。
 - operation 前后的完整 snapshot 继续校验 current、local versions 与 non-local versions。任何不同、非 canonical 或不可读 evidence 仍保持 terminal fail-closed；没有引入 sleep、timeout、fallback、兼容层或远端 rewrite。
@@ -71,14 +75,15 @@ scripts/test-icloud-append-only-symptom
 
 - Red（真实症状）：session `84fed39d-2a74-4abb-94ce-527657412215` 首轮回报 `divergentMarkerVersion`，只读 bytes／metadata probe 排除真实分歧。
 - Red（fast）：`testNativePresenterDoesNotTreatWriterIntentAsDivergence` 在旧实现稳定失败，且 marker bytes 前后相同。
-- Green（聚焦）：`ICloudReplicationRepositoryAuthorityTests` 共 27 项、0 失败；原生 no-op writer intent、真实 bytes 变化、相同 version evidence、不同 version evidence与 unavailable evidence 均已覆盖。
-- Green（扩大）：`NoonmarkSyncTests` 共 358 项、0 失败；`LocalFirstReplicationTests` 共 31 项、0 失败。
-- Green（fast 聚合）：`scripts/test-replication-bootstrap-concurrency` 共 51 项、0 失败；live reset sentinel、failure-case gate、lint 与 format 均返回 0。
+- Red（双轴 review）：mixed evidence 会把已知 divergence 降为 unavailable；原 native change test 没有进入新的 finish window。两项均阻断继续发行验证。
+- Green（聚焦）：`ICloudReplicationRepositoryAuthorityTests` 共 29 项、0 失败；原生 no-op writer intent、真实 bytes 变化、相同／不同／unavailable／mixed evidence、post-snapshot 最终观察窗口与 presenter 注册／注销平衡均已覆盖。
+- Green（扩大）：`NoonmarkSyncTests` 共 360 项、0 失败；`LocalFirstReplicationTests` 共 31 项、0 失败。
+- Green（fast 聚合）：`scripts/test-replication-bootstrap-concurrency` 共 53 项、0 失败；failure-case gate 与 format 均返回 0。
 - 待完成：双轴 review、完整 `make check`、签名 App E2E、全新真实 append-only iCloud multi-round symptom、最终 build 绑定、push、hosted CI 与私有 DMG。真实 multi-round 未转绿前，本案例保持「处理中」。
 
 ## 永久门禁
 
-- fast：`scripts/test-replication-bootstrap-concurrency` 运行真实 Foundation presenter 的 no-op writer intent 红转绿用例，并继续覆盖 bytes 真正改变、version 分歧、unavailable 与注册／注销平衡；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。
+- fast：`scripts/test-replication-bootstrap-concurrency` 运行真实 Foundation presenter 的 no-op writer intent 红转绿用例，并继续覆盖 bytes 真正改变、version 分歧、unavailable、mixed-evidence divergence 优先、post-snapshot 最终观察窗口与注册／注销平衡；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。
 - symptom：`scripts/test-icloud-append-only-symptom` 每次建立一个全新 session 与两个全新 round，要求两轮均通过真实 iCloud 收敛、重启零重复 apply，且后轮不得改变前轮 inventory／digest；由 `scripts/test-icloud-sync-live` 强制调用。旧失败对象永久保留，不清理。
 
 ## 发行、风险、回滚、灰度与监控

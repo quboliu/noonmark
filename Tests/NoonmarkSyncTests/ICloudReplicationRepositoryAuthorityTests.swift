@@ -499,20 +499,20 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         let equivalent = ICloudMarkerAuthorityEventAccumulator(
             expectedMarkerData: marker
         )
-        equivalent.recordCurrentData(marker)
-        equivalent.recordVersionData(marker)
+        equivalent.recordMarkerData(marker)
+        equivalent.recordMarkerData(marker)
         XCTAssertEqual(equivalent.verdict(), .revalidatedEquivalent)
 
         let divergentCurrent = ICloudMarkerAuthorityEventAccumulator(
             expectedMarkerData: marker
         )
-        divergentCurrent.recordCurrentData(divergent)
+        divergentCurrent.recordMarkerData(divergent)
         XCTAssertEqual(divergentCurrent.verdict(), .divergent)
 
         let divergentVersion = ICloudMarkerAuthorityEventAccumulator(
             expectedMarkerData: marker
         )
-        divergentVersion.recordVersionData(divergent)
+        divergentVersion.recordMarkerData(divergent)
         XCTAssertEqual(divergentVersion.verdict(), .divergent)
 
         let unavailable = ICloudMarkerAuthorityEventAccumulator(
@@ -520,6 +520,20 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         )
         unavailable.recordObservationUnavailable()
         XCTAssertEqual(unavailable.verdict(), .unavailable)
+
+        let divergentThenUnavailable = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        divergentThenUnavailable.recordMarkerData(divergent)
+        divergentThenUnavailable.recordObservationUnavailable()
+        XCTAssertEqual(divergentThenUnavailable.verdict(), .divergent)
+
+        let unavailableThenDivergent = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        unavailableThenDivergent.recordObservationUnavailable()
+        unavailableThenDivergent.recordMarkerData(divergent)
+        XCTAssertEqual(unavailableThenDivergent.verdict(), .divergent)
     }
 
     func testAuthorityGuardRejectsMarkerChangedDuringOperation()
@@ -563,6 +577,55 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
                     42
                 }
             XCTFail("a changed marker must fail closed")
+        } catch {
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+    }
+
+    func testAuthorityGuardRejectsMarkerChangedOnlyInFinishSnapshot()
+        async throws
+    {
+        let current = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let changed = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let session = ICloudMarkerAuthorityObservationSession(
+            initialSnapshot: ICloudMarkerVersionSnapshot(
+                current: current,
+                conflicts: []
+            ),
+            snapshot: {
+                ICloudMarkerVersionSnapshot(current: current, conflicts: [])
+            },
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: changed,
+                        conflicts: []
+                    ),
+                    verdict: .stable
+                )
+            }
+        )
+
+        do {
+            _ = try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    expected: try descriptor(from: current),
+                    observationSession: session
+                ) {
+                    42
+                }
+            XCTFail("the finish snapshot must close the final change window")
         } catch {
             XCTAssertEqual(
                 error as? ICloudReplicationRepositoryAuthorityError,
@@ -907,6 +970,54 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         }
         XCTAssertEqual(loader.invocationCount, 2)
         XCTAssertEqual(try Data(contentsOf: markerURL), replacement)
+        XCTAssertFalse(
+            NSFileCoordinator.filePresenters.contains {
+                $0.presentedItemURL?.standardizedFileURL == markerURL
+            }
+        )
+    }
+
+    func testNativeObserverFinalSnapshotClosesPostSnapshotWindow()
+        async throws
+    {
+        let root = makeRepositoryURL()
+        let opened = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: {
+                    UUID(
+                        uuidString: "97000000-0000-0000-0000-000000000001"
+                    )!
+                }
+            )
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        ).standardizedFileURL
+        let expectedMarkerData = try Data(contentsOf: markerURL)
+        let replacement = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let observer = ICloudMarkerAuthorityObserver(
+            markerURL: markerURL,
+            expectedMarkerData: expectedMarkerData,
+            nonlocalVersionLoader: { _, completion in
+                completion(.success([]))
+            }
+        )
+        let session = try await observer.beginObservation()
+        let postOperationSnapshot = try await session.snapshot()
+        XCTAssertEqual(postOperationSnapshot.current, expectedMarkerData)
+
+        try replacement.write(to: markerURL)
+        let finalObservation = try session.finish()
+
+        XCTAssertEqual(finalObservation.snapshot.current, replacement)
+        XCTAssertEqual(
+            opened.descriptor.generationID.uuidString,
+            "97000000-0000-0000-0000-000000000001"
+        )
         XCTAssertFalse(
             NSFileCoordinator.filePresenters.contains {
                 $0.presentedItemURL?.standardizedFileURL == markerURL

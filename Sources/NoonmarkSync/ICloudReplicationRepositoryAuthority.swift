@@ -441,46 +441,35 @@ private extension ICloudReplicationRepositoryAuthority {
 final class ICloudMarkerAuthorityEventAccumulator: @unchecked Sendable {
     private let stateLock = NSLock()
     private let expectedMarkerData: Data
-    private var observedCurrentData: [Data] = []
-    private var observedVersionData: [Data] = []
-    private var observationUnavailable = false
+    private var observedVerdict: ICloudMarkerAuthorityObservationVerdict =
+        .stable
 
     init(expectedMarkerData: Data) {
         self.expectedMarkerData = expectedMarkerData
     }
 
-    func recordCurrentData(_ data: Data) {
+    func recordMarkerData(_ data: Data) {
         stateLock.lock()
-        observedCurrentData.append(data)
-        stateLock.unlock()
-    }
-
-    func recordVersionData(_ data: Data) {
-        stateLock.lock()
-        observedVersionData.append(data)
+        if data != expectedMarkerData {
+            observedVerdict = .divergent
+        } else if observedVerdict == .stable {
+            observedVerdict = .revalidatedEquivalent
+        }
         stateLock.unlock()
     }
 
     func recordObservationUnavailable() {
         stateLock.lock()
-        observationUnavailable = true
+        if observedVerdict != .divergent {
+            observedVerdict = .unavailable
+        }
         stateLock.unlock()
     }
 
     func verdict() -> ICloudMarkerAuthorityObservationVerdict {
         stateLock.lock()
         defer { stateLock.unlock() }
-        if observationUnavailable {
-            return .unavailable
-        }
-        if (observedCurrentData + observedVersionData).contains(
-            where: { $0 != expectedMarkerData }
-        ) {
-            return .divergent
-        }
-        return observedCurrentData.isEmpty && observedVersionData.isEmpty
-            ? .stable
-            : .revalidatedEquivalent
+        return observedVerdict
     }
 }
 
@@ -539,7 +528,7 @@ private final class ICloudMarkerVersionPresenter:
             return
         }
         do {
-            events.recordCurrentData(
+            events.recordMarkerData(
                 try Data(
                     contentsOf: markerURL,
                     options: [.mappedIfSafe]
@@ -552,7 +541,7 @@ private final class ICloudMarkerVersionPresenter:
 
     private func record(version: NSFileVersion) {
         do {
-            events.recordVersionData(
+            events.recordMarkerData(
                 try Data(
                     contentsOf: version.url,
                     options: [.mappedIfSafe]
@@ -564,7 +553,7 @@ private final class ICloudMarkerVersionPresenter:
     }
 }
 
-private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
+final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
     private let markerURL: URL
     private let presenter: ICloudMarkerVersionPresenter
     private let nonlocalVersionLoader: ICloudMarkerNonlocalVersionLoader

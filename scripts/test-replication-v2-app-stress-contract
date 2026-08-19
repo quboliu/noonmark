@@ -216,6 +216,17 @@ require_literal \
 require_literal "$symptom_gate" \
   'temporary_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)"' \
   "replication V2 stress symptom gate does not canonicalize the macOS temporary root"
+for data_root in local authority icloud; do
+  require_literal "$symptom_gate" \
+    "${data_root}_data_root=\"\$gate_root/${data_root}\"" \
+    "replication V2 $data_root phase does not own an isolated diagnostic root"
+  require_literal "$symptom_gate" \
+    "${data_root}_database_path=\"\$${data_root}_data_root/Noonmark.sqlite\"" \
+    "replication V2 $data_root database does not derive from its isolated data root"
+done
+require_literal "$symptom_gate" \
+  '/bin/mkdir -m 700 "$local_data_root" "$authority_data_root" "$icloud_data_root"' \
+  "replication V2 stress does not create three isolated App data roots"
 require_literal "$symptom_gate" \
   'backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"' \
   "replication V2 stress gate must require a caller-selected backup without a repository path default"

@@ -1,6 +1,6 @@
 # FAIL-2026-08-19-04：iCloud presenter 事件误报 authority 分歧
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T00:00:00-04:00/2026-08-19T23:59:59-04:00
 - 影响版本／构建：未发行 `0.3.1 (40)` candidate；没有 push、打包或分发
@@ -9,7 +9,8 @@
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 首轮修复提交：`c2e1221bccdafe5e19709e1347d1d48b7392a24a`（`fix(sync): revalidate iCloud presenter evidence`，双轴 review 后仍需补 mixed-evidence 优先级与最终观察窗口门禁）
-- 修复提交：待回填
+- 修复提交：`2b5665ea5eeb952d79912dfeff507386eb74e296`（`fix(sync): preserve divergent presenter evidence`，令 different bytes 对 unavailable 保持单调优先）
+- 回归门禁提交：`a5321307a0e48a1dd9eaa9086a5832a59b082728`（`test(sync): lock final authority observation window`）与 `63c4e28af3b5062444ce3c9326b584958565f84e`（`test(sync): anchor final authority window contract`）
 
 ## 用户症状与影响
 
@@ -29,6 +30,8 @@
 - 第一版修复尝试在 presenter reacquirer 内再次建立普通 `NSFileCoordinator` read，聚焦测试发生死锁。测试进程被终止且没有接触 production 或 iCloud；该方案被删除。
 - 当前实现改为在 presenter 回调中收集实际 marker／version bytes，并在同一个最终 coordinated read 内取得最后 snapshot 后注销 presenter、排空回调。相同 canonical bytes 只记为 revalidated equivalent；不同 bytes 或不可读仍 fail-closed。
 - `c2e1221` 双轴 review 发现两项阻断：一次 unavailable 会覆盖此前已经确定的 divergent bytes；原有 native change test 又在进入新 `finishObservation()` 前已经失败，不能证明最后 snapshot／注销窗口。修复把 accumulator 收口为单一单调 typed state，令 divergent 永远优先，并新增真实 observer 的 post-snapshot／pre-finish 改写及独立 finish-snapshot rejection 测试。
+- `2b5665e` 完成单调 verdict 修复；`a532130` 与 `63c4e28` 把最终 snapshot／presenter removal 的同一 coordinated accessor 固定为运行测试与 source contract。最终双轴 review 没有剩余阻断项。
+- 2026-08-19 最终精确 source `63c4e28af3b5062444ce3c9326b584958565f84e` 的完整 `make check`、签名 App E2E 与 writer lease 全部返回 0；随后全新真实 iCloud App stress 与双 round symptom gate 均转绿。
 
 ## 复现与证据
 
@@ -79,7 +82,10 @@ scripts/test-icloud-append-only-symptom
 - Green（聚焦）：`ICloudReplicationRepositoryAuthorityTests` 共 29 项、0 失败；原生 no-op writer intent、真实 bytes 变化、相同／不同／unavailable／mixed evidence、post-snapshot 最终观察窗口与 presenter 注册／注销平衡均已覆盖。
 - Green（扩大）：`NoonmarkSyncTests` 共 360 项、0 失败；`LocalFirstReplicationTests` 共 31 项、0 失败。
 - Green（fast 聚合）：`scripts/test-replication-bootstrap-concurrency` 共 53 项、0 失败；failure-case gate 与 format 均返回 0。
-- 待完成：双轴 review、完整 `make check`、签名 App E2E、全新真实 append-only iCloud multi-round symptom、最终 build 绑定、push、hosted CI 与私有 DMG。真实 multi-round 未转绿前，本案例保持「处理中」。
+- Green（完整静态／本机）：最终精确 source 的 `make check` 返回 0；主测试组执行 1,637 项，2 项仅供显式 live 入口运行的 iCloud 测试按设计未在普通进程启用，0 失败。完整签名 App E2E 以 evidence run `prebind-20260819T201500Z-63c4e28` 返回 0，其中飞光提交后 Markdown 渲染、筛选、编辑、删除、重启与 SQLite probe 全部通过；同 run 的 writer-lease E2E 也返回 0。
+- Green（旧 authority 边界）：session `29cb9771-5a0a-4306-91fb-e777651e0852`／round `7a212cdc-b1fb-49ce-a6ce-5a473f9ef1d8` 只建立 1 个 exclusive-create 对象，并得到 `authority-rejected-zero-write`。
+- Green（签名 App real iCloud stress）：session `0bb00700-9bd3-4730-a018-6ca2594b52e1`／round `25203a8c-c190-4c24-aad1-35ba00115c0d` 完成 exercise、重启与第二份 SQLite 收敛，最终保留 54 个对象且没有 mutable head。
+- Green（原始 multi-round 症状）：session `299fd9c7-0cd7-4b3a-be27-03fe77911330` 的 rounds `d63f64c8-e453-46fd-b1f4-67fe8138db07`、`9c3065d2-3a70-480f-a45d-cea611a5dd40` 均收敛并在重启后零重复 apply；两轮各 18 个对象，`mutable_head_count=0`，没有再回报 `divergentMarkerVersion`。案例据此从真实症状红转绿并关闭。
 
 ## 永久门禁
 

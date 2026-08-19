@@ -1,6 +1,6 @@
 # FAIL-2026-08-19-03：Replication bootstrap 活跃 staging 误判与跨 Mac authority 分歧
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T10:56:53-04:00
 - 影响版本／构建：未发行 `0.3.1 (37)`、`(38)`、`(39)` 与 `(40)` candidate；四者都没有 push、打包或分发
@@ -14,6 +14,8 @@
 - 第五轮补漏提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`）与 `0ce661fa4e70edbf55a1365b5fd15141b101b646`（`fix(sync): harden authority release evidence`）
 - 第六轮补漏提交：`6c596cf`（`fix(sync): enforce live iCloud release evidence`）与 `6308032`（`test(sync): isolate authority diagnostic roots`）
 - 第七轮 readiness 修复提交：`124cb0037c22cc7e03c659c97db2d8a725f0caca`（`fix(sync): wait for iCloud authority readiness`）
+- 修复提交：`124cb0037c22cc7e03c659c97db2d8a725f0caca`（`fix(sync): wait for iCloud authority readiness`）
+- 最终共享 authority 回归 source：`63c4e28af3b5062444ce3c9326b584958565f84e`；其后的 presenter 假分歧独立修复与门禁见 `FAIL-2026-08-19-04`
 
 ## 用户症状与影响
 
@@ -124,7 +126,8 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - Red（fresh iCloud readiness）：fresh deterministic round 回报 `unavailableMarkerVersion`／`syncProtocol/444`；精确只读 probe 随后证明同一 marker 已上传且没有分歧版本，旧 runtime 把短暂 metadata readiness 错判为 `.runtimeFailure`。
 - Green（readiness 聚焦）：5 项新增测试固定 readiness 首次不可用时零 endpoint operation、pre-operation race 零远端 mutation、injected 与 native iCloud pre-operation unavailable 都映射 typed waiting，以及 post-validation unavailable 保持原终止性 authority error；5 项、0 失败。完整聚合与真实 iCloud symptom 尚待复跑。
 - Green（readiness 完整复验）：commit `124cb0037c22cc7e03c659c97db2d8a725f0caca` 的完整 `make check`、签名 App E2E 与 writer lease 均返回 0；旧随机 authority session `265276a5-891c-467e-a15b-8ee0ca1147c1`／round `bfe506d7-1a84-46b0-8f4a-bae1b91571fc` 以 1 个对象、`authority-rejected-zero-write` 转绿；fresh deterministic App stress session `cb07caee-44be-4de0-a17c-2580ec8000e5`／round `fafb50fb-7518-4340-b5ac-e91037d8ab04` 完成 exercise、重启与第二 SQLite 对账。
-- 后续 multi-round 门禁暴露的是 `973ff77` 引入的 presenter writer-intent 假分歧，已独立归档为 `FAIL-2026-08-19-04`；它不推翻本案例的 readiness 根因与上述真实症状绿证据。由于该独立修复仍会修改共享 authority 组件，本案例等待最终精确 source 的回归复验后再改为「已修复」。
+- 后续 multi-round 门禁暴露的是 `973ff77` 引入的 presenter writer-intent 假分歧，已独立归档为 `FAIL-2026-08-19-04`；它不推翻本案例的 readiness 根因与上述真实症状绿证据。
+- Green（最终精确 source 回归）：`63c4e28af3b5062444ce3c9326b584958565f84e` 的完整 `make check` 返回 0；签名 App E2E 与同一 evidence run 的 writer lease 均返回 0。旧随机 authority session `29cb9771-5a0a-4306-91fb-e777651e0852`／round `7a212cdc-b1fb-49ce-a6ce-5a473f9ef1d8` 仍以 1 个对象、`authority-rejected-zero-write` 转绿；fresh deterministic App stress session `0bb00700-9bd3-4730-a018-6ca2594b52e1`／round `25203a8c-c190-4c24-aad1-35ba00115c0d` 完成 exercise、重启与第二 SQLite 对账，最终保留 54 个对象。共享组件改动没有令 readiness 退化，本案例据此关闭。
 
 ## 永久门禁
 

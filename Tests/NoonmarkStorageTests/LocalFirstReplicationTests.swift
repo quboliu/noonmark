@@ -734,6 +734,82 @@ final class LocalFirstReplicationTests: XCTestCase {
         )
     }
 
+    func testEndpointReadinessWaitsWithoutRunningRemoteOperations()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("authority-readiness-wait")
+        try SQLiteEngineRepository(databaseURL: databaseURL)
+            .save(NoonmarkEngine().snapshot())
+        let endpoint = DeferredAuthorityEndpoint(
+            readiness: [.awaitingMaterialization, .ready]
+        )
+        let runtime = try LocalFirstReplication.openCleanCut(
+            databaseURL: databaseURL,
+            endpoint: endpoint,
+            generationID: generationID,
+            producerID: producerA,
+            publicationWatermarkStore: publicationWatermarkStore
+        )
+
+        let waiting = try await runtime.send(
+            .reconcile(now: now.addingTimeInterval(1))
+        )
+
+        XCTAssertEqual(waiting.worker, .idle)
+        XCTAssertEqual(waiting.convergence, .waitingForEndpoint)
+        XCTAssertNil(waiting.incident)
+        XCTAssertNil(waiting.lastSyncedAt)
+        let waitingOperationCount = await endpoint.operationCount()
+        XCTAssertEqual(waitingOperationCount, 0)
+
+        let converged = try await runtime.send(
+            .reconcile(now: now.addingTimeInterval(2))
+        )
+
+        XCTAssertEqual(converged.convergence, .converged)
+        XCTAssertNil(converged.incident)
+        let convergedOperationCount = await endpoint.operationCount()
+        XCTAssertGreaterThan(convergedOperationCount, 0)
+    }
+
+    func testEndpointAuthorityRaceWaitsInsteadOfBecomingRuntimeFailure()
+        async throws
+    {
+        let databaseURL = makeDatabaseURL("authority-operation-race")
+        try SQLiteEngineRepository(databaseURL: databaseURL)
+            .save(NoonmarkEngine().snapshot())
+        let endpoint = DeferredAuthorityEndpoint(
+            readiness: [.ready, .ready],
+            failFirstOperationBeforeMutation: true
+        )
+        let runtime = try LocalFirstReplication.openCleanCut(
+            databaseURL: databaseURL,
+            endpoint: endpoint,
+            generationID: generationID,
+            producerID: producerA,
+            publicationWatermarkStore: publicationWatermarkStore
+        )
+
+        let waiting = try await runtime.send(
+            .reconcile(now: now.addingTimeInterval(1))
+        )
+
+        XCTAssertEqual(waiting.worker, .idle)
+        XCTAssertEqual(waiting.convergence, .waitingForEndpoint)
+        XCTAssertNil(waiting.incident)
+        let waitingMutationCount = await endpoint.mutatingOperationCount()
+        XCTAssertEqual(waitingMutationCount, 0)
+
+        let converged = try await runtime.send(
+            .reconcile(now: now.addingTimeInterval(2))
+        )
+
+        XCTAssertEqual(converged.convergence, .converged)
+        XCTAssertNil(converged.incident)
+        let convergedMutationCount = await endpoint.mutatingOperationCount()
+        XCTAssertGreaterThan(convergedMutationCount, 0)
+    }
+
     func testProducerForkIsAnActionableIncidentRatherThanRuntimeFailure()
         async throws
     {
@@ -3005,6 +3081,81 @@ private actor AwaitingMaterializationEndpoint: ReplicationEndpoint {
             openedByteCount: 0,
             state: waiting ? .awaitingMaterialization : .stable
         )
+    }
+
+    func cancelAndJoin() async {}
+}
+
+private actor DeferredAuthorityEndpoint: ReplicationEndpoint {
+    nonisolated let namespace = "deferred-authority-test"
+
+    private var readiness: [ReplicationEndpointReadiness]
+    private var shouldFailBeforeMutation: Bool
+    private var operations = 0
+    private var mutatingOperations = 0
+
+    init(
+        readiness: [ReplicationEndpointReadiness],
+        failFirstOperationBeforeMutation: Bool = false
+    ) {
+        self.readiness = readiness
+        shouldFailBeforeMutation = failFirstOperationBeforeMutation
+    }
+
+    func prepareForReconciliation() async throws
+        -> ReplicationEndpointReadiness
+    {
+        guard readiness.isEmpty == false else { return .ready }
+        return readiness.removeFirst()
+    }
+
+    func publish(
+        sealed publication: SealedReplicationPublication
+    ) async throws -> ReplicationPublicationReceipt {
+        operations += 1
+        if shouldFailBeforeMutation {
+            shouldFailBeforeMutation = false
+            throw ReplicationEndpointReadinessError.awaitingMaterialization
+        }
+        mutatingOperations += 1
+        return ReplicationPublicationReceipt(
+            reference: publication.reference,
+            objects: publication.objects.map(\.reference)
+        )
+    }
+
+    func observe(
+        pending receipts: [ReplicationPublicationReceipt]
+    ) async throws -> [ReplicationPublicationObservation] {
+        operations += 1
+        return receipts.map {
+            ReplicationPublicationObservation(
+                reference: $0.reference,
+                state: .confirmed
+            )
+        }
+    }
+
+    func read(
+        after cursor: ReplicationReadCursor,
+        budget _: ReplicationReadBudget
+    ) async throws -> ReplicationReadPage {
+        operations += 1
+        return ReplicationReadPage(
+            publications: [],
+            cursor: cursor,
+            hasMore: false,
+            openedByteCount: 0,
+            state: .stable
+        )
+    }
+
+    func operationCount() -> Int {
+        operations
+    }
+
+    func mutatingOperationCount() -> Int {
+        mutatingOperations
     }
 
     func cancelAndJoin() async {}

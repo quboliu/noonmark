@@ -699,6 +699,14 @@ private extension LocalFirstReplication {
         do {
             try Task.checkCancellation()
             try assertActiveGeneration(generation)
+            let readiness = try await endpoint.prepareForReconciliation()
+            try assertActiveGeneration(generation)
+            guard readiness == .ready else {
+                return try transitionToEndpointWaiting(
+                    now: now,
+                    generation: generation
+                )
+            }
             try recoverPublicationWatermarkMismatch(now: now)
             try assertActiveGeneration(generation)
             try sealUnsealedJournal(now: now)
@@ -792,6 +800,11 @@ private extension LocalFirstReplication {
                 install(stateWith(worker: .idle))
             }
             throw CancellationError()
+        } catch ReplicationEndpointReadinessError.awaitingMaterialization {
+            return try transitionToEndpointWaiting(
+                now: now,
+                generation: generation
+            )
         } catch {
             let failed = LocalFirstReplicationState(
                 worker: .idle,
@@ -808,6 +821,31 @@ private extension LocalFirstReplication {
             install(failed)
             throw error
         }
+    }
+
+    func transitionToEndpointWaiting(
+        now: Date,
+        generation: UInt64
+    ) throws -> LocalFirstReplicationState {
+        try assertActiveGeneration(generation)
+        let waiting = LocalFirstReplicationState(
+            worker: .idle,
+            convergence: .waitingForEndpoint,
+            incident: nil,
+            pendingLocalPublicationCount: try ledger
+                .pendingLocalPublications(
+                    generationID: generationID,
+                    producerID: producerID
+                ).count,
+            confirmedLocalPublicationCount: 0,
+            appliedRemotePublicationCount: 0,
+            waitingRecordCount: try syncRepository.pendingDownloads().count,
+            lastSyncedAt: state.lastSyncedAt,
+            lastEffectiveSyncedAt: state.lastEffectiveSyncedAt
+        )
+        try persist(waiting, at: now)
+        install(waiting)
+        return waiting
     }
 
     func resolveForkConflicts(

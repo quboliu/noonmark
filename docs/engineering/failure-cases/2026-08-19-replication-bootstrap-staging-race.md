@@ -11,7 +11,9 @@
 - 第二轮修复提交：`ab9bf607334be0f76ccb924777fa91c16188f3e1`（`fix(sync): converge iCloud repository bootstrap authority`，终审后证实仍不完整）
 - 第三轮修复提交：`973ff77b3e7e08d223e7418c0478af9139ec5950`（`fix(sync): close iCloud authority observation gaps`）
 - 第四轮修复提交：`5cd07d248e2c1a5e067d0645334b362fce561e18`（`fix(sync): finish authority validation on every path`）
-- 第五轮补漏提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`）与 `0ce661fa4e70edbf55a1365b5fd15141b101b646`（`fix(sync): harden authority release evidence`）；最终诊断／reset sentinel 补漏提交待确定
+- 第五轮补漏提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`）与 `0ce661fa4e70edbf55a1365b5fd15141b101b646`（`fix(sync): harden authority release evidence`）
+- 第六轮补漏提交：`6c596cf`（`fix(sync): enforce live iCloud release evidence`）与 `6308032`（`test(sync): isolate authority diagnostic roots`）
+- 第七轮 readiness 修复提交：待确定
 
 ## 用户症状与影响
 
@@ -39,6 +41,8 @@
 - `ce87b51` 后的双轴终审继续发现四项证据缺口：non-local API 已被移出 coordinated read accessor；真实 iCloud runner 间接调用会执行 `reset-dev-data audit` 的 fast gate；诊断 recorder 不可用时以全零计数放行；App 只断言 authority error 类型，瞬时 unavailable 也会假绿为旧随机 authority 已正确拒绝。
 - `0ce661f` 后的双轴终审否定最后两个门禁假设：Store 正确拒绝 authority 时会建立并失败一条 `.localFirstSync` diagnostic capsule，要求零失败会把正确实现判红；依赖 `sed` 解析 shell 调用图无法覆盖 `bash scripts/...`、`./scripts/...` 或 `env ... scripts/...`，不能证明任一间接 reset 都被阻断。
 - `6c596cf` 后的双轴终审再证明测试的三个 SQLite 文件虽然名称不同，却共用同一父目录与 `Diagnostics`；先运行的 Local Folder 成功 capsule 会污染 authority snapshot，使正确实现无法满足零成功／一失败。文件名隔离不等于 App data-root 隔离。
+- 完整 `make check`、签名 `e2e` App 与 writer lease 转绿后，首次获准执行真实 append-only iCloud 验证。旧随机 authority round `2d823503-68d9-4bd9-82b2-c07fe6788285/78b9ce7c-04bd-4e4d-8fa9-46932d27d195` 只建立 1 个 exclusive-create marker，并以 `authority-rejected-zero-write`、`syncProtocol/443` 转绿。随后 fresh deterministic round `e59813c1-ab2b-406a-85ec-3a7ec5f846ab/5ab70329-4d78-447f-9c96-f7d8feef372a` 在 exercise 阶段回报 `unavailableMarkerVersion`、`syncProtocol/444`；因此 restart 与第二份 SQLite 收敛没有运行，发行继续阻断。
+- 对上述失败 round 的精确只读 probe 只检查本轮新路径：marker 已是 ubiquitous、uploading false、uploaded true、无 upload error、current version 可见、无 other／conflict version，non-local inventory 随后也成功返回零版本；结构计数为 21 个 descendants。没有读取 payload，也没有删除、覆盖、移动、改名或清理对象。这项运行证据把“永久 marker corruption”排除，并证明 Apple metadata publication 存在短暂 readiness window。
 
 ## 复现与定位证据
 
@@ -64,6 +68,7 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - 最新终审门禁在修复前分别稳定判红：exact authority verdict 没有可用的 privacy-safe raw code；App stress 仍直接调用 resetting fast gate；append-only guard 沿调用图发现 `scripts/test-replication-bootstrap-concurrency -> scripts/reset-dev-data`；bootstrap contract 证明 non-local loader 只在 coordinated accessor 返回后才启动。
 - 诊断／reset 第二轮 Red 进一步固定两项事实：authority error 没有 stable `DiagnosticFailureProviding` code，App contract 找不到“一条失败 capsule”的断言；`reset-dev-data` 不认识 inherited live sentinel，append-only guard 与 direct／bash／relative／env-wrapper mutation gate 全部稳定判红，且测试只传入不可 reset 的 production profile，没有触碰任何资料。
 - data-root isolation contract 在旧 runner 上稳定判红：local、authority 与 iCloud database 都直接位于同一个 `$gate_root`，无法各自拥有独立 `Diagnostics`。
+- fresh deterministic round 的运行红证据否定“本机 marker 可读就代表完整 version inventory 已经可供 remote operation 使用”的假设；初始化时 local preflight 成功，首轮 reconcile 仍可在 non-local inventory 暂不可用时抛出 `unavailableMarkerVersion`。现有 runtime 把所有 endpoint throw 一律写成 `.blocked/.runtimeFailure`，错误地把可重试的操作前 readiness 当成永久事故。
 
 ## 排除的假设
 
@@ -90,6 +95,8 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - 没有 final marker但只有 marker staging时，只有没有历史随机 authority 的 fresh deterministic bootstrap 可以用完整 exact canonical bytes 补齐同一 final key；可读的部分、空、超长、分歧、非 canonical 名称或未知 subtree 全部按 corruption／legacy 边界 fail-closed。
 - 初始化完成 bootstrap 后，在同一次 coordinated read 内复核 current 与所有 locally available versions，确保 App 尚未进入 clean-cut 本机持久化前即可阻断已可见分歧；这层 preflight 不冒充 non-local 全量观察。
 - 每次 publish、非空 observe 与 read 前，在 coordinated read 内注册 marker `NSFilePresenter`、读取 current 与 local versions 并调用 `getNonlocalVersionsOfItem`；presenter 监听 bytes change 与 version gain／lose，持续覆盖实际 operation，即使 operation 失败也再做 post snapshot，并在 coordinated read 内注销后排空回调。current、版本 inventory 或任一 bytes 变化、非 canonical、不可读都 fail-closed，不 resolve、不删除。完整 authority window 固定由每次 remote operation 承担。
+- `ReplicationEndpoint` 以显式 readiness 结果表达 operation 前的 materialization 状态。`LocalFirstReplication` 必须在 recovery、journal sealing 与任何 endpoint operation 前读取 readiness；`.awaitingMaterialization` 只落盘为无 incident 的 `.waitingForEndpoint`，由既有同步调度再次尝试，不新增 sleep、timeout 或旁路。
+- readiness 与实际 operation 之间仍可能发生状态变化，因此 iCloud adapter 在每次 operation 的 authority lease 建立阶段，把 `unavailableMarkerVersion` 精确转换为 `ReplicationEndpointReadinessError.awaitingMaterialization`；runtime 同样回到 waiting。只有 lease 尚未取得、operation 尚未开始的 unavailable 可以这样转换。operation 已经开始后的 final snapshot／presenter 注销 unavailable、marker bytes 或 inventory 分歧仍保留原 authority error，并由 App 记为终止性 incident。
 - 每次 snapshot 在第一次 coordinated read accessor 内登记 presenter、读取 current／local versions并启动 non-local loader；accessor 返回后等待异步 callback，再执行第二次 coordinated current／local-version 读取并对账。presenter 在放行 coordinated writer 前同步记录 authority change。初始 snapshot 任一 bytes 变化都会在 operation 前失败，不能拖到 post validation 才发现；coordinated URL 不得带出 accessor 后再调用 Foundation version API。
 - 所有真实 iCloud entrypoint 在任何下游命令前 export `NOONMARK_LIVE_ICLOUD_SYNC=1`；`reset-dev-data` 自身必须在载入 profile helper 前检查 inherited sentinel 并 fail-closed。独立 fast mutation gate 以 direct、bash、relative 与 env-wrapper 四种形式证明间接调用同样在任何副作用前拒绝，不再把不完整的 shell 语法解析冒充完整调用图。
 - 真实签名 App symptom gate 先运行不会 reset 的 append-only 静态门禁与完整 Local Folder App 前置门禁，再在独立全新 iCloud session／round 以 exclusive-create 写入一份 canonical 旧随机 final marker；Store 必须回报 exact `divergentMarkerVersion`，并取得恰好一条 `.localFirstSync` failed capsule，其 privacy-safe failure 固定为 `syncProtocol/443`；不得建立 runtime、clean-cut authority、outbox、同步时间或新增远端对象。随后才运行正常 deterministic authority 的 iCloud 收敛路径。
@@ -113,11 +120,14 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - Green（诊断／reset 补漏）：authority errors 已映射到固定 `syncProtocol/441...445`，divergent 为 `443`；App／shell 共同要求零成功、恰好一条 `syncProtocol/443` 失败 capsule。真实 iCloud 四个入口在开头 export live sentinel，reset 自身在 bootstrap 前拒绝；direct、bash、relative 与 env-wrapper mutation gate、append-only guard、App stress contract 及 failure-case gate 全部返回 0。fast authority 聚合共 41 项、0 失败，完整 `NoonmarkSyncTests` 共 352 项、0 失败；`make format-check` 与 `make lint` 返回 0。`make check` 与真实签名 App／iCloud symptom 尚待执行。
 - Red（`6c596cf` 终审）：三个 database URL 的父目录相同，源码对账证明 authority snapshot 必然包含 Local Folder 成功 capsule；新增 data-root isolation contract 在旧 runner 稳定判红。
 - Green（data-root 隔离补漏）：runner 现在建立 `local`、`authority`、`icloud` 三个 mode 级 0700 data-root，各自承载 SQLite、Diagnostics、sidecar 与 lease；App stress contract、append-only guard 与 shell syntax 返回 0。完整回归与真实签名 App／iCloud symptom 尚待执行。
-- 待完成：终审补漏 commit、`make check`、再次双轴终审、真实签名 App／append-only iCloud symptom gate、writer lease 与 release chain。完成并回填精确 commit 前，本案例保持「处理中」。
+- Green（首轮发行前验证）：完整 `make check` 共 1,627 项、0 失败；签名 App 的飞光 Markdown 用户路径与 writer lease 全部通过。旧随机 authority 的真实 append-only round 以 1 个对象和 `authority-rejected-zero-write` 转绿。
+- Red（fresh iCloud readiness）：fresh deterministic round 回报 `unavailableMarkerVersion`／`syncProtocol/444`；精确只读 probe 随后证明同一 marker 已上传且没有分歧版本，旧 runtime 把短暂 metadata readiness 错判为 `.runtimeFailure`。
+- Green（readiness 聚焦）：5 项新增测试固定 readiness 首次不可用时零 endpoint operation、pre-operation race 零远端 mutation、injected 与 native iCloud pre-operation unavailable 都映射 typed waiting，以及 post-validation unavailable 保持原终止性 authority error；5 项、0 失败。完整聚合与真实 iCloud symptom 尚待复跑。
+- 待完成：readiness 修复 commit、完整聚合、真实签名 App／append-only iCloud symptom gate、最终 build 绑定、push、hosted CI 与私有 DMG release chain。完成并回填精确 commit 前，本案例保持「处理中」。
 
 ## 永久门禁
 
-- fast：`scripts/test-replication-bootstrap-concurrency` 在真实临时 filesystem 运行 bootstrap、iCloud authority、stable diagnostic code 与 endpoint preflight 测试，固定同机 lock handshake、独立 mirror deterministic marker、远端 staging 三态、本机／non-local version 分歧与零写入 fail-closed，并静态固定 non-local API 在 coordinated accessor 内启动；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。`scripts/test-live-icloud-reset-sentinel` 独立执行 direct／indirect reset refusal，并由 `scripts/check` 直接调用。
+- fast：`scripts/test-replication-bootstrap-concurrency` 在真实临时 filesystem 运行 bootstrap、iCloud authority、stable diagnostic code、endpoint preflight 与 runtime readiness 测试，固定同机 lock handshake、独立 mirror deterministic marker、远端 staging 三态、本机／non-local version 分歧与零写入 fail-closed；同时固定 pre-operation unavailable 只能进入无 incident waiting、post-validation unavailable 必须保持终止，并静态固定 non-local API 在 coordinated accessor 内启动；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。`scripts/test-live-icloud-reset-sentinel` 独立执行 direct／indirect reset refusal，并由 `scripts/check` 直接调用。
 - symptom：`scripts/test-replication-v2-app-stress` 以 mode 级独立 App data-root 运行真实签名隔离 App，先在全新 append-only iCloud round 建立一份旧随机 final marker，并证明 Store exact `divergentMarkerVersion` rejection 前后只有该 marker、恰好一条 `syncProtocol/443` 失败诊断、runtime／clean-cut／outbox／同步时间均未建立；随后在另一全新 round 完成 deterministic bootstrap、remote operations、重启及第二份 SQLite 收敛。所有真实 iCloud 入口继承 live sentinel，reset 自身负责 fail-closed；该入口由 `scripts/test-replication-v2-real-validation` 强制调用，普通 unit process 只作为受害组回归，不再冒充 symptom gate。
 - 真实双 Mac：只有 append-only 静态门禁与本机症状门禁先通过后，才可按专用 session／round 在两台实体 Mac 执行；对象永久保留，不清理，不把本机 mirror 测试冒充跨设备结论。
 

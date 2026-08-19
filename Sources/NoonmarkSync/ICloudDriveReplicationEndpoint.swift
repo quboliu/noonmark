@@ -361,6 +361,20 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         namespace = "icloud-" + files.namespace
     }
 
+    public func prepareForReconciliation() async throws
+        -> ReplicationEndpointReadiness
+    {
+        try validateBoundary()
+        do {
+            try await validateRepositoryAuthorityReadiness()
+            return .ready
+        } catch ICloudReplicationRepositoryAuthorityError
+            .unavailableMarkerVersion
+        {
+            return .awaitingMaterialization
+        }
+    }
+
     public func publish(
         sealed publication: SealedReplicationPublication
     ) async throws -> ReplicationPublicationReceipt {
@@ -456,20 +470,59 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 }
 
 private extension ICloudDriveReplicationEndpoint {
+    var repositoryAuthorityMarkerURL: URL {
+        rootURL.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        )
+    }
+
+    func validateRepositoryAuthorityReadiness() async throws {
+        if let repositoryAuthorityDescriptor {
+            try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    at: repositoryAuthorityMarkerURL,
+                    expected: repositoryAuthorityDescriptor,
+                    operation: {}
+                )
+            return
+        }
+        try await repositoryAuthorityValidation()
+        try await repositoryAuthorityPostValidation()
+    }
+
     func withRepositoryAuthority<Result: Sendable>(
         _ operation: () async throws -> Result
     ) async throws -> Result {
         if let repositoryAuthorityDescriptor {
+            let lease: ICloudMarkerAuthorityValidationLease
+            do {
+                lease = try await ICloudReplicationRepositoryAuthority
+                    .beginValidatedMarkerAuthority(
+                        at: repositoryAuthorityMarkerURL,
+                        expected: repositoryAuthorityDescriptor
+                    )
+            } catch ICloudReplicationRepositoryAuthorityError
+                .unavailableMarkerVersion
+            {
+                throw ReplicationEndpointReadinessError
+                    .awaitingMaterialization
+            }
             return try await ICloudReplicationRepositoryAuthority
-                .withValidatedMarkerAuthority(
-                    at: rootURL.appendingPathComponent(
-                        FileReplicationRepositoryBootstrap.markerFilename
-                    ),
-                    expected: repositoryAuthorityDescriptor,
-                    operation: operation
+                .executeRequiringPostValidation(
+                    operation: operation,
+                    postValidation: {
+                        try await ICloudReplicationRepositoryAuthority
+                            .finishValidatedMarkerAuthority(lease)
+                    }
                 )
         }
-        try await repositoryAuthorityValidation()
+        do {
+            try await repositoryAuthorityValidation()
+        } catch ICloudReplicationRepositoryAuthorityError
+            .unavailableMarkerVersion
+        {
+            throw ReplicationEndpointReadinessError.awaitingMaterialization
+        }
         return try await ICloudReplicationRepositoryAuthority
             .executeRequiringPostValidation(
                 operation: operation,

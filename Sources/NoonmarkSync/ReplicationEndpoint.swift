@@ -486,6 +486,15 @@ public enum ReplicationReadState: Equatable, Sendable {
     case blockedProducerFork(ReplicationForkEvidence)
 }
 
+public enum ReplicationEndpointReadiness: Equatable, Sendable {
+    case ready
+    case awaitingMaterialization
+}
+
+public enum ReplicationEndpointReadinessError: Error, Equatable, Sendable {
+    case awaitingMaterialization
+}
+
 public struct ReplicationReadPage: Equatable, Sendable {
     public let publications: [ReceivedReplicationPublication]
     public let resolutionBaselines: [ReceivedReplicationPublication]
@@ -514,6 +523,9 @@ public struct ReplicationReadPage: Equatable, Sendable {
 public protocol ReplicationEndpoint: Sendable {
     var namespace: String { get }
 
+    func prepareForReconciliation() async throws
+        -> ReplicationEndpointReadiness
+
     func publish(
         sealed publication: SealedReplicationPublication
     ) async throws -> ReplicationPublicationReceipt
@@ -528,6 +540,14 @@ public protocol ReplicationEndpoint: Sendable {
     ) async throws -> ReplicationReadPage
 
     func cancelAndJoin() async
+}
+
+public extension ReplicationEndpoint {
+    func prepareForReconciliation() async throws
+        -> ReplicationEndpointReadiness
+    {
+        .ready
+    }
 }
 
 public struct ReplicationPublicationBuilder: Sendable {

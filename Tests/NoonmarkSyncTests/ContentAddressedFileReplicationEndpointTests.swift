@@ -173,6 +173,113 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
         }
     }
 
+    func testICloudEndpointReportsUnavailablePreOperationAuthorityAsWaiting()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let publication = try publication(sequence: 1)
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            repositoryAuthorityValidation: {
+                throw ICloudReplicationRepositoryAuthorityError
+                    .unavailableMarkerVersion
+            },
+            downloadRequest: { _ in }
+        )
+
+        let readiness = try await endpoint.prepareForReconciliation()
+        XCTAssertEqual(readiness, .awaitingMaterialization)
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.publish(sealed: publication)
+        }) { error in
+            XCTAssertEqual(
+                error as? ReplicationEndpointReadinessError,
+                .awaitingMaterialization
+            )
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rootURL.path))
+    }
+
+    func testICloudRoundEndpointWaitsForNativeVersionInventoryBeforePublication()
+        async throws
+    {
+        let cloudRoot = makeRepositoryURL()
+        try FileManager.default.createDirectory(
+            at: cloudRoot,
+            withIntermediateDirectories: true
+        )
+        let session = try ICloudAppendOnlyTestNamespace.beginSession(
+            cloudDocumentsRoot: cloudRoot,
+            sessionID: UUID()
+        )
+        let round = try ICloudAppendOnlyTestNamespace.createRound(
+            in: session,
+            roundID: UUID()
+        )
+        let endpoint = try ICloudDriveReplicationEndpoint(round: round)
+        let publication = try ReplicationPublicationBuilder().seal(
+            records: [try preferenceRecord(index: 1)],
+            generationID: endpoint.generationID,
+            producerID: producerID,
+            sequence: 1,
+            previousSealDigest: nil
+        )
+
+        let readiness = try await endpoint.prepareForReconciliation()
+
+        XCTAssertEqual(readiness, .awaitingMaterialization)
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.publish(sealed: publication)
+        }) { error in
+            XCTAssertEqual(
+                error as? ReplicationEndpointReadinessError,
+                .awaitingMaterialization
+            )
+        }
+        for relativeDirectory in [
+            "v2/announcements",
+            "v2/chunks",
+            "v2/roots",
+            "v2/seals",
+        ] {
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: round.rootURL.appendingPathComponent(
+                        relativeDirectory
+                    ).path
+                )
+            )
+        }
+    }
+
+    func testICloudEndpointKeepsUnavailablePostValidationTerminal()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let publication = try publication(sequence: 1)
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            repositoryAuthorityPostValidation: {
+                throw ICloudReplicationRepositoryAuthorityError
+                    .unavailableMarkerVersion
+            },
+            downloadRequest: { _ in }
+        )
+
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.publish(sealed: publication)
+        }) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .unavailableMarkerVersion
+            )
+            XCTAssertNil(error as? ReplicationEndpointReadinessError)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rootURL.path))
+    }
+
     func testICloudEndpointCompletesPostAuthorityValidationAfterEveryOperation()
         async throws
     {

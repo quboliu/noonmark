@@ -239,14 +239,24 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
     private let boundary: Boundary
     private let files: ContentAddressedFileReplicationEndpoint
     private let downloadRequest: (URL) throws -> Void
+    private let repositoryAuthorityValidation: @Sendable () async throws
+        -> Void
 
     public init(
         round: ICloudAppendOnlyTestRound,
-        generationID: @Sendable () -> UUID = UUID.init
+        preferredGenerationID: UUID? = nil
     ) throws {
+        let repositoryScope = ICloudAppendOnlyTestNamespace.relativeRoot
+            + "/" + round.sessionID.uuidString.lowercased()
+            + "/" + round.roundID.uuidString.lowercased()
+        let proposedGenerationID = try ICloudReplicationRepositoryAuthority
+            .generationID(
+                for: repositoryScope,
+                preferred: preferredGenerationID
+            )
         let result = try FileReplicationRepositoryBootstrap.openOrCreateWithStatus(
             at: round.rootURL,
-            generationID: generationID
+            generationID: { proposedGenerationID }
         )
         self.round = round
         rootURL = round.rootURL
@@ -266,21 +276,38 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         downloadRequest = {
             try FileManager.default.startDownloadingUbiquitousItem(at: $0)
         }
+        repositoryAuthorityValidation = Self.authorityValidation(
+            rootURL: round.rootURL,
+            descriptor: result.descriptor
+        )
         namespace = "icloud-append-only-" + round.sessionID.uuidString
             .lowercased() + "-" + round.roundID.uuidString.lowercased()
+        try ICloudReplicationRepositoryAuthority
+            .validateLocallyAvailableMarkerVersions(
+                at: round.rootURL.appendingPathComponent(
+                    FileReplicationRepositoryBootstrap.markerFilename
+                ),
+                expected: result.descriptor
+            )
     }
 
     public init(
         repositoryName: String,
-        generationID: @Sendable () -> UUID = UUID.init
+        preferredGenerationID: UUID? = nil
     ) throws {
         let resolvedRoot = try ICloudDriveRepositoryLocator.defaultRootURL(
             repositoryName: repositoryName
         )
-        let result = try FileReplicationRepositoryBootstrap.openOrCreateWithStatus(
-            at: resolvedRoot,
-            generationID: generationID
-        )
+        let proposedGenerationID = try ICloudReplicationRepositoryAuthority
+            .generationID(
+                for: repositoryName,
+                preferred: preferredGenerationID
+            )
+        let result = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: resolvedRoot,
+                generationID: { proposedGenerationID }
+            )
         round = nil
         rootURL = resolvedRoot
         self.generationID = result.descriptor.generationID
@@ -295,7 +322,18 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         downloadRequest = {
             try FileManager.default.startDownloadingUbiquitousItem(at: $0)
         }
+        repositoryAuthorityValidation = Self.authorityValidation(
+            rootURL: resolvedRoot,
+            descriptor: result.descriptor
+        )
         namespace = "icloud-" + files.namespace
+        try ICloudReplicationRepositoryAuthority
+            .validateLocallyAvailableMarkerVersions(
+                at: resolvedRoot.appendingPathComponent(
+                    FileReplicationRepositoryBootstrap.markerFilename
+                ),
+                expected: result.descriptor
+            )
     }
 
     init(
@@ -305,6 +343,8 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         fileDataReader: @escaping @Sendable (URL) throws -> Data = {
             try Data(contentsOf: $0)
         },
+        repositoryAuthorityValidation: @escaping @Sendable () async throws
+            -> Void = {},
         downloadRequest: @escaping (URL) throws -> Void
     ) {
         round = nil
@@ -319,6 +359,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
             fileDataReader: fileDataReader
         )
         self.downloadRequest = downloadRequest
+        self.repositoryAuthorityValidation = repositoryAuthorityValidation
         namespace = "icloud-" + files.namespace
     }
 
@@ -326,6 +367,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         sealed publication: SealedReplicationPublication
     ) async throws -> ReplicationPublicationReceipt {
         try validateBoundary()
+        try await repositoryAuthorityValidation()
         return try await files.publish(sealed: publication)
     }
 
@@ -334,6 +376,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
     ) async throws -> [ReplicationPublicationObservation] {
         guard receipts.isEmpty == false else { return [] }
         try validateBoundary()
+        try await repositoryAuthorityValidation()
         return try receipts.map { receipt in
             let states = try receipt.objects.map { object in
                 ICloudReplicationEvidenceClassifier.classify(
@@ -352,6 +395,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         budget: ReplicationReadBudget
     ) async throws -> ReplicationReadPage {
         try validateBoundary()
+        try await repositoryAuthorityValidation()
         var isAwaitingMaterialization = false
         for url in try regularJSONFilesInBoundary() {
             if try requestDownloadIfNeeded(at: url) == false {
@@ -409,6 +453,22 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 }
 
 private extension ICloudDriveReplicationEndpoint {
+    nonisolated static func authorityValidation(
+        rootURL: URL,
+        descriptor: ReplicationRepositoryDescriptor
+    ) -> @Sendable () async throws -> Void {
+        let markerURL = rootURL.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        )
+        return {
+            try await ICloudReplicationRepositoryAuthority
+                .validateMarkerVersions(
+                    at: markerURL,
+                    expected: descriptor
+                )
+        }
+    }
+
     func validateBoundary() throws {
         let expected = boundary.rootURL.standardizedFileURL.path
         guard expected != "/",

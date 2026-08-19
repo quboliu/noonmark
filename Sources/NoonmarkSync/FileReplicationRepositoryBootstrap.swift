@@ -10,6 +10,7 @@ public enum ReplicationRepositoryBootstrapError:
     case invalidBoundary
     case invalidMarker
     case cannotCreateMarker
+    case markerPublicationInProgress
 }
 
 public struct ReplicationRepositoryDescriptor:
@@ -72,11 +73,15 @@ public enum FileReplicationRepositoryBootstrap {
         at rootURL: URL,
         fileManager: FileManager = .default,
         generationID: @Sendable () -> UUID = UUID.init,
-        markerWriteByteLimitForTesting: Int?
+        markerWriteByteLimitForTesting: Int?,
+        bootstrapLockAttemptForTesting: (@Sendable () -> Void)? = nil
     ) throws -> ReplicationRepositoryOpenResult {
         let root = rootURL.standardizedFileURL
         try prepareRoot(root, fileManager: fileManager)
-        return try withExclusiveBootstrapLock(at: root) {
+        return try withExclusiveBootstrapLock(
+            at: root,
+            onLockAttempt: bootstrapLockAttemptForTesting
+        ) {
             try openOrCreateLocked(
                 at: root,
                 fileManager: fileManager,
@@ -113,16 +118,24 @@ private extension FileReplicationRepositoryBootstrap {
                 createdRepository: false
             )
         }
-        guard children.isEmpty else {
-            throw ReplicationRepositoryBootstrapError
-                .legacyRepositoryRequiresManualReset
-        }
-
         let descriptor = ReplicationRepositoryDescriptor(
             formatVersion: formatVersion,
             generationID: generationID()
         )
         let data = try canonicalData(descriptor)
+        if children.isEmpty == false {
+            switch try markerStagingState(
+                at: root,
+                expectedMarkerData: data,
+                fileManager: fileManager
+            ) {
+            case .recoverable:
+                break
+            case .inProgress:
+                throw ReplicationRepositoryBootstrapError
+                    .markerPublicationInProgress
+            }
+        }
         do {
             let result = try AppendOnlyFilePublisher(
                 rootURL: root,
@@ -170,6 +183,7 @@ private extension FileReplicationRepositoryBootstrap {
 
     static func withExclusiveBootstrapLock<Result>(
         at root: URL,
+        onLockAttempt: (@Sendable () -> Void)?,
         _ operation: () throws -> Result
     ) throws -> Result {
         let descriptor = root.withUnsafeFileSystemRepresentation { path in
@@ -184,6 +198,7 @@ private extension FileReplicationRepositoryBootstrap {
         }
         defer { close(descriptor) }
 
+        onLockAttempt?()
         var lockResult: Int32
         repeat {
             lockResult = flock(descriptor, LOCK_EX)
@@ -238,6 +253,79 @@ private extension FileReplicationRepositoryBootstrap {
             throw ReplicationRepositoryBootstrapError
                 .legacyRepositoryRequiresManualReset
         }
+    }
+
+    enum MarkerStagingState {
+        case recoverable
+        case inProgress
+    }
+
+    static func markerStagingState(
+        at root: URL,
+        expectedMarkerData: Data,
+        fileManager: FileManager
+    ) throws -> MarkerStagingState {
+        let rootChildren = try directoryChildren(
+            root,
+            fileManager: fileManager
+        )
+        guard Set(rootChildren.map(\.lastPathComponent)) == ["v2"],
+              let v2 = rootChildren.first
+        else {
+            throw ReplicationRepositoryBootstrapError
+                .legacyRepositoryRequiresManualReset
+        }
+        try requireDirectory(v2)
+        let v2Children = try directoryChildren(v2, fileManager: fileManager)
+        guard Set(v2Children.map(\.lastPathComponent)) == ["staging"],
+              let staging = v2Children.first
+        else {
+            throw ReplicationRepositoryBootstrapError
+                .legacyRepositoryRequiresManualReset
+        }
+        try requireDirectory(staging)
+        let stagingChildren = try directoryChildren(
+            staging,
+            fileManager: fileManager
+        )
+        guard Set(stagingChildren.map(\.lastPathComponent)) == ["markers"],
+              let markers = stagingChildren.first
+        else {
+            throw ReplicationRepositoryBootstrapError
+                .legacyRepositoryRequiresManualReset
+        }
+        try requireDirectory(markers)
+        let stagedMarkers = try directoryChildren(
+            markers,
+            fileManager: fileManager
+        )
+        var foundCompleteMarker = false
+        for staged in stagedMarkers {
+            try requireRegularFile(staged)
+            let stem = staged.deletingPathExtension().lastPathComponent
+            guard staged.pathExtension == "stage",
+                  isCanonicalUUID(stem)
+            else {
+                throw ReplicationRepositoryBootstrapError
+                    .legacyRepositoryRequiresManualReset
+            }
+            let data: Data
+            do {
+                data = try Data(contentsOf: staged, options: [.mappedIfSafe])
+            } catch {
+                throw ReplicationRepositoryBootstrapError
+                    .markerPublicationInProgress
+            }
+            guard data.count <= expectedMarkerData.count,
+                  expectedMarkerData.starts(with: data)
+            else {
+                throw ReplicationRepositoryBootstrapError
+                    .legacyRepositoryRequiresManualReset
+            }
+            foundCompleteMarker = foundCompleteMarker
+                || data == expectedMarkerData
+        }
+        return foundCompleteMarker ? .recoverable : .inProgress
     }
 
     static func validateV2Tree(

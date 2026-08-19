@@ -139,10 +139,12 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
         guard lockResult == 0 else {
             return
         }
+        var rootIsLocked = true
         defer {
-            _ = flock(rootDescriptor, LOCK_UN)
+            if rootIsLocked {
+                _ = flock(rootDescriptor, LOCK_UN)
+            }
         }
-
         try FileManager.default.createDirectory(
             at: root.appendingPathComponent(
                 "v2/staging/markers",
@@ -164,28 +166,30 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
                     generationID: winnerID
                 )
             )
-        let activePublisher = Task.detached {
-            try await Task.sleep(for: .milliseconds(100))
-            defer { _ = flock(rootDescriptor, LOCK_UN) }
-            return try AppendOnlyFilePublisher(rootURL: root).publish(
-                markerData,
-                to: FileReplicationRepositoryBootstrap.markerFilename,
-                stagingArea: "markers"
-            )
-        }
-
-        let opened: ReplicationRepositoryDescriptor
-        do {
-            opened = try FileReplicationRepositoryBootstrap.openOrCreate(
+        let lockAttempted = DispatchSemaphore(value: 0)
+        let opener = Task.detached {
+            try FileReplicationRepositoryBootstrap.openOrCreateWithStatus(
                 at: root,
-                generationID: { losingID }
-            )
-        } catch {
-            _ = try await activePublisher.value
-            throw error
+                generationID: { losingID },
+                markerWriteByteLimitForTesting: nil,
+                bootstrapLockAttemptForTesting: {
+                    lockAttempted.signal()
+                }
+            ).descriptor
         }
+        XCTAssertEqual(lockAttempted.wait(timeout: .now() + 2), .success)
 
-        let publicationResult = try await activePublisher.value
+        let publicationResult = try AppendOnlyFilePublisher(
+            rootURL: root
+        ).publish(
+            markerData,
+            to: FileReplicationRepositoryBootstrap.markerFilename,
+            stagingArea: "markers"
+        )
+        XCTAssertEqual(flock(rootDescriptor, LOCK_UN), 0)
+        rootIsLocked = false
+        let opened = try await opener.value
+
         XCTAssertEqual(publicationResult, .published)
         XCTAssertEqual(opened.generationID, winnerID)
         XCTAssertEqual(
@@ -232,11 +236,94 @@ final class ReplicationRepositoryBootstrapTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? ReplicationRepositoryBootstrapError,
-                .legacyRepositoryRequiresManualReset
+                .markerPublicationInProgress
             )
         }
         XCTAssertEqual(try Data(contentsOf: interruptedStages[0]).count, 5)
         XCTAssertEqual(try inventory(root), inventoryBeforeRetry)
+    }
+
+    func testExactRemoteMarkerStageCanFinishTheSameBootstrap() throws {
+        let root = makeRepositoryURL()
+        let generationID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000006"
+        )!
+        let markerData = try canonicalMarkerData(generationID: generationID)
+        let stage = try markerStageURL(root: root)
+        try markerData.write(to: stage, options: [.withoutOverwriting])
+
+        let result = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: { generationID }
+            )
+
+        XCTAssertEqual(result.descriptor.generationID, generationID)
+        XCTAssertTrue(result.createdRepository)
+        XCTAssertEqual(
+            try Data(
+                contentsOf: root.appendingPathComponent(
+                    FileReplicationRepositoryBootstrap.markerFilename
+                )
+            ),
+            markerData
+        )
+        XCTAssertEqual(try Data(contentsOf: stage), markerData)
+    }
+
+    func testPartialRemoteMarkerStageReportsInProgressWithoutWriting()
+        throws
+    {
+        let root = makeRepositoryURL()
+        let generationID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000007"
+        )!
+        let stage = try markerStageURL(root: root)
+        try canonicalMarkerData(generationID: generationID).prefix(5)
+            .write(to: stage, options: [.withoutOverwriting])
+        let before = try inventory(root)
+
+        XCTAssertThrowsError(
+            try FileReplicationRepositoryBootstrap.openOrCreate(
+                at: root,
+                generationID: { generationID }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ReplicationRepositoryBootstrapError,
+                .markerPublicationInProgress
+            )
+        }
+
+        XCTAssertEqual(try inventory(root), before)
+    }
+
+    func testDivergentRemoteMarkerStageFailsClosedWithoutWriting() throws {
+        let root = makeRepositoryURL()
+        let proposedGenerationID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000008"
+        )!
+        let divergentGenerationID = UUID(
+            uuidString: "92000000-0000-0000-0000-000000000009"
+        )!
+        let stage = try markerStageURL(root: root)
+        try canonicalMarkerData(generationID: divergentGenerationID)
+            .write(to: stage, options: [.withoutOverwriting])
+        let before = try inventory(root)
+
+        XCTAssertThrowsError(
+            try FileReplicationRepositoryBootstrap.openOrCreate(
+                at: root,
+                generationID: { proposedGenerationID }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ReplicationRepositoryBootstrapError,
+                .legacyRepositoryRequiresManualReset
+            )
+        }
+
+        XCTAssertEqual(try inventory(root), before)
     }
 
     func testMalformedMarkerFailsClosedWithoutRepairOrReplacement() throws {
@@ -399,5 +486,29 @@ private extension ReplicationRepositoryBootstrapTests {
             return try url.resourceValues(forKeys: [.isRegularFileKey])
                 .isRegularFile == true ? url : nil
         }
+    }
+
+    func canonicalMarkerData(generationID: UUID) throws -> Data {
+        try ReplicationPublicationBuilder.canonicalEncoder().encode(
+            ReplicationRepositoryDescriptor(
+                formatVersion: FileReplicationRepositoryBootstrap
+                    .formatVersion,
+                generationID: generationID
+            )
+        )
+    }
+
+    func markerStageURL(root: URL) throws -> URL {
+        let markers = root.appendingPathComponent(
+            "v2/staging/markers",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: markers,
+            withIntermediateDirectories: true
+        )
+        return markers.appendingPathComponent(
+            "93000000-0000-0000-0000-000000000001.stage"
+        )
     }
 }

@@ -119,6 +119,60 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
         XCTAssertFalse(page.hasMore)
     }
 
+    func testICloudEndpointChecksMarkerAuthorityBeforeEveryRemoteOperation()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let publication = try publication(sequence: 1)
+        let expectedError = ICloudReplicationRepositoryAuthorityError
+            .divergentMarkerVersion
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            repositoryAuthorityValidation: {
+                throw expectedError
+            },
+            downloadRequest: { _ in }
+        )
+
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.publish(sealed: publication)
+        }) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                expectedError
+            )
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rootURL.path))
+
+        let receipt = ReplicationPublicationReceipt(
+            reference: publication.reference,
+            objects: publication.objects.map(\.reference)
+        )
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.observe(pending: [receipt])
+        }) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                expectedError
+            )
+        }
+        await XCTAssertThrowsErrorAsync({
+            try await endpoint.read(
+                after: .origin,
+                budget: ReplicationReadBudget(
+                    maximumPublications: 1,
+                    maximumBytes: 1
+                )
+            )
+        }) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                expectedError
+            )
+        }
+    }
+
     func testFirstPublicationLargerThanByteBudgetStillAdvancesCursor()
         async throws
     {
@@ -1045,6 +1099,20 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+}
+
+private func XCTAssertThrowsErrorAsync(
+    _ expression: () async throws -> some Any,
+    _ errorHandler: (Error) -> Void = { _ in },
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected expression to throw", file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }
 

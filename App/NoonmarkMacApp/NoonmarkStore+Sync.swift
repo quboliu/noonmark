@@ -489,13 +489,13 @@ private extension NoonmarkStore {
             let iCloud = if let round = try appReplicationV2StressICloudRound() {
                 try ICloudDriveReplicationEndpoint(
                     round: round,
-                    generationID: { authority?.generationID ?? UUID() }
+                    preferredGenerationID: authority?.generationID
                 )
             } else {
                 try ICloudDriveReplicationEndpoint(
                     repositoryName: AppLaunchArguments.validatedRuntimeProfile
                         .iCloudRepositoryName,
-                    generationID: { authority?.generationID ?? UUID() }
+                    preferredGenerationID: authority?.generationID
                 )
             }
             endpoint = iCloud
@@ -641,6 +641,12 @@ private extension NoonmarkStore {
             localFirstSyncMessage = engine.preferences.language == .chinese
                 ? "检测到旧同步目录。请您在 Finder 中手工删除该目录后重试；晷迹不会自动删除或迁移其中任何内容。"
                 : "A legacy sync directory was found. Delete it manually in Finder and retry; Noonmark will not delete or migrate it."
+        } else if error as? ReplicationRepositoryBootstrapError
+            == .markerPublicationInProgress
+        {
+            localFirstSyncMessage = engine.preferences.language == .chinese
+                ? "同步仓库仍在完成初始化，请稍后重试。"
+                : "The sync repository is still initializing. Try again shortly."
         } else {
             localFirstSyncMessage = AppPresentation(
                 language: engine.preferences.language

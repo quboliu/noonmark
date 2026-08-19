@@ -52,8 +52,11 @@ ADR-0046 把同步从全量 mirror 改为 durable incremental replication，但�
 
 - 项目尚未发布且没有外部用户。V2 不读取、导入、转换或侦测任何 V1 remote evidence、frontier、receipt、failure metadata 或旧设备 writer；不建立 staging importer、legacy decoder、dual read／dual write、late-join 或 runtime fallback。
 - V2 正式 App 继续使用 runtime profile 所属的同一 logical sync repository。repository 必须为空或已含 exact V2 immutable format marker：
-  - 空 repository 以 append-only staging + atomic no-overwrite link 建立唯一 V2 marker，marker 固定格式版本并携带该 repository 的 generation ID；
-  - 多设备并发初始化时，只有一份 marker 可成功创建，其他设备重读并采用已存在的 exact marker；
+  - Local Folder 的空 repository 以 append-only staging + atomic no-overwrite link 建立唯一 V2 marker，并以同一 directory inode 的 `flock` 串行化本机 task／process；这把 lock 不得被解释成跨 Mac authority；
+  - 没有既有本机 clean-cut authority 的 iCloud repository，以 domain-separated SHA-256 对稳定 repository scope 推导 UUIDv8 generation；当前版本的多个独立 mirror 即使尚未看见对方，也必须生成相同 canonical marker bytes。SQLite 已有 authority 或本机已可见 exact marker 时继续采用既有 generation，不静默替换已建立的随机 V2 authority；
+  - final marker 尚未出现时，只有完整 exact canonical marker stage 可以继续 append-only publication；部分 exact prefix 返回 typed in-progress 且零写入，分歧、超长、非 canonical 或未知 subtree 全部 fail-closed。任何 stage 都永久保留，不清理、不覆盖；
+  - iCloud Endpoint 初始化校验 current 与本机可用 marker versions；每次 publish、非空 observe 与 read 前，再以 coordinated read 对账 current、操作前后本机 versions 和 `getNonlocalVersionsOfItem` 返回的 non-local versions。完全相同 bytes 可以共存；非 canonical、不可读、current 改变或任一分歧全部阻断，不 resolve、不删除；
+  - iCloud Drive 仍不提供 server-side CAS；确定性 fresh authority 消除当前 writer 的随机 split-brain，version validator 只对本轮实际取得的 Apple version evidence负责。两台实体 Mac 与 72 小时 soak 仍是发行灰度，不得由同机 mirror 冒充；
   - marker 通过后仍须以 `lstat` 递归验证完整 `v2` 子树；目录／regular file 类型、object kind、generation、producer、20 位 sequence、digest、永久 staging area 与 suffix 必须全部符合 exact grammar，symlink、特殊 inode 或任何未知后代均不得被文件系统透明跟随；
   - marker 缺失且 repository 非空、marker 格式不符、完整子树 grammar 不符或任何非 V2 object 存在时全部在 Endpoint 写入前 fail-closed，只提示用户手工删除旧 iCloud 同步目录后重新同步。
 - App、Agent、测试、脚本与 Endpoint 永不删除、覆盖、替换、移动、改名或清理旧 iCloud 资料。用户手工删除旧目录是唯一允许的重置路径，不是 App capability。

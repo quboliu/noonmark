@@ -4,7 +4,7 @@
 
 - 生效日期：2026-08-05
 - 当前已发行基线：`0.2.6 (28)`；精确 commit 为 `12ed27bf5d43077744a65c932703f2051f6d4ca4`，由 annotated tag `v0.2.6` 绑定。
-- 当前未发行 trial candidate：`0.3.1 (40)`；采用 schema 19 Replication V2 clean cut，并包含飞光 Markdown 换行、同机 bootstrap staging 竞态与跨 Mac deterministic repository authority 根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
+- 当前未发行 trial candidate：`0.3.1 (41)`；采用 schema 19 Replication V2 clean cut，并包含飞光 Markdown 换行、同机 bootstrap staging 竞态、跨 Mac deterministic repository authority、iCloud readiness 与 presenter 假分歧根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
 - 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
 本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
@@ -31,7 +31,8 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| `0.3.1 (40)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。fresh iCloud authority 由稳定 scope 确定性推导；v15／v17／v18、format 6、V1、无 marker 非空 repository 或分歧 marker version 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (41)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。fresh iCloud authority 由稳定 scope 确定性推导；操作前 metadata 暂不可用进入 typed waiting，操作后不可用与不同 marker bytes 继续终止；v15／v17／v18、format 6、V1、无 marker 非空 repository 或分歧 marker version 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (40)` 退役候选 | current schema `19` | current format `7` | 绑定后仍发生 iCloud readiness、presenter evidence 与最终观察窗口修复及故障案例闭环，tracked source identity 已改变；未 push、未打包、未交付或复用 |
 | `0.3.1 (39)` 退役候选 | current schema `19` | current format `7` | review 证明 directory `flock` 只协调同机 inode，不能让两台 Mac 的随机 generation 收敛；原确定性测试依赖未协调 sleep，且本机 file versions 检查漏掉 non-local versions；未 push、未打包、未交付或复用 |
 | `0.3.1 (38)` 退役候选 | current schema `19` | current format `7` | 已绑定 bootstrap 根因修复 commit；案例闭环与最终 source identity 回填改变 tracked source 后退役，未 push、未打包、未交付或复用 |
 | `0.3.1 (37)` 退役候选 | current schema `19` | current format `7` | 推送前完整门禁捕获 bootstrap 把另一个活跃 writer 的 staging 中间态误判成 legacy repository；未 push、未打包、未交付或复用 |

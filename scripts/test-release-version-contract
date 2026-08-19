@@ -81,10 +81,12 @@ stored_source_fingerprint="${BASH_REMATCH[1]}"
 [[ -x scripts/release-source-fingerprint &&
   -x scripts/verify-release-source-identity ]] ||
   fail "release source identity commands are missing or not executable"
-[[ "$(scripts/release-source-fingerprint)" == "$stored_source_fingerprint" ]] ||
-  fail "current build source fingerprint does not match tracked release inputs"
-scripts/verify-release-source-identity >/dev/null ||
-  fail "current build source identity verifier rejected the repository"
+[[ "$stored_source_fingerprint" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "current build source fingerprint is malformed"
+[[ -x scripts/verify-origin-main-candidate ]] ||
+  fail "origin/main candidate verifier is missing or not executable"
+[[ -x scripts/verify-release-source-transition ]] ||
+  fail "release source transition verifier is missing or not executable"
 
 rg -F 'scripts/release-version marketing-version' scripts/build-mac-app >/dev/null ||
   fail "App build does not read the tracked marketing version"
@@ -104,21 +106,39 @@ rg -F 'scripts/verify-release-trial-version' "$release_script" >/dev/null ||
 rg -F 'scripts/verify-release-source-identity' scripts/verify-release-trial-version \
   >/dev/null ||
   fail "pre-tag trial verifier does not bind the tracked release source"
+rg -F 'scripts/verify-origin-main-candidate' scripts/verify-release-trial-version \
+  >/dev/null ||
+  fail "pre-tag trial verifier does not require the exact pushed main commit"
 rg -F 'scripts/verify-release-source-identity' scripts/verify-release-version-tag \
   >/dev/null ||
   fail "tag verifier does not bind the tracked release source"
+rg -F 'scripts/verify-origin-main-candidate' scripts/verify-release-version-tag \
+  >/dev/null ||
+  fail "tag verifier does not require the exact pushed main commit"
 rg -F 'fetch-depth: 0' .github/workflows/release-publish.yml >/dev/null ||
   fail "release workflow does not fetch the annotated version tag"
 rg -F 'fetch-depth: 0' .github/workflows/ci.yml >/dev/null ||
   fail "hosted CI does not fetch the source identity history"
+rg -F 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' \
+  .github/workflows/ci.yml >/dev/null ||
+  fail "hosted CI does not audit the pull request head"
+rg -F 'scripts/verify-release-source-transition' .github/workflows/ci.yml \
+  >/dev/null ||
+  fail "hosted CI does not audit changed source identity"
 rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||
   fail "release version tag verifier does not require an annotated tag"
 rg -F 'release/BUILD-LEDGER.tsv' docs/engineering/versioning-and-private-release.md >/dev/null ||
   fail "version governance does not document the build ledger"
 rg -F 'scripts/verify-release-source-identity' scripts/test-dmg-install >/dev/null ||
   fail "real DMG install gate does not consume candidate source identity"
+rg -F 'scripts/verify-origin-main-candidate' scripts/test-dmg-install >/dev/null ||
+  fail "real DMG install gate does not consume pushed main authority"
 install_source_gate_line="$(
   awk '$0 == "scripts/verify-release-source-identity" { print NR }' \
+    scripts/test-dmg-install
+)"
+install_remote_gate_line="$(
+  awk '$0 == "scripts/verify-origin-main-candidate" { print NR }' \
     scripts/test-dmg-install
 )"
 install_runtime_setup_line="$(
@@ -126,9 +146,18 @@ install_runtime_setup_line="$(
     scripts/test-dmg-install
 )"
 [[ "$install_source_gate_line" =~ ^[1-9][0-9]*$ &&
+  "$install_remote_gate_line" =~ ^[1-9][0-9]*$ &&
   "$install_runtime_setup_line" =~ ^[1-9][0-9]*$ ]] ||
-  fail "real DMG install source or runtime gate is ambiguous"
-((install_source_gate_line < install_runtime_setup_line)) ||
-  fail "real DMG install audits source identity after runtime profile setup"
+  fail "real DMG install source, remote, or runtime gate is ambiguous"
+((install_source_gate_line < install_remote_gate_line &&
+  install_remote_gate_line < install_runtime_setup_line)) ||
+  fail "real DMG install audits candidate authority after runtime profile setup"
+
+rg -F 'scripts/verify-origin-main-candidate' scripts/push-release-tag >/dev/null ||
+  fail "tag publisher does not share the pushed main authority"
+rg -F 'scripts/test-release-origin-main-contract' scripts/check >/dev/null ||
+  fail "origin/main candidate contract is absent from scripts/check"
+rg -F 'scripts/test-release-source-transition-contract' scripts/check >/dev/null ||
+  fail "source transition contract is absent from scripts/check"
 
 echo "Release version contract passed: $marketing_version ($build_number)"

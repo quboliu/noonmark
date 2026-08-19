@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release origin main contract: $*" >&2
+  exit 1
+}
+
+verifier="scripts/verify-origin-main-candidate"
+[[ -x "$verifier" ]] || fail "origin/main candidate verifier is missing or not executable"
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-origin-main-contract.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT INT TERM
+
+remote="$fixture_root/origin.git"
+repository="$fixture_root/repository"
+git init --bare -q "$remote"
+git init -q "$repository"
+git -C "$repository" config user.name Noonmark
+git -C "$repository" config user.email noonmark@example.invalid
+mkdir -p "$repository/scripts"
+cp "$verifier" "$repository/scripts/"
+chmod +x "$repository/scripts/verify-origin-main-candidate"
+printf '%s\n' 'candidate source' >"$repository/candidate.txt"
+git -C "$repository" add scripts candidate.txt
+git -C "$repository" commit -qm 'test: establish candidate'
+git -C "$repository" branch -M main
+git -C "$repository" remote add origin "$remote"
+git -C "$repository" push -q origin HEAD:refs/heads/main
+git -C "$remote" symbolic-ref HEAD refs/heads/main
+
+(
+  cd "$repository"
+  scripts/verify-origin-main-candidate >/dev/null
+) || fail "exact pushed origin/main candidate was rejected"
+
+if (
+  cd "$repository"
+  scripts/verify-origin-main-candidate unexpected >/dev/null 2>&1
+); then
+  fail "origin/main candidate verifier accepted arguments"
+fi
+
+amended="$fixture_root/amended"
+git clone -q "$remote" "$amended"
+git -C "$amended" config user.name Noonmark
+git -C "$amended" config user.email noonmark@example.invalid
+git -C "$amended" commit --amend -qm 'test: amend candidate identity'
+if (
+  cd "$amended"
+  scripts/verify-origin-main-candidate >/dev/null 2>&1
+); then
+  fail "origin/main candidate verifier accepted an amended local commit"
+fi
+
+follow_up="$fixture_root/follow-up"
+git clone -q "$remote" "$follow_up"
+git -C "$follow_up" config user.name Noonmark
+git -C "$follow_up" config user.email noonmark@example.invalid
+git -C "$follow_up" commit --allow-empty -qm 'test: advance local candidate'
+if (
+  cd "$follow_up"
+  scripts/verify-origin-main-candidate >/dev/null 2>&1
+); then
+  fail "origin/main candidate verifier accepted an unpushed follow-up commit"
+fi
+
+synthetic_merge="$fixture_root/synthetic-merge"
+git clone -q "$remote" "$synthetic_merge"
+git -C "$synthetic_merge" config user.name Noonmark
+git -C "$synthetic_merge" config user.email noonmark@example.invalid
+git -C "$synthetic_merge" switch -qc candidate
+printf '%s\n' 'candidate branch source' >"$synthetic_merge/branch.txt"
+git -C "$synthetic_merge" add branch.txt
+git -C "$synthetic_merge" commit -qm 'test: create candidate branch'
+git -C "$synthetic_merge" switch -q main
+git -C "$synthetic_merge" merge --no-ff -qm 'test: create synthetic merge' candidate
+if (
+  cd "$synthetic_merge"
+  scripts/verify-origin-main-candidate >/dev/null 2>&1
+); then
+  fail "origin/main candidate verifier accepted an unpushed synthetic merge"
+fi
+
+missing_origin="$fixture_root/missing-origin"
+git init -q "$missing_origin"
+mkdir -p "$missing_origin/scripts"
+cp "$verifier" "$missing_origin/scripts/"
+chmod +x "$missing_origin/scripts/verify-origin-main-candidate"
+printf '%s\n' 'candidate source' >"$missing_origin/candidate.txt"
+git -C "$missing_origin" add scripts candidate.txt
+git -C "$missing_origin" -c user.name=Noonmark \
+  -c user.email=noonmark@example.invalid commit -qm 'test: missing origin'
+if (
+  cd "$missing_origin"
+  scripts/verify-origin-main-candidate >/dev/null 2>&1
+); then
+  fail "origin/main candidate verifier accepted a missing origin"
+fi
+
+echo "Release origin/main candidate contract passed"

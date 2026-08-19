@@ -100,8 +100,9 @@ shallow_state="$(git rev-parse --is-shallow-repository 2>/dev/null)" ||
 
 identity_seen=0
 max_bound_build=0
+max_preidentity_build=0
+preidentity_version_seen=0
 last_identity_commit=""
-previous_commit=""
 previous_identity_blob=""
 history_commits="$(git rev-list --first-parent --reverse HEAD)" ||
   fail "could not enumerate first-parent candidate history"
@@ -114,14 +115,22 @@ while IFS= read -r commit; do
   if [[ -z "$commit_identity_blob" ]]; then
     ((identity_seen == 0)) ||
       fail "current build source identity was removed from candidate history"
-    previous_commit="$commit"
+    if git cat-file -e "${commit}:release/VERSION" 2>/dev/null; then
+      preidentity_build="$(release_field_at_ref "$commit" build-number)"
+      if ((preidentity_build > max_preidentity_build)); then
+        max_preidentity_build="$preidentity_build"
+      fi
+      preidentity_version_seen=1
+    else
+      ((preidentity_version_seen == 0)) ||
+        fail "release/VERSION was removed before source identity binding"
+    fi
     continue
   fi
   [[ "$commit_identity_blob" =~ ^[0-9a-f]{40,64}$ ]] ||
     fail "candidate history contains an invalid source identity blob"
   if ((identity_seen == 1)) &&
     [[ "$commit_identity_blob" == "$previous_identity_blob" ]]; then
-    previous_commit="$commit"
     continue
   fi
 
@@ -134,20 +143,8 @@ while IFS= read -r commit; do
     fail "historical source identity does not match release/VERSION at $commit"
 
   if ((identity_seen == 0)); then
-    if [[ -n "$previous_commit" ]] &&
-      git cat-file -e "${previous_commit}:release/VERSION" 2>/dev/null; then
-      previous_build="$(
-        release_field_at_ref "$previous_commit" build-number
-      )"
-      ((binding_build > previous_build)) ||
-        fail "first source identity binding did not allocate a higher build"
-    elif [[ -n "$previous_commit" ]]; then
-      previous_version_commit="$(
-        git log -1 --format=%H "$previous_commit" -- release/VERSION
-      )"
-      [[ -z "$previous_version_commit" ]] ||
-        fail "release/VERSION was removed before source identity binding"
-    fi
+    ((binding_build > max_preidentity_build)) ||
+      fail "first source identity binding reused a historical build number"
   else
     ((binding_build > max_bound_build)) ||
       fail "candidate source identity reused a historical build number"
@@ -157,7 +154,6 @@ while IFS= read -r commit; do
   max_bound_build="$binding_build"
   last_identity_commit="$commit"
   previous_identity_blob="$commit_identity_blob"
-  previous_commit="$commit"
 done <<<"$history_commits"
 
 ((identity_seen == 1)) ||

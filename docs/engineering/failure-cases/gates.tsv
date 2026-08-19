@@ -273,7 +273,9 @@ FAIL-2026-08-12-03	fast	scripts/test-replication-incomplete-local-view	scripts/t
 FAIL-2026-08-12-03	symptom	scripts/test-replication-incomplete-local-view	scripts/test-all	真实临时 filesystem 必须从 changed retry、逐 item 乱序与读取期消失收敛到完整连续事实，不得永久 stall、泄漏 raw Cocoa error 或静默 stable 截断
 FAIL-2026-08-19-01	fast	scripts/test-unit	scripts/check	NoonmarkMacUIContractTests 必须保留普通 Markdown 换行、粗体与链接语义
 FAIL-2026-08-19-01	symptom	scripts/test-e2e	scripts/test-all	真实飞光物理输入与提交后必须以 Markdown paragraph 几何证明普通换行仍为两行
-FAIL-2026-08-19-02	fast	scripts/test-release-version-contract	scripts/check	current VERSION、ledger、full-history CI、exact-HEAD fingerprint 与真实 install gate wiring 必须一致
-FAIL-2026-08-19-02	fast	scripts/test-release-trial-contract	scripts/check	隔离 Git fixture 对 shallow、首次同 build binding、历史回退复用、docs／empty follow-up 与 source mutation 均须持续 fail-closed；只有更大 build 可转绿
-FAIL-2026-08-19-02	symptom	scripts/test-dmg-install	scripts/release-private-dmg	精确 candidate package 必须先证明该 build 未绑定另一 source，再以受控 dmg-validation 身份证明实际安装 App 的版本、build 与 commit
-FAIL-2026-08-19-02	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 必须在完整历史 source audit 及真实安装、交互、退出、重启与诊断身份对账全绿后才可暴露
+FAIL-2026-08-19-02	fast	scripts/test-release-version-contract	scripts/check	VERSION／ledger 结构、PR-head conditional transition、live remote wiring 与真实 install gate 顺序必须一致
+FAIL-2026-08-19-02	fast	scripts/test-release-trial-contract	scripts/check	隔离 Git fixture 对 shallow、首次及 preidentity 历史 build 复用、历史 binding 回退复用、docs／empty follow-up、source mutation、amend 与 synthetic merge 均须持续 fail-closed；只有更大 build 的精确 pushed HEAD 可转绿
+FAIL-2026-08-19-02	fast	scripts/test-release-origin-main-contract	scripts/check	live origin/main 只接受精确 HEAD；missing origin、amend、未 push follow-up 与 synthetic merge 必须 fail-closed
+FAIL-2026-08-19-02	fast	scripts/test-release-source-transition-contract	scripts/check	普通 PR／push 不冒充发行候选；identity 相对 base／first parent 变化时必须调用真实 source audit
+FAIL-2026-08-19-02	symptom	scripts/test-dmg-install	scripts/release-private-dmg	精确 candidate package 必须先证明 build 历史与 live origin/main authority，再以受控 dmg-validation 身份证明实际安装 App 的版本、build 与 commit
+FAIL-2026-08-19-02	release	scripts/test-dmg-install	scripts/release-private-dmg	私有 DMG 必须在完整历史 source audit、live remote 对账及真实安装、交互、退出、重启与诊断身份全绿后才可暴露

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release source transition contract: $*" >&2
+  exit 1
+}
+
+transition_verifier="scripts/verify-release-source-transition"
+[[ -x "$transition_verifier" ]] ||
+  fail "release source transition verifier is missing or not executable"
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-source-transition.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
+cleanup() {
+  rm -rf "$fixture_root"
+}
+trap cleanup EXIT INT TERM
+
+fixture="$fixture_root/repository"
+trace="$fixture_root/source-audit.trace"
+mkdir -p "$fixture/scripts" "$fixture/release"
+cp "$transition_verifier" "$fixture/scripts/"
+# The generated stub expands this variable when the stub executes.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'printf "%s\\n" source-audit >>"$NOONMARK_SOURCE_AUDIT_TRACE"' \
+  >"$fixture/scripts/verify-release-source-identity"
+chmod +x \
+  "$fixture/scripts/verify-release-source-transition" \
+  "$fixture/scripts/verify-release-source-identity"
+printf '%s\n' 'identity=one' >"$fixture/release/CURRENT-BUILD-SOURCE"
+printf '%s\n' 'base source' >"$fixture/source.txt"
+git -C "$fixture" init -q
+git -C "$fixture" config user.name Noonmark
+git -C "$fixture" config user.email noonmark@example.invalid
+git -C "$fixture" add scripts release source.txt
+git -C "$fixture" commit -qm 'test: establish source identity'
+base_commit="$(git -C "$fixture" rev-parse HEAD)"
+
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=push \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "root push did not audit its source identity"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "1" ]] ||
+  fail "root push did not invoke exactly one source audit"
+
+printf '%s\n' 'ordinary source follow-up' >"$fixture/source.txt"
+git -C "$fixture" add source.txt
+git -C "$fixture" commit -qm 'test: ordinary source follow-up'
+follow_up_commit="$(git -C "$fixture" rev-parse HEAD)"
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=push \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "ordinary push was rejected"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "1" ]] ||
+  fail "ordinary push incorrectly invoked candidate source audit"
+
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=pull_request \
+    NOONMARK_CI_BASE_SHA="$base_commit" \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "ordinary pull request was rejected"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "1" ]] ||
+  fail "ordinary pull request incorrectly invoked candidate source audit"
+
+printf '%s\n' 'identity=two' >"$fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$fixture" commit -qm 'test: change source identity'
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=push \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "identity-changing push was rejected before its source audit"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "2" ]] ||
+  fail "identity-changing push did not invoke source audit"
+
+(
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=pull_request \
+    NOONMARK_CI_BASE_SHA="$follow_up_commit" \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null
+) || fail "identity-changing pull request was rejected before its source audit"
+[[ "$(wc -l <"$trace" | tr -d ' ')" == "3" ]] ||
+  fail "identity-changing pull request did not invoke source audit"
+
+if (
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=workflow_dispatch \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null 2>&1
+); then
+  fail "source transition verifier accepted an unsupported event"
+fi
+if (
+  cd "$fixture"
+  NOONMARK_CI_EVENT_NAME=pull_request \
+    NOONMARK_CI_BASE_SHA=invalid \
+    NOONMARK_SOURCE_AUDIT_TRACE="$trace" \
+    scripts/verify-release-source-transition >/dev/null 2>&1
+); then
+  fail "source transition verifier accepted an invalid pull request base"
+fi
+
+echo "Release source transition contract passed"

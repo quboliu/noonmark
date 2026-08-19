@@ -22,15 +22,11 @@ scripts/verify-release-version-tag
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   fail "source worktree must be clean"
 fi
+scripts/verify-origin-main-candidate
 
 tag="v$(scripts/release-version marketing-version)"
 head_commit="$(git rev-parse HEAD)"
 tag_object="$(git rev-parse "refs/tags/${tag}")"
-remote_main="$(
-  git ls-remote --heads origin refs/heads/main | awk 'NR == 1 { print $1 }'
-)"
-[[ "$remote_main" == "$head_commit" ]] ||
-  fail "origin/main ${remote_main:-missing} does not match HEAD ${head_commit}"
 
 if [[ -n "$(
   git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}"

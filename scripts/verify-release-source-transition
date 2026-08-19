@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release source transition: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/verify-release-source-transition" >&2
+  exit 64
+fi
+
+event_name="${NOONMARK_CI_EVENT_NAME:-}"
+comparison_commit=""
+case "$event_name" in
+  pull_request)
+    comparison_commit="${NOONMARK_CI_BASE_SHA:-}"
+    [[ "$comparison_commit" =~ ^[0-9a-f]+$ &&
+      ("${#comparison_commit}" -eq 40 || "${#comparison_commit}" -eq 64) ]] ||
+      fail "pull request base commit is invalid"
+    git cat-file -e "${comparison_commit}^{commit}" 2>/dev/null ||
+      fail "pull request base commit is unavailable"
+    ;;
+  push)
+    comparison_commit="$(git rev-parse --verify 'HEAD^1' 2>/dev/null || true)"
+    ;;
+  *)
+    fail "unsupported CI event"
+    ;;
+esac
+
+if [[ -z "$comparison_commit" ]]; then
+  scripts/verify-release-source-identity
+  exit 0
+fi
+
+set +e
+git diff --quiet "$comparison_commit" HEAD -- release/CURRENT-BUILD-SOURCE
+diff_status=$?
+set -e
+case "$diff_status" in
+  0)
+    echo "Release source transition unchanged; candidate audit not requested"
+    ;;
+  1)
+    scripts/verify-release-source-identity
+    ;;
+  *)
+    fail "could not compare the release source transition"
+    ;;
+esac

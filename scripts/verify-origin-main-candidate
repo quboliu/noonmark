@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release origin/main candidate: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/verify-origin-main-candidate" >&2
+  exit 64
+fi
+
+head_commit="$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" ||
+  fail "could not resolve candidate HEAD"
+[[ "$head_commit" =~ ^[0-9a-f]+$ &&
+  ("${#head_commit}" -eq 40 || "${#head_commit}" -eq 64) ]] ||
+  fail "candidate HEAD has an invalid object identity"
+
+if ! remote_rows="$(
+  GIT_TERMINAL_PROMPT=0 \
+    git ls-remote --exit-code --heads origin refs/heads/main 2>/dev/null
+)"; then
+  fail "could not resolve live origin/main"
+fi
+
+rows=()
+while IFS= read -r row || [[ -n "$row" ]]; do
+  rows+=("$row")
+done <<<"$remote_rows"
+[[ "${#rows[@]}" -eq 1 ]] ||
+  fail "live origin/main did not resolve to exactly one ref"
+
+remote_commit=""
+remote_ref=""
+remote_extra=""
+IFS=$'\t' read -r remote_commit remote_ref remote_extra <<<"${rows[0]}"
+[[ -z "$remote_extra" && "$remote_ref" == "refs/heads/main" &&
+  "$remote_commit" =~ ^[0-9a-f]+$ &&
+  ("${#remote_commit}" -eq 40 || "${#remote_commit}" -eq 64) ]] ||
+  fail "live origin/main returned a malformed ref"
+[[ "$remote_commit" == "$head_commit" ]] ||
+  fail "live origin/main does not match candidate HEAD"
+
+echo "Release origin/main candidate verified: ${head_commit}"

@@ -14,6 +14,7 @@ trial_verifier="scripts/verify-release-trial-version"
 [[ -x "$trial_verifier" ]] || fail "trial version verifier is missing or not executable"
 source_verifier="scripts/verify-release-source-identity"
 source_fingerprint="scripts/release-source-fingerprint"
+origin_verifier="scripts/verify-origin-main-candidate"
 
 for required in \
   'usage: scripts/release-private-dmg [--trial <absolute-output-dmg>]' \
@@ -179,12 +180,14 @@ cp \
   "$trial_verifier" \
   "$source_verifier" \
   "$source_fingerprint" \
+  "$origin_verifier" \
   scripts/release-version \
   "$version_fixture/scripts/"
 chmod +x \
   "$version_fixture/scripts/verify-release-trial-version" \
   "$version_fixture/scripts/verify-release-source-identity" \
   "$version_fixture/scripts/release-source-fingerprint" \
+  "$version_fixture/scripts/verify-origin-main-candidate" \
   "$version_fixture/scripts/release-version"
 cp release/VERSION release/BUILD-LEDGER.tsv "$version_fixture/release/"
 printf '%s\n' 'original candidate source' \
@@ -214,14 +217,99 @@ printf '%s\n' \
 git -C "$version_fixture" add release/CURRENT-BUILD-SOURCE
 git -C "$version_fixture" commit -qm 'test: establish bound trial fixture'
 fixture_binding_commit="$(git -C "$version_fixture" rev-parse HEAD)"
+version_origin="$fixture_root/version-origin.git"
+git init --bare -q "$version_origin"
+git -C "$version_fixture" branch -M main
+git -C "$version_fixture" remote add origin "$version_origin"
+git -C "$version_fixture" push -q origin HEAD:refs/heads/main
+git -C "$version_origin" symbolic-ref HEAD refs/heads/main
 
 (
   cd "$version_fixture"
   scripts/verify-release-trial-version >/dev/null
 ) || fail "fresh highest candidate without a tag was rejected"
 
+amended_fixture="$fixture_root/amended-version"
+git clone -q "$version_origin" "$amended_fixture"
+git -C "$amended_fixture" config user.name Noonmark
+git -C "$amended_fixture" config user.email noonmark@example.invalid
+git -C "$amended_fixture" commit --amend -qm \
+  'test: amend bound candidate identity'
+(
+  cd "$amended_fixture"
+  scripts/verify-release-source-identity >/dev/null
+) || fail "local source audit unexpectedly rejected an identical-tree amend"
+if (
+  cd "$amended_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted an amended commit absent from origin/main"
+fi
+
+synthetic_fixture="$fixture_root/synthetic-merge-version"
+mkdir -p \
+  "$synthetic_fixture/scripts" \
+  "$synthetic_fixture/release" \
+  "$synthetic_fixture/Sources"
+cp \
+  "$trial_verifier" \
+  "$source_verifier" \
+  "$source_fingerprint" \
+  "$origin_verifier" \
+  scripts/release-version \
+  "$synthetic_fixture/scripts/"
+chmod +x "$synthetic_fixture/scripts/"*
+cp release/VERSION release/BUILD-LEDGER.tsv "$synthetic_fixture/release/"
+synthetic_base_build=$((fixture_build - 1))
+((synthetic_base_build > 0)) ||
+  fail "fixture build cannot exercise a synthetic merge"
+sed -i '' "s/^build_number=.*/build_number=$synthetic_base_build/" \
+  "$synthetic_fixture/release/VERSION"
+printf '%s\n' 'synthetic merge base source' \
+  >"$synthetic_fixture/Sources/candidate-source.txt"
+git -C "$synthetic_fixture" init -q
+git -C "$synthetic_fixture" config user.name Noonmark
+git -C "$synthetic_fixture" config user.email noonmark@example.invalid
+git -C "$synthetic_fixture" add scripts release Sources
+git -C "$synthetic_fixture" commit -qm 'test: establish synthetic merge base'
+synthetic_base_commit="$(git -C "$synthetic_fixture" rev-parse HEAD)"
+git -C "$synthetic_fixture" switch -qc candidate
+sed -i '' "s/^build_number=.*/build_number=$fixture_build/" \
+  "$synthetic_fixture/release/VERSION"
+git -C "$synthetic_fixture" add release/VERSION
+synthetic_fingerprint="$(
+  cd "$synthetic_fixture"
+  scripts/release-source-fingerprint
+)"
+printf '%s\n' \
+  "marketing_version=$fixture_version" \
+  "build_number=$fixture_build" \
+  "source_fingerprint_sha256=$synthetic_fingerprint" \
+  >"$synthetic_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$synthetic_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$synthetic_fixture" commit -qm 'test: bind candidate branch source'
+synthetic_candidate_commit="$(git -C "$synthetic_fixture" rev-parse HEAD)"
+synthetic_origin="$fixture_root/synthetic-origin.git"
+git init --bare -q "$synthetic_origin"
+git -C "$synthetic_fixture" remote add origin "$synthetic_origin"
+git -C "$synthetic_fixture" push -q origin HEAD:refs/heads/main
+git -C "$synthetic_origin" symbolic-ref HEAD refs/heads/main
+git -C "$synthetic_fixture" switch --detach -q "$synthetic_base_commit"
+git -C "$synthetic_fixture" merge --no-ff -qm \
+  'test: create synthetic candidate merge' "$synthetic_candidate_commit"
+(
+  cd "$synthetic_fixture"
+  scripts/verify-release-source-identity >/dev/null
+) || fail "local source audit unexpectedly rejected the synthetic merge"
+if (
+  cd "$synthetic_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a synthetic merge absent from origin/main"
+fi
+
 shallow_fixture="$fixture_root/shallow-version"
-git clone -q --depth 1 "file://$version_fixture" "$shallow_fixture"
+git clone -q --depth 1 "file://$version_origin" "$shallow_fixture"
 if (
   cd "$shallow_fixture"
   scripts/verify-release-trial-version >/dev/null 2>&1
@@ -238,6 +326,7 @@ cp \
   "$trial_verifier" \
   "$source_verifier" \
   "$source_fingerprint" \
+  "$origin_verifier" \
   scripts/release-version \
   "$introduction_fixture/scripts/"
 chmod +x "$introduction_fixture/scripts/"*
@@ -267,8 +356,59 @@ if (
   fail "trial verifier accepted first source binding without a higher build"
 fi
 
+preidentity_history_fixture="$fixture_root/preidentity-history-version"
+mkdir -p \
+  "$preidentity_history_fixture/scripts" \
+  "$preidentity_history_fixture/release" \
+  "$preidentity_history_fixture/Sources"
+cp \
+  "$source_verifier" \
+  "$source_fingerprint" \
+  scripts/release-version \
+  "$preidentity_history_fixture/scripts/"
+chmod +x "$preidentity_history_fixture/scripts/"*
+cp release/VERSION release/BUILD-LEDGER.tsv \
+  "$preidentity_history_fixture/release/"
+printf '%s\n' 'historical high-build source' \
+  >"$preidentity_history_fixture/Sources/candidate-source.txt"
+git -C "$preidentity_history_fixture" init -q
+git -C "$preidentity_history_fixture" config user.name Noonmark
+git -C "$preidentity_history_fixture" config user.email noonmark@example.invalid
+git -C "$preidentity_history_fixture" add scripts release Sources
+git -C "$preidentity_history_fixture" commit -qm \
+  'test: establish historical high build without identity'
+preidentity_rollback_build=$((fixture_build - 1))
+((preidentity_rollback_build > 0)) ||
+  fail "fixture build cannot exercise preidentity rollback"
+sed -i '' "s/^build_number=.*/build_number=$preidentity_rollback_build/" \
+  "$preidentity_history_fixture/release/VERSION"
+git -C "$preidentity_history_fixture" add release/VERSION
+git -C "$preidentity_history_fixture" commit -qm \
+  'test: roll back before introducing identity'
+sed -i '' "s/^build_number=.*/build_number=$fixture_build/" \
+  "$preidentity_history_fixture/release/VERSION"
+git -C "$preidentity_history_fixture" add release/VERSION
+preidentity_fingerprint="$(
+  cd "$preidentity_history_fixture"
+  scripts/release-source-fingerprint
+)"
+printf '%s\n' \
+  "marketing_version=$fixture_version" \
+  "build_number=$fixture_build" \
+  "source_fingerprint_sha256=$preidentity_fingerprint" \
+  >"$preidentity_history_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$preidentity_history_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$preidentity_history_fixture" commit -qm \
+  'test: reuse historical build for first identity'
+if (
+  cd "$preidentity_history_fixture"
+  scripts/verify-release-source-identity >/dev/null 2>&1
+); then
+  fail "source verifier accepted reuse of a preidentity historical build"
+fi
+
 head_fixture="$fixture_root/head-version"
-git clone -q "$version_fixture" "$head_fixture"
+git clone -q "$version_origin" "$head_fixture"
 git -C "$head_fixture" config user.name Noonmark
 git -C "$head_fixture" config user.email noonmark@example.invalid
 git -C "$head_fixture" commit --allow-empty -qm 'test: advance candidate head'
@@ -280,7 +420,7 @@ if (
 fi
 
 docs_fixture="$fixture_root/docs-version"
-git clone -q "$version_fixture" "$docs_fixture"
+git clone -q "$version_origin" "$docs_fixture"
 git -C "$docs_fixture" config user.name Noonmark
 git -C "$docs_fixture" config user.email noonmark@example.invalid
 docs_fingerprint_before="$(
@@ -306,7 +446,7 @@ if (
 fi
 
 history_fixture="$fixture_root/history-version"
-git clone -q "$version_fixture" "$history_fixture"
+git clone -q "$version_origin" "$history_fixture"
 git -C "$history_fixture" config user.name Noonmark
 git -C "$history_fixture" config user.email noonmark@example.invalid
 rollback_build=$((fixture_build - 1))
@@ -412,6 +552,7 @@ sed -i '' \
   "$version_fixture/release/CURRENT-BUILD-SOURCE"
 git -C "$version_fixture" add release/CURRENT-BUILD-SOURCE
 git -C "$version_fixture" commit -qm 'test: allocate a higher build'
+git -C "$version_fixture" push -q origin HEAD:refs/heads/main
 (
   cd "$version_fixture"
   scripts/verify-release-trial-version >/dev/null

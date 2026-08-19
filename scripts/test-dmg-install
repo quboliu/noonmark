@@ -897,8 +897,9 @@ if [[ "${1:-}" == "--record-window-failure-fixture" ]]; then
 fi
 
 # The installed package identity is only meaningful when its version and build
-# are still bound to this exact full-history candidate source.
+# remain bound to this full-history source and exact live origin/main commit.
 scripts/verify-release-source-identity
+scripts/verify-origin-main-candidate
 
 # The LaunchServices helper posts physical WindowServer input. Require a stable
 # designated requirement so its one-time TCC authorization survives rebuilds.

@@ -14,6 +14,7 @@ if [[ "$#" -ne 0 ]]; then
   exit 64
 fi
 
+scripts/verify-release-source-identity
 marketing_version="$(scripts/release-version marketing-version)"
 build_number="$(scripts/release-version build-number)"
 ledger_file="release/BUILD-LEDGER.tsv"

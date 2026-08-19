@@ -896,6 +896,10 @@ if [[ "${1:-}" == "--record-window-failure-fixture" ]]; then
   exit $?
 fi
 
+# The installed package identity is only meaningful when its version and build
+# are still bound to this exact full-history candidate source.
+scripts/verify-release-source-identity
+
 # The LaunchServices helper posts physical WindowServer input. Require a stable
 # designated requirement so its one-time TCC authorization survives rebuilds.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1

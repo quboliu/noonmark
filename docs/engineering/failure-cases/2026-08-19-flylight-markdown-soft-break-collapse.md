@@ -69,6 +69,8 @@ block parser 会把相邻普通正文行组合成同一 paragraph，并用 `\n` 
 
 风险等级为 A：共享 Markdown inline renderer 会影响飞光、Sticky Note、任务详情与烛龙文本。回归重点是 inline 格式仍可解析、block 分层不变、既有卡片高度与置顶可视区不漂移。未通过 fast、真实飞光 symptom、Demo fixture 与完整 `make check` 前不进入发行。若验证发现共享消费者回归，只回滚本次 renderer、E2E 与 fixture 修复提交；不迁移、不重写任何用户正文，因为持久化数据从未损坏。
 
+修复改变了 build 32 分配后的源码，因此 `0.3.0 (32)` 已退役且不得分发；build 33、34 又因 source identity 历史门禁缺口退役，重新发行保持用户批准的营销版本 `0.3.1`，当前验证候选为 build 35，不覆盖既有本机 trial 文件。
+
 ## 教训与永久约束
 
 Markdown 解析模式是用户内容语义的一部分，不能只以 heading／list 是否出现判断渲染正确。凡是编辑器承诺普通回车可表达分行，门禁必须同时证明领域／存储保留字符与最终 UI 保留可见行；共享渲染问题必须在共享边界修复，并保留 inline 语义的反向断言。

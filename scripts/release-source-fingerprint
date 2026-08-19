@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release source fingerprint: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/release-source-fingerprint" >&2
+  exit 64
+fi
+
+all_entries="$(mktemp "${TMPDIR:-/tmp}/noonmark-release-source-all.XXXXXX")"
+release_entries="$(
+  mktemp "${TMPDIR:-/tmp}/noonmark-release-source-inputs.XXXXXX"
+)"
+cleanup() {
+  rm -f "$all_entries" "$release_entries"
+}
+trap cleanup EXIT
+
+git ls-files -s -z >"$all_entries" || fail "could not read the tracked index"
+entry_count=0
+while IFS= read -r -d '' entry; do
+  metadata="${entry%%$'\t'*}"
+  path="${entry#*$'\t'}"
+  [[ "$metadata" =~ ^[0-9]{6}\ [0-9a-f]{40,64}\ 0$ ]] ||
+    fail "tracked index contains an unresolved or malformed entry"
+  [[ "$path" != "$entry" && -n "$path" ]] ||
+    fail "tracked index contains an unsafe path entry"
+  case "$path" in
+    release/CURRENT-BUILD-SOURCE)
+      continue
+      ;;
+  esac
+  printf '%s\0' "$entry" >>"$release_entries"
+  entry_count=$((entry_count + 1))
+done <"$all_entries"
+
+((entry_count > 0)) || fail "tracked release source set is empty"
+shasum -a 256 "$release_entries" | awk '{print $1}'

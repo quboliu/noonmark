@@ -12,6 +12,8 @@ fail() {
 release_script="scripts/release-private-dmg"
 trial_verifier="scripts/verify-release-trial-version"
 [[ -x "$trial_verifier" ]] || fail "trial version verifier is missing or not executable"
+source_verifier="scripts/verify-release-source-identity"
+source_fingerprint="scripts/release-source-fingerprint"
 
 for required in \
   'usage: scripts/release-private-dmg [--trial <absolute-output-dmg>]' \
@@ -169,22 +171,251 @@ if rg -q '^publish-trial-dmg ' "$mutated_trace"; then
 fi
 
 version_fixture="$fixture_root/version"
-mkdir -p "$version_fixture/scripts" "$version_fixture/release"
-cp "$trial_verifier" scripts/release-version "$version_fixture/scripts/"
+mkdir -p \
+  "$version_fixture/scripts" \
+  "$version_fixture/release" \
+  "$version_fixture/Sources"
+cp \
+  "$trial_verifier" \
+  "$source_verifier" \
+  "$source_fingerprint" \
+  scripts/release-version \
+  "$version_fixture/scripts/"
 chmod +x \
   "$version_fixture/scripts/verify-release-trial-version" \
+  "$version_fixture/scripts/verify-release-source-identity" \
+  "$version_fixture/scripts/release-source-fingerprint" \
   "$version_fixture/scripts/release-version"
 cp release/VERSION release/BUILD-LEDGER.tsv "$version_fixture/release/"
+printf '%s\n' 'original candidate source' \
+  >"$version_fixture/Sources/candidate-source.txt"
 git -C "$version_fixture" init -q
 git -C "$version_fixture" config user.name Noonmark
 git -C "$version_fixture" config user.email noonmark@example.invalid
-git -C "$version_fixture" add scripts release
-git -C "$version_fixture" commit -qm 'test: establish trial fixture'
+git -C "$version_fixture" add scripts release Sources
+fixture_version="$(
+  cd "$version_fixture"
+  scripts/release-version marketing-version
+)"
+fixture_build="$(
+  cd "$version_fixture"
+  scripts/release-version build-number
+)"
+next_build=$((fixture_build + 1))
+fixture_fingerprint="$(
+  cd "$version_fixture"
+  scripts/release-source-fingerprint
+)"
+printf '%s\n' \
+  "marketing_version=$fixture_version" \
+  "build_number=$fixture_build" \
+  "source_fingerprint_sha256=$fixture_fingerprint" \
+  >"$version_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$version_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$version_fixture" commit -qm 'test: establish bound trial fixture'
+fixture_binding_commit="$(git -C "$version_fixture" rev-parse HEAD)"
 
 (
   cd "$version_fixture"
   scripts/verify-release-trial-version >/dev/null
 ) || fail "fresh highest candidate without a tag was rejected"
+
+shallow_fixture="$fixture_root/shallow-version"
+git clone -q --depth 1 "file://$version_fixture" "$shallow_fixture"
+if (
+  cd "$shallow_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a shallow candidate history"
+fi
+
+introduction_fixture="$fixture_root/introduction-version"
+mkdir -p \
+  "$introduction_fixture/scripts" \
+  "$introduction_fixture/release" \
+  "$introduction_fixture/Sources"
+cp \
+  "$trial_verifier" \
+  "$source_verifier" \
+  "$source_fingerprint" \
+  scripts/release-version \
+  "$introduction_fixture/scripts/"
+chmod +x "$introduction_fixture/scripts/"*
+cp release/VERSION release/BUILD-LEDGER.tsv "$introduction_fixture/release/"
+printf '%s\n' 'pre-identity candidate source' \
+  >"$introduction_fixture/Sources/candidate-source.txt"
+git -C "$introduction_fixture" init -q
+git -C "$introduction_fixture" config user.name Noonmark
+git -C "$introduction_fixture" config user.email noonmark@example.invalid
+git -C "$introduction_fixture" add scripts release Sources
+git -C "$introduction_fixture" commit -qm 'test: establish unbound candidate'
+introduction_fingerprint="$(
+  cd "$introduction_fixture"
+  scripts/release-source-fingerprint
+)"
+printf '%s\n' \
+  "marketing_version=$fixture_version" \
+  "build_number=$fixture_build" \
+  "source_fingerprint_sha256=$introduction_fingerprint" \
+  >"$introduction_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$introduction_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$introduction_fixture" commit -qm 'test: bind without a higher build'
+if (
+  cd "$introduction_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted first source binding without a higher build"
+fi
+
+head_fixture="$fixture_root/head-version"
+git clone -q "$version_fixture" "$head_fixture"
+git -C "$head_fixture" config user.name Noonmark
+git -C "$head_fixture" config user.email noonmark@example.invalid
+git -C "$head_fixture" commit --allow-empty -qm 'test: advance candidate head'
+if (
+  cd "$head_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a candidate identity bound to an older HEAD"
+fi
+
+docs_fixture="$fixture_root/docs-version"
+git clone -q "$version_fixture" "$docs_fixture"
+git -C "$docs_fixture" config user.name Noonmark
+git -C "$docs_fixture" config user.email noonmark@example.invalid
+docs_fingerprint_before="$(
+  cd "$docs_fixture"
+  scripts/release-source-fingerprint
+)"
+mkdir -p "$docs_fixture/docs"
+printf '%s\n' 'machine-consumed release gate input' \
+  >"$docs_fixture/docs/gate-input.tsv"
+git -C "$docs_fixture" add docs/gate-input.tsv
+docs_fingerprint_after="$(
+  cd "$docs_fixture"
+  scripts/release-source-fingerprint
+)"
+[[ "$docs_fingerprint_after" != "$docs_fingerprint_before" ]] ||
+  fail "release source fingerprint ignored tracked documentation"
+git -C "$docs_fixture" commit -qm 'test: change tracked documentation'
+if (
+  cd "$docs_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted a docs-only candidate commit"
+fi
+
+history_fixture="$fixture_root/history-version"
+git clone -q "$version_fixture" "$history_fixture"
+git -C "$history_fixture" config user.name Noonmark
+git -C "$history_fixture" config user.email noonmark@example.invalid
+rollback_build=$((fixture_build - 1))
+((rollback_build > 0)) || fail "fixture build cannot exercise rollback"
+printf '%s\n' 'rolled-back candidate source' \
+  >"$history_fixture/Sources/candidate-source.txt"
+sed -i '' "s/^build_number=.*/build_number=$rollback_build/" \
+  "$history_fixture/release/VERSION"
+git -C "$history_fixture" add Sources/candidate-source.txt release/VERSION
+rollback_fingerprint="$(
+  cd "$history_fixture"
+  scripts/release-source-fingerprint
+)"
+sed -i '' "s/^build_number=.*/build_number=$rollback_build/" \
+  "$history_fixture/release/CURRENT-BUILD-SOURCE"
+sed -i '' \
+  "s/^source_fingerprint_sha256=.*/source_fingerprint_sha256=$rollback_fingerprint/" \
+  "$history_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$history_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$history_fixture" commit -qm 'test: roll back candidate build'
+printf '%s\n' 'reused candidate source' \
+  >"$history_fixture/Sources/candidate-source.txt"
+sed -i '' "s/^build_number=.*/build_number=$fixture_build/" \
+  "$history_fixture/release/VERSION"
+git -C "$history_fixture" add Sources/candidate-source.txt release/VERSION
+reused_fingerprint="$(
+  cd "$history_fixture"
+  scripts/release-source-fingerprint
+)"
+sed -i '' "s/^build_number=.*/build_number=$fixture_build/" \
+  "$history_fixture/release/CURRENT-BUILD-SOURCE"
+sed -i '' \
+  "s/^source_fingerprint_sha256=.*/source_fingerprint_sha256=$reused_fingerprint/" \
+  "$history_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$history_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$history_fixture" commit -qm 'test: reuse historical candidate build'
+if (
+  cd "$history_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted reuse of a historical candidate build"
+fi
+
+printf '%s\n' 'mutated candidate source' \
+  >"$version_fixture/Sources/candidate-source.txt"
+git -C "$version_fixture" add Sources/candidate-source.txt
+git -C "$version_fixture" commit -qm 'test: mutate candidate source'
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted changed source under the same version and build"
+fi
+mutated_fingerprint="$(
+  cd "$version_fixture"
+  scripts/release-source-fingerprint
+)"
+sed -i '' \
+  "s/^source_fingerprint_sha256=.*/source_fingerprint_sha256=$mutated_fingerprint/" \
+  "$version_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$version_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$version_fixture" commit -qm 'test: rebind unchanged trial identity'
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier accepted rebound source under the same version and build"
+fi
+mkdir -p "$version_fixture/docs"
+printf '%s\n' 'follow-up documentation' \
+  >"$version_fixture/docs/follow-up.md"
+git -C "$version_fixture" add docs/follow-up.md
+git -C "$version_fixture" commit -qm 'docs: follow rebound source'
+if (
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null 2>&1
+); then
+  fail "trial verifier forgot an invalid rebound after a later commit"
+fi
+git -C "$version_fixture" switch --detach -q "$fixture_binding_commit"
+
+printf '%s\n' 'next candidate source' \
+  >"$version_fixture/Sources/candidate-source.txt"
+sed -i '' "s/^build_number=.*/build_number=$next_build/" \
+  "$version_fixture/release/VERSION"
+sed -i '' '$s/candidate$/retired/' \
+  "$version_fixture/release/BUILD-LEDGER.tsv"
+printf '%s\t%s\tcandidate\n' "$fixture_version" "$next_build" \
+  >>"$version_fixture/release/BUILD-LEDGER.tsv"
+git -C "$version_fixture" add \
+  Sources/candidate-source.txt \
+  release/VERSION \
+  release/BUILD-LEDGER.tsv
+next_fingerprint="$(
+  cd "$version_fixture"
+  scripts/release-source-fingerprint
+)"
+sed -i '' \
+  "s/^build_number=.*/build_number=$next_build/" \
+  "$version_fixture/release/CURRENT-BUILD-SOURCE"
+sed -i '' \
+  "s/^source_fingerprint_sha256=.*/source_fingerprint_sha256=$next_fingerprint/" \
+  "$version_fixture/release/CURRENT-BUILD-SOURCE"
+git -C "$version_fixture" add release/CURRENT-BUILD-SOURCE
+git -C "$version_fixture" commit -qm 'test: allocate a higher build'
+(
+  cd "$version_fixture"
+  scripts/verify-release-trial-version >/dev/null
+) || fail "trial verifier rejected source bound to a higher build"
 
 marketing_version="$(
   cd "$version_fixture"

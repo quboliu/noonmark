@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() {
+  echo "release source identity: $*" >&2
+  exit 1
+}
+
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/verify-release-source-identity" >&2
+  exit 64
+fi
+
+identity_file="release/CURRENT-BUILD-SOURCE"
+[[ -f "$identity_file" && ! -L "$identity_file" ]] ||
+  fail "missing regular current build source identity"
+identity_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  identity_lines+=("$line")
+done <"$identity_file"
+[[ "${#identity_lines[@]}" -eq 3 ]] ||
+  fail "current build source identity must contain exactly three lines"
+[[ "${identity_lines[0]}" =~ ^marketing_version=([0-9]+\.[0-9]+\.[0-9]+)$ ]] ||
+  fail "current build source marketing version is invalid"
+identity_version="${BASH_REMATCH[1]}"
+[[ "${identity_lines[1]}" =~ ^build_number=([1-9][0-9]*)$ ]] ||
+  fail "current build source build number is invalid"
+identity_build="${BASH_REMATCH[1]}"
+[[ "${identity_lines[2]}" =~ ^source_fingerprint_sha256=([0-9a-f]{64})$ ]] ||
+  fail "current build source fingerprint is invalid"
+identity_fingerprint="${BASH_REMATCH[1]}"
+
+marketing_version="$(scripts/release-version marketing-version)"
+build_number="$(scripts/release-version build-number)"
+[[ "$identity_version" == "$marketing_version" &&
+  "$identity_build" == "$build_number" ]] ||
+  fail "current build source identity does not match release/VERSION"
+
+release_field_at_ref() {
+  local ref="$1"
+  local field="$2"
+  local content
+  local lines=()
+
+  content="$(git show "${ref}:release/VERSION")" ||
+    fail "could not read release/VERSION at $ref"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lines+=("$line")
+  done <<<"$content"
+  [[ "${#lines[@]}" -eq 2 &&
+    "${lines[0]}" =~ ^marketing_version=([0-9]+\.[0-9]+\.[0-9]+)$ ]] ||
+    fail "release/VERSION at $ref has an invalid marketing version"
+  local ref_version="${BASH_REMATCH[1]}"
+  [[ "${lines[1]}" =~ ^build_number=([1-9][0-9]*)$ ]] ||
+    fail "release/VERSION at $ref has an invalid build number"
+  local ref_build="${BASH_REMATCH[1]}"
+
+  case "$field" in
+    marketing-version) echo "$ref_version" ;;
+    build-number) echo "$ref_build" ;;
+    *) fail "unsupported historical release field: $field" ;;
+  esac
+}
+
+identity_field_at_ref() {
+  local ref="$1"
+  local field="$2"
+  local content
+  local lines=()
+
+  content="$(git show "${ref}:${identity_file}")" ||
+    fail "could not read current build source identity at $ref"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lines+=("$line")
+  done <<<"$content"
+  [[ "${#lines[@]}" -eq 3 &&
+    "${lines[0]}" =~ ^marketing_version=([0-9]+\.[0-9]+\.[0-9]+)$ ]] ||
+    fail "current build source identity at $ref has an invalid marketing version"
+  local ref_version="${BASH_REMATCH[1]}"
+  [[ "${lines[1]}" =~ ^build_number=([1-9][0-9]*)$ ]] ||
+    fail "current build source identity at $ref has an invalid build number"
+  local ref_build="${BASH_REMATCH[1]}"
+  [[ "${lines[2]}" =~ ^source_fingerprint_sha256=[0-9a-f]{64}$ ]] ||
+    fail "current build source identity at $ref has an invalid fingerprint"
+
+  case "$field" in
+    marketing-version) echo "$ref_version" ;;
+    build-number) echo "$ref_build" ;;
+    *) fail "unsupported historical identity field: $field" ;;
+  esac
+}
+
+shallow_state="$(git rev-parse --is-shallow-repository 2>/dev/null)" ||
+  fail "could not inspect repository history depth"
+[[ "$shallow_state" == "false" ]] ||
+  fail "full Git history is required to verify candidate source identity"
+
+identity_seen=0
+max_bound_build=0
+last_identity_commit=""
+previous_commit=""
+previous_identity_blob=""
+history_commits="$(git rev-list --first-parent --reverse HEAD)" ||
+  fail "could not enumerate first-parent candidate history"
+while IFS= read -r commit; do
+  [[ "$commit" =~ ^[0-9a-f]{40,64}$ ]] ||
+    fail "first-parent history contains an invalid commit identity"
+  commit_identity_blob="$(
+    git rev-parse --verify "${commit}:${identity_file}" 2>/dev/null || true
+  )"
+  if [[ -z "$commit_identity_blob" ]]; then
+    ((identity_seen == 0)) ||
+      fail "current build source identity was removed from candidate history"
+    previous_commit="$commit"
+    continue
+  fi
+  [[ "$commit_identity_blob" =~ ^[0-9a-f]{40,64}$ ]] ||
+    fail "candidate history contains an invalid source identity blob"
+  if ((identity_seen == 1)) &&
+    [[ "$commit_identity_blob" == "$previous_identity_blob" ]]; then
+    previous_commit="$commit"
+    continue
+  fi
+
+  binding_version="$(identity_field_at_ref "$commit" marketing-version)"
+  binding_build="$(identity_field_at_ref "$commit" build-number)"
+  release_version="$(release_field_at_ref "$commit" marketing-version)"
+  release_build="$(release_field_at_ref "$commit" build-number)"
+  [[ "$binding_version" == "$release_version" &&
+    "$binding_build" == "$release_build" ]] ||
+    fail "historical source identity does not match release/VERSION at $commit"
+
+  if ((identity_seen == 0)); then
+    if [[ -n "$previous_commit" ]] &&
+      git cat-file -e "${previous_commit}:release/VERSION" 2>/dev/null; then
+      previous_build="$(
+        release_field_at_ref "$previous_commit" build-number
+      )"
+      ((binding_build > previous_build)) ||
+        fail "first source identity binding did not allocate a higher build"
+    elif [[ -n "$previous_commit" ]]; then
+      previous_version_commit="$(
+        git log -1 --format=%H "$previous_commit" -- release/VERSION
+      )"
+      [[ -z "$previous_version_commit" ]] ||
+        fail "release/VERSION was removed before source identity binding"
+    fi
+  else
+    ((binding_build > max_bound_build)) ||
+      fail "candidate source identity reused a historical build number"
+  fi
+
+  identity_seen=1
+  max_bound_build="$binding_build"
+  last_identity_commit="$commit"
+  previous_identity_blob="$commit_identity_blob"
+  previous_commit="$commit"
+done <<<"$history_commits"
+
+((identity_seen == 1)) ||
+  fail "candidate history has no committed source identity"
+git cat-file -e "HEAD:${identity_file}" 2>/dev/null ||
+  fail "HEAD has no committed source identity"
+if git diff --quiet HEAD -- "$identity_file"; then
+  head_commit="$(git rev-parse HEAD)"
+  [[ "$last_identity_commit" == "$head_commit" ]] ||
+    fail "current source identity is not bound to the exact candidate HEAD"
+else
+  ((build_number > max_bound_build)) ||
+    fail "working source identity did not allocate a higher build number"
+fi
+
+current_fingerprint="$(scripts/release-source-fingerprint)"
+[[ "$identity_fingerprint" == "$current_fingerprint" ]] ||
+  fail "tracked release source changed without a new version and build"
+
+echo "Release source identity verified: ${marketing_version} (${build_number})"

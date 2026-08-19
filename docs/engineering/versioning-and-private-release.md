@@ -4,7 +4,7 @@
 
 - 生效日期：2026-08-05
 - 当前已发行基线：`0.2.6 (28)`；精确 commit 为 `12ed27bf5d43077744a65c932703f2051f6d4ca4`，由 annotated tag `v0.2.6` 绑定。
-- 当前未发行 trial candidate：`0.3.0 (32)`；采用 schema 19 Replication V2 clean cut，并包含 incomplete replication view 根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
+- 当前未发行 trial candidate：`0.3.1 (35)`；采用 schema 19 Replication V2 clean cut，并包含飞光 Markdown 换行根因修复；在双实体 Mac 与连续 72 小时 soak 完成前不得建立 tag 或宣称 release ready。
 - 发行方式：在公开仓库建立公开 GitHub Release，提供 Apple Development 签名 DMG；不宣称 Developer ID、notarization、staple 或 Gatekeeper 分发完成。
 
 本文是营销版本、构建号、资料兼容与 GitHub 发行的唯一流程说明。它不改变任何用户资料兼容承诺；改变兼容范围前必须取得用户明确审核与同意。
@@ -21,6 +21,7 @@ build_number=正整数
 - `marketing_version` 写入 `CFBundleShortVersionString`，并对应精确 Git tag `v<marketing_version>`。
 - `build_number` 写入 `CFBundleVersion`。每一次私有 DMG 候选都必须使用从未使用过的更大构建号；不得覆盖、重签或替换既有 build 的 DMG。
 - [`release/BUILD-LEDGER.tsv`](../../release/BUILD-LEDGER.tsv) 是不可复用 build 的机器可检登记。版本文件必须恰好指向一条 `candidate` 或 `released` 记录；build 必须严格递增。失败候选保留并在后续准备时标为 `retired`，绝不回收其号码。
+- [`release/CURRENT-BUILD-SOURCE`](../../release/CURRENT-BUILD-SOURCE) 以版本、build 与 source fingerprint 绑定当前候选。fingerprint 覆盖除 identity 自身外的全部 tracked 输入，包括文档与机器消费的门禁登记；identity 的最后一次变更还必须是精确 `HEAD`，因为 App 会内嵌该 commit。verifier 审计完整 first-parent 历史，首次绑定及每次后续绑定都必须使用大于所有历史绑定的新 build；浅历史、移除后重新引入、回退再复用、docs-only 或 empty follow-up commit 全部 fail-closed。未跟踪与未提交变化继续由 clean-source preflight 独立阻断。
 - `scripts/release-version` 是 shell 读取入口。版本环境变量一旦存在即 fail-closed；不得再用环境变量生成另一套身份。
 - App 内的 Commit、UTC build date、Mach-O UUID、dSYM 和 SHA 继续由真实构建产物派生，不能手写进版本文件。
 
@@ -30,7 +31,10 @@ build_number=正整数
 
 | 当前基线 | SQLite | JSON 数据包 | 升级／导入承诺 |
 | --- | --- | --- | --- |
-| `0.3.0 (32)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18、format 6、V1 或无 marker 非空 repository 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (35)` trial candidate | current schema `19` | current format `7` | 开发期 clean cut：只接受空库或 exact schema 19；只导入 canonical format 7。v15／v17／v18、format 6、V1 或无 marker 非空 repository 全部在写入前 fail-closed，不迁移、不兼容、不自动删除 |
+| `0.3.1 (34)` 退役候选 | current schema `19` | current format `7` | review 证明 shallow CI、build 回退再恢复、首次同 build 绑定与 docs／empty follow-up commit 仍可绕过首版完整性检查；不得重打、覆盖、交付或复用 |
+| `0.3.1 (33)` 退役候选 | current schema `19` | current format `7` | 首版 source identity 历史检查只观察相邻 commit，非法同 build 重新绑定可被后续文档 commit 掩盖；不得重打、覆盖、交付或复用 |
+| `0.3.0 (32)` 退役候选 | current schema `19` | current format `7` | 飞光 Markdown 修复后源码变化却复用 candidate 身份；不得重打、覆盖、交付或复用 |
 | `0.3.0 (31)` 退役候选 | current schema `19` | current format `7` | 已完成第一次本机 Replication V2 trial；后续 incomplete replication view 修复改变源码身份，因此不得重打、覆盖、交付或复用 |
 | `0.3.0 (30)` 退役候选 | current schema `19` | current format `7` | 发行 runtime evidence gate 暴露 E2E producer／inventory 漂移后退役，不得重打、交付或复用 |
 | `0.2.7 (29)` 退役候选 | 当前 schema `18` | 当前 format `7` | 只记录历史 confirmed-frontier 候选；源码与 schema 已被 Replication V2 取代，build 29 不得重打、交付或复用 |
@@ -44,9 +48,9 @@ build_number=正整数
 
 1. **立项与版本分配**：在需求设计中声明用户可见范围、目标 `MAJOR.MINOR.PATCH`、下一构建号和资料兼容矩阵。营销版本只在兼容决策、产品范围和验证方式被审核后修改；build 号随候选递增。
 2. **开发与合并**：每项工作使用隔离 worktree，按需求、现状、设计、实施、验证、闭环推进。修复必须更新故障案例和 fast／symptom／release 门禁映射。
-3. **合入 `main`**：只接受经过 review 的干净提交。trial 阶段允许本机 `main` 尚未 push；任何未提交内容都不能进入 package。正式发布前再按已审核步骤正常 push `main`，它仍是唯一发行候选分支。
+3. **合入并推送 `main`**：只接受经过 review 的干净提交。当前用户明确要求先把精确候选 push 到 `origin/main`，再开始私有出包；任何未提交内容或尚未到达远端的候选都不能进入本轮 package。`main` 仍是唯一发行候选分支。
 4. **发行前验证**：在实际打包的 `main` worktree 运行 `make check`、writer-lease E2E 与完整 `scripts/test-e2e`，得到同一 evidence run 的成功清单。新增或改变用户可见能力时，同步运行 `make test-demo-fixture`；资料变更额外运行 clean-cut 与 current JSON 导入专项测试。
-5. **Pre-tag trial 门禁**：在没有同名 tag 与目标输出时运行 `scripts/release-private-dmg --trial /absolute/Downloads/Noonmark-X.Y.Z-buildN.dmg`。`scripts/verify-release-trial-version` 要求 current version 精确指向 ledger 最后一条最高 build 的 `candidate`；随后执行与 tagged 本机候选相同的静态证据、诊断闭环、腾讯输入 release smoke、DMG 打包、只读静态验证、受控 `dmg-validation` 安装／退出／重启及最终证据对账。入口在 full verifier 前后固定同一 package manifest SHA；全部成功后，publisher 仍须把 source、临时副本和 final output 三次对账到该 manifest 的 `dmg_sha256`，才按 current version／build 的 canonical basename，在 physical non-symlink parent 内 exclusive-create trial DMG 并报告 SHA-256。既有输出永不覆盖。trial 不检查 GitHub Environment，也不触发 hosted CI、push 或 Release。
+5. **Pre-tag trial 门禁**：确认 `origin/main` 精确等于候选 `HEAD` 后，在没有同名 tag 与目标输出时运行 `scripts/release-private-dmg --trial /absolute/Downloads/Noonmark-X.Y.Z-buildN.dmg`。`scripts/verify-release-trial-version` 要求 current version 精确指向 ledger 最后一条最高 build 的 `candidate`，并通过共享 source identity verifier 证明完整历史、精确 HEAD 与全部 tracked inputs 仍绑定该 candidate；随后执行与 tagged 本机候选相同的静态证据、诊断闭环、腾讯输入 release smoke、DMG 打包、只读静态验证、受控 `dmg-validation` 安装／退出／重启及最终证据对账。入口在 full verifier 前后固定同一 package manifest SHA；全部成功后，publisher 仍须把 source、临时副本和 final output 三次对账到该 manifest 的 `dmg_sha256`，才按 current version／build 的 canonical basename，在 physical non-symlink parent 内 exclusive-create trial DMG 并报告 SHA-256。既有输出永不覆盖。trial 入口本身不检查 GitHub Environment，也不触发 hosted CI、push 或 Release。
 6. **实体灰度与 soak**：trial DMG 只以全新、不覆盖的名称交给当前指定用户。双实体 Mac 与连续 72 小时 soak 全绿前不建立 tag；失败时退休该 build，下一候选使用更大 build，不覆盖现存产物。
 7. **本地候选 tag 与 tagged 门禁**：灰度完成并获审核后，在精确候选 commit 创建带注释 tag `v<marketing_version>`，先不 push。默认运行 `scripts/release-private-dmg`；它继续要求 tag 精确指向 `HEAD`、GitHub release Environment ready，并重跑完整本机 package／install 门禁。`make package-dmg` 与 `make release-private-dmg` 只委托默认 tagged 入口，不会隐式进入 trial。
 8. **候选发布**：只用 `scripts/push-release-tag` 推送。该入口要求 `origin/main` 精确等于 `HEAD`、远端没有同名 tag／Release、GitHub `release` Environment 恰有三个签名 secret 且只允许 `v*` tag。tag workflow 还拒绝重复 run attempt 和同一 commit 的既有 run，验证该 commit 已有且唯一的 GitHub-hosted CI 成功，再以临时 keychain 验证唯一签名身份和一次性签名探针，最后发布公开 GitHub Release。公开 Release notes 只从英文 conventional commits 生成，过滤 CI／release／test／docs 等非用户作用域，并在发布前后拒绝 Han 正文；内部版本记录继续使用新加坡中文。若任一门禁失败，删除未交付候选并用新 build 重新开始；不得移动已交付 tag。成功后保留 SHA-256、release manifest、dSYM 和 release note。

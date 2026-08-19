@@ -23,6 +23,8 @@ jobs:
       NOONMARK_EVIDENCE_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Toolchain
         run: |
           xcodebuild -version

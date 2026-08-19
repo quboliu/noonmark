@@ -64,6 +64,28 @@ done < <(tail -n +2 "$ledger_file")
 [[ "$current_matches" -eq 1 ]] ||
   fail "current version must have exactly one active build ledger entry"
 
+source_identity_file="release/CURRENT-BUILD-SOURCE"
+[[ -f "$source_identity_file" && ! -L "$source_identity_file" ]] ||
+  fail "current build source identity is missing or not a regular file"
+source_identity_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  source_identity_lines+=("$line")
+done <"$source_identity_file"
+[[ "${#source_identity_lines[@]}" -eq 3 ]] ||
+  fail "current build source identity must contain exactly three lines"
+[[ "${source_identity_lines[0]}" == "marketing_version=$marketing_version" &&
+  "${source_identity_lines[1]}" == "build_number=$build_number" &&
+  "${source_identity_lines[2]}" =~ ^source_fingerprint_sha256=([0-9a-f]{64})$ ]] ||
+  fail "current build source identity does not match the current version"
+stored_source_fingerprint="${BASH_REMATCH[1]}"
+[[ -x scripts/release-source-fingerprint &&
+  -x scripts/verify-release-source-identity ]] ||
+  fail "release source identity commands are missing or not executable"
+[[ "$(scripts/release-source-fingerprint)" == "$stored_source_fingerprint" ]] ||
+  fail "current build source fingerprint does not match tracked release inputs"
+scripts/verify-release-source-identity >/dev/null ||
+  fail "current build source identity verifier rejected the repository"
+
 rg -F 'scripts/release-version marketing-version' scripts/build-mac-app >/dev/null ||
   fail "App build does not read the tracked marketing version"
 rg -F 'scripts/release-version build-number' scripts/build-mac-app >/dev/null ||
@@ -79,11 +101,34 @@ rg -F 'scripts/verify-release-trial-version' "$release_script" >/dev/null ||
   fail "private release entry does not expose the pre-tag trial verifier"
 [[ -x scripts/verify-release-trial-version ]] ||
   fail "pre-tag trial version verifier is missing or not executable"
+rg -F 'scripts/verify-release-source-identity' scripts/verify-release-trial-version \
+  >/dev/null ||
+  fail "pre-tag trial verifier does not bind the tracked release source"
+rg -F 'scripts/verify-release-source-identity' scripts/verify-release-version-tag \
+  >/dev/null ||
+  fail "tag verifier does not bind the tracked release source"
 rg -F 'fetch-depth: 0' .github/workflows/release-publish.yml >/dev/null ||
   fail "release workflow does not fetch the annotated version tag"
+rg -F 'fetch-depth: 0' .github/workflows/ci.yml >/dev/null ||
+  fail "hosted CI does not fetch the source identity history"
 rg -F 'git cat-file -t' scripts/verify-release-version-tag >/dev/null ||
   fail "release version tag verifier does not require an annotated tag"
 rg -F 'release/BUILD-LEDGER.tsv' docs/engineering/versioning-and-private-release.md >/dev/null ||
   fail "version governance does not document the build ledger"
+rg -F 'scripts/verify-release-source-identity' scripts/test-dmg-install >/dev/null ||
+  fail "real DMG install gate does not consume candidate source identity"
+install_source_gate_line="$(
+  awk '$0 == "scripts/verify-release-source-identity" { print NR }' \
+    scripts/test-dmg-install
+)"
+install_runtime_setup_line="$(
+  awk '$0 == "source scripts/runtime-profile-common" { print NR }' \
+    scripts/test-dmg-install
+)"
+[[ "$install_source_gate_line" =~ ^[1-9][0-9]*$ &&
+  "$install_runtime_setup_line" =~ ^[1-9][0-9]*$ ]] ||
+  fail "real DMG install source or runtime gate is ambiguous"
+((install_source_gate_line < install_runtime_setup_line)) ||
+  fail "real DMG install audits source identity after runtime profile setup"
 
 echo "Release version contract passed: $marketing_version ($build_number)"

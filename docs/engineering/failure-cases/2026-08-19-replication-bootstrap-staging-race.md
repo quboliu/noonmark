@@ -1,6 +1,6 @@
 # FAIL-2026-08-19-03：Replication bootstrap 活跃 staging 误判与跨 Mac authority 分歧
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T10:56:53-04:00
 - 影响版本／构建：未发行 `0.3.1 (37)`、`(38)` 与 `(39)` candidate；三者都没有 push、打包或分发
@@ -8,7 +8,7 @@
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 首轮修复提交：`2bd4734e5af061fe3709fa7ffdfee199808c1b5d`（`fix(sync): serialize replication repository bootstrap`，只修复同机并发）
-- 完整修复提交：待本案例关联实现 commit 后回填
+- 修复提交：`ab9bf607334be0f76ccb924777fa91c16188f3e1`（`fix(sync): converge iCloud repository bootstrap authority`）
 
 ## 用户症状与影响
 
@@ -75,7 +75,7 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - Red（review）：两个独立 mirror 的旧随机 generator 产生不同 marker；100 ms sleep 无法证明 opener 到达锁点；只调用 `otherVersionsOfItem` 漏掉 SDK 定义的 non-local versions。
 - Green（聚焦）：确定性 generation、既有 authority、scope validation、本机 exact／divergent versions、injected non-local divergence、完整／部分／分歧 staging、显式 lock handshake 与 endpoint preflight 均已转绿。
 - Green（原受害组）：加入 non-local validator 后，`swift test --filter NoonmarkSyncTests` 运行 330 项、0 失败。
-- 待完成：修复 commit、案例状态与门禁映射闭环、完整 `make check`、双轴 review、真实签名 App E2E、writer lease、DMG release chain。以上未完成前案例保持处理中，不能宣称发行就绪。
+- Green（闭环）：完整修复已由 commit `ab9bf607334be0f76ccb924777fa91c16188f3e1` 独立承载，案例与 fast／symptom 门禁映射已经回填。完整 `make check`、双轴 review、真实签名 App E2E、writer lease 与 DMG release chain 仍是 build 40 发行门禁，不能用案例已修复替代发行就绪。
 
 ## 永久门禁
 
@@ -85,7 +85,7 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 
 ## 发行、风险、回滚、灰度与监控
 
-风险等级为 P：这是同步 repository 首次建立与跨设备 generation authority。build 37、38 与 39 全部在 push／出包前退役，不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`，最终闭环只能使用更大的全新 build。
+风险等级为 P：这是同步 repository 首次建立与跨设备 generation authority。build 37、38 与 39 全部在 push／出包前退役，不覆盖、不重签、不分发；营销版本保持用户指定的 `0.3.1`，当前闭环候选为全新的 build 40。
 
 回滚为整体 revert 独立 sync 修复 commit 并退休受影响 candidate；不得取消 authority validation、恢复随机 fresh iCloud generation、增加 sleep／timeout、自动清理 staging、resolve file versions、读取 production 或修改任何既有 iCloud 对象。由于所有新增远端动作仍是 append-only exact publication，回滚不需要也不允许远端删除。
 

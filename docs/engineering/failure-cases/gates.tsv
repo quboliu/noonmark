@@ -274,6 +274,7 @@ FAIL-2026-08-12-03	symptom	scripts/test-replication-incomplete-local-view	script
 FAIL-2026-08-19-01	fast	scripts/test-unit	scripts/check	NoonmarkMacUIContractTests 必须保留普通 Markdown 换行、粗体与链接语义
 FAIL-2026-08-19-01	symptom	scripts/test-e2e	scripts/test-all	真实飞光物理输入与提交后必须以 Markdown paragraph 几何证明普通换行仍为两行
 FAIL-2026-08-19-02	fast	scripts/test-release-version-contract	scripts/check	VERSION／ledger 结构、共享 candidate authority 内部顺序、PR-head conditional transition，以及 trial／tag／真实 install／tag publisher／hosted workflow 的统一消费与发布前重验必须一致
+FAIL-2026-08-19-02	fast	scripts/test-github-release-readiness-contract	scripts/check	workflow 与 tag publisher 必须只通过共享 candidate authority 消费 hosted CI，并保持签名、push 与 publication verification 的严格顺序
 FAIL-2026-08-19-02	fast	scripts/test-release-trial-contract	scripts/check	隔离 Git fixture 对 shallow、首次及 preidentity 历史 build 复用、历史 binding 回退复用、docs／empty follow-up、source mutation、amend、synthetic merge 与 hosted CI failure 均须持续 fail-closed；只有更大 build 的精确 pushed、CI-success HEAD 可转绿
 FAIL-2026-08-19-02	fast	scripts/test-release-origin-main-contract	scripts/check	live origin/main 只接受精确 HEAD；missing origin、amend、未 push follow-up 与 synthetic merge 必须 fail-closed
 FAIL-2026-08-19-02	fast	scripts/test-release-source-transition-contract	scripts/check	普通 PR／push 不冒充发行候选；PR 只在 identity 相对唯一 merge-base 变化、push 只在相对 first parent 变化时调用真实 source audit

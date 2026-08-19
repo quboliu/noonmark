@@ -16,8 +16,12 @@ require_order() {
   local first_line
   local second_line
 
-  first_line="$(rg -n -F "$first" "$path" | head -n 1 | cut -d: -f1)"
-  second_line="$(rg -n -F "$second" "$path" | head -n 1 | cut -d: -f1)"
+  first_line="$(
+    rg -n -F "$first" "$path" | cut -d: -f1 | sed -n '1p' || true
+  )"
+  second_line="$(
+    rg -n -F "$second" "$path" | cut -d: -f1 | sed -n '1p' || true
+  )"
   [[ "$first_line" =~ ^[0-9]+$ && "$second_line" =~ ^[0-9]+$ &&
     "$first_line" -lt "$second_line" ]] ||
     fail "$path does not order '$first' before '$second'"
@@ -207,7 +211,7 @@ rg -F 'codesign --verify --strict "$NOONMARK_CI_SIGNING_PROBE"' \
   fail "release workflow does not prove the imported private key"
 require_order \
   "$workflow" \
-  'name: Verify prior GitHub-hosted CI' \
+  'name: Verify release candidate authority' \
   'name: Import and prove Apple Development signing identity'
 require_order \
   "$workflow" \
@@ -228,10 +232,10 @@ rg -F 'scripts/verify-github-release-language "$tag"' \
 require_order \
   "$tag_publisher" \
   'scripts/verify-github-release-readiness' \
-  'scripts/verify-github-hosted-ci "$head_commit"'
+  'scripts/verify-release-candidate-authority "$head_commit"'
 require_order \
   "$tag_publisher" \
-  'scripts/verify-github-hosted-ci "$head_commit"' \
+  'scripts/verify-release-candidate-authority "$head_commit"' \
   'git push origin'
 require_order \
   "$tag_publisher" \

@@ -13,7 +13,7 @@
 - 第四轮修复提交：`5cd07d248e2c1a5e067d0645334b362fce561e18`（`fix(sync): finish authority validation on every path`）
 - 第五轮补漏提交：`ce87b5117a2cc7bf3e84649dd1b31d74f902f670`（`fix(sync): reject authority changes before operation`）与 `0ce661fa4e70edbf55a1365b5fd15141b101b646`（`fix(sync): harden authority release evidence`）
 - 第六轮补漏提交：`6c596cf`（`fix(sync): enforce live iCloud release evidence`）与 `6308032`（`test(sync): isolate authority diagnostic roots`）
-- 第七轮 readiness 修复提交：待确定
+- 第七轮 readiness 修复提交：`124cb0037c22cc7e03c659c97db2d8a725f0caca`（`fix(sync): wait for iCloud authority readiness`）
 
 ## 用户症状与影响
 
@@ -123,7 +123,8 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - Green（首轮发行前验证）：完整 `make check` 共 1,627 项、0 失败；签名 App 的飞光 Markdown 用户路径与 writer lease 全部通过。旧随机 authority 的真实 append-only round 以 1 个对象和 `authority-rejected-zero-write` 转绿。
 - Red（fresh iCloud readiness）：fresh deterministic round 回报 `unavailableMarkerVersion`／`syncProtocol/444`；精确只读 probe 随后证明同一 marker 已上传且没有分歧版本，旧 runtime 把短暂 metadata readiness 错判为 `.runtimeFailure`。
 - Green（readiness 聚焦）：5 项新增测试固定 readiness 首次不可用时零 endpoint operation、pre-operation race 零远端 mutation、injected 与 native iCloud pre-operation unavailable 都映射 typed waiting，以及 post-validation unavailable 保持原终止性 authority error；5 项、0 失败。完整聚合与真实 iCloud symptom 尚待复跑。
-- 待完成：readiness 修复 commit、完整聚合、真实签名 App／append-only iCloud symptom gate、最终 build 绑定、push、hosted CI 与私有 DMG release chain。完成并回填精确 commit 前，本案例保持「处理中」。
+- Green（readiness 完整复验）：commit `124cb0037c22cc7e03c659c97db2d8a725f0caca` 的完整 `make check`、签名 App E2E 与 writer lease 均返回 0；旧随机 authority session `265276a5-891c-467e-a15b-8ee0ca1147c1`／round `bfe506d7-1a84-46b0-8f4a-bae1b91571fc` 以 1 个对象、`authority-rejected-zero-write` 转绿；fresh deterministic App stress session `cb07caee-44be-4de0-a17c-2580ec8000e5`／round `fafb50fb-7518-4340-b5ac-e91037d8ab04` 完成 exercise、重启与第二 SQLite 对账。
+- 后续 multi-round 门禁暴露的是 `973ff77` 引入的 presenter writer-intent 假分歧，已独立归档为 `FAIL-2026-08-19-04`；它不推翻本案例的 readiness 根因与上述真实症状绿证据。由于该独立修复仍会修改共享 authority 组件，本案例等待最终精确 source 的回归复验后再改为「已修复」。
 
 ## 永久门禁
 

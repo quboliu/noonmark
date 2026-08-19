@@ -365,7 +365,15 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
             snapshot: {
                 ICloudMarkerVersionSnapshot(current: current, conflicts: [])
             },
-            finish: { false }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: current,
+                        conflicts: []
+                    ),
+                    verdict: .stable
+                )
+            }
         )
 
         do {
@@ -391,7 +399,7 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         XCTAssertFalse(operationDidRun)
     }
 
-    func testAuthorityGuardFailsAfterInventoryChangesDuringOperation()
+    func testAuthorityGuardRevalidatesEquivalentInventoryEvents()
         async throws
     {
         let marker = try markerData(
@@ -408,7 +416,56 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
             snapshot: {
                 ICloudMarkerVersionSnapshot(current: marker, conflicts: [])
             },
-            finish: { true }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: marker,
+                        conflicts: [marker]
+                    ),
+                    verdict: .revalidatedEquivalent
+                )
+            }
+        )
+
+        let result = try await ICloudReplicationRepositoryAuthority
+            .withValidatedMarkerAuthority(
+                expected: try descriptor(from: marker),
+                observationSession: session
+            ) {
+                await operation.recordRun()
+                return 42
+            }
+
+        XCTAssertEqual(result, 42)
+        let operationDidRun = await operation.didRun()
+        XCTAssertTrue(operationDidRun)
+    }
+
+    func testAuthorityGuardRejectsDivergentPresenterEvidenceAfterOperation()
+        async throws
+    {
+        let marker = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let session = ICloudMarkerAuthorityObservationSession(
+            initialSnapshot: ICloudMarkerVersionSnapshot(
+                current: marker,
+                conflicts: []
+            ),
+            snapshot: {
+                ICloudMarkerVersionSnapshot(current: marker, conflicts: [])
+            },
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: marker,
+                        conflicts: []
+                    ),
+                    verdict: .divergent
+                )
+            }
         )
 
         do {
@@ -417,18 +474,52 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
                     expected: try descriptor(from: marker),
                     observationSession: session
                 ) {
-                    await operation.recordRun()
-                    return 42
+                    42
                 }
-            XCTFail("a changed version inventory must fail closed")
+            XCTFail("divergent presenter evidence must fail closed")
         } catch {
             XCTAssertEqual(
                 error as? ICloudReplicationRepositoryAuthorityError,
                 .divergentMarkerVersion
             )
         }
-        let operationDidRun = await operation.didRun()
-        XCTAssertTrue(operationDidRun)
+    }
+
+    func testPresenterEventAccumulatorClassifiesObservedBytes() throws {
+        let marker = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let divergent = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let equivalent = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        equivalent.recordCurrentData(marker)
+        equivalent.recordVersionData(marker)
+        XCTAssertEqual(equivalent.verdict(), .revalidatedEquivalent)
+
+        let divergentCurrent = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        divergentCurrent.recordCurrentData(divergent)
+        XCTAssertEqual(divergentCurrent.verdict(), .divergent)
+
+        let divergentVersion = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        divergentVersion.recordVersionData(divergent)
+        XCTAssertEqual(divergentVersion.verdict(), .divergent)
+
+        let unavailable = ICloudMarkerAuthorityEventAccumulator(
+            expectedMarkerData: marker
+        )
+        unavailable.recordObservationUnavailable()
+        XCTAssertEqual(unavailable.verdict(), .unavailable)
     }
 
     func testAuthorityGuardRejectsMarkerChangedDuringOperation()
@@ -452,7 +543,15 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
             snapshot: {
                 ICloudMarkerVersionSnapshot(current: changed, conflicts: [])
             },
-            finish: { false }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: changed,
+                        conflicts: []
+                    ),
+                    verdict: .stable
+                )
+            }
         )
 
         do {
@@ -491,7 +590,15 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
                     conflicts: [marker]
                 )
             },
-            finish: { false }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: marker,
+                        conflicts: [marker]
+                    ),
+                    verdict: .stable
+                )
+            }
         )
 
         let result = try await ICloudReplicationRepositoryAuthority
@@ -526,7 +633,15 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
                     conflicts: []
                 )
             },
-            finish: { false }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: marker,
+                        conflicts: []
+                    ),
+                    verdict: .stable
+                )
+            }
         )
 
         do {
@@ -571,7 +686,15 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
                     conflicts: []
                 )
             },
-            finish: { false }
+            finish: {
+                ICloudMarkerAuthorityFinalObservation(
+                    snapshot: ICloudMarkerVersionSnapshot(
+                        current: changed,
+                        conflicts: []
+                    ),
+                    verdict: .stable
+                )
+            }
         )
 
         do {
@@ -663,6 +786,49 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
 
         XCTAssertEqual(countDuringOperation, 1)
         XCTAssertEqual(presenterCount(), 0)
+    }
+
+    func testNativePresenterDoesNotTreatWriterIntentAsDivergence()
+        async throws
+    {
+        let root = makeRepositoryURL()
+        let opened = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(at: root)
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        ).standardizedFileURL
+        let markerBefore = try Data(contentsOf: markerURL)
+
+        let result = try await ICloudReplicationRepositoryAuthority
+            .withValidatedMarkerAuthority(
+                at: markerURL,
+                expected: opened.descriptor,
+                nonlocalVersionLoader: { _, completion in
+                    completion(.success([]))
+                },
+                operation: {
+                    var coordinationError: NSError?
+                    NSFileCoordinator().coordinate(
+                        writingItemAt: markerURL,
+                        options: [],
+                        error: &coordinationError
+                    ) { _ in
+                        // Writer intent alone must not change authority.
+                    }
+                    if let coordinationError {
+                        throw coordinationError
+                    }
+                    return 42
+                }
+            )
+
+        XCTAssertEqual(result, 42)
+        XCTAssertEqual(try Data(contentsOf: markerURL), markerBefore)
+        XCTAssertFalse(
+            NSFileCoordinator.filePresenters.contains {
+                $0.presentedItemURL?.standardizedFileURL == markerURL
+            }
+        )
     }
 
     func testUnavailableNativeNonlocalInventoryFailsClosedAndUnregisters()

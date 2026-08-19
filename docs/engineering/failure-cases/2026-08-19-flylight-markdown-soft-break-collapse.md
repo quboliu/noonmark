@@ -1,13 +1,13 @@
 # FAIL-2026-08-19-01：飞光 Markdown 普通换行在提交后被折叠
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-08-19T09:00:46Z
 - 影响版本／构建：0.3.0 build 32；source commit `1eb9837c5f74728d04be61af559b4a62e6b12593`
 - 引入提交：`18cc1a5c3da426b60a8f7ce208535c8077ca8b26`（`feat(app): integrate task classification sync and the Zhulong workbench`）
 - Git author／committer：`quboliu <38942505+quboliu@users.noreply.github.com>`／`quboliu <38942505+quboliu@users.noreply.github.com>`
 - 实际修改者：未知；仓库只能证明 Git identity，不能证明实际操作者
-- 修复提交：待回填
+- 修复提交：`7fb9024a96dd3a65c8e4ff980a31e4d7eeb9b85c`（`fix(markdown): preserve authored line breaks`）
 
 ## 用户症状与影响
 
@@ -21,6 +21,7 @@
 - 2026-08-19：先加入单元 tracer，以旧 `.full` 路径得到 `第一行 第二行 链接`，稳定判红。
 - 2026-08-19：共享 renderer 改用 `.inlineOnlyPreservingWhitespace` 后，单元 tracer 与真实飞光症状路径转绿；完整验证与修复 commit 尚待闭环。
 - 2026-08-19T09:25:20Z：真实 Demo `.app` fixture 与完整 `make check` 转绿；修复 commit 尚待闭环。
+- 2026-08-19T05:40:33-04:00：根因修复以 `7fb9024a96dd3a65c8e4ff980a31e4d7eeb9b85c` 提交，案例完成闭环。
 
 ## 复现与证据
 
@@ -57,7 +58,7 @@ block parser 会把相邻普通正文行组合成同一 paragraph，并用 `\n` 
 - 真实 current-source `e2e` App 飞光物理输入、提交及完整 Idea Capture 自动化：`artifacts/flylight-markdown-green.1n8vMU/exercise-result.txt` 为 `ok`。
 - `make test-demo-fixture` 通过；真实 Demo `.app` 完成一年 fixture 安装、SQLite／加密 sidecar 回读，页面切换总耗时 1311 ms，低于 6000 ms 门限。
 - 完整 `make check` 以 exit 0 结束：1594 项 system tests 中 2 项显式 live iCloud 测试按设计未启用，其余 0 失败；Demo 14 项、failure-case 108 个案例、SwiftLint 与 SwiftFormat 门禁均完成。SwiftLint 只报告仓库既有非阻断 warning，本次新增 import 排序 warning 已在随后聚焦 lint 中消除。
-- 最终修复 commit 尚待回填，因此案例保持「处理中」。
+- 根因修复 commit 已精确回填，原始症状由 red 转 green，相关受害路径与永久门禁均通过；案例状态为「已修复」。
 
 ## 永久门禁
 

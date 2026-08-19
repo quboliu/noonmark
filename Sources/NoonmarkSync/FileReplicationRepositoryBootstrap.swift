@@ -678,11 +678,13 @@ private extension FileReplicationRepositoryBootstrap {
         unreadableError: ReplicationRepositoryBootstrapError = .invalidMarker
     ) throws -> ReplicationRepositoryDescriptor {
         var metadata = stat()
-        guard lstat(url.path, &metadata) == 0,
-              metadata.st_mode & S_IFMT == S_IFREG,
+        guard lstat(url.path, &metadata) == 0 else {
+            throw unreadableError
+        }
+        guard metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_mode & S_IFMT != S_IFLNK
         else {
-            throw unreadableError
+            throw ReplicationRepositoryBootstrapError.invalidMarker
         }
         let data: Data
         do {

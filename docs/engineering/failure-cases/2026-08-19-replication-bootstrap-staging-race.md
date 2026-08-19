@@ -9,7 +9,7 @@
 - 实际修改者：未知；Git identity 不能证明实际操作者
 - 首轮修复提交：`2bd4734e5af061fe3709fa7ffdfee199808c1b5d`（`fix(sync): serialize replication repository bootstrap`，只修复同机并发）
 - 第二轮修复提交：`ab9bf607334be0f76ccb924777fa91c16188f3e1`（`fix(sync): converge iCloud repository bootstrap authority`，终审后证实仍不完整）
-- 第三轮修复提交：待确定
+- 第三轮修复提交：`973ff77b3e7e08d223e7418c0478af9139ec5950`（`fix(sync): close iCloud authority observation gaps`）；终审补漏提交待确定
 
 ## 用户症状与影响
 
@@ -32,6 +32,7 @@
 - build 40 双轴终审再发现四项反例：semaphore 在真正调用 `flock` 前已经放行，不能证明发生锁竞争；marker 可在首次 root scan 与 staging scan 之间出现并被误报 legacy；SQLite 中旧随机 authority 可在空 iCloud mirror 发布与新客户端确定性 authority 不同的 marker；部分可读 stage 被改成 `markerPublicationInProgress`，破坏 `FAIL-2026-08-11-17` 已固定的人工重置契约。
 - 同一终审根据本机 Xcode SDK 的 `NSFileVersion.h` 确认，全量版本观察必须在单次 coordinated read 内注册实现 gain／lose 回调的 `NSFilePresenter`、枚举 local versions 并调用 non-local API，而且 presenter 必须跨越实际 remote operation。只做操作前后两个独立 snapshot 仍有漏报窗口。
 - 用户批准兼容边界：旧随机 authority 只有在原 final marker 确实可见且 bytes 一致时才可采用；若 marker 缺失或不可用，必须零写入 fail-closed，等待原 marker 可见。不得自动改写、迁移、fallback 或以 stage 代替 final marker。
+- `973ff77` 后的双轴终审继续判红四个边界：SQLite authority 为 nil 时仍会静默采用可见的旧随机 marker；operation 抛错时跳过 post snapshot；异步 non-local callback 等待期间 current bytes 改变没有触发 authority flag；初始化时既有的 locally available version preflight 被删除，令 clean-cut 本机副作用可能先于分歧阻断。
 
 ## 复现与定位证据
 
@@ -48,6 +49,10 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - endpoint 的 publish、非空 observe 与 read 都必须在任何 object I/O 前消费同一 authority validator。
 - 真实 `flock(LOCK_EX | LOCK_NB)` 必须先返回 `EWOULDBLOCK`／`EAGAIN`，测试握手才可放行 publisher；marker 若在首次 absence 与 staging scan 之间出现，fresh scan 必须采用已经发布的 winner。
 - presenter 必须在 operation 期间真实出现在 `NSFileCoordinator.filePresenters`，结束与任何错误路径后都必须平衡注销；non-local inventory API 不可用时 operation 不得执行。
+- SQLite authority 为 nil 且 mirror 已有旧随机 final marker 时必须按 deterministic authority 分歧阻断，且 mirror inventory 与 marker bytes 保持不变。
+- operation 自身失败也必须执行最终 snapshot；若最终 authority 同时分歧，authority error 优先，不能只回报原 operation error。
+- native presenter 必须以 `presentedItemDidChange` 捕获最终 snapshot 读出 current 后、non-local callback 返回前发生的 bytes 改变；仅监听 version gain／lose 不完整。
+- endpoint 初始化必须在 clean-cut 本机持久化前保留 locally available version preflight；该 preflight 与完整 remote-operation authority window 是两层互补门禁。
 
 ## 排除的假设
 
@@ -72,7 +77,8 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - 对没有既有本机 clean-cut authority 的 iCloud repository，以 domain-separated SHA-256 对稳定 repository scope 取 128 bit，并设置 RFC variant 与 UUIDv8 version。两台当前版本 Mac 即使完全离线初始化，也会生成相同 canonical marker bytes。
 - 若 SQLite 没有 authority，或既有 authority 等于当前 scope 推导值，才允许以确定性 generation 打开／建立 repository；若 SQLite authority 是历史随机值，只允许只读打开可见 final marker并核对 generation。final marker 缺失或不可用时保持 mirror inventory 不变，回报 typed unavailable，不以 stage 补发。
 - 没有 final marker但只有 marker staging时，只有没有历史随机 authority 的 fresh deterministic bootstrap 可以用完整 exact canonical bytes 补齐同一 final key；可读的部分、空、超长、分歧、非 canonical 名称或未知 subtree 全部按 corruption／legacy 边界 fail-closed。
-- 每次 publish、非空 observe 与 read 前，在 coordinated read 内注册 marker `NSFilePresenter`、读取 current 与 local versions并调用 `getNonlocalVersionsOfItem`；presenter 持续覆盖实际 operation，再做 post snapshot，并在 coordinated read 内注销后排空回调。current、版本 inventory 或任一 bytes 变化、非 canonical、不可读都 fail-closed，不 resolve、不删除。初始化仅负责 bootstrap；完整 authority window 固定由每次 remote operation 承担。
+- 初始化完成 bootstrap 后，在同一次 coordinated read 内复核 current 与所有 locally available versions，确保 App 尚未进入 clean-cut 本机持久化前即可阻断已可见分歧；这层 preflight 不冒充 non-local 全量观察。
+- 每次 publish、非空 observe 与 read 前，在 coordinated read 内注册 marker `NSFilePresenter`、读取 current 与 local versions 并调用 `getNonlocalVersionsOfItem`；presenter 监听 bytes change 与 version gain／lose，持续覆盖实际 operation，即使 operation 失败也再做 post snapshot，并在 coordinated read 内注销后排空回调。current、版本 inventory 或任一 bytes 变化、非 canonical、不可读都 fail-closed，不 resolve、不删除。完整 authority window 固定由每次 remote operation 承担。
 - 这套设计以确定性 authority 消除当前版本 fresh bootstrap 的 split-brain 来源，并以 version validator 阻断已出现的分歧；它不宣称 iCloud Drive 获得 server CAS，也不以本机门禁替代双实体 Mac 灰度。
 
 ## 当前验证结果
@@ -81,14 +87,15 @@ Standards review 的跨设备反例不依赖真实用户资料：两个独立临
 - Red（review）：两个独立 mirror 的旧随机 generator 产生不同 marker；100 ms sleep 无法证明 opener 到达锁点；只调用 `otherVersionsOfItem` 漏掉 SDK 定义的 non-local versions。
 - Red（build 40 终审）：旧随机 authority 在 marker 缺失时仍可发布新 marker；marker 在两次 scan 之间出现会被误判；partial stage 返回错误的 in-progress；lock hook 在真实 contention 前触发；presenter 没有跨越 operation。
 - Green（第三轮聚焦）：旧随机 authority 的 absent／empty／stage-only mirror 全部零写入，只有可见且 matching final marker 可采用；derived authority 可重建空 mirror但拒绝不同 marker；marker scan race、partial-stage 人工重置、真实 `EWOULDBLOCK` 握手均已转绿。
-- Green（authority window）：fake session 固定 pre／post marker 与 inventory 变化；真实 Foundation runtime证明 presenter 在 operation 内注册并在成功／non-local unavailable 错误后平衡注销；endpoint publish、非空 observe 与 read 都执行 post validation。聚焦共 31 项、0 失败。
-- Green（原受害组）：完整 `NoonmarkSyncTests` 运行 342 项、0 失败。
-- 待完成：第三轮修复 commit、`make check`、双轴终审、真实签名 App E2E、writer lease 与 release chain。完成并回填精确 commit 前，本案例保持「处理中」。
+- Red（`973ff77` 终审）：新增 7 个确定性用例在旧实现稳定失败，直接证明 nil authority 静默采用随机 marker、失败 operation 的 post snapshot 次数为 0、最终 snapshot 异步窗口内 bytes 改变仍返回成功，以及 marker directory 被误报暂时不可用。
+- Green（authority window）：fake session 固定 pre／post marker 与 inventory 变化，并证明失败 operation 仍执行 post validation 且 authority failure 优先；真实 Foundation runtime 证明 presenter 在 operation 内注册、捕获最终 snapshot 异步窗口内的 bytes 改变，并在成功／non-local unavailable 错误后平衡注销；endpoint publish、非空 observe 与 read 都执行 post validation。聚焦共 38 项、0 失败。
+- Green（原受害组）：完整 `NoonmarkSyncTests` 运行 349 项、0 失败；`make format-check` 与 `make lint` 均返回 0。
+- 待完成：终审补漏 commit、`make check`、再次双轴终审、真实签名 App／append-only iCloud symptom gate、writer lease 与 release chain。完成并回填精确 commit 前，本案例保持「处理中」。
 
 ## 永久门禁
 
 - fast：`scripts/test-replication-bootstrap-concurrency` 在真实临时 filesystem 运行 bootstrap、iCloud authority 与 endpoint preflight 测试，固定同机 lock handshake、独立 mirror deterministic marker、远端 staging 三态、本机／non-local version 分歧与零写入 fail-closed；由 `scripts/test-replication-v2-recovery-contract` 纳入 `scripts/check`。
-- symptom：`scripts/test-unit` 在完整 `NoonmarkSyncTests` 进程重跑所有同步消费者，捕获原始全组失败；由 `scripts/check` 强制调用。
+- symptom：`scripts/test-replication-v2-app-stress` 以真实签名隔离 App 在全新 append-only iCloud round 完成 deterministic bootstrap、remote operations、重启及第二份 SQLite 收敛；由显式 `scripts/test-replication-v2-real-validation` 强制调用。普通 unit process 只作为受害组回归，不再冒充 symptom gate。
 - 真实双 Mac：只有 append-only 静态门禁与本机症状门禁先通过后，才可按专用 session／round 在两台实体 Mac 执行；对象永久保留，不清理，不把本机 mirror 测试冒充跨设备结论。
 
 ## 发行、风险、回滚、灰度与监控

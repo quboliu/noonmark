@@ -201,6 +201,49 @@ final class ContentAddressedFileReplicationEndpointTests: XCTestCase {
         XCTAssertEqual(validations.count, 3)
     }
 
+    func testICloudEndpointCompletesPostValidationWhenOperationThrows()
+        async throws
+    {
+        let rootURL = makeRepositoryURL()
+        let publication = try publication(sequence: 1)
+        let writer = ContentAddressedFileReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID
+        )
+        _ = try await writer.publish(sealed: publication)
+        let validations = AuthorityValidationRecorder()
+        let endpoint = ICloudDriveReplicationEndpoint(
+            rootURL: rootURL,
+            generationID: generationID,
+            fileDataReader: { _ in
+                Data("corrupt".utf8)
+            },
+            repositoryAuthorityPostValidation: {
+                validations.record()
+            },
+            downloadRequest: { _ in }
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            {
+                try await endpoint.read(
+                    after: .origin,
+                    budget: ReplicationReadBudget(
+                        maximumPublications: 10,
+                        maximumBytes: 1_000_000
+                    )
+                )
+            },
+            { error in
+                XCTAssertEqual(
+                    error as? FileReplicationEndpointError,
+                    .invalidObject
+                )
+            }
+        )
+        XCTAssertEqual(validations.count, 1)
+    }
+
     func testFirstPublicationLargerThanByteBudgetStillAdvancesCursor()
         async throws
     {

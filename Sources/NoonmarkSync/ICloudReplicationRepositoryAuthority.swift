@@ -90,11 +90,9 @@ enum ICloudReplicationRepositoryAuthority {
                 at: rootURL,
                 generationID: { derivedGenerationID }
             )
-        if let existingGenerationID {
-            guard result.descriptor.generationID == existingGenerationID else {
-                throw ICloudReplicationRepositoryAuthorityError
-                    .divergentMarkerVersion
-            }
+        guard result.descriptor.generationID == derivedGenerationID else {
+            throw ICloudReplicationRepositoryAuthorityError
+                .divergentMarkerVersion
         }
         return result
     }
@@ -113,7 +111,54 @@ enum ICloudReplicationRepositoryAuthority {
         }
     }
 
+    static func validateLocallyAvailableMarkerVersions(
+        at markerURL: URL,
+        expected descriptor: ReplicationRepositoryDescriptor
+    ) throws {
+        var snapshot: ICloudMarkerVersionSnapshot?
+        var readFailed = false
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(
+            readingItemAt: markerURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                let versions =
+                    (NSFileVersion.otherVersionsOfItem(
+                        at: coordinatedURL
+                    ) ?? [])
+                    + (NSFileVersion.unresolvedConflictVersionsOfItem(
+                        at: coordinatedURL
+                    ) ?? [])
+                snapshot = ICloudMarkerVersionSnapshot(
+                    current: try Data(
+                        contentsOf: coordinatedURL,
+                        options: [.mappedIfSafe]
+                    ),
+                    conflicts: try versions.map {
+                        try Data(
+                            contentsOf: $0.url,
+                            options: [.mappedIfSafe]
+                        )
+                    }
+                )
+            } catch {
+                readFailed = true
+            }
+        }
+        guard coordinationError == nil,
+              readFailed == false,
+              let snapshot
+        else {
+            throw ICloudReplicationRepositoryAuthorityError
+                .unavailableMarkerVersion
+        }
+        try validate(snapshot, expected: descriptor)
+    }
+
     static func withValidatedMarkerAuthority<Result: Sendable>(
+        isolation: isolated (any Actor)? = #isolation,
         at markerURL: URL,
         expected descriptor: ReplicationRepositoryDescriptor,
         nonlocalVersionLoader: @escaping ICloudMarkerNonlocalVersionLoader
@@ -125,17 +170,17 @@ enum ICloudReplicationRepositoryAuthority {
             expected: descriptor,
             nonlocalVersionLoader: nonlocalVersionLoader
         )
-        do {
-            let result = try await operation()
-            try await finishValidatedMarkerAuthority(lease)
-            return result
-        } catch {
-            cancelValidatedMarkerAuthority(lease)
-            throw error
-        }
+        return try await executeRequiringPostValidation(
+            isolation: isolation,
+            operation: operation,
+            postValidation: {
+                try await finishValidatedMarkerAuthority(lease)
+            }
+        )
     }
 
     static func withValidatedMarkerAuthority<Result: Sendable>(
+        isolation: isolated (any Actor)? = #isolation,
         expected descriptor: ReplicationRepositoryDescriptor,
         observationSession: ICloudMarkerAuthorityObservationSession,
         operation: () async throws -> Result
@@ -144,14 +189,30 @@ enum ICloudReplicationRepositoryAuthority {
             expected: descriptor,
             observationSession: observationSession
         )
+        return try await executeRequiringPostValidation(
+            isolation: isolation,
+            operation: operation,
+            postValidation: {
+                try await finishValidatedMarkerAuthority(lease)
+            }
+        )
+    }
+
+    static func executeRequiringPostValidation<Result: Sendable>(
+        isolation _: isolated (any Actor)? = #isolation,
+        operation: () async throws -> Result,
+        postValidation: () async throws -> Void
+    ) async throws -> Result {
+        let result: Result
         do {
-            let result = try await operation()
-            try await finishValidatedMarkerAuthority(lease)
-            return result
+            result = try await operation()
         } catch {
-            cancelValidatedMarkerAuthority(lease)
-            throw error
+            let operationError = error
+            try await postValidation()
+            throw operationError
         }
+        try await postValidation()
+        return result
     }
 
     static func beginValidatedMarkerAuthority(
@@ -177,8 +238,8 @@ enum ICloudReplicationRepositoryAuthority {
         do {
             let finalSnapshot = try await lease.observationSession.snapshot()
             try validate(finalSnapshot, expected: lease.expected)
-            let versionInventoryChanged = try lease.observationSession.finish()
-            guard versionInventoryChanged == false else {
+            let authorityChanged = try lease.observationSession.finish()
+            guard authorityChanged == false else {
                 throw ICloudReplicationRepositoryAuthorityError
                     .divergentMarkerVersion
             }
@@ -334,7 +395,7 @@ private final class ICloudMarkerVersionPresenter:
     let presentedItemOperationQueue: OperationQueue
 
     private let stateLock = NSLock()
-    private var versionInventoryChanged = false
+    private var authorityChanged = false
 
     init(markerURL: URL) {
         presentedItemURL = markerURL
@@ -347,22 +408,26 @@ private final class ICloudMarkerVersionPresenter:
     }
 
     func presentedItemDidGain(_: NSFileVersion) {
-        recordVersionInventoryChange()
+        recordAuthorityChange()
     }
 
     func presentedItemDidLose(_: NSFileVersion) {
-        recordVersionInventoryChange()
+        recordAuthorityChange()
     }
 
-    func didObserveVersionInventoryChange() -> Bool {
+    func presentedItemDidChange() {
+        recordAuthorityChange()
+    }
+
+    func didObserveAuthorityChange() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return versionInventoryChanged
+        return authorityChanged
     }
 
-    private func recordVersionInventoryChange() {
+    private func recordAuthorityChange() {
         stateLock.lock()
-        versionInventoryChanged = true
+        authorityChanged = true
         stateLock.unlock()
     }
 }
@@ -491,7 +556,7 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
             stateLock.unlock()
             presenter.presentedItemOperationQueue
                 .waitUntilAllOperationsAreFinished()
-            return presenter.didObserveVersionInventoryChange()
+            return presenter.didObserveAuthorityChange()
         }
         isFinished = true
         let mustRemovePresenter = isRegistered
@@ -499,7 +564,7 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
         stateLock.unlock()
 
         guard mustRemovePresenter else {
-            return presenter.didObserveVersionInventoryChange()
+            return presenter.didObserveAuthorityChange()
         }
         let removalState = ICloudMarkerPresenterRemovalState()
         var coordinationError: NSError?
@@ -519,7 +584,7 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
             throw ICloudReplicationRepositoryAuthorityError
                 .unavailableMarkerVersion
         }
-        return presenter.didObserveVersionInventoryChange()
+        return presenter.didObserveAuthorityChange()
     }
 }
 

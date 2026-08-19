@@ -149,6 +149,43 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         XCTAssertFalse(result.createdRepository)
     }
 
+    func testExistingRandomAuthorityRejectsAMarkerDirectoryAsInvalid()
+        throws
+    {
+        let existing = UUID(
+            uuidString: "97000000-0000-0000-0000-000000000003"
+        )!
+        let root = makeRepositoryURL()
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: markerURL,
+            withIntermediateDirectories: true
+        )
+        let inventoryBefore = try FileManager.default.contentsOfDirectory(
+            atPath: root.path
+        )
+
+        XCTAssertThrowsError(
+            try ICloudReplicationRepositoryAuthority.openRepository(
+                at: root,
+                scope: "Noonmark/SyncRepository",
+                existingGenerationID: existing
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ReplicationRepositoryBootstrapError,
+                .invalidMarker
+            )
+        }
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: root.path),
+            inventoryBefore
+        )
+    }
+
     func testExistingDerivedAuthorityCanRecreateAnEmptyRepository() throws {
         let scope = "Noonmark/SyncRepository"
         let existing = try ICloudReplicationRepositoryAuthority.generationID(
@@ -199,6 +236,46 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
             )
         }
         XCTAssertEqual(try Data(contentsOf: markerURL), markerBefore)
+    }
+
+    func testMissingAuthorityRejectsAVisibleRandomMarkerWithoutWriting()
+        throws
+    {
+        let scope = "Noonmark/SyncRepository"
+        let randomGenerationID = UUID(
+            uuidString: "97000000-0000-0000-0000-000000000005"
+        )!
+        let root = makeRepositoryURL()
+        _ = try FileReplicationRepositoryBootstrap.openOrCreate(
+            at: root,
+            generationID: { randomGenerationID }
+        )
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        )
+        let markerBefore = try Data(contentsOf: markerURL)
+        let inventoryBefore = try FileManager.default.contentsOfDirectory(
+            atPath: root.path
+        ).sorted()
+
+        XCTAssertThrowsError(
+            try ICloudReplicationRepositoryAuthority.openRepository(
+                at: root,
+                scope: scope,
+                existingGenerationID: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: markerURL), markerBefore)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .sorted(),
+            inventoryBefore
+        )
     }
 
     func testInvalidScopeIsRejectedBeforeRepositoryAccess() {
@@ -420,6 +497,135 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         XCTAssertEqual(result, 42)
     }
 
+    func testAuthorityGuardPostValidatesWhenOperationThrows()
+        async throws
+    {
+        let marker = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let snapshots = AuthorityGuardSnapshotRecorder()
+        let session = ICloudMarkerAuthorityObservationSession(
+            initialSnapshot: ICloudMarkerVersionSnapshot(
+                current: marker,
+                conflicts: []
+            ),
+            snapshot: {
+                snapshots.record()
+                return ICloudMarkerVersionSnapshot(
+                    current: marker,
+                    conflicts: []
+                )
+            },
+            finish: { false }
+        )
+
+        do {
+            let _: Int = try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    expected: try descriptor(from: marker),
+                    observationSession: session
+                ) {
+                    throw AuthorityGuardTestError.operationFailed
+                }
+            XCTFail("the operation error must be rethrown after post-validation")
+        } catch {
+            XCTAssertEqual(
+                error as? AuthorityGuardTestError,
+                .operationFailed
+            )
+        }
+        XCTAssertEqual(snapshots.count, 1)
+    }
+
+    func testAuthorityGuardPrefersPostValidationFailureOverOperationError()
+        async throws
+    {
+        let current = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let changed = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let session = ICloudMarkerAuthorityObservationSession(
+            initialSnapshot: ICloudMarkerVersionSnapshot(
+                current: current,
+                conflicts: []
+            ),
+            snapshot: {
+                ICloudMarkerVersionSnapshot(
+                    current: changed,
+                    conflicts: []
+                )
+            },
+            finish: { false }
+        )
+
+        do {
+            let _: Int = try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    expected: try descriptor(from: current),
+                    observationSession: session
+                ) {
+                    throw AuthorityGuardTestError.operationFailed
+                }
+            XCTFail("authority divergence must outrank the operation error")
+        } catch {
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+    }
+
+    func testLocalPreflightRejectsAnUnexpectedCanonicalCurrentMarker()
+        throws
+    {
+        let root = makeRepositoryURL()
+        let opened = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: {
+                    UUID(
+                        uuidString: "97000000-0000-0000-0000-000000000001"
+                    )!
+                }
+            )
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        )
+        let markerBefore = try Data(contentsOf: markerURL)
+        let unexpected = ReplicationRepositoryDescriptor(
+            formatVersion: FileReplicationRepositoryBootstrap.formatVersion,
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+
+        XCTAssertThrowsError(
+            try ICloudReplicationRepositoryAuthority
+                .validateLocallyAvailableMarkerVersions(
+                    at: markerURL,
+                    expected: unexpected
+                )
+        ) { error in
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+        XCTAssertEqual(
+            opened.descriptor.generationID.uuidString,
+            "97000000-0000-0000-0000-000000000001"
+        )
+        XCTAssertEqual(try Data(contentsOf: markerURL), markerBefore)
+    }
+
     func testNativePresenterGuardSpansOperationAndBalancesRegistration()
         async throws
     {
@@ -483,6 +689,57 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         )
     }
 
+    func testNativePresenterRejectsMarkerChangedAfterFinalSnapshotRead()
+        async throws
+    {
+        let root = makeRepositoryURL()
+        let opened = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: {
+                    UUID(
+                        uuidString: "97000000-0000-0000-0000-000000000001"
+                    )!
+                }
+            )
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        ).standardizedFileURL
+        let replacement = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let loader = MarkerChangingNonlocalVersionLoader(
+            markerURL: markerURL,
+            replacement: replacement
+        )
+
+        do {
+            _ = try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    at: markerURL,
+                    expected: opened.descriptor,
+                    nonlocalVersionLoader: loader.load
+                ) {
+                    42
+                }
+            XCTFail("a marker change inside the final observation must fail")
+        } catch {
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+        XCTAssertEqual(loader.invocationCount, 2)
+        XCTAssertEqual(try Data(contentsOf: markerURL), replacement)
+        XCTAssertFalse(
+            NSFileCoordinator.filePresenters.contains {
+                $0.presentedItemURL?.standardizedFileURL == markerURL
+            }
+        )
+    }
+
     private func markerData(generationID: UUID) throws -> Data {
         try ReplicationPublicationBuilder.canonicalEncoder().encode(
             ReplicationRepositoryDescriptor(
@@ -523,5 +780,76 @@ private actor AuthorityGuardOperationRecorder {
 
     func didRun() -> Bool {
         operationDidRun
+    }
+}
+
+private enum AuthorityGuardTestError: Error, Equatable {
+    case operationFailed
+}
+
+private final class AuthorityGuardSnapshotRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshotCount = 0
+
+    var count: Int {
+        lock.withLock { snapshotCount }
+    }
+
+    func record() {
+        lock.withLock {
+            snapshotCount += 1
+        }
+    }
+}
+
+private final class MarkerChangingNonlocalVersionLoader: @unchecked Sendable {
+    private let lock = NSLock()
+    private let markerURL: URL
+    private let replacement: Data
+    private var count = 0
+
+    init(markerURL: URL, replacement: Data) {
+        self.markerURL = markerURL
+        self.replacement = replacement
+    }
+
+    var invocationCount: Int {
+        lock.withLock { count }
+    }
+
+    func load(
+        _: URL,
+        completion: @escaping @Sendable (
+            ICloudMarkerNonlocalVersionResult
+        ) -> Void
+    ) {
+        let invocation = lock.withLock {
+            count += 1
+            return count
+        }
+        guard invocation == 2 else {
+            completion(.success([]))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var coordinationError: NSError?
+            var writeFailed = false
+            NSFileCoordinator().coordinate(
+                writingItemAt: markerURL,
+                options: [],
+                error: &coordinationError
+            ) { coordinatedURL in
+                do {
+                    try replacement.write(to: coordinatedURL)
+                } catch {
+                    writeFailed = true
+                }
+            }
+            if coordinationError == nil, writeFailed == false {
+                completion(.success([]))
+            } else {
+                completion(.unavailable)
+            }
+        }
     }
 }

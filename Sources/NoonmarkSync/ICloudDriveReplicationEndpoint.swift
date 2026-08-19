@@ -281,6 +281,13 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         repositoryAuthorityPostValidation = {}
         namespace = "icloud-append-only-" + round.sessionID.uuidString
             .lowercased() + "-" + round.roundID.uuidString.lowercased()
+        try ICloudReplicationRepositoryAuthority
+            .validateLocallyAvailableMarkerVersions(
+                at: round.rootURL.appendingPathComponent(
+                    FileReplicationRepositoryBootstrap.markerFilename
+                ),
+                expected: result.descriptor
+            )
     }
 
     public init(
@@ -313,6 +320,13 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
         repositoryAuthorityValidation = {}
         repositoryAuthorityPostValidation = {}
         namespace = "icloud-" + files.namespace
+        try ICloudReplicationRepositoryAuthority
+            .validateLocallyAvailableMarkerVersions(
+                at: resolvedRoot.appendingPathComponent(
+                    FileReplicationRepositoryBootstrap.markerFilename
+                ),
+                expected: result.descriptor
+            )
     }
 
     init(
@@ -446,28 +460,21 @@ private extension ICloudDriveReplicationEndpoint {
         _ operation: () async throws -> Result
     ) async throws -> Result {
         if let repositoryAuthorityDescriptor {
-            let lease = try await ICloudReplicationRepositoryAuthority
-                .beginValidatedMarkerAuthority(
+            return try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
                     at: rootURL.appendingPathComponent(
                         FileReplicationRepositoryBootstrap.markerFilename
                     ),
-                    expected: repositoryAuthorityDescriptor
+                    expected: repositoryAuthorityDescriptor,
+                    operation: operation
                 )
-            do {
-                let result = try await operation()
-                try await ICloudReplicationRepositoryAuthority
-                    .finishValidatedMarkerAuthority(lease)
-                return result
-            } catch {
-                ICloudReplicationRepositoryAuthority
-                    .cancelValidatedMarkerAuthority(lease)
-                throw error
-            }
         }
         try await repositoryAuthorityValidation()
-        let result = try await operation()
-        try await repositoryAuthorityPostValidation()
-        return result
+        return try await ICloudReplicationRepositoryAuthority
+            .executeRequiringPostValidation(
+                operation: operation,
+                postValidation: repositoryAuthorityPostValidation
+            )
     }
 
     func validateBoundary() throws {

@@ -248,7 +248,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 
     public init(
         round: ICloudAppendOnlyTestRound,
-        existingGenerationID: UUID? = nil
+        preferredGenerationID existingGenerationID: UUID? = nil
     ) throws {
         let repositoryScope = ICloudAppendOnlyTestNamespace.relativeRoot
             + "/" + round.sessionID.uuidString.lowercased()
@@ -292,7 +292,7 @@ public actor ICloudDriveReplicationEndpoint: ReplicationEndpoint {
 
     public init(
         repositoryName: String,
-        existingGenerationID: UUID? = nil
+        preferredGenerationID existingGenerationID: UUID? = nil
     ) throws {
         let resolvedRoot = try ICloudDriveRepositoryLocator.defaultRootURL(
             repositoryName: repositoryName

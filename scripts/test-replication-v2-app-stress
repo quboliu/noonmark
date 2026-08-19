@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 scripts/test-icloud-append-only-guard
+scripts/test-replication-bootstrap-concurrency
 source scripts/runtime-profile-common
 
 backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"
@@ -19,9 +20,13 @@ local_state_path="$gate_root/local-restart-state.json"
 local_sync_root="$gate_root/local-sync-repository"
 icloud_database_path="$gate_root/icloud-Noonmark.sqlite"
 icloud_state_path="$gate_root/icloud-restart-state.json"
+authority_database_path="$gate_root/authority-Noonmark.sqlite"
+authority_state_path="$gate_root/authority-state.json"
 backup_fixture="$gate_root/import-package.json"
 icloud_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
 icloud_round_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+authority_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+authority_round_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
 
 cleanup() {
   pkill -x "$app_process" >/dev/null 2>&1 || true
@@ -83,9 +88,28 @@ wait_for_result() {
 
   for attempt in {1..3600}; do
     if [[ -f "$result_path" ]]; then
-      if ! jq -e \
-        --arg phase "$expected_phase" \
-        '.status == "ok"
+      local result_filter
+      if [[ "$expected_phase" == "authority-fault" ]]; then
+        result_filter='
+          .status == "ok"
+          and .phase == $phase
+          and .underlyingErrorKind == "ICloudReplicationRepositoryAuthorityError"
+          and .pendingOutboxCount == 0
+          and .confirmedOutboxCount == 0
+          and .lastSyncedPresent == false
+          and .lastEffectiveSyncedPresent == false
+          and .convergence == "blocked-authority"
+          and .importedTaskCount == 0
+          and .createdCount == 0
+          and .editedCount == 0
+          and .deletedCount == 0
+          and .mixedDomainMutationCount == 0
+          and .syncRunCount == 0
+          and .diagnosticSyncFailedCount == 0
+          and .mutationRejectionCount == 0'
+      else
+        result_filter='
+          .status == "ok"
           and .phase == $phase
           and .pendingOutboxCount == 0
           and .lastSyncedPresent == true
@@ -94,8 +118,11 @@ wait_for_result() {
           and (($phase == "exercise" and .mixedDomainMutationCount == 71)
             or ($phase == "verify-restart" and .mixedDomainMutationCount == 0))
           and .diagnosticSyncFailedCount == 0
-          and .mutationRejectionCount == 0' \
-        "$result_path" >/dev/null; then
+          and .mutationRejectionCount == 0'
+      fi
+      if ! jq -e \
+        --arg phase "$expected_phase" \
+        "$result_filter" "$result_path" >/dev/null; then
         jq -c \
           '{status,phase,errorCode,underlyingErrorKind,pendingOutboxCount,convergence,diagnosticSyncFailedCount,mutationRejectionCount,diagnosticFailureDomain,diagnosticFailureCode,diagnosticFailureStage,sqliteFailurePoint}' \
           "$result_path" >&2
@@ -161,6 +188,17 @@ run_phase() {
         --e2e-replication-v2-stress-icloud-round-id "$icloud_round_id"
       )
       ;;
+    authority-icloud)
+      database_path="$authority_database_path"
+      state_path="$authority_state_path"
+      arguments+=(
+        --data-url "$database_path"
+        --e2e-replication-v2-stress-state-url "$state_path"
+        --e2e-replication-v2-stress-icloud
+        --e2e-replication-v2-stress-icloud-session-id "$authority_session_id"
+        --e2e-replication-v2-stress-icloud-round-id "$authority_round_id"
+      )
+      ;;
     *)
       echo "unknown replication V2 stress endpoint mode" >&2
       return 1
@@ -187,6 +225,12 @@ echo "Replication V2 signed App local-folder prerequisite: starting"
 run_phase local-folder exercise
 run_phase local-folder verify-restart
 echo "Replication V2 signed App local-folder prerequisite: passed"
+
+echo "Replication V2 signed App old-authority rejection: starting"
+echo "session_id=$authority_session_id"
+echo "round_id=$authority_round_id"
+run_phase authority-icloud authority-fault
+echo "created_object_count=1 typed_verdict=authority-rejected-zero-write"
 
 echo "Replication V2 signed App real iCloud stress: starting"
 echo "session_id=$icloud_session_id"

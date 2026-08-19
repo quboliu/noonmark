@@ -740,6 +740,62 @@ final class ICloudReplicationRepositoryAuthorityTests: XCTestCase {
         )
     }
 
+    func testNativePresenterRejectsInitialSnapshotChangeBeforeOperation()
+        async throws
+    {
+        let root = makeRepositoryURL()
+        let opened = try FileReplicationRepositoryBootstrap
+            .openOrCreateWithStatus(
+                at: root,
+                generationID: {
+                    UUID(
+                        uuidString: "97000000-0000-0000-0000-000000000001"
+                    )!
+                }
+            )
+        let markerURL = root.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        ).standardizedFileURL
+        let replacement = try markerData(
+            generationID: UUID(
+                uuidString: "97000000-0000-0000-0000-000000000002"
+            )!
+        )
+        let loader = MarkerChangingNonlocalVersionLoader(
+            markerURL: markerURL,
+            replacement: replacement,
+            changingOnInvocation: 1,
+            coordinatesWrite: false
+        )
+        let operation = AuthorityGuardOperationRecorder()
+
+        do {
+            try await ICloudReplicationRepositoryAuthority
+                .withValidatedMarkerAuthority(
+                    at: markerURL,
+                    expected: opened.descriptor,
+                    nonlocalVersionLoader: loader.load
+                ) {
+                    await operation.recordRun()
+                }
+            XCTFail("an initial snapshot change must fail before operation")
+        } catch {
+            XCTAssertEqual(
+                error as? ICloudReplicationRepositoryAuthorityError,
+                .divergentMarkerVersion
+            )
+        }
+        let operationDidRun = await operation.didRun()
+        XCTAssertFalse(operationDidRun)
+        XCTAssertEqual(loader.invocationCount, 1)
+        XCTAssertEqual(try Data(contentsOf: markerURL), replacement)
+        XCTAssertFalse(
+            NSFileCoordinator.filePresenters.contains {
+                $0.presentedItemURL?.standardizedFileURL == markerURL
+            }
+        )
+    }
+
     private func markerData(generationID: UUID) throws -> Data {
         try ReplicationPublicationBuilder.canonicalEncoder().encode(
             ReplicationRepositoryDescriptor(
@@ -806,11 +862,20 @@ private final class MarkerChangingNonlocalVersionLoader: @unchecked Sendable {
     private let lock = NSLock()
     private let markerURL: URL
     private let replacement: Data
+    private let changingOnInvocation: Int
+    private let coordinatesWrite: Bool
     private var count = 0
 
-    init(markerURL: URL, replacement: Data) {
+    init(
+        markerURL: URL,
+        replacement: Data,
+        changingOnInvocation: Int = 2,
+        coordinatesWrite: Bool = true
+    ) {
         self.markerURL = markerURL
         self.replacement = replacement
+        self.changingOnInvocation = changingOnInvocation
+        self.coordinatesWrite = coordinatesWrite
     }
 
     var invocationCount: Int {
@@ -827,11 +892,20 @@ private final class MarkerChangingNonlocalVersionLoader: @unchecked Sendable {
             count += 1
             return count
         }
-        guard invocation == 2 else {
+        guard invocation == changingOnInvocation else {
             completion(.success([]))
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [self] in
+            if coordinatesWrite == false {
+                do {
+                    try replacement.write(to: markerURL)
+                    completion(.success([]))
+                } catch {
+                    completion(.unavailable)
+                }
+                return
+            }
             var coordinationError: NSError?
             var writeFailed = false
             NSFileCoordinator().coordinate(

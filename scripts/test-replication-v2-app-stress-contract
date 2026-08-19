@@ -42,6 +42,12 @@ require_literal "$automation" \
   "--e2e-replication-v2-stress-backup-url" \
   "replication V2 stress automation does not import the caller-selected backup"
 require_literal "$automation" \
+  'case authorityFault = "authority-fault"' \
+  "replication V2 stress automation omits the old-authority fault mode"
+require_literal "$automation" \
+  "--e2e-replication-v2-stress-authority-fault" \
+  "replication V2 stress automation does not expose the authority fault mode"
+require_literal "$automation" \
   "try await store.commitDataImport" \
   "replication V2 stress automation bypasses the real Store import transaction"
 require_literal "$automation" \
@@ -91,6 +97,24 @@ require_literal "$automation" \
   "ICloudAppendOnlyTestNamespace.reopenRound" \
   "replication V2 stress automation does not strictly reopen the exact round after restart"
 require_literal "$automation" \
+  "writeExclusiveAuthorityMarker" \
+  "replication V2 authority fault does not seed its final marker by exclusive create"
+require_literal "$automation" \
+  ".canonicalEncoder().encode(" \
+  "replication V2 authority fault does not seed a canonical marker"
+require_literal "$automation" \
+  "inventoryBefore == inventoryAfter" \
+  "replication V2 authority fault does not prove zero remote writes"
+require_literal "$automation" \
+  "store.localFirstReplicationRuntime == nil" \
+  "replication V2 authority fault does not reject runtime creation"
+require_literal "$automation" \
+  "try ledger.cleanCutAuthority() == nil" \
+  "replication V2 authority fault does not prove clean-cut authority stayed absent"
+require_literal "$automation" \
+  '"ICloudReplicationRepositoryAuthorityError"' \
+  "replication V2 authority fault does not prove the typed rejection"
+require_literal "$automation" \
   "syncLocalFolderNow()" \
   "replication V2 stress automation bypasses the real manual sync command"
 require_literal "$automation" \
@@ -116,6 +140,9 @@ require_literal "$symptom_gate" \
   "scripts/test-icloud-append-only-guard" \
   "replication V2 stress symptom gate does not run the no-mutation guard before iCloud access"
 require_literal "$symptom_gate" \
+  "scripts/test-replication-bootstrap-concurrency" \
+  "replication V2 stress symptom gate does not run the fast authority gate before iCloud access"
+require_literal "$symptom_gate" \
   "--e2e-replication-v2-stress-local-folder" \
   "replication V2 stress does not expose its isolated Local Folder prerequisite"
 require_literal "$symptom_gate" \
@@ -130,6 +157,18 @@ require_literal "$symptom_gate" \
 require_literal "$symptom_gate" \
   "--e2e-replication-v2-stress-icloud-round-id" \
   "replication V2 stress symptom gate does not select a fresh iCloud round"
+require_literal "$symptom_gate" \
+  'phase_flag="--e2e-replication-v2-stress-${phase}"' \
+  "replication V2 stress symptom gate does not launch the real authority fault"
+require_literal "$symptom_gate" \
+  "run_phase authority-icloud authority-fault" \
+  "replication V2 stress symptom gate does not execute the authority fault"
+require_literal "$symptom_gate" \
+  'underlyingErrorKind == "ICloudReplicationRepositoryAuthorityError"' \
+  "replication V2 authority fault does not require its typed runtime error"
+require_literal "$symptom_gate" \
+  'convergence == "blocked-authority"' \
+  "replication V2 authority fault does not require the fail-closed verdict"
 require_literal "$symptom_gate" \
   "--data-url" \
   "replication V2 stress symptom gate does not isolate SQLite"
@@ -149,6 +188,12 @@ require_literal "$symptom_gate" \
 require_literal "$symptom_gate" \
   'backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"' \
   "replication V2 stress gate must require a caller-selected backup without a repository path default"
+require_literal "$v2_icloud_surface" \
+  "preferredGenerationID existingGenerationID" \
+  "iCloud endpoint no longer preserves its public preferredGenerationID label"
+require_literal "$sync_surface" \
+  "preferredGenerationID: authority?.generationID" \
+  "production Store no longer calls the source-compatible iCloud initializer"
 
 if rg -n '/Users/|/Downloads/' "$symptom_gate" >/dev/null; then
   echo "replication V2 stress gate must not persist a user or backup path" >&2
@@ -167,13 +212,19 @@ local_prerequisite_line="$(
   grep -nF 'run_phase local-folder verify-restart' "$symptom_gate" |
     cut -d: -f1
 )"
+authority_fault_line="$(
+  grep -nF 'run_phase authority-icloud authority-fault' "$symptom_gate" |
+    cut -d: -f1
+)"
 first_icloud_line="$(
   grep -nF 'run_phase icloud exercise' "$symptom_gate" |
     cut -d: -f1
 )"
-if [[ -z "$local_prerequisite_line" || -z "$first_icloud_line" ||
-  "$local_prerequisite_line" -ge "$first_icloud_line" ]]; then
-  echo "real iCloud stress must follow the complete Local Folder App prerequisite" >&2
+if [[ -z "$local_prerequisite_line" || -z "$authority_fault_line" ||
+  -z "$first_icloud_line" ||
+  "$local_prerequisite_line" -ge "$authority_fault_line" ||
+  "$authority_fault_line" -ge "$first_icloud_line" ]]; then
+  echo "real authority fault must follow Local Folder and precede happy-path iCloud stress" >&2
   exit 1
 fi
 

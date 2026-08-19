@@ -489,13 +489,13 @@ private extension NoonmarkStore {
             let iCloud = if let round = try appReplicationV2StressICloudRound() {
                 try ICloudDriveReplicationEndpoint(
                     round: round,
-                    existingGenerationID: authority?.generationID
+                    preferredGenerationID: authority?.generationID
                 )
             } else {
                 try ICloudDriveReplicationEndpoint(
                     repositoryName: AppLaunchArguments.validatedRuntimeProfile
                         .iCloudRepositoryName,
-                    existingGenerationID: authority?.generationID
+                    preferredGenerationID: authority?.generationID
                 )
             }
             endpoint = iCloud
@@ -695,6 +695,8 @@ private func appReplicationV2StressICloudRound() throws
         "--e2e-replication-v2-stress-exercise"
     ) || AppLaunchArguments.contains(
         "--e2e-replication-v2-stress-verify-restart"
+    ) || AppLaunchArguments.contains(
+        "--e2e-replication-v2-stress-authority-fault"
     )
     guard isStress else { return nil }
     guard AppLaunchArguments.validatedRuntimeProfile == .e2e,

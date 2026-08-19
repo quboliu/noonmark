@@ -18,10 +18,29 @@ struct ICloudMarkerVersionSnapshot: Sendable {
     let conflicts: [Data]
 }
 
+private struct ICloudCoordinatedMarkerVersionSnapshot: Sendable {
+    let snapshot: ICloudMarkerVersionSnapshot
+    let coordinatedURL: URL
+}
+
 struct ICloudMarkerAuthorityObservationSession: Sendable {
     let initialSnapshot: ICloudMarkerVersionSnapshot
+    let initialAuthorityChanged: Bool
     let snapshot: @Sendable () async throws -> ICloudMarkerVersionSnapshot
     let finish: @Sendable () throws -> Bool
+
+    init(
+        initialSnapshot: ICloudMarkerVersionSnapshot,
+        initialAuthorityChanged: Bool = false,
+        snapshot: @escaping @Sendable () async throws
+            -> ICloudMarkerVersionSnapshot,
+        finish: @escaping @Sendable () throws -> Bool
+    ) {
+        self.initialSnapshot = initialSnapshot
+        self.initialAuthorityChanged = initialAuthorityChanged
+        self.snapshot = snapshot
+        self.finish = finish
+    }
 }
 
 struct ICloudMarkerAuthorityValidationLease: Sendable {
@@ -115,45 +134,7 @@ enum ICloudReplicationRepositoryAuthority {
         at markerURL: URL,
         expected descriptor: ReplicationRepositoryDescriptor
     ) throws {
-        var snapshot: ICloudMarkerVersionSnapshot?
-        var readFailed = false
-        var coordinationError: NSError?
-        NSFileCoordinator().coordinate(
-            readingItemAt: markerURL,
-            options: [],
-            error: &coordinationError
-        ) { coordinatedURL in
-            do {
-                let versions =
-                    (NSFileVersion.otherVersionsOfItem(
-                        at: coordinatedURL
-                    ) ?? [])
-                    + (NSFileVersion.unresolvedConflictVersionsOfItem(
-                        at: coordinatedURL
-                    ) ?? [])
-                snapshot = ICloudMarkerVersionSnapshot(
-                    current: try Data(
-                        contentsOf: coordinatedURL,
-                        options: [.mappedIfSafe]
-                    ),
-                    conflicts: try versions.map {
-                        try Data(
-                            contentsOf: $0.url,
-                            options: [.mappedIfSafe]
-                        )
-                    }
-                )
-            } catch {
-                readFailed = true
-            }
-        }
-        guard coordinationError == nil,
-              readFailed == false,
-              let snapshot
-        else {
-            throw ICloudReplicationRepositoryAuthorityError
-                .unavailableMarkerVersion
-        }
+        let snapshot = try locallyAvailableMarkerVersions(at: markerURL)
         try validate(snapshot, expected: descriptor)
     }
 
@@ -314,6 +295,10 @@ private extension ICloudReplicationRepositoryAuthority {
                 observationSession.initialSnapshot,
                 expected: descriptor
             )
+            guard observationSession.initialAuthorityChanged == false else {
+                throw ICloudReplicationRepositoryAuthorityError
+                    .divergentMarkerVersion
+            }
             return ICloudMarkerAuthorityValidationLease(
                 expected: descriptor,
                 observationSession: observationSession
@@ -332,6 +317,41 @@ private extension ICloudReplicationRepositoryAuthority {
         return try versions.map { version in
             try coordinatedData(at: version.url)
         }
+    }
+
+    static func locallyAvailableMarkerVersions(
+        at markerURL: URL,
+        beforeRead: ((URL) throws -> Void)? = nil
+    ) throws -> ICloudMarkerVersionSnapshot {
+        var snapshot: ICloudMarkerVersionSnapshot?
+        var readFailed = false
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(
+            readingItemAt: markerURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                try beforeRead?(coordinatedURL)
+                snapshot = ICloudMarkerVersionSnapshot(
+                    current: try Data(
+                        contentsOf: coordinatedURL,
+                        options: [.mappedIfSafe]
+                    ),
+                    conflicts: try otherVersionData(at: coordinatedURL)
+                )
+            } catch {
+                readFailed = true
+            }
+        }
+        guard coordinationError == nil,
+              readFailed == false,
+              let snapshot
+        else {
+            throw ICloudReplicationRepositoryAuthorityError
+                .unavailableMarkerVersion
+        }
+        return snapshot
     }
 
     static func coordinatedData(at url: URL) throws -> Data {
@@ -419,6 +439,15 @@ private final class ICloudMarkerVersionPresenter:
         recordAuthorityChange()
     }
 
+    func relinquishPresentedItem(
+        toWriter writer: @escaping @Sendable (
+            (@Sendable () -> Void)?
+        ) -> Void
+    ) {
+        recordAuthorityChange()
+        writer {}
+    }
+
     func didObserveAuthorityChange() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -456,8 +485,10 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
             let initialSnapshot = try await snapshot(
                 registeringPresenter: true
             )
+            let initialAuthorityChanged = observedAuthorityChange()
             return ICloudMarkerAuthorityObservationSession(
                 initialSnapshot: initialSnapshot,
+                initialAuthorityChanged: initialAuthorityChanged,
                 snapshot: { [self] in
                     try await snapshot(registeringPresenter: false)
                 },
@@ -474,57 +505,69 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
     private func snapshot(
         registeringPresenter: Bool
     ) async throws -> ICloudMarkerVersionSnapshot {
+        let initialLocalSnapshot = try coordinatedLocalSnapshot(
+            registeringPresenter: registeringPresenter
+        )
+        let nonlocalVersions = try await loadNonlocalVersions(
+            at: initialLocalSnapshot.coordinatedURL
+        )
+        let finalLocalSnapshot = try coordinatedLocalSnapshot(
+            registeringPresenter: false
+        )
+        guard initialLocalSnapshot.snapshot.current
+            == finalLocalSnapshot.snapshot.current
+        else {
+            throw ICloudReplicationRepositoryAuthorityError
+                .divergentMarkerVersion
+        }
+        return ICloudMarkerVersionSnapshot(
+            current: finalLocalSnapshot.snapshot.current,
+            conflicts: initialLocalSnapshot.snapshot.conflicts
+                + finalLocalSnapshot.snapshot.conflicts
+                + nonlocalVersions
+        )
+    }
+
+    private func coordinatedLocalSnapshot(
+        registeringPresenter: Bool
+    ) throws -> ICloudCoordinatedMarkerVersionSnapshot {
         try ensureObservationIsActive()
-        return try await withCheckedThrowingContinuation { continuation in
-            let completion = ICloudMarkerSnapshotCompletion(
-                continuation: continuation
-            )
-            let coordinationState = ICloudMarkerSnapshotCoordinationState()
-            var coordinationError: NSError?
-            NSFileCoordinator().coordinate(
-                readingItemAt: markerURL,
-                options: [],
-                error: &coordinationError
-            ) { coordinatedURL in
-                do {
+        var coordinatedURL: URL?
+        let snapshot = try ICloudReplicationRepositoryAuthority
+            .locallyAvailableMarkerVersions(
+                at: markerURL,
+                beforeRead: { url in
+                    coordinatedURL = url
                     if registeringPresenter {
                         try self.registerPresenterInsideCoordinatedRead()
                     }
-                    let current = try Data(
-                        contentsOf: coordinatedURL,
-                        options: [.mappedIfSafe]
-                    )
-                    let localVersions = try ICloudReplicationRepositoryAuthority
-                        .otherVersionData(at: coordinatedURL)
-                    coordinationState.markNonlocalRequestStarted()
-                    nonlocalVersionLoader(coordinatedURL) { result in
-                        switch result {
-                        case let .success(nonlocalVersions):
-                            completion.resume(
-                                returning: ICloudMarkerVersionSnapshot(
-                                    current: current,
-                                    conflicts: localVersions + nonlocalVersions
-                                )
-                            )
-                        case .unavailable:
-                            completion.resume(
-                                throwing: ICloudReplicationRepositoryAuthorityError
-                                    .unavailableMarkerVersion
-                            )
-                        }
-                    }
-                } catch {
-                    coordinationState.recordSetupFailure()
                 }
-            }
-            if coordinationError != nil
-                || coordinationState.didFailSetup
-                || coordinationState.didStartNonlocalRequest == false
-            {
-                completion.resume(
-                    throwing: ICloudReplicationRepositoryAuthorityError
-                        .unavailableMarkerVersion
-                )
+            )
+        guard let coordinatedURL else {
+            throw ICloudReplicationRepositoryAuthorityError
+                .unavailableMarkerVersion
+        }
+        return ICloudCoordinatedMarkerVersionSnapshot(
+            snapshot: snapshot,
+            coordinatedURL: coordinatedURL
+        )
+    }
+
+    private func loadNonlocalVersions(at url: URL) async throws -> [Data] {
+        try await withCheckedThrowingContinuation { continuation in
+            let completion = ICloudMarkerNonlocalCompletion(
+                continuation: continuation
+            )
+            nonlocalVersionLoader(url) { result in
+                switch result {
+                case let .success(versions):
+                    completion.resume(returning: versions)
+                case .unavailable:
+                    completion.resume(
+                        throwing: ICloudReplicationRepositoryAuthorityError
+                            .unavailableMarkerVersion
+                    )
+                }
             }
         }
     }
@@ -536,6 +579,11 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
             throw ICloudReplicationRepositoryAuthorityError
                 .unavailableMarkerVersion
         }
+    }
+
+    private func observedAuthorityChange() -> Bool {
+        presenter.presentedItemOperationQueue.waitUntilAllOperationsAreFinished()
+        return presenter.didObserveAuthorityChange()
     }
 
     private func registerPresenterInsideCoordinatedRead() throws {
@@ -588,22 +636,19 @@ private final class ICloudMarkerAuthorityObserver: @unchecked Sendable {
     }
 }
 
-private final class ICloudMarkerSnapshotCompletion: @unchecked Sendable {
+private final class ICloudMarkerNonlocalCompletion: @unchecked Sendable {
     private let stateLock = NSLock()
     private var continuation:
-        CheckedContinuation<ICloudMarkerVersionSnapshot, any Error>?
+        CheckedContinuation<[Data], any Error>?
 
     init(
-        continuation: CheckedContinuation<
-            ICloudMarkerVersionSnapshot,
-            any Error
-        >
+        continuation: CheckedContinuation<[Data], any Error>
     ) {
         self.continuation = continuation
     }
 
-    func resume(returning snapshot: ICloudMarkerVersionSnapshot) {
-        takeContinuation()?.resume(returning: snapshot)
+    func resume(returning versions: [Data]) {
+        takeContinuation()?.resume(returning: versions)
     }
 
     func resume(throwing error: any Error) {
@@ -611,45 +656,13 @@ private final class ICloudMarkerSnapshotCompletion: @unchecked Sendable {
     }
 
     private func takeContinuation()
-        -> CheckedContinuation<ICloudMarkerVersionSnapshot, any Error>?
+        -> CheckedContinuation<[Data], any Error>?
     {
         stateLock.lock()
         defer { stateLock.unlock() }
         let result = continuation
         continuation = nil
         return result
-    }
-}
-
-private final class ICloudMarkerSnapshotCoordinationState:
-    @unchecked Sendable
-{
-    private let stateLock = NSLock()
-    private var nonlocalRequestStarted = false
-    private var setupFailed = false
-
-    var didStartNonlocalRequest: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return nonlocalRequestStarted
-    }
-
-    var didFailSetup: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return setupFailed
-    }
-
-    func markNonlocalRequestStarted() {
-        stateLock.lock()
-        nonlocalRequestStarted = true
-        stateLock.unlock()
-    }
-
-    func recordSetupFailure() {
-        stateLock.lock()
-        setupFailed = true
-        stateLock.unlock()
     }
 }
 

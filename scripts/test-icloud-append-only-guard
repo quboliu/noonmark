@@ -100,11 +100,22 @@ if /usr/bin/grep -E \
   exit 1
 fi
 if /usr/bin/grep -E \
-  '\.write\(to:|O_TRUNC|O_CREAT|open\(' \
+  '\.write\(to:|O_TRUNC|O_CREAT|O_WRONLY|O_RDWR' \
   Sources/NoonmarkSync/ICloudDriveReplicationEndpoint.swift \
   Sources/NoonmarkSync/ContentAddressedFileReplicationEndpoint.swift \
   Sources/NoonmarkSync/FileReplicationRepositoryBootstrap.swift >/dev/null; then
   echo "final-key owners must delegate writes to the append-only publisher" >&2
+  exit 1
+fi
+if /usr/bin/grep -E 'O_TRUNC|O_RDWR' \
+  App/NoonmarkMacApp/ReplicationV2StressE2EAutomation.swift >/dev/null; then
+  echo "signed iCloud stress must not overwrite its authority fixture" >&2
+  exit 1
+fi
+if ! /usr/bin/grep -F \
+  'O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC' \
+  App/NoonmarkMacApp/ReplicationV2StressE2EAutomation.swift >/dev/null; then
+  echo "signed iCloud authority fixture must use exclusive final-key creation" >&2
   exit 1
 fi
 if /usr/bin/grep -E \

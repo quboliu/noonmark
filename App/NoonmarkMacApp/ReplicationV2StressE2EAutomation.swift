@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import NoonmarkCore
@@ -11,6 +12,7 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
     private enum Mode: String {
         case exercise
         case verifyRestart = "verify-restart"
+        case authorityFault = "authority-fault"
     }
 
     private enum EndpointMode: Equatable {
@@ -50,6 +52,11 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         case mixedIdeaDeleteFailed = "mixed-idea-delete-failed"
         case mixedSettingsFailed = "mixed-settings-failed"
         case iCloudRoundUnavailable = "icloud-round-unavailable"
+        case authorityMarkerWriteFailed = "authority-marker-write-failed"
+        case authorityWasAccepted = "authority-was-accepted"
+        case authorityLedgerMutated = "authority-ledger-mutated"
+        case authorityRepositoryMutated = "authority-repository-mutated"
+        case authorityErrorMissing = "authority-error-missing"
         case stateFileInvalid = "state-file-invalid"
         case resultWriteFailed = "result-write-failed"
     }
@@ -151,6 +158,9 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
     private static let restartEditCount = 20
     private static let restartDeleteCount = 10
     private static let syncBatchSize = 20
+    private static let incompatibleAuthorityGenerationID = UUID(
+        uuidString: "97000000-0000-0000-0000-000000000099"
+    )!
 
     private let mode: Mode
     private let backupURL: URL?
@@ -174,6 +184,10 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
             "--e2e-replication-v2-stress-verify-restart"
         ) {
             mode = .verifyRestart
+        } else if AppLaunchArguments.contains(
+            "--e2e-replication-v2-stress-authority-fault"
+        ) {
+            mode = .authorityFault
         } else {
             return nil
         }
@@ -206,6 +220,9 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
         guard endpointMode == .localFolder
                 || (iCloudSessionID != nil && iCloudRoundID != nil)
         else { return nil }
+        guard mode != .authorityFault || endpointMode == .iCloud else {
+            return nil
+        }
         let backupURL = AppLaunchArguments.value(
             after: "--e2e-replication-v2-stress-backup-url"
         ).map { URL(fileURLWithPath: $0) }
@@ -232,6 +249,8 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
                     result = try await exercise(on: store)
                 case .verifyRestart:
                     result = try await verifyRestart(on: store)
+                case .authorityFault:
+                    result = try await exerciseAuthorityFault(on: store)
                 }
             } catch {
                 let stagedFailure = error as? StagedFailure
@@ -341,6 +360,133 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
                 throw FailureCode.iCloudRoundUnavailable
             }
         }
+    }
+
+    private func exerciseAuthorityFault(
+        on store: NoonmarkStore
+    ) async throws -> StressResult {
+        guard endpointMode == .iCloud,
+              let iCloudSessionID,
+              let iCloudRoundID
+        else {
+            throw FailureCode.iCloudRoundUnavailable
+        }
+        await settleConfiguration(on: store)
+        let ledger = SQLiteReplicationLedger(databaseURL: databaseURL)
+        guard store.localFirstReplicationRuntime == nil,
+              try ledger.cleanCutAuthority() == nil,
+              try LocalFirstReplication.persistedState(
+                  databaseURL: databaseURL
+              ) == nil
+        else {
+            throw FailureCode.authorityLedgerMutated
+        }
+
+        let round: ICloudAppendOnlyTestRound
+        do {
+            let session = try ICloudAppendOnlyTestNamespace.beginSession(
+                sessionID: iCloudSessionID
+            )
+            round = try ICloudAppendOnlyTestNamespace.createRound(
+                in: session,
+                roundID: iCloudRoundID
+            )
+        } catch {
+            throw FailureCode.iCloudRoundUnavailable
+        }
+        do {
+            try writeExclusiveAuthorityMarker(
+                in: round,
+                generationID: Self.incompatibleAuthorityGenerationID
+            )
+        } catch {
+            throw FailureCode.authorityMarkerWriteFailed
+        }
+        let inventoryBefore = try roundInventory(at: round.rootURL)
+        guard inventoryBefore.count == 1,
+              inventoryBefore[
+                  FileReplicationRepositoryBootstrap.markerFilename
+              ] != nil
+        else {
+            throw FailureCode.authorityRepositoryMutated
+        }
+
+        store.setLocalFirstSyncEndpoint(endpointMode.kind)
+        store.setLocalFirstSyncMode(.manual)
+        store.setLocalFirstSyncEnabled(true)
+        await settleConfiguration(on: store)
+
+        guard store.engine.preferences.localFirstSyncPolicy.enabled,
+              store.engine.preferences.localFirstSyncPolicy.endpoint == .iCloud
+        else {
+            throw FailureCode.configurationDidNotSettle
+        }
+        guard store.localFirstReplicationRuntime == nil else {
+            throw FailureCode.authorityWasAccepted
+        }
+        guard try ledger.cleanCutAuthority() == nil,
+              try LocalFirstReplication.persistedState(
+                  databaseURL: databaseURL
+              ) == nil
+        else {
+            throw FailureCode.authorityLedgerMutated
+        }
+        guard store.localFirstReplicationLastErrorKind
+            == "ICloudReplicationRepositoryAuthorityError",
+            let failureMessage = store.localFirstSyncMessage,
+            failureMessage.isEmpty == false
+        else {
+            throw FailureCode.authorityErrorMissing
+        }
+        let outbox = try ledger.outboxSnapshot(
+            generationID: Self.incompatibleAuthorityGenerationID
+        )
+        guard outbox.pendingCount == 0, outbox.confirmedCount == 0 else {
+            throw FailureCode.authorityLedgerMutated
+        }
+        let inventoryAfter = try roundInventory(at: round.rootURL)
+        guard inventoryBefore == inventoryAfter else {
+            throw FailureCode.authorityRepositoryMutated
+        }
+        let diagnostics = await diagnosticCounts(on: store)
+            ?? DiagnosticCounts(
+                succeededSyncOperations: 0,
+                failedSyncOperations: 0,
+                mutationRejections: 0,
+                firstFailure: nil,
+                firstFailureStage: nil
+            )
+        guard diagnostics.failedSyncOperations == 0,
+              diagnostics.mutationRejections == 0
+        else {
+            throw FailureCode.diagnosticFailure
+        }
+        return StressResult(
+            status: "ok",
+            phase: mode.rawValue,
+            errorCode: nil,
+            underlyingErrorKind:
+            store.localFirstReplicationLastErrorKind,
+            importedTaskCount: 0,
+            createdCount: 0,
+            editedCount: 0,
+            deletedCount: 0,
+            mixedDomainMutationCount: 0,
+            syncRunCount: 0,
+            pendingOutboxCount: outbox.pendingCount,
+            confirmedOutboxCount: outbox.confirmedCount,
+            lastSyncedPresent: false,
+            lastEffectiveSyncedPresent: false,
+            convergence: "blocked-authority",
+            diagnosticSyncSucceededCount:
+            diagnostics.succeededSyncOperations,
+            diagnosticSyncFailedCount: diagnostics.failedSyncOperations,
+            mutationRejectionCount: diagnostics.mutationRejections,
+            diagnosticFailureDomain: nil,
+            diagnosticFailureCode: nil,
+            diagnosticFailureStage: nil,
+            sqliteFailurePoint: nil
+        )
     }
 
     private func exercise(on store: NoonmarkStore) async throws
@@ -927,6 +1073,106 @@ struct ReplicationV2StressE2EAutomation: LaunchAutomationRunnable {
             diagnosticFailureStage: nil,
             sqliteFailurePoint: nil
         )
+    }
+
+    private func writeExclusiveAuthorityMarker(
+        in round: ICloudAppendOnlyTestRound,
+        generationID: UUID
+    ) throws {
+        let markerData = try ReplicationPublicationBuilder
+            .canonicalEncoder().encode(
+                ReplicationRepositoryDescriptor(
+                    formatVersion: FileReplicationRepositoryBootstrap
+                        .formatVersion,
+                    generationID: generationID
+                )
+            )
+        let markerURL = round.rootURL.appendingPathComponent(
+            FileReplicationRepositoryBootstrap.markerFilename
+        )
+        let fileDescriptor = markerURL.withUnsafeFileSystemRepresentation {
+            path in
+            guard let path else { return Int32(-1) }
+            return Darwin.open(
+                path,
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                S_IRUSR | S_IWUSR
+            )
+        }
+        guard fileDescriptor >= 0 else {
+            throw FailureCode.authorityMarkerWriteFailed
+        }
+        let wroteAllBytes = markerData.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return false }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(
+                    fileDescriptor,
+                    baseAddress.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if count > 0 {
+                    offset += count
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+        let synchronized = wroteAllBytes && fsync(fileDescriptor) == 0
+        let closed = close(fileDescriptor) == 0
+        guard synchronized, closed else {
+            throw FailureCode.authorityMarkerWriteFailed
+        }
+    }
+
+    private func roundInventory(
+        at rootURL: URL
+    ) throws -> [String: String] {
+        let root = rootURL.standardizedFileURL
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
+        ]
+        let children = try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: []
+        )
+        var inventory: [String: String] = [:]
+        for child in children {
+            let item = child.standardizedFileURL
+            guard item.deletingLastPathComponent() == root else {
+                throw FailureCode.authorityRepositoryMutated
+            }
+            let values = try item.resourceValues(forKeys: keys)
+            let evidence: String
+            if values.isSymbolicLink == true {
+                throw FailureCode.authorityRepositoryMutated
+            } else if values.isRegularFile == true {
+                let bytes = try Data(
+                    contentsOf: item,
+                    options: [.mappedIfSafe]
+                )
+                evidence = "file:" + SHA256.hash(data: bytes).map {
+                    String(format: "%02x", $0)
+                }.joined()
+            } else if values.isDirectory == true {
+                evidence = "directory"
+            } else {
+                throw FailureCode.authorityRepositoryMutated
+            }
+            guard inventory.updateValue(
+                evidence,
+                forKey: item.lastPathComponent
+            ) == nil else {
+                throw FailureCode.authorityRepositoryMutated
+            }
+        }
+        return inventory
     }
 
     private func isOwnerRegularFile(_ url: URL) throws -> Bool {

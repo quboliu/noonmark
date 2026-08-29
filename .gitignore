@@ -8,3 +8,10 @@ DerivedData/
 artifacts/
 dist/
 /config/ai-provider.local.json
+
+# Local compatibility links into /home/muxunting/WorkSpace/BUILD.
+/.build
+/.swiftpm
+/DerivedData
+/artifacts
+/dist

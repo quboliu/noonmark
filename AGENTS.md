@@ -38,6 +38,7 @@
 ## 当前开发入口
 
 - 基础环境：macOS，完整 Xcode 或能提供 XCTest 的有效 Apple developer toolchain。
+- 本机构建、打包、测试与开发 fixture 的真实内容统一位于 `/home/muxunting/WorkSpace/BUILD/projs/noonmark/`。Aranya 仓库内禁止创建 `.build/`、`.swiftpm/`、`DerivedData/`、`artifacts/`、`dist/` 的真实目录，也禁止用指向 BUILD 的兼容软链接占位；BUILD 内同样禁止放置 Noonmark 源码副本或 Git worktree。SwiftPM 命令必须显式传 `--scratch-path`，其他脚本必须通过统一外置路径变量直接读写 BUILD；尚未完成参数化的旧入口不得运行。任务涉及 BUILD 时同时读取 `/home/muxunting/WorkSpace/BUILD/AGENTS.md`。
 - 本机已确认 `xcode-select -p` 指向 `/Applications/Xcode-26.2.0.app/Contents/Developer`。
 - 本机已确认 `xcodebuild -version` 输出 Xcode 26.2，`swift --version` 输出 Apple Swift 6.2.3；项目声明仍以 `Package.swift` 的 Swift tools 6.0 为准。
 - 本机已确认 `xcrun --find xctest` 和 `xcrun --find simctl` 可用。
@@ -186,7 +187,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 - 功能快速迭代期间，每轮交互验收统一使用 `make run-demo-app`，不得再把新用户空库、一次性手工灌数或 `--ephemeral` 截图 fixture 当成用户体验入口。
 - 演示基线必须由 `NoonmarkDemoSupport` 通过真实领域接口重放，并覆盖连续一年的中段用户状态。真实 `.app` 安装后必须再以 SQLite 与加密烛龙 sidecar 回读对账，失败时不得打开成“可体验”状态。
 - 新增或改变用户可见功能时，必须同步评估演示覆盖契约。若该功能需要状态或历史才能体验，应在同一改动中更新一年用户故事、机器可检查报告和 `docs/engineering/interactive-demo-fixture.md` 覆盖表；普通用户能力必须纳入跨季度重复使用计数。
-- 演示数据根固定隔离于仓库 `artifacts/interactive-demo/`，运行身份固定为 `demo`，每次启动整体重建；不得读取、写入或复用 production 数据库与 iCloud repository。演示 bundle 只复用内部 E2E 参数能力，不得放宽 production bundle 的参数边界。
+- 演示数据通过仓库兼容入口 `artifacts/interactive-demo/` 访问，但真实目录固定在项目 BUILD 根，运行身份固定为 `demo`，每次启动整体重建；不得读取、写入或复用 production 数据库与 iCloud repository。演示 bundle 只复用内部 E2E 参数能力，不得放宽 production bundle 的参数边界。
 
 ## 测试三铁律
 

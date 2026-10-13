@@ -7,7 +7,7 @@
 - 引入提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`，`feat(web): add a single-owner self-hosted preview`
 - Git author／committer：`orb-agents <orb-agents@mail.com>`／同上
 - 实际修改者：本次对话的 Codex 实施流程；Git identity 不代表具体自然人，各行实际操作者无法仅由 Git 确认
-- 修复提交：待回填
+- 修复提交：`029b9859af9b73916f4542eafed6e5c4223596e1`
 
 ## 用户症状与影响
 
@@ -39,7 +39,7 @@
 
 ## 验证结果
 
-旧版结构症状已判红；本轮 5 项真实交互门禁、一年三尺寸截图及完整 Linux `make check` 均已通过，见[验证记录](../../tasks/noonmark-web-ui-parity/verification.md)。最终 commit 待回填。Linux 未执行原生 App，不声称有新的 Mac 运行图或用户批准的视觉 reference。分类、重复计划、烛龙、语言切换、原生数据包等仍未对等，原始“整套 UI 和交互还原”诉求尚未完全达到，因此本案例保持「处理中」。
+旧版结构症状已判红；本轮 5 项真实交互门禁、一年三尺寸截图及完整 Linux `make check` 均已通过，见[验证记录](../../tasks/noonmark-web-ui-parity/verification.md)。本轮修复 commit 已回填。Linux 未执行原生 App，不声称有新的 Mac 运行图或用户批准的视觉 reference。分类、重复计划、烛龙、语言切换、原生数据包等仍未对等，原始“整套 UI 和交互还原”诉求尚未完全达到，因此本案例保持「处理中」。
 
 ## 永久门禁
 

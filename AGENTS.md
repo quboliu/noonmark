@@ -33,15 +33,16 @@
   - `NoonmarkMacUIContractTests`
   - `NoonmarkSimulationTests`
 - 当前文档已包含产品范围、功能规格、烛龙、ADR、研究资料和 Mac UI 设计契约；领域术语以 `CONTEXT.md` 为准。
-- 当前已有可运行 Mac App target 和本地 DMG 打包脚本；尚未发现后端服务、容器部署配置或生产 deployed endpoint。验证应覆盖 Swift Package 的 build/test、隔离真实 `.app` E2E 截图、持久化探针、production DMG 静态门禁和受控派生的 `dmg-validation` 交互，不得在开发或测试中启动 production App。
+- 当前已有可运行 Mac App target 和本地 DMG 打包脚本，以及独立开发中的 Go／Web 个人实例；尚无 Web 生产 deployed endpoint。Mac 验证应覆盖 Swift Package 的 build/test、隔离真实 `.app` E2E 截图、持久化探针、production DMG 静态门禁和受控派生的 `dmg-validation` 交互，不得在开发或测试中启动 production App。Web 验证使用下述独立入口，不能替代原生门禁。
 
 ## 当前开发入口
 
-### Web／Go 规划与当前 Linux 工作区（2026-10-12）
+### Web／Go 个人实例与当前 Linux 工作区（2026-10-12）
 
-- Web／Go 的产品边界已由用户更新为：服务端唯一任务事实源、个人自部署优先、一位 owner 多设备访问，官方托管以后复用同一内核；Web 不做本地优先、浏览器领域引擎、离线命令回放或双模式切换。技术方案仍为提案，入口见 `docs/tasks/noonmark-web-architecture/README.md` 与 ADR-0049；ADR-0048 已被取代，不要把拟建 API、脚本或指标描述成已实现／已验收。
+- Web／Go 的产品边界已由用户更新为：服务端唯一任务事实源、个人自部署优先、一位 owner 多设备访问，官方托管以后复用同一内核；Web 不做本地优先、浏览器领域引擎、离线命令回放或双模式切换。架构见 `docs/tasks/noonmark-web-architecture/README.md` 与 ADR-0049；实现范围和证据以 `docs/tasks/noonmark-web-self-hosted/README.md` 为准。ADR-0048 已被取代，不要把未实现 API、原生兼容或指标描述成已验收。
 - 按用户本次指示，当前 Linux 主机的源码和分支操作留在 `/home/xuntingmu/workspace/noonmark`，不建立源码副本或外置 worktree。Web／Go 的依赖、构建、缓存、数据库、浏览器 profile 和测试证据统一外置到 `/share/broker/noonmark-build`；仓库只保留 Git 忽略的 `.work` 软链接作为入口。
-- Web／Go 路径约束见 `docs/engineering/web-build-workspace.md`。后续先完成 P0 参数化入口和目录守卫，再运行构建／测试；不得只靠 `.gitignore` 隐藏真实产物。
+- Web／Go 路径约束见 `docs/engineering/web-build-workspace.md`。所有命令通过 `scripts/web/env` 或 `scripts/web/run` 进入外置 run；`make web-check` 覆盖路径守卫、Go、实际容器／浏览器、恢复与一年演示。`make web-demo` 是 Web 交互验收入口，不能用原生 `make run-demo-app` 代替。唯一依赖软链接为受检的 `apps/web/node_modules`；不得只靠 `.gitignore` 隐藏真实产物。
+- `make check` 通过 `scripts/check-platform` 选择实际平台：macOS 保持原生 `scripts/check`，Linux 执行 `scripts/web/check`。这是两套不同运行面的验证，不得把任一平台的成功宣称为另一平台已验证；显式启用的套件缺少依赖时必须失败。
 - 以下 macOS BUILD 规则仍适用于原生开发，production 与 iCloud 保护不变。本次用户指定的 Linux `.work` 入口不受原生兼容软链接禁令限制；不因此恢复 `.build`、`artifacts` 或 `dist` 兼容链接，也不运行未参数化的旧入口。
 
 ### 原生 macOS 开发
@@ -235,7 +236,7 @@ Issues 和 PRD 追踪于 `quboliu/noonmark` 的 GitHub Issues；外部 PR 不作
 - 临时容器必须使用 `--rm`。
 - 不许执行 `docker prune --volumes`，避免误删数据。
 - `AutoMigrate` 卡死且无日志时，优先检查 `pg_stat_activity` 并杀僵尸事务，不要先 restart 容器。
-- 当前仓库尚未发现 Dockerfile、compose 或部署脚本；在部署入口出现前，不得臆造容器验证结论。
+- Web 的 Dockerfile、Compose 与说明位于 `deploy/self-hosted/`；`scripts/web/package` 只构建本地镜像，不发布 registry。容器和浏览器验收走 `scripts/web/test-e2e`，使用唯一 run UUID、loopback 端口及合成资料；不得臆造容器或跨架构发行结论。
 - 一旦新增容器化运行面，每次改完相关代码都要主动部署到隔离容器验证。
 
 ## UI 基调

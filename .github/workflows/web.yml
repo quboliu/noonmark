@@ -1,0 +1,59 @@
+name: Web self-hosted
+
+on:
+  pull_request:
+    paths:
+      - apps/web/**
+      - services/noonmark/**
+      - scripts/web/**
+      - deploy/self-hosted/**
+      - .github/workflows/web.yml
+      - Makefile
+      - scripts/check-platform
+  push:
+    branches: [main]
+    paths:
+      - apps/web/**
+      - services/noonmark/**
+      - scripts/web/**
+      - deploy/self-hosted/**
+      - .github/workflows/web.yml
+      - Makefile
+      - scripts/check-platform
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-hosted-product:
+    name: Linux Go, browser and container gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NOONMARK_WORK_ROOT: ${{ runner.temp }}/noonmark
+      CS_TEST_STACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+      - name: Install source isolation tool
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - name: Install locked browser dependencies
+        run: scripts/web/deps
+      - name: Install browser engine
+        run: scripts/web/run audit bash -c 'cd apps/web && npx --no-install playwright install --with-deps chromium'
+      - name: Verify source, SQLite, real browser and release container
+        run: scripts/web/check
+      - name: Verify source-only checkout after failure
+        if: always()
+        run: scripts/web/check-workspace

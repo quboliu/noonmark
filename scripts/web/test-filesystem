@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "$0")/env" audit
+trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
+python3 -B "$NOONMARK_SOURCE_ROOT/scripts/web/test-filesystem.py"

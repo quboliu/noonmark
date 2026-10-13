@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${NOONMARK_RUN_ROOT:-}" ]]; then
+  source "$(dirname -- "$0")/env" development
+fi
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"
+"$NOONMARK_SOURCE_ROOT/scripts/web/deps"
+test ! -L "$NOONMARK_BUILD_ROOT/bin"
+mkdir -m 700 -p "$NOONMARK_BUILD_ROOT/bin"
+"$NOONMARK_SOURCE_ROOT/scripts/web/readonly-exec" bash -euo pipefail -c '
+  cd "$NOONMARK_SOURCE_ROOT/services/noonmark"
+  CGO_ENABLED=1 go build -mod=readonly -trimpath -tags netgo,osusergo,sqlite_omit_load_extension \
+    -ldflags "-linkmode external -extldflags -static" -o "$NOONMARK_BUILD_ROOT/bin/noonmark" ./cmd/noonmark
+'
+"$NOONMARK_SOURCE_ROOT/scripts/web/readonly-exec" bash -euo pipefail -c '
+  cd "$NOONMARK_SOURCE_ROOT/apps/web"
+  npm run typecheck
+  npm run build
+'
+if [[ "$(python3 -B "$NOONMARK_SOURCE_ROOT/scripts/web/workspace.py" hash)" != "$NOONMARK_SOURCE_HASH" ]]; then
+  printf '%s\n' 'Source changed during this build; start a fresh scripts/web/env run.' >&2
+  exit 1
+fi
+python3 -B - "$NOONMARK_BUILD_ROOT" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+manifest = json.loads((root / "manifest.json").read_text())
+manifest["artifacts"] = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                         for path in sorted(root.rglob("*")) if path.is_file() and path.name != "manifest.json"}
+(root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"
+printf 'Build ready: %s\n' "$NOONMARK_BUILD_ROOT"

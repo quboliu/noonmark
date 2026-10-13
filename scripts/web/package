@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${NOONMARK_RUN_ROOT:-}" ]]; then
+  source "$(dirname -- "$0")/env" release-validation
+fi
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"
+if [[ ! -x "$NOONMARK_BUILD_ROOT/bin/noonmark" || ! -f "$NOONMARK_WEB_DIST/index.html" ]]; then
+  "$NOONMARK_SOURCE_ROOT/scripts/web/build"
+fi
+if file "$NOONMARK_BUILD_ROOT/bin/noonmark" | grep -q 'dynamically linked'; then
+  printf '%s\n' 'Container requires a statically linked binary.' >&2
+  exit 1
+fi
+noonmark_runtime="$NOONMARK_BUILD_ROOT/runtime"
+mkdir -m 700 -p "$noonmark_runtime/etc/ssl/certs" "$noonmark_runtime/data" "$noonmark_runtime/tmp"
+cp /etc/ssl/certs/ca-certificates.crt "$noonmark_runtime/etc/ssl/certs/ca-certificates.crt"
+chmod 755 "$noonmark_runtime" "$noonmark_runtime/etc" "$noonmark_runtime/etc/ssl" "$noonmark_runtime/etc/ssl/certs" "$noonmark_runtime/data"
+chmod 1777 "$noonmark_runtime/tmp"
+chmod 644 "$noonmark_runtime/etc/ssl/certs/ca-certificates.crt"
+noonmark_image="noonmark-local:${NOONMARK_SOURCE_HASH:0:12}-${NOONMARK_RUN_ID:0:8}"
+docker buildx build --load --tag "$noonmark_image" \
+  --label org.opencontainers.image.source=https://github.com/quboliu/noonmark \
+  --label "app.noonmark.source-hash=$NOONMARK_SOURCE_HASH" \
+  --file "$NOONMARK_SOURCE_ROOT/deploy/self-hosted/Dockerfile" \
+  --build-context "noonmark-bin=$NOONMARK_BUILD_ROOT/bin" \
+  --build-context "noonmark-web=$NOONMARK_WEB_DIST" \
+  --build-context "noonmark-runtime=$noonmark_runtime" \
+  --metadata-file "$NOONMARK_RUN_ROOT/reports/image-build.json" \
+  "$NOONMARK_SOURCE_ROOT/deploy/self-hosted"
+printf '%s\n' "$noonmark_image" > "$NOONMARK_BUILD_ROOT/image.txt"
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"
+printf 'Image ready: %s\n' "$noonmark_image"

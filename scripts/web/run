@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+noonmark_profile="${1:?Usage: scripts/web/run <profile> <command> [args...]}"
+shift
+if (( $# == 0 )); then
+  printf '%s\n' 'A command is required.' >&2
+  exit 2
+fi
+source "$(dirname -- "$0")/env" "$noonmark_profile"
+trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
+"$@"

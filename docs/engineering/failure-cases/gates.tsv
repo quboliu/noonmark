@@ -1,4 +1,18 @@
 case_id	tier	gate_entry	required_by	catches
+FAIL-2026-10-13-01	fast	scripts/web/test-demo-clock	scripts/web/check	确定性 demo 时钟必须穿过 Store 关闭重开；模拟真正跨 owner 午夜时回读仍必须拒绝 ready
+FAIL-2026-10-13-01	symptom	scripts/web/check	scripts/check-platform	完整 race 年度重放须用固定纽约时钟完成365日事实及重新打开对账，同时真实演示浏览器门禁继续使用实际墙钟
+FAIL-2026-10-12-07	fast	scripts/web/test-clock	scripts/web/check	相邻 exact instants 跨整秒时的 UTC 投影须固定九位小数并保持展示排序顺序
+FAIL-2026-10-12-07	symptom	scripts/web/test-clock-storage	scripts/web/check	真实 SQLite 相同墙钟连续捕获飞光，服务端和 Notes 同款 ECMAScript localeCompare 均须返回较新条目在前
+FAIL-2026-10-12-04	fast	scripts/web/test-domain-boundary	scripts/web/check	已撤销会话在进入 receipt 读事务后必须重新验权并拒绝；会话仍有效时可正常读取
+FAIL-2026-10-12-04	symptom	scripts/web/test-domain-boundary	scripts/web/check	真实 SQLite owner 登录、提交、读取 receipt、退出后持原认证 context 再读，必须返回 AUTH_REQUIRED 而非旧收据
+FAIL-2026-10-12-05	fast	scripts/web/test-domain-boundary	scripts/web/check	延期继承未完成子任务须按1起连续编号，随后新增子任务不能排到继承项之前
+FAIL-2026-10-12-05	symptom	scripts/web/test-domain-boundary	scripts/web/check	真实 SQLite 三子任务完成前两项、延期第三项、目标新增子任务后回读，继承项position必须为1、新项为2
+FAIL-2026-10-12-03	fast	scripts/web/test-clock	scripts/web/check	分配后的 exact mutation bits 必须驱动 CreatedAt／UpdatedAt 投影；wall clock 回拨时投影仍单调
+FAIL-2026-10-12-03	symptom	scripts/web/test-clock-storage	scripts/web/check	真实 SQLite 经创建、时钟回拨、完成／编辑／置顶／删除及关闭重开，时间投影须匹配 exact bits 且单调，损坏投影必须 fail-closed
+FAIL-2026-10-12-02	fast	scripts/web/test-workspace	scripts/web/check	浏览器短临时目录须实际可绑定 AF_UNIX socket，过长／未管理路径及跨 run ownership 必须拒绝
+FAIL-2026-10-12-02	symptom	scripts/web/test-e2e	scripts/web/check	隔离容器 E2E 的 Chromium 必须完成真实启动及产品用户路径，不能因 SingletonSocket 路径过长退出
+FAIL-2026-10-12-01	fast	scripts/web/test-http-boundary	scripts/web/check	真实 SQLite 与 HTTP handler 必须拒绝 password／Password 及 Unicode long-s 别名请求，不得签发会话
+FAIL-2026-10-12-01	symptom	scripts/web/test-e2e	scripts/web/check	隔离部署真实 endpoint 对 ASCII／Unicode 字段歧义返回 400 INVALID_REQUEST 且无 token，正常 owner 登录保持可用
 FAIL-2026-08-01-01	fast	scripts/test-e2e-evidence-contract	scripts/check	拒绝 async App 入口并要求同步 main 架构不变量
 FAIL-2026-08-01-01	symptom	scripts/test-e2e	scripts/test-all	真实 File Import、NSOpenPanel、确认、SQLite 与重启回读
 FAIL-2026-08-01-01	symptom	scripts/test-tencent-ime-termination-persistence	scripts/test-all	持久化启动后的退出握手、保存与重启回读
@@ -285,3 +299,7 @@ FAIL-2026-08-19-03	fast	scripts/test-live-icloud-reset-sentinel	scripts/check	�
 FAIL-2026-08-19-03	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实签名隔离 App 必须以 mode 级独立 data-root 在 live sentinel 保护的全新 append-only iCloud round 对旧随机 final marker 回报 exact divergent verdict、恰好一条 syncProtocol/443 失败诊断且 runtime／clean-cut／outbox／远端 inventory 零副作用，再以另一 round 验证 deterministic authority 收敛
 FAIL-2026-08-19-04	fast	scripts/test-replication-bootstrap-concurrency	scripts/test-replication-v2-recovery-contract	原生 Foundation presenter 的 no-op writer intent 与相同 marker version evidence 必须重新验证为 equivalent；真实不同 bytes 必须单调优先于后续 unavailable，post-snapshot 改写须被捕获，且 source contract 固定 final snapshot 与 presenter removal 位于同一个 coordinated read accessor
 FAIL-2026-08-19-04	symptom	scripts/test-icloud-append-only-symptom	scripts/test-icloud-sync-live	两个全新真实 iCloud round 必须均收敛且重启零重复 apply；正常 file coordination 事件不得误报 divergentMarkerVersion，后轮不得改变前轮 inventory 或 digest
+FAIL-2026-10-12-06	fast	scripts/web/test-focus	scripts/web/check	草稿异步读取就绪后聚焦且提交状态往返不抢焦点
+FAIL-2026-10-12-06	symptom	scripts/web/test-e2e	scripts/web/check	真实新增任务浮窗标题取得输入焦点
+FAIL-2026-10-12-08	fast	scripts/web/test-container-lifecycle	scripts/web/check	容器异步删除结束前不得复用且daemon故障不得视为空
+FAIL-2026-10-12-08	symptom	scripts/web/test-e2e	scripts/web/check	真实容器停止后重新创建并回读恢复资料

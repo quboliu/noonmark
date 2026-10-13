@@ -100,4 +100,18 @@ format-check:
 	scripts/format --lint
 
 check:
-	scripts/check
+	scripts/check-platform
+
+.PHONY: web-build web-package web-check web-demo
+
+web-build:
+	scripts/web/build
+
+web-package:
+	scripts/web/package
+
+web-check:
+	scripts/web/check
+
+web-demo:
+	scripts/web/run-demo

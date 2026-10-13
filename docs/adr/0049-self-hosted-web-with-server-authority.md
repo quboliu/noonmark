@@ -1,12 +1,12 @@
 # Web 采用服务端事实源，先交付个人自部署实例
 
-**Status**: Proposed
+**Status**: Accepted（分阶段实施）
 
 **Task-ID**: `noonmark-web-architecture`
 
 ## 已确认的产品决定
 
-2026-10-12 用户取消 Web 本地优先，要求借鉴思源的自部署方式，并进一步确认：个人实例优先，官方托管以后复用同一内核。一套实例供一位 owner 使用，多台设备访问同一个服务。该产品边界已确认；以下具体存储、接口与运维实现仍为待验证的技术提案。
+2026-10-12 用户取消 Web 本地优先，要求借鉴思源的自部署方式，并进一步确认：个人实例优先，官方托管以后复用同一内核。一套实例供一位 owner 使用，多台设备访问同一个服务。用户随后授权开工；该架构按阶段实施，未完成能力和技术差异见[实施记录](../tasks/noonmark-web-self-hosted/README.md)。接受决策不代表所有门禁已经完成。
 
 本 ADR 取代 [ADR-0048](0048-propose-web-dual-authority-and-go-backend.md)。原生 Mac 的 ADR-0009、iCloud V2、数据模式和运行隔离继续有效；Web 不复制它们的模式切换入口。
 
@@ -26,4 +26,4 @@
 
 SQLite 适合个人单实例的运行边界，但不提供多副本共享卷或单机无故障保证。数据根锁、可靠磁盘、异机备份、真实恢复和受控升级是发行条件。未来托管可先运行隔离个人实例；引入 PostgreSQL 必须由实际容量／运营证据驱动。
 
-原方案源码基线保留在 Git 历史；本次只修订文档，不变更原生数据或创建可运行服务。风险、回滚、灰度和症状门禁见[架构方案](../tasks/noonmark-web-architecture/README.md)、[数据协议](../tasks/noonmark-web-architecture/data-protocol.md)、[自部署运维](../tasks/noonmark-web-architecture/self-hosting.md)和[实施计划](../tasks/noonmark-web-architecture/delivery-plan.md)。
+原方案基线保留在 Git 历史；首次设计提交只修订文档，后续 Web 实施在同一 checkout 的开发分支推进，不变更原生数据。风险、回滚、灰度和症状门禁见[架构方案](../tasks/noonmark-web-architecture/README.md)、[数据协议](../tasks/noonmark-web-architecture/data-protocol.md)、[自部署运维](../tasks/noonmark-web-architecture/self-hosting.md)和[实施计划](../tasks/noonmark-web-architecture/delivery-plan.md)。

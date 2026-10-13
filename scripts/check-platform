@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+noonmark_source_root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
+case "$(uname -s)" in
+  Darwin)
+    printf '%s\n' 'check: 原生 macOS 门禁（Web 使用独立 Linux runner 验证）'
+    exec "$noonmark_source_root/scripts/check"
+    ;;
+  Linux)
+    printf '%s\n' 'check: Web Linux 门禁（不能替代原生 macOS 验证）'
+    exec "$noonmark_source_root/scripts/web/check"
+    ;;
+  *)
+    printf '%s\n' 'check: 此平台尚无受支持的验证入口' >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# 由 Bash source；每次调用分配全新且外置的 profile run。
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  printf '%s\n' 'Usage: source scripts/web/env <development|e2e|demo|audit|release-validation>' >&2
+  exit 2
+fi
+noonmark_env_script="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/workspace.py"
+if ! noonmark_exports="$(python3 -B "$noonmark_env_script" init "${1:-}")"; then
+  return 1
+fi
+eval "$noonmark_exports"
+unset noonmark_exports noonmark_env_script
+umask 077

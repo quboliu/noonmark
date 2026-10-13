@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+noonmark_demo_build="${NOONMARK_DEMO_BUILD_ROOT:-}"
+source "$(dirname -- "$0")/env" demo
+trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
+if [[ -n "$noonmark_demo_build" ]]; then
+  export NOONMARK_DEMO_BUILD_ROOT="$noonmark_demo_build"
+  python3 -B "$NOONMARK_SOURCE_ROOT/scripts/web/demo.py" verify-build
+else
+  "$NOONMARK_SOURCE_ROOT/scripts/web/build"
+  export NOONMARK_DEMO_BUILD_ROOT="$NOONMARK_BUILD_ROOT"
+fi
+python3 -B "$NOONMARK_SOURCE_ROOT/scripts/web/demo.py" interactive "$@"

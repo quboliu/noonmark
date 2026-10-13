@@ -1,0 +1,43 @@
+services:
+  noonmark:
+    image: ${NOONMARK_IMAGE:?请指定已经构建或核验的 Noonmark 镜像}
+    # rootful 使用数据目录 owner 的非 root UID；rootless 显式配置 0:0 映射到宿主非特权 owner。
+    user: "${NOONMARK_UID:-1000}:${NOONMARK_GID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "127.0.0.1:${NOONMARK_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${NOONMARK_DATA_DIR:?请指定仓库外的实例数据目录}
+        target: /data
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    command:
+      - serve
+      - --data-dir
+      - /data
+      - --web-dir
+      - /opt/noonmark/web
+      - --listen
+      - 0.0.0.0:8080
+      - --public-origin
+      - ${NOONMARK_PUBLIC_ORIGIN:?请指定浏览器访问实例的完整 origin}
+      - --trusted-proxy
+      - ${NOONMARK_TRUSTED_PROXY:-}
+    healthcheck:
+      test: [CMD, /usr/local/bin/noonmark, healthcheck, --url, "http://127.0.0.1:8080"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "3"

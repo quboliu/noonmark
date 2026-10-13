@@ -29,6 +29,7 @@
     coverage/
     exports/
   demo/<run-id>/                            # 一年演示，每次新建
+  t/<8-hex>/                               # exclusive-create 浏览器短 TMPDIR，manifest 绑定 run
 ```
 
 本次建立到 `cache/`、`deps/`、`builds/`、`runs/`、`demo/` 一级空目录，不生成 fixture。`run-id` 及按版本细分的路径由后续 wrapper exclusive-create。外置根不得包含 Noonmark 源码副本或 Git worktree；切分支继续使用当前 checkout，不把项目搬进 `/share/broker/`。
@@ -60,6 +61,8 @@ Go 缓存变量及 `-o` 以 [Go 命令文档](https://pkg.go.dev/cmd/go)为依�
 
 JS 安装器可在外置依赖沙盒中复制 package manifest／lockfile 后安装，再通过声明的链接向源码提供依赖；不能复制应用源码或创建 checkout。workspace 依赖和生命周期脚本也须验证没有反向写入源码。只设置包管理器 store path 通常仍会留下真实 `node_modules`，因此不能单凭 store path 判断隔离完成。
 
+Chromium 的 AF_UNIX socket 不能使用带完整 run UUID 的通用临时目录。wrapper 为每轮 exclusive-create `NOONMARK_BROWSER_TMPDIR=$NOONMARK_WORK_ROOT/t/<8-hex>`，canonical base 的 UTF-8 字节长度最多 48；目录为 0700，并用 ownership manifest 双向绑定当前 run。只有 Playwright／Chromium 子进程据此覆盖 `TMPDIR`，全局 `TMPDIR`／`GOTMPDIR` 继续严格等于 `run/tmp`。不使用软链接缩短路径，外置根过长时明确失败。症状与门禁见 [FAIL-2026-10-12-02](failure-cases/2026-10-12-web-browser-socket-path.md)。
+
 容器镜像层和 daemon 内部 metadata 属于隔离构建运行器；若需要限定其物理位置，应使用专属 builder／daemon 的外置 data-root，不能重配或清理共享 daemon。应用持久卷及 fixture 不使用不透明、跨 run 复用的 named volume。源码挂载只读，第三方依赖与输出分开挂载；临时单容器使用 `--rm`，Compose 只操作本轮唯一 project。
 
 ## 3. Profile 与清理
@@ -89,4 +92,4 @@ Web profile 使用 `development`、`e2e`、`demo`、`audit`、`release-validatio
 - 两次独立 suite 不复用 DB／browser profile；不同分支、工具版本、架构和 lockfile 缓存不会错用。
 - 没有源代码副本、worktree、凭证明文、生产路径探测或跨项目清理。
 
-本次验证只检查文档、Git 状态、目录归属、软链接目标与忽略规则。尚不能声称未来每种工具都已遵守外置约束，P0 必须实际实现并验证上述守卫。
+最初设计阶段只检查文档、Git、目录归属和链接；实施阶段已提供 `scripts/web/env`、只读源码构建与路径／进程／浏览器门禁。当前支持的工具与实际证据见[实施记录](../tasks/noonmark-web-self-hosted/README.md)。未来新增工具仍须验证真实写入位置，不能从既有门禁推断它已遵守外置约束。

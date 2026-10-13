@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${NOONMARK_WORK_ROOT:?Run through scripts/web/env or scripts/web/run first}"
+: "${NOONMARK_SOURCE_ROOT:?Missing source root}"
+if ! command -v bwrap >/dev/null; then
+  printf '%s\n' 'bubblewrap is required to verify builds with a read-only source checkout.' >&2
+  exit 1
+fi
+exec bwrap --die-with-parent --ro-bind / / \
+  --bind "$NOONMARK_WORK_ROOT" "$NOONMARK_WORK_ROOT" \
+  --dev /dev --proc /proc --chdir "$NOONMARK_SOURCE_ROOT" -- "$@"

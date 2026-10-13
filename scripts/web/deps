@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${NOONMARK_RUN_ROOT:-}" ]]; then
+  source "$(dirname -- "$0")/env" audit
+fi
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"
+noonmark_package="$NOONMARK_SOURCE_ROOT/apps/web"
+noonmark_operation="${1:-install}"
+if [[ "$noonmark_operation" == lock ]]; then
+  noonmark_lock_dir="$NOONMARK_RUN_ROOT/tmp/npm-lock"
+  mkdir -m 700 "$noonmark_lock_dir"
+  cp "$noonmark_package/package.json" "$noonmark_lock_dir/package.json"
+  if [[ -f "$noonmark_package/package-lock.json" ]]; then
+    cp "$noonmark_package/package-lock.json" "$noonmark_lock_dir/package-lock.json"
+  fi
+  npm install --prefix "$noonmark_lock_dir" --package-lock-only --ignore-scripts
+  cp "$noonmark_lock_dir/package-lock.json" "$noonmark_package/package-lock.json"
+elif [[ "$noonmark_operation" != install ]]; then
+  printf '%s\n' 'Usage: scripts/web/deps [install|lock]' >&2
+  exit 2
+fi
+python3 -B "$NOONMARK_SOURCE_ROOT/scripts/web/install-deps.py"
+"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"

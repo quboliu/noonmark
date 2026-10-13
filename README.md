@@ -30,6 +30,12 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-blue"></a>
 </p>
 
+## Self-hosted Web preview
+
+A Go server and React client are being implemented alongside the native app. The Web edition uses server-owned SQLite, one owner per instance, and multiple online devices. Start a fresh one-year demonstration with `make web-demo`; build a local container with `make web-package`. Dependencies and runtime data stay outside the checkout.
+
+See the [deployment guide](deploy/self-hosted/README.md) and [implementation scope](docs/tasks/noonmark-web-self-hosted/README.md). This preview does not yet provide native feature parity or Mac data-package compatibility. The product tour below describes the native macOS app.
+
 ## The problem Noonmark solves
 
 Ordinary todo lists are good at answering "what is still unchecked right now", but struggle to answer honestly:

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "$0")/env" audit
+trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
+cd "$NOONMARK_SOURCE_ROOT/services/noonmark"
+CGO_ENABLED=1 go test -mod=readonly -count=1 ./internal/httpapi ./cmd/noonmark \
+  | tee "$NOONMARK_RUN_ROOT/reports/http-boundary.txt"

@@ -30,6 +30,12 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-blue"></a>
 </p>
 
+## 个人自部署 Web 预览
+
+仓库正在原生 App 旁实现 Go 服务与 React 客户端。Web 以服务端 SQLite 为事实源，一位 owner 使用一套实例，多设备在线访问。`make web-demo` 创建全新的一年演示实例，`make web-package` 构建本地容器；依赖和运行数据全部外置。
+
+操作见[自部署说明](deploy/self-hosted/README.md)，功能与验收边界见[实施记录](docs/tasks/noonmark-web-self-hosted/README.md)。本预览尚未实现原生完整能力或 Mac 数据包兼容；下方产品导览描述原生 macOS App。
+
 ## 晷迹解决什么问题
 
 普通 Todo 擅长回答“现在还有什么没打勾”，却很难如实回答：

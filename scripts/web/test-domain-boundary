@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$(dirname -- "$0")/run" audit go -C services/noonmark test -race ./internal/store -run '^Test(RevokedSessionCannotReadReceipt|CarryoverReindexesRemainingSubtasksBeforeNewOnes)$' -count=1

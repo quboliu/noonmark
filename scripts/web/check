@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "$0")/env" audit
+trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
+"$NOONMARK_SOURCE_ROOT/scripts/test-failure-case-gates"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-workspace"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-filesystem"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-http-boundary"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-clock"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-clock-storage"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-domain-boundary"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-demo-clock"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-container-lifecycle"
+(
+  cd "$NOONMARK_SOURCE_ROOT/services/noonmark"
+  test -n "$(rg --files -g '*_test.go' .)"
+  noonmark_unformatted="$(gofmt -l .)"
+  if [[ -n "$noonmark_unformatted" ]]; then
+    printf '%s\n' "$noonmark_unformatted" >&2
+    exit 1
+  fi
+  CGO_ENABLED=1 go vet ./...
+  CGO_ENABLED=1 go test -race -count=1 -json -coverprofile "$NOONMARK_RUN_ROOT/coverage/go.out" ./... \
+    | tee "$NOONMARK_RUN_ROOT/reports/go-tests.json"
+)
+"$NOONMARK_SOURCE_ROOT/scripts/web/build"
+"$NOONMARK_SOURCE_ROOT/scripts/web/package"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-focus"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-e2e"
+NOONMARK_DEMO_BUILD_ROOT="$NOONMARK_BUILD_ROOT" "$NOONMARK_SOURCE_ROOT/scripts/web/test-demo"

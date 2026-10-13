@@ -15,3 +15,6 @@ dist/
 /DerivedData
 /artifacts
 /dist
+
+# 本机 Web／Go 外置产物入口；真实内容位于 /share/broker/noonmark-build。
+/.work

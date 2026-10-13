@@ -37,6 +37,15 @@
 
 ## 当前开发入口
 
+### Web／Go 规划与当前 Linux 工作区（2026-10-12）
+
+- Web／Go 架构目前为提案，入口见 `docs/tasks/noonmark-web-architecture/README.md`；不要把设计中的 API、脚本或商业指标描述成已实现／已验收。
+- 按用户本次指示，当前 Linux 主机的源码和分支操作留在 `/home/xuntingmu/workspace/noonmark`，不建立源码副本或外置 worktree。Web／Go 的依赖、构建、缓存、数据库、浏览器 profile 和测试证据统一外置到 `/share/broker/noonmark-build`；仓库只保留 Git 忽略的 `.work` 软链接作为入口。
+- Web／Go 路径约束见 `docs/engineering/web-build-workspace.md`。后续先完成 P0 参数化入口和目录守卫，再运行构建／测试；不得只靠 `.gitignore` 隐藏真实产物。
+- 以下 macOS BUILD 规则仍适用于原生开发，production 与 iCloud 保护不变。本次用户指定的 Linux `.work` 入口不受原生兼容软链接禁令限制；不因此恢复 `.build`、`artifacts` 或 `dist` 兼容链接，也不运行未参数化的旧入口。
+
+### 原生 macOS 开发
+
 - 基础环境：macOS，完整 Xcode 或能提供 XCTest 的有效 Apple developer toolchain。
 - 本机构建、打包、测试与开发 fixture 的真实内容统一位于 `/home/muxunting/WorkSpace/BUILD/projs/noonmark/`。Aranya 仓库内禁止创建 `.build/`、`.swiftpm/`、`DerivedData/`、`artifacts/`、`dist/` 的真实目录，也禁止用指向 BUILD 的兼容软链接占位；BUILD 内同样禁止放置 Noonmark 源码副本或 Git worktree。SwiftPM 命令必须显式传 `--scratch-path`，其他脚本必须通过统一外置路径变量直接读写 BUILD；尚未完成参数化的旧入口不得运行。任务涉及 BUILD 时同时读取 `/home/muxunting/WorkSpace/BUILD/AGENTS.md`。
 - 本机已确认 `xcode-select -p` 指向 `/Applications/Xcode-26.2.0.app/Contents/Developer`。

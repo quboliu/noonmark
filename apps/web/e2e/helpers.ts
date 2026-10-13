@@ -38,6 +38,7 @@ export async function api<T>(page: Page, token: string, path: string, body?: unk
 }
 export const snapshot = (page: Page, token: string) => api<Snapshot>(page, token, '/api/v1/snapshot');
 export async function navigation(page: Page, name: string) {
+  if (name === '每日复盘') { await navigation(page, 'Day Todo'); await page.getByRole('button', { name: '每日复盘', exact: true }).click(); return; }
   const mobile = page.getByRole('button', { name: '打开导航', exact: true });
   if (await mobile.isVisible()) await mobile.click();
   await page.locator('.sidebar').getByRole('button', { name, exact: true }).click();

@@ -26,5 +26,6 @@ trap '"$NOONMARK_SOURCE_ROOT/scripts/web/check-workspace"' EXIT
 "$NOONMARK_SOURCE_ROOT/scripts/web/build"
 "$NOONMARK_SOURCE_ROOT/scripts/web/package"
 "$NOONMARK_SOURCE_ROOT/scripts/web/test-focus"
+"$NOONMARK_SOURCE_ROOT/scripts/web/test-ui-parity"
 "$NOONMARK_SOURCE_ROOT/scripts/web/test-e2e"
 NOONMARK_DEMO_BUILD_ROOT="$NOONMARK_BUILD_ROOT" "$NOONMARK_SOURCE_ROOT/scripts/web/test-demo"

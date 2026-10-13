@@ -1,0 +1,413 @@
+.settings-window {
+    --settings-background: #fdfdfd;
+    --settings-sidebar: #e7e7e7;
+    --settings-selection: #d1d1d1;
+    --settings-text: #1c1c1f;
+    --settings-muted: #6b6b75;
+    --settings-line: #e6e6e9;
+    --settings-control: #f0f0f1;
+    --settings-active: #fff;
+    width: min(860px, calc(100vw - 32px));
+    height: min(660px, calc(100dvh - 40px));
+    max-width: none;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    border: 1px solid #bfbfc4;
+    border-radius: 10px;
+    background: var(--settings-background);
+    color: var(--settings-text);
+    box-shadow: 0 20px 65px #1c1c1f30;
+    overflow: hidden;
+    line-height: 1.5;
+}
+.settings-window[data-theme="warmPaper"] {
+    --settings-background: #fffdf9;
+    --settings-sidebar: #ede8df;
+    --settings-selection: #d9d2c8;
+    --settings-text: #211b16;
+    --settings-muted: #706252;
+    --settings-line: #e6ded2;
+    --settings-control: #f5efe5;
+    --settings-active: #fffefb;
+}
+.settings-window::backdrop {
+    background: #20202729;
+}
+.settings-window .settings-layout {
+    position: relative;
+    display: grid;
+    grid-template-columns: 230px minmax(0, 1fr);
+    height: 100%;
+}
+.settings-window .settings-navigation {
+    padding: 10px;
+    background: var(--settings-sidebar);
+    border-right: 1px solid #00000015;
+    overflow-y: auto;
+}
+.settings-window .settings-pane-button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 9px;
+    width: 100%;
+    min-height: 28px;
+    padding: 4px 9px;
+    margin: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--settings-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: left;
+}
+.settings-window .settings-pane-button > svg {
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+}
+.settings-window .settings-pane-button:hover {
+    background: #00000006;
+}
+.settings-window .settings-pane-button.selected {
+    background: var(--settings-selection);
+}
+.settings-window .settings-pane-content {
+    min-width: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: 30px 34px;
+}
+.settings-window .settings-pane-content > h1 {
+    font-size: 20px;
+    line-height: 1.4;
+    font-weight: 600;
+    letter-spacing: 0;
+    margin: 0 0 20px;
+    padding-right: 22px;
+}
+.settings-window .settings-pane-content > div {
+    max-width: 660px;
+}
+.settings-window .settings-subtitle {
+    margin: 0 0 14px;
+    color: var(--settings-muted);
+    font-size: 12px;
+}
+.settings-window .settings-section {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 0;
+    margin: 0 0 16px;
+}
+.settings-window .settings-section > h2 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--settings-muted);
+    margin: 0;
+}
+.settings-window .settings-segmented {
+    display: flex;
+    width: 320px;
+    max-width: 100%;
+    height: 24px;
+    padding: 1px;
+    border: 1px solid #00000009;
+    border-radius: 6px;
+    background: var(--settings-control);
+    box-shadow: inset 0 1px 2px #00000004;
+}
+.settings-window .settings-segmented > button {
+    flex: 1;
+    min-width: 0;
+    min-height: 20px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 20px;
+    color: var(--settings-text);
+}
+.settings-window .settings-segmented > button[aria-pressed="true"] {
+    background: var(--settings-active);
+    box-shadow:
+        0 0 1px #00000050,
+        0 1px 2px #00000019;
+}
+.settings-window .settings-explanation {
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--settings-muted);
+}
+.settings-window .settings-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 400;
+}
+.settings-window .settings-checkbox input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #2961c7;
+}
+.settings-window .settings-shortcuts {
+    width: min(320px, 100%);
+    margin: 0;
+    font-size: 11.5px;
+}
+.settings-window .settings-shortcuts > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+}
+.settings-window .settings-shortcuts dt {
+    color: var(--settings-muted);
+}
+.settings-window .settings-shortcuts dd {
+    margin: 0;
+}
+.settings-window kbd {
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+}
+.settings-window .settings-poem {
+    margin-top: 5px;
+}
+.settings-window .settings-poem summary {
+    width: fit-content;
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 500;
+}
+.settings-window .settings-poem-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 10px;
+}
+.settings-window .settings-poem-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+.settings-window .settings-poem-label > label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--settings-muted);
+}
+.settings-window .settings-poem textarea {
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    padding: 8px 10px;
+    border: 1px solid var(--settings-line);
+    border-radius: 7px;
+    background: var(--settings-active);
+    color: var(--settings-text);
+    font-size: 12px;
+    line-height: 1.6;
+}
+.settings-window .settings-poem-display {
+    padding-top: 20px;
+    margin-top: 20px;
+    border-top: 1px solid var(--settings-line);
+}
+.settings-window .settings-poem-display > p {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    color: var(--settings-muted);
+    line-height: 1.85;
+    margin: 0;
+}
+.settings-window .settings-text-button {
+    min-height: 28px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: #2961c7;
+    font-size: 11.5px;
+    font-weight: 400;
+}
+.settings-window .settings-text-button:hover {
+    text-decoration: underline;
+}
+.settings-window .settings-secondary {
+    min-height: 28px;
+    padding: 3px 9px;
+    background: var(--settings-control);
+    border: 0;
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--settings-text);
+}
+.settings-window .settings-facts {
+    margin: 0;
+    font-size: 12px;
+}
+.settings-window .settings-facts > div {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: 12px;
+    padding: 7px 0;
+}
+.settings-window .settings-facts dt {
+    color: var(--settings-muted);
+}
+.settings-window .settings-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+.settings-window .settings-connected {
+    color: #08764d;
+}
+.settings-window .settings-rule {
+    height: 1px;
+    margin: 16px 0;
+    background: var(--settings-line);
+}
+.settings-window .settings-boundaries {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding-left: 15px;
+    color: var(--settings-muted);
+    font-size: 12px;
+}
+.settings-window .settings-boundaries li {
+    padding-left: 1px;
+}
+.settings-window .settings-boundaries li::marker {
+    color: #2961c7;
+}
+.settings-window .settings-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--settings-muted);
+}
+.settings-window .settings-close:hover {
+    background: var(--settings-control);
+}
+.settings-window .settings-storage-warning {
+    font-size: 11.5px;
+    color: #8a591d;
+    margin: 0 0 16px;
+}
+.settings-window .backup-section h2 {
+    font-size: 12px;
+    font-weight: 600;
+    margin: 0 0 10px;
+}
+.settings-window .backup-section p {
+    font-size: 11.5px;
+    color: var(--settings-muted);
+    margin: 0 0 10px;
+}
+.settings-window .backup-section form {
+    margin: 14px 0;
+    max-width: 360px;
+}
+.settings-window .backup-section label {
+    font-size: 12px;
+}
+.settings-window .backup-section label + label {
+    margin-top: 14px;
+}
+.settings-window .backup-section input {
+    font-size: 12px;
+    min-height: 28px;
+    padding: 4px 8px;
+    margin-top: 5px;
+    color: var(--settings-text);
+    background: var(--settings-active);
+    border-color: var(--settings-line);
+}
+.settings-window .backup-section form button[type="submit"] {
+    min-height: 28px;
+    font-size: 11.5px;
+    padding: 4px 10px;
+    margin-top: 14px;
+}
+.settings-window .backup-section .field-hint {
+    margin-top: 7px;
+    font-size: 11px;
+}
+.settings-window .backup-section .restore-hint {
+    font-size: 11px;
+}
+@media (max-width: 650px) {
+    .settings-window {
+        width: calc(100vw - 16px);
+        height: calc(100dvh - 24px);
+    }
+    .settings-window .settings-layout {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+    .settings-window .settings-navigation {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px;
+        padding: 10px 40px 10px 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--settings-line);
+        overflow: visible;
+    }
+    .settings-window .settings-pane-button {
+        width: auto;
+        min-height: 36px;
+        font-size: 12px;
+    }
+    .settings-window .settings-pane-button > svg {
+        flex-basis: 16px;
+        width: 16px;
+        height: 16px;
+    }
+    .settings-window .settings-pane-content {
+        padding: 22px 20px;
+    }
+    .settings-window .settings-pane-content > h1 {
+        margin-bottom: 18px;
+    }
+    .settings-window .settings-close {
+        top: 12px;
+        right: 7px;
+    }
+    .settings-window .settings-segmented {
+        height: 32px;
+    }
+    .settings-window .settings-segmented > button {
+        line-height: 28px;
+    }
+    .settings-window .settings-poem textarea,
+    .settings-window .backup-section input {
+        font-size: 16px;
+    }
+    .settings-window .settings-poem-label {
+        align-items: flex-start;
+        gap: 5px;
+        flex-wrap: wrap;
+    }
+}

@@ -43,7 +43,7 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
   const secondToken = await login(second);
   try {
     await test.step('中文组合输入不会提前提交，任务由实例保存', async () => {
-      await page.locator('.add-task').click();
+      await page.keyboard.press('Control+k');
       const dialog = page.getByRole('dialog', { name: '添加任务', exact: true });
       const title = dialog.getByLabel('任务名称', { exact: true });
       await expect(title).toBeEnabled();
@@ -91,20 +91,22 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
       await navigation(page, '飞光');
       await expect(page.getByLabel('记录内容', { exact: true })).toBeEnabled();
       await page.getByLabel('记录内容', { exact: true }).fill(MAIN_IDEA);
-      await page.getByRole('button', { name: '记录', exact: true }).click();
+      await page.getByRole('button', { name: '发布', exact: true }).click();
       const record = page.locator('.idea-list > li').filter({ hasText: MAIN_IDEA });
       await expect(record).toBeVisible();
-      await record.getByRole('button', { name: '设为便签', exact: true }).click();
-      await expect(record.getByRole('button', { name: '取消便签', exact: true })).toBeVisible();
-      await navigation(page, '便签');
+      await record.getByRole('button', { name: '记录操作', exact: true }).click();
+      await record.getByRole('button', { name: '加入 Sticky Note', exact: true }).click();
+      await record.getByRole('button', { name: '记录操作', exact: true }).click();
+      await expect(record.getByRole('button', { name: '从 Sticky Note 移除', exact: true })).toBeVisible();
+      await navigation(page, 'Sticky Note');
       await expect(page.locator('.idea-body').filter({ hasText: MAIN_IDEA })).toBeVisible();
       await navigation(page, '每日复盘');
-      await expect(page.getByRole('textbox', { name: '今天，想记住什么？', exact: true })).toBeEnabled();
-      await page.getByRole('textbox', { name: '今天，想记住什么？', exact: true }).fill(MAIN_REVIEW);
-      await page.getByRole('textbox', { name: '还有什么没完成？', exact: true }).fill('留待下一步完成商业发行门禁。');
-      await page.getByRole('textbox', { name: '留给明天的话', exact: true }).fill('从已有证据继续。');
+      await expect(page.getByRole('textbox', { name: '今日总结', exact: true })).toBeEnabled();
+      await page.getByRole('textbox', { name: '今日总结', exact: true }).fill(MAIN_REVIEW);
+      await page.getByRole('textbox', { name: '未完成原因', exact: true }).fill('留待下一步完成商业发行门禁。');
+      await page.getByRole('textbox', { name: '明日注意事项', exact: true }).fill('从已有证据继续。');
       await page.getByRole('button', { name: '保存复盘', exact: true }).click();
-      await expect(page.getByText('复盘已保存到实例。', { exact: true })).toBeVisible();
+      await expect(page.getByText('✓ 复盘已保存', { exact: true })).toBeVisible();
       expect((await snapshot(page, token)).days.find(day => day.date === initial.today)?.summary).toBe(MAIN_REVIEW);
     });
     await test.step('草稿实际落盘，刷新重新认证后恢复，凭证不落盘', async () => {
@@ -126,14 +128,14 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
       await expect(composer).toBeEnabled();
       await composer.fill(OFFLINE_IDEA);
       await waitForDraft(page, OFFLINE_IDEA);
-      await expect(page.getByRole('button', { name: '记录', exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: '发布', exact: true })).toBeDisabled();
       expect(commands).toBe(before);
       await context.setOffline(false);
-      await expect(page.getByText('个人实例 · 已连接', { exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: '记录', exact: true })).toBeEnabled();
+      await expect(page.locator('.instance-note').getByText('已连接', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '发布', exact: true })).toBeEnabled();
       expect((await snapshot(page, token)).ideas.filter(idea => idea.body === OFFLINE_IDEA)).toHaveLength(0);
       expect(commands, '重新连接不得自动发送命令').toBe(before);
-      await page.getByRole('button', { name: '记录', exact: true }).click();
+      await page.getByRole('button', { name: '发布', exact: true }).click();
       await expect(page.locator('.idea-body').filter({ hasText: OFFLINE_IDEA })).toBeVisible();
       expect((await snapshot(page, token)).ideas.filter(idea => idea.body === OFFLINE_IDEA)).toHaveLength(1);
     });
@@ -153,10 +155,10 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
           await route.abort('failed').catch(() => {});
         }
       }, { times: 1 });
-      await page.getByRole('button', { name: '记录', exact: true }).click();
+      await page.getByRole('button', { name: '发布', exact: true }).click();
       await expect(page.getByText('有一次操作结果待确认', { exact: true })).toBeVisible();
       expect(committedStatus, '丢弃响应前必须已走完真实提交').toBe(200);
-      await expect(page.getByRole('button', { name: '记录', exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: '发布', exact: true })).toBeDisabled();
       expect(commands, '确认丢失后不得生成新命令自动重试').toBe(before + 1);
       await page.getByRole('button', { name: '核对结果', exact: true }).click();
       await expect(page.getByText('有一次操作结果待确认', { exact: true })).toHaveCount(0);
@@ -176,7 +178,7 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
       await navigation(page, 'Day Todo');
       await expect(page.locator('.task-row')).toHaveCount(39);
       await page.screenshot({ path: join(reportRoot, 'screenshots', 'day-desktop-top.png') });
-      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.evaluate(() => document.querySelector('.main-content')!.scrollTo(0, document.querySelector('.main-content')!.scrollHeight));
       await expect(page.locator('.sidebar')).toBeInViewport();
       await page.screenshot({ path: join(reportRoot, 'screenshots', 'day-desktop-bottom.png') });
       const uniqueIDs = await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map(element => element.id); return new Set(ids).size === ids.length; });
@@ -184,13 +186,13 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
       await page.setViewportSize({ width: 390, height: 844 });
       await expect(page.locator('.sidebar'), '移动侧栏收起后才采集页面证据').not.toBeInViewport();
       await expect(page.getByRole('heading', { name: 'Day Todo', exact: true })).toBeVisible();
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.evaluate(() => document.querySelector('.main-content')!.scrollTo(0, 0));
       await page.screenshot({ path: join(reportRoot, 'screenshots', 'day-mobile-top.png') });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '移动页面不得横向溢出').toBe(true);
-      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.evaluate(() => document.querySelector('.main-content')!.scrollTo(0, document.querySelector('.main-content')!.scrollHeight));
       await page.screenshot({ path: join(reportRoot, 'screenshots', 'day-mobile-bottom.png') });
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await navigation(page, '便签');
+      await page.evaluate(() => document.querySelector('.main-content')!.scrollTo(0, 0));
+      await navigation(page, 'Sticky Note');
       await expect(page.locator('.idea-body').filter({ hasText: MAIN_IDEA })).toBeVisible();
       await page.setViewportSize({ width: 1440, height: 1000 });
       state = await snapshot(page, token);
@@ -198,6 +200,7 @@ test('个人实例：真实浏览器命令、草稿、多设备及备份闭环',
     });
     await test.step('最后下载真实加密备份，检查本机没有持久凭证', async () => {
       await navigation(page, '设置');
+      await page.getByRole('dialog', { name: '设置', exact: true }).getByRole('button', { name: '数据', exact: true }).click();
       await page.getByLabel('实例密码', { exact: true }).fill(process.env.NOONMARK_E2E_PASSWORD!);
       await page.getByLabel('备份口令', { exact: true }).fill(process.env.NOONMARK_E2E_BACKUP_PASSPHRASE!);
       await page.getByLabel('再次输入备份口令', { exact: true }).fill(process.env.NOONMARK_E2E_BACKUP_PASSPHRASE!);

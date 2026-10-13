@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 const runRoot = process.env.NOONMARK_RUN_ROOT;
 const baseURL = process.env.NOONMARK_E2E_URL;
 const stage = process.env.NOONMARK_E2E_STAGE ?? 'browser';
-if (!['browser', 'restart', 'restored', 'demo', 'focus'].includes(stage)) throw new Error('E2E_INVALID_STAGE');
+if (!['browser', 'restart', 'restored', 'demo', 'focus', 'parity'].includes(stage)) throw new Error('E2E_INVALID_STAGE');
 if (!runRoot || !isAbsolute(runRoot) || !baseURL) {
   throw new Error('E2E_REQUIRES_EXTERNAL_RUN_AND_INSTANCE');
 }

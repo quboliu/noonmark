@@ -13,10 +13,10 @@ test('重启或恢复后：原有任务、飞光和复盘仍可从真实界面�
   await navigation(page, '已完成');
   await expect(page.locator('.task-open').filter({ hasText: MAIN_TASK })).toBeVisible();
   await expect(page.locator('.completed-children').filter({ hasText: SUBTASK })).toBeVisible();
-  await navigation(page, '便签');
+  await navigation(page, 'Sticky Note');
   await expect(page.locator('.idea-body').filter({ hasText: MAIN_IDEA })).toBeVisible();
   await navigation(page, '每日复盘');
   await page.getByLabel('查看日期', { exact: true }).fill(trace!.date);
-  await expect(page.getByRole('textbox', { name: '今天，想记住什么？', exact: true })).toHaveValue(MAIN_REVIEW);
+  await expect(page.getByRole('textbox', { name: '今日总结', exact: true })).toHaveValue(MAIN_REVIEW);
   expect(errors, '恢复后不得出现浏览器脚本错误').toBe(0);
 });

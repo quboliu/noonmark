@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export NOONMARK_E2E_SCOPE=parity
+exec "$(dirname -- "$0")/test-e2e"

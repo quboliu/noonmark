@@ -40,7 +40,7 @@ def main():
     if os.environ.get("CS_TEST_STACK") != "1" or os.environ.get("NOONMARK_PROFILE") != "e2e":
         raise RuntimeError("isolated e2e profile required")
     scope = os.environ.get("NOONMARK_E2E_SCOPE", "full")
-    if scope not in {"full", "focus"}:
+    if scope not in {"full", "focus", "parity"}:
         raise RuntimeError("unknown E2E scope")
     source = Path(os.environ["NOONMARK_SOURCE_ROOT"])
     work = Path(os.environ["NOONMARK_WORK_ROOT"])
@@ -143,10 +143,10 @@ def main():
 
     try:
         start("instance")
-        if scope == "focus":
-            browser("focus.spec.ts", "focus")
-            stop("focus")
-            print("Real browser focus gate passed; evidence:", run / "reports/playwright-focus.json")
+        if scope in {"focus", "parity"}:
+            browser("native-ui.spec.ts" if scope == "parity" else "focus.spec.ts", scope)
+            stop(scope)
+            print("Real browser gate passed; evidence:", run / ("reports/playwright-" + scope + ".json"))
             return
         browser("self-hosted.spec.ts", "browser")
         stop("browser")

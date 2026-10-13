@@ -8,7 +8,7 @@
 
 交互入口为 `scripts/web/run-demo`：每轮建立新的 demo run，构建后从终端读取本轮密码，完成重放与回读才在本机 loopback 启动服务。命令保持前台，按 Ctrl-C 会停止本轮进程；非终端输入须显式使用 `--password-stdin`，不接受 argv 密码或默认密码。
 
-`scripts/web/test-demo` 使用同一生成流程，再运行真实浏览器的桌面／移动长滚动页面、底部速记、精选飞光与提交回读。合成凭证只存于测试进程内存。报告位于当前 run 的 `reports/demo.json`、`reports/demo-browser.json`、`reports/demo-browser-evidence.json` 和 `reports/playwright-demo.json`，截图在 `reports/screenshots/`。
+`scripts/web/test-demo` 使用同一生成流程，再运行真实浏览器的桌面／移动长滚动页面、底部速记、精选飞光与提交回读。UI 还原覆盖固定为 `1200×768` 的 220px 导航、280px 详情／复盘、14 天日期条、860×660 设置工作面及主题切换、飞光原位编辑、Sticky Note 墙视图／来源聚焦和真实月份日历；同时保留 `1440×1000` 与 `390×844` 两个长滚动尺寸。这里复用一年事实，未另建 UI 假数据。合成凭证只存于测试进程内存。报告位于当前 run 的 `reports/demo.json`、`reports/demo-browser.json`、`reports/demo-browser-evidence.json` 和 `reports/playwright-demo.json`，截图在 `reports/screenshots/`。
 
 需要复用构建时显式传 `NOONMARK_DEMO_BUILD_ROOT`；入口先验证当前完整 source hash 和 manifest 中各产物 SHA-256，失配则拒绝启动，不使用旧分支或旧源码的产物。
 

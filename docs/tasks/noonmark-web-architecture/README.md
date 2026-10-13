@@ -1,208 +1,166 @@
-# 晷迹 Web 与 Go 服务端架构方案
+# 晷迹 Web：个人自部署架构方案
 
-建议采用 **React／TypeScript PWA + Go 模块化单体 + PostgreSQL**，以同一套领域契约支撑两条互斥的数据路径：本地优先由浏览器数据库提交事实，账号优先由 Go 服务提交事实。需要评审的核心决定是事实源、模式切换、浏览器数据保障和跨语言一致性；这些决定应先于页面与 API 实现。
+建议首期采用 **React／TypeScript 浏览器客户端 + Go 服务 + 服务端 SQLite**，交付一个应用容器和一个持久数据目录。一套实例供一个人使用，多台设备连接同一个服务；官方托管以后复用同一内核。
 
 - Task-ID：`noonmark-web-architecture`
-- 日期：2026-10-12
-- 状态：设计提案；尚未实现 Web、Go 服务、账号或新同步端点。
-- 分级：本次为 A 级文档与目录配置；后续同步、迁移、鉴权和上线按 P 级执行。
-- 阅读顺序：本文 → [数据与协议设计](data-protocol.md) → [实施与商业上线门禁](delivery-plan.md) → [构建及测试目录契约](../../engineering/web-build-workspace.md)。
+- 更新日期：2026-10-12
+- 产品边界：用户已明确取消 Web 本地优先，并确认“个人实例优先；官方托管以后复用同一内核”。
+- 状态：设计提案。首期范围已确认，技术实现、镜像、命令及指标尚未交付或验收。
+- 分级：本次为 A 级文档变更；后续持久化、鉴权、导入恢复与发行按 P 级推进。
+- 阅读顺序：本文 → [数据协议](data-protocol.md) → [自部署与运维](self-hosting.md) → [实施计划](delivery-plan.md) → [外置构建目录](../../engineering/web-build-workspace.md)。
 
-## 1. 需求、范围与证据
+## 1. 已确认目标与原生边界
 
-本次目标是为现有晷迹增加可商业运营的 Web 客户端和 Go 后端，同时保留无账号使用核心功能的能力。源码与 Git 分支操作留在当前仓库；编译缓存、依赖安装内容、浏览器 profile、数据库和测试报告全部外置。本次交付设计文档与外置目录入口，不建立服务、不操作用户资料、不运行 production App。
+Web 只有服务端事实源。自部署决定服务和数据由谁运行、放在哪里；它不要求用户注册官方账号，也不把浏览器变成独立数据节点。服务可部署在用户自己的电脑、NAS 或服务器上，浏览器始终通过 HTTP API 访问它。
 
-2026-10-12 执行 `git fetch origin` 后，`main`、`origin/main` 以及 `git ls-remote --symref origin HEAD` 指向同一提交 `48624929578bf67a9478f160680bc2845c1fb2a5`，领先／落后均为 0；检查开始时工作区干净。提交时间为 2026-08-29T13:32:03-04:00，主题为 `chore(workspace): align generated-state boundaries`。此记录是设计取证基线，不表示后续提交仍停在该 SHA。
+| 场景 | 首期行为 |
+| --- | --- |
+| 在个人电脑运行服务 | 浏览器访问本机服务，数据留在服务数据目录 |
+| 在 NAS／家庭服务器运行服务 | 多设备访问同一个实例，只有服务器提交事实 |
+| 外网断开，但局域网内服务仍可达 | 核心功能照常运行；外部 AI 等可选依赖受影响 |
+| 浏览器无法连接实例 | 明确显示不可提交，保留当前输入；不自动离线执行任务命令 |
+| 同一人用两个浏览器编辑 | 服务端串行提交，按版本校验并发，第二个客户端拉取已提交变更 |
+| 用户不注册官方账号 | 可完成安装、认证、核心使用、导入导出和恢复 |
+| 未来官方托管 | 平台运营相同内核，为用户提供独立实例；不是另一种数据模式 |
 
-| 已核实事实 | 源码／契约依据 | 对 Web 设计的约束 |
+本轮不改变原生 Mac 的本地优先、iCloud V2、profile、数据模式或 DMG 发行行为。Web 不提供本地优先开关，也不把原生 ADR-0009 的模式切换搬到网页。原生与 Web 的初期互通是用户主动导入导出，连续同步另行设计，当前不承诺。
+
+原方案的浏览器 IndexedDB／OPFS 任务事实库、客户端领域引擎、Go WASM、离线命令 outbox、本地复制 relay、E2EE 多主复制和双模式切换均退出 Web 范围。此前已提交方案可在 Git 历史 `3c261df` 查阅；[ADR-0048](../../adr/0048-propose-web-dual-authority-and-go-backend.md)已被新方向取代。未完成的 Claude 双模式方案对比也随该范围变更结束，不再据其推进实现。
+
+## 2. 现状与参考依据
+
+仓库当前运行面仍是 SwiftPM 原生 App，没有已实现的 Go 服务、Web package、容器入口或 Web deployed endpoint。此次文档更新前本地 `main` 为 `3c261df`，工作区干净。当前环境为 Linux，不具备本仓库原生 WindowServer 验收条件。
+
+| 依据 | 已核实内容 | 本设计采用的约束 |
 | --- | --- | --- |
-| 领域名为本地优先、在线优先；两种主写入路径互斥 | [CONTEXT.md](../../../CONTEXT.md)、[ADR-0009](../../adr/0009-mutually-exclusive-data-mode-with-scheduled-backup.md) | 用户所说“账号优先”在本文映射为 `onlineFirst`，不新增第三个枚举 |
-| `AppDataMode` 已有两个值，更新模式目前主要修改偏好；本地同步受模式开关约束 | [Models.swift](../../../Sources/NoonmarkCore/Models.swift)、[NoonmarkEngine.swift](../../../Sources/NoonmarkCore/NoonmarkEngine.swift)、[NoonmarkStore+Sync.swift](../../../App/NoonmarkMacApp/NoonmarkStore+Sync.swift) | 不能把已有设置入口当成已完成账号后端或安全迁移 |
-| 领域包括 Day、任务链、定义、日轨迹、子任务、重复计划、分类、飞光 | [NoonmarkSnapshot.swift](../../../Sources/NoonmarkCore/NoonmarkSnapshot.swift) | Web 不能缩成只有 `todos(id,title,done)` 的 CRUD 系统 |
-| 普通数据包目前为 format 7，要求严格 canonical 结构；日期以浮点 bit pattern 的 `UInt64` 编码 | [NoonmarkDataPackage.swift](../../../Sources/NoonmarkStorage/NoonmarkDataPackage.swift)、[ExactDateJSONCoding.swift](../../../Sources/NoonmarkStorage/ExactDateJSONCoding.swift) | 原样 `JSON.parse` 会有整数精度风险；兼容必须经过专用 codec 与 Swift 对账 |
-| 现有复制协议有 immutable publication、producer epoch、seal、frontier 与 fork resolution | [ReplicationEndpoint.swift](../../../Sources/NoonmarkSync/ReplicationEndpoint.swift)、[LocalFirstReplication.swift](../../../Sources/NoonmarkStorage/LocalFirstReplication.swift)、[ADR-0047](../../adr/0047-converge-sync-into-a-durable-replication-runtime.md) | 保留协议语义，不能退化为每次上传全库覆盖远端 |
-| 子任务可变字段曾被误当身份，形成同步毒记录 | [FAIL-2026-08-06-01](../../engineering/failure-cases/2026-08-06-subtask-mutable-identity-merge.md)、[CurrentSyncRecordMerger.swift](../../../Sources/NoonmarkSync/CurrentSyncRecordMerger.swift) | 字段身份与合并规则必须逐项建表，不能一律 LWW 或一律不可变 |
-| 仓库当前为 SwiftPM；未发现 Go module、Web package、Dockerfile、Compose 或 deployed endpoint | [Package.swift](../../../Package.swift) 与 tracked 文件清单 | 本文所有 Web 运行、性能、安全结论都是待验收目标 |
-| 当前宿主是 Linux；原 macOS BUILD 路径不可访问，旧 Makefile 仍有不带 scratch path 的 SwiftPM 命令 | [Makefile](../../../Makefile)、[AGENTS.md](../../../AGENTS.md) | 本次不运行旧构建／测试入口，不把历史 macOS 通过记录当成本机验证 |
+| [CONTEXT.md](../../../CONTEXT.md)、[NoonmarkSnapshot.swift](../../../Sources/NoonmarkCore/NoonmarkSnapshot.swift) | 核心包括 Day、任务链、定义、轨迹、子任务、重复计划、分类及飞光 | 保留完整领域能力，不缩成简单 Todo CRUD |
+| [NoonmarkEngine.swift](../../../Sources/NoonmarkCore/NoonmarkEngine.swift) | 可编辑任务定义可复用身份；历史引用决定何时形成新版本 | 按源码语义移植，不假设每次编辑都插入新定义 |
+| [MutationClock.swift](../../../Sources/NoonmarkCore/MutationClock.swift)、[ADR-0022](../../adr/0022-use-one-persisted-mutation-frontier-with-exact-clocks.md) | 单一持久 frontier 与精确浮点时钟 | Go 保留 exact clock，不能用毫秒时间戳替代 |
+| [NoonmarkDataPackage.swift](../../../Sources/NoonmarkStorage/NoonmarkDataPackage.swift)、[ExactDateJSONCoding.swift](../../../Sources/NoonmarkStorage/ExactDateJSONCoding.swift) | format 7 严格校验，日期编码为 `UInt64` bit pattern | 兼容包必须经无损 codec 与 Swift 对账 |
+| [思源 Docker 文档](https://github.com/siyuan-note/siyuan#docker-hosting)、[Dockerfile](https://github.com/siyuan-note/siyuan/blob/master/Dockerfile) | 镜像含界面资源与 kernel，挂载 workspace 并配置访问认证 | 借鉴单实例、单数据目录的部署体验；不引入其代码或照搬笔记数据模型 |
 
-成功标准是：两种模式的写入权可证明互斥；离线、重试、跨日、冲突、模式切换、账户切换及恢复有明确行为；安全和运维要求有真实测试门禁；后续每个实施阶段都有可运行交付物。云厂商、商业定价和部署地区尚未确定，本文给出可替换边界及默认容量假设。
+引用的思源部署资料于 2026-10-12 查阅。思源整个产品仍有自己的 local-first 设计；本方案仅借鉴其 Web 自部署的交付方式。Noonmark 的领域引擎、权限和持久化行为仍由本仓库定义。
 
-## 2. 产品契约
-
-账号负责身份、设备授权、配额和订阅，数据模式负责谁有权提交任务事实。登录不会自动上传本地资料，购买订阅不会自动切换数据模式。
-
-| 行为 | 本地优先 `localFirst` | 账号优先 `onlineFirst` |
-| --- | --- | --- |
-| 初次使用 | 无需账号；首次装载应用资源仍需网络，之后可离线打开 | 先登录并建立个人 workspace |
-| 主事实源 | 该安装的 IndexedDB；其他安装经显式复制收敛 | Go 服务事务提交的 PostgreSQL 数据集 |
-| 保存确认 | 本地事务完成后显示“已保存到本机” | 服务端事务确认后显示“已保存到账号” |
-| 离线写入 | 完整执行核心领域命令并留下轨迹 | 保存待提交草稿／意图；不能冒充已完成、已排期等事实 |
-| 跨设备 | 可选、显式启用的复制端点；登录本身不启用 | 登录后按授权读取云端事实和增量 |
-| AI 不可用 | Todo、飞光、复盘及已有本地能力照常可用 | 同左；AI 不在核心写入事务内 |
-| 备份 | 用户导出恢复包；可选复制不等于备份 | 服务端灾备 + 用户可恢复导出；定时导出不做双向 merge |
-| 切换模式 | 经过冻结、校验和导入到新数据集 | 经过服务端冻结、完整导出与本地校验 |
-| 退出账号 | 不删除独立的无账号本地资料；停止需账号的复制权限 | 锁定账号缓存；显式处理未提交草稿和可信设备保留策略 |
-
-“完整核心能力”以原生领域行为为准：Day Todo、任务池、未来计划、日轨迹、延续、有限撤销、子任务、重复计划、分组标签、完成／未完成池、飞光、手写复盘及导入导出。烛龙功能另建同等行为清单，禁止用静态模板冒充 AI。分阶段开发可以先交付子集，但未完成能力对账前不能称为原生等价版，也不能替换原生用户路径。
-
-Web 无法取得 macOS 全局快捷键、桌面置顶便签、Keychain ThisDeviceOnly 或任意 iCloud 文件夹权限。Web 对应提供应用内快捷键、飞光入口与 PWA 窗口；原生系统集成功能继续属于原生客户端。是否另做浏览器扩展／桌面桥接须独立设计，不能以网页弹窗宣称系统能力已经对等。
-
-## 3. 总体结构与选型
-
-PWA 是 Web 客户端的交付和运行形态：用户可在浏览器直接访问，也可在支持的浏览器安装为独立窗口。React 负责页面，TypeScript 应用层负责选择数据路径，IndexedDB 负责本地持久化；Manifest 提供安装信息，Service Worker 缓存应用资源并管理更新。用户第一次取得应用资源后，本地模式可以离线重新打开。Go 服务运行在云端或自托管服务器，不随 PWA 安装到用户电脑。平台能力依据见 [MDN PWA 说明](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/What_is_a_progressive_web_app)。
-
-PWA 本身不提供任务同步、领域一致性或账号系统。这些能力分别由下面的本地 runtime、复制协议和 Go 服务实现；Service Worker 不能成为第二个事实写入者。安装 PWA 也是可选操作，不改变两种数据模式的语义。
+## 3. 架构与技术选型
 
 ```mermaid
 flowchart TB
-  UI[React PWA / 同一套页面] --> PORT[应用命令与查询接口]
-  PORT -->|localFirst| LOCAL[TypeScript 领域引擎 / Worker]
-  LOCAL --> IDB[(IndexedDB / 本地事实与复制 ledger)]
-  IDB -. 显式启用复制 .-> RELAY[Go 复制端点 / 不裁决领域事实]
-  PORT -->|onlineFirst| HTTP[Bearer HTTPS / 待提交草稿]
-  HTTP --> API[Go API / 鉴权与命令处理]
-  API --> DOMAIN[Go 领域引擎]
-  DOMAIN --> PG[(PostgreSQL / 事实与 outbox)]
-  API --> FEED[增量读取 / fetch stream 通知]
-  PG --> JOB[Go Worker / outbox 与定时任务]
-  JOB --> OBJ[(对象存储 / 导出与灾备对象)]
-  RELAY --> OBJ
-  AUTH[OIDC 身份服务] --> HTTP
-  JOB -. 明确授权的 scope .-> AI[烛龙 Provider Adapter]
+  B1[桌面浏览器] --> HTTP[同源 HTTP API / Bearer 认证]
+  B2[手机或其他浏览器] --> HTTP
+  subgraph Instance[个人实例 / 一个应用容器]
+    WEB[只读 Web 静态资源] --> B1
+    WEB --> B2
+    HTTP --> APP[Go 应用服务 / 命令处理与查询]
+    APP --> CORE[Go 纯领域引擎]
+    CORE --> TX[单写入事务协调器]
+    TX --> DB[(服务端 SQLite / 唯一任务事实源)]
+    DB --> JOB[进程内 durable job runner]
+    JOB --> APP
+    APP --> CHANGES[变更查询与通知]
+    JOB --> BACKUP[一致性备份与导出]
+  end
+  CHANGES --> B1
+  CHANGES --> B2
+  JOB -. 显式启用 .-> AI[用户配置的 AI Provider]
+  DB --- DATA[用户挂载的数据目录]
+  BACKUP --> ARCHIVE[加密备份 / 用户指定的异机目标]
 ```
 
-客户端同一时刻只装配一个主数据 adapter。`LocalWorkspace` 与 `AccountWorkspace` 使用不同数据库 namespace、不同命令处理器和不同保存状态。UI 不直接访问 IndexedDB、SQL 或同步 API；按数据模式装配应用接口的责任集中在一个 runtime 中。
-
-| 组件 | 建议 | 决策理由与边界 |
+| 部件 | 首期选择 | 原因与限制 |
 | --- | --- | --- |
-| Web | React + TypeScript + Vite，PWA 应用壳 | 交互型私有数据应用无 SSR 必需；避免另建 Node 业务后端。营销站如有 SEO 需求单独部署 |
-| 本地持久化 | IndexedDB + Dexie，Worker 内领域处理 | 事务、浏览器覆盖与多页签是当前优先项；不直接移植 SQLite 文件 |
-| Go HTTP | 标准 `net/http`，显式 middleware，OpenAPI 契约 | 简化运行面；业务逻辑不依赖框架上下文 |
-| Go 持久化 | PostgreSQL + pgx + sqlc，版本化 SQL migration | 事务、约束和 RLS 保持可检查，避免 ORM 自动迁移掩盖 schema 变更 |
-| 进程 | 同一 Go module，API 与 Worker 两种启动角色 | 可独立扩容和限流，领域包共享；初期不拆微服务 |
-| 异步任务 | PostgreSQL outbox + jobs 表 | 业务提交和任务入队同事务，不必引入 Kafka 来补双写漏洞 |
-| 大对象 | S3 兼容私有对象存储 | 导出包和复制对象；对象存储不承载在线任务事务 |
-| 登录 | 支持 OIDC／PKCE 和 passkey 的成熟身份服务 | Noonmark 不自研密码系统；自托管选项通过标准协议保留 |
-| 观测 | OpenTelemetry 接口、指标、白名单结构化事件 | 默认关闭内容采集，沿用现有诊断隐私边界 |
+| 界面 | React + TypeScript + Vite | 类型化交互与静态发布，不额外运行 Node 业务服务 |
+| 浏览器状态 | 查询缓存与当前输入草稿 | 不保存第二份可执行任务事实库，不参与冲突合并 |
+| Go 服务 | 标准 `net/http`，模块化单体 | 同进程拥有 API、领域、存储、后台任务和静态资源服务 |
+| 数据库 | 服务端 SQLite，WAL，单写入协调器 | 单人多设备场景减少部署依赖；不允许多个服务副本共写同一数据目录 |
+| Go 数据访问 | `database/sql` + `mattn/go-sqlite3` + sqlc，显式 SQL migration | 可检查事务和约束；CGO 工具链、SQLite 编译选项与架构在 P0 锁定 |
+| API | HTTP JSON + OpenAPI 生成 TypeScript 类型 | 命令、查询、备份作业有明确契约；不同时维护第二套 RPC 协议 |
+| 通知 | 带 Bearer 的 fetch stream；断线后重新查询 | 通知不承载可靠提交，序列与 snapshot 才决定客户端状态 |
+| 异步任务 | 同库 jobs／outbox，进程内执行器 | 入队与业务同事务；重启后恢复，外部 I/O 不占事务 |
+| 分发 | Linux amd64／arm64 OCI 镜像，Compose 为主要入口 | 一个应用容器，不要求 PG、Redis、S3、Kafka 或官方 IdP |
+| 可选桌面安装入口 | Web Manifest 后续添加 | 不阻塞首期，不以安装 PWA 作为数据可靠性前提 |
 
-Redis、搜索集群、Kubernetes、消息总线和多地域多主都不作为首期依赖。仅当量测显示 PG 队列、单地域写入或搜索成本超过目标时再引入，并记录替换条件。所有实际依赖版本与镜像 digest 在 P0 锁定；本文不把浮动 `latest` 当作可复现配置。
+SQLite 可位于应用服务器本机，由服务器代客户端执行领域请求；其并发模型符合本次单写入设计。[SQLite 使用场景说明](https://www.sqlite.org/whentouse.html)支持这一选型条件。SQLite 文件必须在服务主机的本地文件系统／受支持块存储上，不能通过 NFS／SMB 共用 WAL 数据库。[WAL 文档](https://www.sqlite.org/wal.html)说明了相关限制。
 
-SQLite WASM／OPFS 是备选，不是当前默认：它不能消除浏览器配额和清站点数据风险，还引入 VFS、Worker 与跨页签并发设计。若 IndexedDB 在规定一年数据集下无法满足查询目标，先量测索引与投影，再用同一契约测试比较 SQLite WASM。不同 VFS 的并发与响应头要求应以 [SQLite 官方持久化说明](https://sqlite.org/wasm/doc/tip/persistence.md)为准。
+驱动需要 CGO，不能宣称任意平台一次纯 Go 静态交叉编译即可交付。[go-sqlite3 项目](https://github.com/mattn/go-sqlite3)是构建约束依据；P0 应验证 amd64／arm64 的实际发行镜像、数据库备份 API 和 context cancellation，而不只验证开发机 build。
 
-## 4. 领域与模块边界
+SQLite 放在自部署服务器上仍然是服务端事实源。浏览器清缓存、更换设备或卸载可选 PWA，不会删除服务器数据；服务器磁盘损坏仍需依靠备份恢复，不能把单实例说成高可用集群。
 
-| 模块 | 拥有的数据及能力 | 禁止跨界 |
-| --- | --- | --- |
-| `identity` | OIDC subject 映射、会话、设备授权 | 不持有任务领域写入方法 |
-| `workspace` | 个人 workspace、成员角色、dataset mode／epoch、迁移状态 | 不按客户端传入的 owner 字段授权 |
-| `todo` | Day、TaskChain、TaskDefinition、DayTrace、Subtask、重复计划与分类事实 | 禁止通用 `PATCH trace` 改写历史 |
-| `flylight` | `IdeaEntry`、时间线、删除与恢复语义 | 不依赖 AI Provider；沿用内部兼容标识 |
-| `review` | 日统计投影、复盘文本及创作来源 | 补写复盘不能解锁当日任务事实 |
-| `replication` | publication、receipt、cursor、fork evidence | 不成为账号优先的第二个 merge 引擎 |
-| `transfer` | 校验、数据包、模式切换、恢复任务 | 普通导入不能静默覆盖非空账号数据集 |
-| `zhulong` | scope、会话、建议、确认、异步调用 | AI 只提出命令；必须经同一领域校验和用户确认 |
-| `billing` | 产品权益、配额、计费事件 | 订阅过期不能删除事实或阻断导出 |
-| `diagnostics` | 有界 typed evidence | 不收任务正文、Provider 内容或原始错误 |
+## 4. 领域模块与界面行为
 
-Go 与 TypeScript 各有可独立测试的纯领域包。两者共享的是命令 schema、字段语义、状态机和黄金向量，不是假设“两份翻译后的代码天然等价”。Swift 现有实现是重要行为参考，已知缺陷仍需依据领域不变量判断；三份引擎通过同一输入序列与规范化快照对账。具体 wire、日期与 codec 约束见[数据协议](data-protocol.md)。
+| 模块 | 职责 |
+| --- | --- |
+| `identity` | 单 owner 登录、设备会话、撤销及恢复认证 |
+| `instance` | 实例身份、活动 dataset、时区、schema 与维护状态 |
+| `core` | Day Todo、任务链、轨迹、子任务、重复计划、分类、飞光及复盘规则 |
+| `command` | 鉴权、版本检查、exact clock、幂等、事务提交 |
+| `query` | Day、任务池、未来计划、完成／未完成池、重复轨迹和飞光投影 |
+| `jobs` | 日结、自动归类、备份、导出及受控 AI 调用 |
+| `transfer` | 格式校验、staging、导入、恢复和跨主机搬迁 |
+| `zhulong` | scope、会话、建议与用户确认；只通过普通领域命令落地 |
+| `diagnostics` | 有界、白名单、无内容的 typed evidence |
 
-建议的未来源码布局如下，当前不创建空实现目录：
+Go 实现唯一的 Web 领域引擎。TypeScript 只做输入提示、渲染、导航与请求管理；服务端独立验证全部字段和业务前置条件。现有 Swift 引擎作为差分参考，因此只维护 Swift／Go 两份领域实现，无需浏览器 Go WASM 或第三份 TS 引擎。
+
+日历、未来计划、轨迹、飞光、复盘、子任务、重复任务、分类和有限撤销都列入能力清单。系统级全局快捷键、桌面置顶便签等仍是原生能力；Web 提供应用内对应入口，不据此宣称具有系统权限。界面沿用亮色、减少重复视觉单位的基调。
+
+界面区分“输入尚未提交”“请求结果待确认”“服务端已保存”。乐观动画可以先响应，但不能让未确认命令进入已完成统计、产生后续事实、触发 AI 或导出。采纳 Claude 新提案的草稿恢复思路：浏览器可用 IndexedDB 保存非事实输入，刷新后找回；它不运行领域规则，也不在重连时自动生成任务命令。断线后保留当前编辑内容并提示服务不可达；重新连通先核对不确定命令的 receipt，再刷新版本并由用户决定是否重新提交其他草稿。
+
+## 5. 鉴权、安全与数据控制
+
+首期是一位 owner 的个人实例，不开放注册、多用户共用工作区或协作权限。不要求官方账号、官方登录服务或联网许可证检查才能使用普通清单和恢复能力。
+
+初始化通过同镜像的管理 CLI 从交互输入或受控 secret 挂载取得 owner 初始凭证，使用成熟 Argon2id 实现保存 verifier；禁止默认密码、空密码、URL／命令行明文凭证和匿名远程访问。实例未初始化时 HTTP 服务不暴露可被外网抢注的设置接口。只需管理个人实例认证，不自建 OAuth Provider。
+
+API 遵守仓库 Bearer 约定。登录经 TLS 验证后签发高熵、可撤销的会话 token，服务端只存 token 摘要与有限会话 metadata；浏览器 token 放内存，不放 URL、localStorage 或持久任务缓存。刷新页面重新认证可由浏览器密码管理器辅助；未来“记住设备”必须独立设计与审查。会话到期、密码重置、导入激活和恢复 epoch 变化都能阻断旧写入。
+
+本机 loopback 可用 HTTP；跨主机访问必须配置 HTTPS、公网 origin 与 Host allowlist。只信任显式配置的反向代理；不根据任意 `X-Forwarded-*` 提升权限。默认同源，不开放通配 CORS，不使用 `credentials: include`。关键管理操作重新认证，所有导出／下载同样校验权限。
+
+XSS 会威胁已登录会话与屏幕内容。正文默认纯文本，Markdown 用 sanitizer；禁止用户内容直接执行脚本，使用 CSP、受控依赖和禁止 frame embedding。容器非 root、根文件系统只读、drop capabilities、不开 privileged，不挂载 Docker socket。
+
+Provider API Key 是需要在调用时使用的凭证字符串，服务端使用独立 master key 对其与烛龙私有资料加密；不能把它误称为不可导出的 AES key。key 文件以 secret 挂载／0600 文件保护，业务数据不含明文凭证。自部署管理员拥有主机控制权，服务端可处理明文，不宣称端到端加密或对管理员零知识。
+
+AI 请求经过范围确认、超时、预算和出站控制。允许用户显式配置内网 Provider，但此类配置仅 owner 可修改；后台限制固定目标、重定向与 DNS 解析，不能提供任意 URL 代理。没有 Provider 时普通清单、飞光、手写复盘和本地统计完整可用。
+
+沿用诊断隐私白名单：不收正文、标签、路径、账号、IP、URL、payload、AI 内容、凭证和原始 Error。浏览器诊断不自动上传，服务器 typed 诊断按 allocated bytes 控制在 4 MiB／7 天，单个用户导出最多 8 MiB；容器 stdout、反向代理和 APM 的默认日志也须接受哨兵检查。应用不自动联系官方遥测或上传资料。
+
+## 6. 原生互通与未来托管
+
+Mac 互通首期只做用户主动提供的 format 7 数据包，经 Go 无损解码和完整领域验证后导入。Web 导出同样由 Swift decoder 验证。数据包不携带认证、Provider 凭证或烛龙私有 sidecar；导入时不继承原生端点、设备身份及本地优先开关。不会直接读取 Mac SQLite、原生 production 目录或 iCloud。
+
+未来官方托管优先采用“控制面 + 多个独立个人实例”：控制面管理路由、开通、计费和运维，数据面复用同镜像、同 API 和独立数据卷。控制面不是任务事实源，自部署不依赖控制面。自动调度须先落实持久卷的单实例 fencing，不能靠多副本共享 SQLite 实现 HA。
+
+如果实际托管规模证明实例密度或运维成本不可接受，再评估 PostgreSQL 数据面；不是首期同时支持两套数据库。迁移前必须有容量证据、数据对账与回滚设计。官方托管的可用性、灾备和计费也须独立验收，当前个人单机版不承诺 99.9% 托管 SLA。
+
+## 7. 工程布局与性能预算
 
 ```text
-App/、Sources/、Tests/             # 现有 Swift 客户端
-apps/web/                         # React UI、Worker、PWA
-packages/domain/                  # TypeScript 纯领域引擎
-packages/contracts/               # 手写协议与类型入口
-packages/local-store/             # IndexedDB schema 与事务边界
-packages/replication/              # 浏览器复制 runtime
-services/noonmark/                 # Go module
-  cmd/noonmark-api/
-  cmd/noonmark-worker/
-  internal/{identity,workspace,todo,flylight,review,replication,transfer,zhulong,billing}/
-  internal/platform/{postgres,objectstore,auth,observability}/
+App/、Sources/、Tests/                 # 现有 Swift 项目
+apps/web/                             # React UI、API client、资源
+services/noonmark/                     # Go module
+  cmd/noonmark/                        # serve、init、backup、restore 等拟建 CLI
+  internal/{identity,instance,core,command,query,jobs,transfer,zhulong}/
+  internal/platform/{sqlite,filesystem,diagnostics}/
   migrations/
-contracts/{openapi,schema,fixtures}/ # 可评审的规范与小型人工／确定性向量
-deploy/{compose,production}/       # 声明配置；无状态文件和凭证
-scripts/web/                      # 唯一构建、测试、目录守卫入口
+contracts/{openapi,fixtures}/          # 协议与小型确定性向量
+  # Go／TS 生成结果落外置目录，由工具参数引入
+  # 不把编译后的前端资源写回源码供 go:embed 使用
+deploy/self-hosted/                    # 将来加入镜像与 Compose 声明
+scripts/web/                          # 将来加入唯一 build/test 入口
 .work -> /share/broker/noonmark-build
 ```
 
-生成的 SDK、二进制、数据库和批量 fixture 落到 `.work` 的真实目标。契约、migration、lockfile 和小型可评审测试向量属于源码；测试运行输出不属于源码。
+主交付为镜像内 Go 可执行程序加只读 Web 资源目录，由 Go 同源服务。前端编译资源直接从外置 build 目录装入发行镜像；源码目录不放 `dist`，不以 `go:embed` 为由引入生成文件。当前仅有设计文档，上述运行目录和命令尚未创建。
 
-## 5. 浏览器可靠性
+以下是验收预算，不是测量结果：在固定 2 vCPU／2 GiB Linux 参考机、SSD、一年重度 fixture、10 个同时在线会话下，命令服务端 p95 ≤ 100 ms，常用查询 p95 ≤ 100 ms，健康局域网内第二设备可见 p95 ≤ 2 s。含浏览器、网络和服务器证据一起量测；AI、备份不计入普通命令但不得挤占其资源。
 
-浏览器事务成功表示已经提交到该 origin 的存储，不是灾备承诺。持久化申请可能被拒绝，存储受配额影响，清除站点数据会删除 IndexedDB 与 OPFS；应用必须用 `navigator.storage.persist()`／`estimate()` 显示真实状态，处理配额错误并保留未提交编辑。[MDN 存储配额与清除规则](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria)是平台边界依据。
+商业质量的重点是可安装、可恢复、可升级、数据不误写及能力完整。单实例故障期间服务不可写是明确边界；具体备份 RPO、恢复 RTO、资源限额和故障测试见[自部署文档](self-hosting.md)。
 
-每个本地命令在一个 IndexedDB transaction 内提交领域行、历史事实、版本、待复制 journal 和命令结果。UI 必须等待事务 completion，再显示保存状态；不能在键入事件或 request success 时提前确认。网络请求和长时间异步计算放在事务外，在事务内重新核对版本，避免 IndexedDB 自动结束事务。[Dexie transaction 说明](https://dexie.org/docs/Dexie/Dexie.transaction%28%29)支持这一边界。
+## 8. 与原方案及 Claude 提案的取舍
 
-同 origin 多页签通过 Web Locks 选复制 worker，BroadcastChannel 通知界面刷新；正确性仍依赖事务内版本检查和唯一键。锁不承担跨设备共识，页签挂起或 worker 消失后可由 durable ledger 接续。[Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API)只协调同 origin 上下文。
+保留两份提案共同成立的部分：Go 模块化单体、服务端命令、事务幂等、Swift 行为对账、AI 受控写入、可恢复数据包及真实 E2E。用户取消 Web 本地优先后，客户端 Go WASM、SQLite-WASM／OPFS、客户端复制和跨模式交接已没有对应需求，不继续为它们安排验证或实现。
 
-PWA 缓存只收版本化静态资源，不缓存 Bearer token、AI 响应或认证 API。服务 worker 在全部客户端释放旧 schema 后才切换需要 migration 的版本；旧页签收到 `versionchange` 必须关闭数据库连接并要求保存草稿后刷新。迁移失败保留旧数据库与可导出内容，不能清库“修复”。
+采用 SQLite 服务端个人实例，取代原方案面向多租户 PG 的首期运行形态。River 的 PG 事务入队和 Connect-RPC 可作为未来独立选型，但当前分别用 SQLite 同事务 jobs 和 HTTP OpenAPI 满足需求，避免让个人安装承担多租户平台的依赖。SQLite driver 在 P0 对比 `mattn/go-sqlite3` 与 Claude 建议的 `modernc.org/sqlite`：前者是当前基准候选，后者减少 CGO 构建负担；按备份、取消、精确值、并发和发行证据决定，不同时交付两个运行驱动。
 
-后台同步、关闭浏览器后的定时备份和通知送达不能作为可靠性前提。本地日结在启动、恢复焦点及执行命令时补算；账号日结由服务端 worker 执行且命令路径兜底。用户主动导出的文件需要显式下载／授权；浏览器不能悄悄给本地磁盘做定时备份。
+对 Claude 新版自部署提案的逐项评审见[对比记录](proposal-comparison.md)。评审采纳的是满足已确认范围的机制，不把其尚待讨论的 Cloud、多用户和商业化清单重新变成首期要求。
 
-本地模式的商业交付至少具备：重启回读、配额告警、最后导出时间、写后可校验的恢复包、恢复演练和可选多设备复制。完全无账号且没有外部备份时，浏览器 profile 损坏无法由服务端恢复；产品必须准确表达这一限制，不承诺零数据丢失。
-
-## 6. 账号、安全与隐私
-
-### 身份与租户
-
-首期只开放个人 workspace；schema 预留 `workspace_members`，团队共享需独立产品与授权设计。JWT 的 `sub` 只映射用户，服务端每次按已验证 subject、workspace 成员关系、dataset 与动作权限授权；不能仅验证签名就放行对象 ID。删除成员／注销账号会增加授权版本并撤销会话及设备。
-
-登录使用 OIDC Authorization Code + PKCE S256，核对 issuer、audience、nonce、state 和 redirect URI；不用 implicit flow。访问 token 短时有效、只放内存，刷新 token 若使用必须轮换且只留会话内存；刷新／重新打开页面经身份服务重新认证，不落 localStorage／IndexedDB。采用 [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html)作为 OAuth 安全基线。
-
-应用 API 统一 `Authorization: Bearer ...`，同源 `/api/v1` 反代；不使用跨域 `credentials: include`。若以后允许跨源，CORS 必须精确 origin allowlist。流式通知使用可带 Authorization 的 `fetch` stream，不把 token 放入 URL，也不依赖不能自定义该 header 的原生 `EventSource` 用法。服务端身份服务自身的登录会话 cookie 不授予 Noonmark API 权限。
-
-账号缓存以 `(environment, origin, issuer, subject, dataset_id)` 隔离。共享设备默认不持久保存账号事实；可信设备缓存为显式选择。退出时停止 worker、清除 token、默认清除账号事实缓存并广播到其他页签；未提交草稿须先由用户选择保留为独立本地草稿或删除，不能上传到随后登录的另一个账号。若提供退出后保留缓存，必须使用独立本机解锁和加密方案，密钥不能与密文一起明文存放；隐藏 UI 不等于锁定数据。离线设备不能被远程保证立即擦除，此限制同样适用于撤销后的本地副本。
-
-### 数据与攻击面
-
-所有租户表含 `workspace_id`，使用复合外键防止跨租户引用。PostgreSQL 启用并强制 RLS，API／worker 角色不是 owner、superuser 或 `BYPASSRLS`；每个事务 `SET LOCAL` 授权 scope，连接池归还后不得泄漏上下文。migration 用单独权限，缺 scope 默认拒绝。RLS 不能替代业务授权，也不能抵御已完全被攻陷且能任意设置 scope 的服务端。[PostgreSQL RLS 文档](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)说明了 owner 和高权限绕过边界。
-
-XSS 可以读取运行中的本地任务和内存 token，是两种模式的共同高风险。正文默认纯文本；Markdown 必须 sanitizer；限制 CSP、禁止任意脚本与 HTML 注入，应用页不引入广告或第三方分析脚本。使用受控依赖、lockfile、SBOM、漏洞扫描、镜像签名和最小容器权限。
-
-API、导入和复制按账号／设备分别限流，同时限制请求字节、解压大小、嵌套深度、实体数量和单批处理时长；超限返回 typed rejection，不能让一个大包耗尽整个 worker。导出下载使用短时、只读、限定单对象的授权；签发前重新核对权限，URL 和下载凭证不进入日志。实际阈值由一年重度数据集与恶意输入测试共同确定，作为发布配置审查项。
-
-账号模式采用 TLS、数据库／备份静态加密与 KMS 管钥，服务端可处理明文，不宣传为 E2EE。可选本地复制托管端点建议采用独立版本的客户端加密 envelope；其密钥恢复、设备授权和 metadata 泄漏见协议文档，审计完成前不开放该功能。
-
-托管 API Key 在服务端凭证库加密保存，不进入配置文件、日志、导出包或普通同步。无账号用户若使用浏览器直连 Provider，凭证只留会话内存且受 Provider CORS 限制；持久 BYOK 或跨域代理必须另行选定安全方案。代理不得接受任意内网 URL；自定义 Provider 需要 SSRF、DNS 重绑定和出站 allowlist 防护。
-
-诊断沿用现有白名单：不记录任务、标签、路径、账号、邮箱、IP、URL、payload、原始 Error 或 AI 内容；本地日志不自动上传。浏览器无法可靠查询 allocated bytes，Web 以编码字节数最多 4 MiB／7 天及单个导出最多 8 MiB 限流，但不得宣称满足原生 allocated-bytes 度量。服务端只自动采集必要聚合指标与 typed operation／incident；网关、CDN、APM 默认访问日志也必须接受相同隐私审查，不能在业务层脱敏后由代理重新记录。
-
-任务历史不可无痕编辑是领域规则，不意味着用户不能删除账号。账号删除要求重新认证、停止新写入和导出任务、撤销凭证、按明确保留期限删除业务数据及最终过期的备份；恢复旧备份时须重放删除账本，避免已注销资料复活。现有真实 iCloud append-only 铁命继续适用，服务端删除策略不得据此回写或清理 iCloud。
-
-## 7. 商业运行目标
-
-以下数字是首轮验收预算和容量假设，不是当前已达到的指标。上线前以实际硬件、数据量和网络条件重测。
-
-| 项目 | 首期目标／假设 | 验证口径 |
-| --- | --- | --- |
-| 容量 | 10,000 月活、1,000 同时在线，每人每日 100 个命令 | 约 100 万命令／日，平均约 12/s；以 20 倍突发约 240/s 压测 |
-| 账号 API 可用性 | 月度 99.9% | 用户有效请求成功率；429／5xx 及身份依赖故障单独统计，不能隐藏依赖不可用 |
-| 本地保存 | 一年数据集下 p95 ≤ 50 ms、p99 ≤ 150 ms | 从输入确认到事务完成，不包含 IME composition；固定桌面基准机 |
-| 在线命令 | 服务端 p95 ≤ 200 ms、端到端 p95 ≤ 500 ms | 同部署区域正常网络；不包含 AI／大包导入 |
-| 在线增量可见性 | 健康网络下 p95 ≤ 2 s | 从服务端提交到第二客户端应用，而非只测消息投递 |
-| 常用页面 | 一年数据集下本地查询 p95 ≤ 100 ms | Day、飞光、完成／未完成池、重复轨迹均测长列表 |
-| 单可用区故障 | 已确认在线事务 RPO = 0，目标恢复 ≤ 5 分钟 | 要求同步复制／对应托管 HA 承诺；故障注入验收后才能对外承诺 |
-| 地域灾难 | RPO ≤ 5 分钟、RTO ≤ 60 分钟 | 连续 WAL 归档／跨故障域备份与完整恢复计时 |
-
-若每命令净增 2 KiB，一天约新增 2 GB 原始变更，索引、副本和备份会继续放大；该假设用于成本试算，不用来预先证明容量足够。压测至少覆盖单个重度账号、多小账号、突发补同步、导出并行与慢客户端，量测连接池、I/O、磁盘放大和每活跃账号成本。
-
-首期部署为单地域多可用区：CDN 静态资源、至少两个 Go API 实例、独立 worker、托管 HA PostgreSQL、私有对象存储和 secret manager。worker 每次领取任务有 lease／fencing，业务效果按命令幂等；进程崩溃后重领，不声称消息只投递一次。Provider 若不支持请求幂等，超时后无法排除已调用和已计费，不盲目自动重试；记录 typed 不确定状态并提供明确重试选择，核心命令应用仍去重。扩容 API 不会提高单 dataset 的串行提交速度，必须单独监控重度账号排队。
-
-上线需具备数据库 PITR、对象备份、密钥恢复、整站恢复 runbook 和值班责任人；每月演练隔离恢复，每季演练故障域切换。服务端备份不是用户侧数据包，两者均须可恢复验证。账户计费 webhook 需验签、重放防护与账本幂等，配额从持久账本派生；限额、欠费与 AI 预算都不能影响用户读取和导出已有数据。
-
-采用低基数指标：事务成功率／延迟、队列年龄、复制等待、fork 数、迁移停滞、恢复耗时、存储额度及匿名 typed error。分页 SLO 告警、错误预算消耗告警和恢复失败告警均须有 runbook；不把用户 ID、任务 ID、正文或 digest 放进指标标签。
-
-## 8. 决策边界与待确认项
-
-| 选项 | 本方案选择 | 何时重审 |
-| --- | --- | --- |
-| 微服务或模块化单体 | 模块化单体，API／worker 分进程 | 团队、隔离需求或单模块负载足以抵偿分布式事务成本 |
-| 两种模式共用自动双向同步 | 两个明确 adapter、两个 dataset authority | 不合并，除非重新定义在线优先的产品契约 |
-| 所有字段套 CRDT／LWW | 按字段继承现有语义，领域冲突显式处理 | 将来有多人同文编辑需求时，对独立文本字段评估 CRDT |
-| 在浏览器直接重用 Swift | TS／Go 领域引擎 + Swift 差分向量 | Swift WASM 完整平台及调试成本经量测优于双实现时 |
-| 所有用户强制登录 | 无账号本地路径 | 不改变；这是本项目核心价值 |
-| 直接桥接现有 iCloud | 首先验证数据包，之后设计原生 HTTPS adapter | 精确 wire／merge／恢复门禁全部通过后才允许接入 |
-
-默认先做个人效率产品、桌面 Web 优先，移动浏览器是同套领域能力下的响应式适配。正式开发前应确定首发地区和预算、账号供应商、可信设备缓存默认值、本地复制是否纳入首发、烛龙 Web 的 BYOK 方式，以及团队共享是否另期。未知项通过 adapter 和门禁隔离，不作为偷减核心领域能力的理由。
+后续优先级是：外置工具入口 → 单容器真实纵向路径 → 原生领域对等 → 数据包／备份恢复 → 安全与升级门禁。原生能力不因 Web 范围变化而被删除或改写。

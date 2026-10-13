@@ -1,8 +1,10 @@
 # Web 采用互斥数据事实源与 Go 模块化后端
 
-**Status**: Proposed
+**Status**: Superseded
 
 **Task-ID**: `noonmark-web-architecture`
+
+2026-10-12 用户明确取消 Web 本地优先，并确认个人自部署先行、官方托管以后复用同一内核。本提案不再用于实施，由 [ADR-0049](0049-self-hosted-web-with-server-authority.md) 取代。以下内容保留为历史决策记录；当前设计以新 ADR 和任务目录文档为准。
 
 ## 背景
 

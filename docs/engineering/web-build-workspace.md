@@ -5,6 +5,7 @@
 - Task-ID：`noonmark-web-architecture`
 - 依据：用户 2026-10-12 对当前 Linux 工作目录和 `/share/broker/` 的明确要求。
 - 本次只建立目录入口及规则；工具 wrapper、守卫、Web／Go 构建尚未实施。
+- 当前 Web 方向是个人自部署、服务端 SQLite，见 `docs/tasks/noonmark-web-architecture/self-hosting.md`。用户正式实例的数据目录不是本外置根的开发 fixture；本机测试容器的 `/data` 只允许绑定本轮隔离 run。
 - 原生 macOS BUILD、production profile 和 iCloud append-only 规则继续有效；不把旧脚本重定向到 Linux 后冒充可运行。
 
 ## 1. 真实位置与权限
@@ -51,7 +52,7 @@
 | Vite | `cacheDir`、`build.outDir` 显式为外置路径；临时 config 编译文件也须外置／避免落源码 |
 | TypeScript／测试 runner | `tsBuildInfoFile`、Vitest cache、coverage、报告目录均显式设置 |
 | Playwright | `outputDir`、reporter、下载浏览器路径、trace／video、持久 browser profile 均在外置根 |
-| 应用数据与导出 | 开发 PG data、对象存储、SQLite、AI fake sidecar、下载包及 crash evidence 只在当前 run |
+| 应用数据与导出 | 隔离实例的 SQLite／WAL、jobs、加密 AI fixture、下载包、备份及 crash evidence 只在当前 run；未来新增数据库或对象存储也须同样外置 |
 | Docker／Compose | data bind mount 在 run 内；BuildKit cache 使用专属外置配置，GC 保持开启 |
 | 原生 Swift | 在具备 Apple toolchain 的主机读其 BUILD 规则并传 `--scratch-path`；未参数化旧入口不运行 |
 
@@ -63,7 +64,7 @@ JS 安装器可在外置依赖沙盒中复制 package manifest／lockfile 后安
 
 ## 3. Profile 与清理
 
-Web profile 使用 `development`、`e2e`、`demo`、`audit`、`release-validation`，不继承 Mac bundle 的命名权限。测试 API、数据库、对象存储与 OIDC realm 各自带环境 identity；生产凭证及域名不进入测试配置。不能只凭 `CS_TEST_STACK=1` 就信任任意数据库 URL。
+Web profile 使用 `development`、`e2e`、`demo`、`audit`、`release-validation`，不继承 Mac bundle 的命名权限。测试 API、实例 SQLite 和浏览器 profile 各自带环境 identity；将来使用外部数据库、对象存储或 OIDC 时同样隔离。生产凭证及域名不进入测试配置，不能只凭 `CS_TEST_STACK=1` 就信任任意实例或数据路径。
 
 每次 suite：
 

@@ -39,7 +39,7 @@
 
 ### Web／Go 规划与当前 Linux 工作区（2026-10-12）
 
-- Web／Go 架构目前为提案，入口见 `docs/tasks/noonmark-web-architecture/README.md`；不要把设计中的 API、脚本或商业指标描述成已实现／已验收。
+- Web／Go 的产品边界已由用户更新为：服务端唯一任务事实源、个人自部署优先、一位 owner 多设备访问，官方托管以后复用同一内核；Web 不做本地优先、浏览器领域引擎、离线命令回放或双模式切换。技术方案仍为提案，入口见 `docs/tasks/noonmark-web-architecture/README.md` 与 ADR-0049；ADR-0048 已被取代，不要把拟建 API、脚本或指标描述成已实现／已验收。
 - 按用户本次指示，当前 Linux 主机的源码和分支操作留在 `/home/xuntingmu/workspace/noonmark`，不建立源码副本或外置 worktree。Web／Go 的依赖、构建、缓存、数据库、浏览器 profile 和测试证据统一外置到 `/share/broker/noonmark-build`；仓库只保留 Git 忽略的 `.work` 软链接作为入口。
 - Web／Go 路径约束见 `docs/engineering/web-build-workspace.md`。后续先完成 P0 参数化入口和目录守卫，再运行构建／测试；不得只靠 `.gitignore` 隐藏真实产物。
 - 以下 macOS BUILD 规则仍适用于原生开发，production 与 iCloud 保护不变。本次用户指定的 Linux `.work` 入口不受原生兼容软链接禁令限制；不因此恢复 `.build`、`artifacts` 或 `dist` 兼容链接，也不运行未参数化的旧入口。

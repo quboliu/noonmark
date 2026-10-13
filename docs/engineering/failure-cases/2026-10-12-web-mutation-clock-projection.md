@@ -1,13 +1,13 @@
 # FAIL-2026-10-12-03：Web 将原始墙钟写入领域 mutation 时间
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-10-12，Web 首次实现的独立源码复核及真实 SQLite 回归测试。
 - 影响版本／构建：尚未提交、尚未发行的 Web 初始实现；开发基线为 `83e9aedd6003632b26b26b80808e132e1187ebc5`。
 - 引入提交：不存在。错误代码产生于本次未提交工作区；上述基线尚不含 Go 领域引擎，不能将故障归因给该基线提交。
 - Git author／committer：故障改动尚无 Git author／committer 记录；基线身份不等于实际修改者。
 - 实际修改者：本次协作的 Codex `domain_store` agent，依据当前 agent 会话及 `engine.go` 创建记录确认；操作者的人类身份未知。
-- 修复提交：待回填。
+- 修复提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`
 
 ## 用户症状与影响
 
@@ -49,7 +49,9 @@
 
 ## 验证结果
 
-共享 allocator、projection round-trip、时间范围、真实 SQLite 回拨及关闭重开测试已通过；原始症状由红转绿。提交身份及最终全集结果尚待本次任务闭环回填，因此维持「处理中」。
+allocator、精确投影 round-trip、时间范围、真实 SQLite 回拨与关闭重开回归通过；完成、修改、精选和删除时间均来自分配后的 instant。完整年度重放及浏览器演示通过。
+
+上述修复已进入首个实现提交；完整运行证据见[预览验证记录](../../tasks/noonmark-web-self-hosted/verification.md)。
 
 ## 永久门禁
 

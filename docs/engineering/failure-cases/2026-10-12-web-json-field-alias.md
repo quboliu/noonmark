@@ -1,13 +1,13 @@
 # FAIL-2026-10-12-01：Web JSON 字段别名绕过重复字段拒绝
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-10-12 23:16 至 23:20，America/New_York；UTC 为翌日。
 - 影响版本／构建：个人自部署 Web 首轮未提交实现，CLI 版本 `0.1.0-dev`；此前仓库尚无本次 Web 服务，不影响原生 Mac。
 - 引入提交：不存在；故障在本轮未提交源码首次运行时发现，不能归因给已有 commit。
 - Git author／committer：引入故障时尚无 Git 提交，因此无对应 Git identity。
 - 实际修改者：可由本次协作 session 确认，HTTP 首次实现由 root Codex agent 编写；build_tools agent 添加独立运行测试后发现。没有证据将该代码归因给具体自然人。
-- 修复提交：待回填
+- 修复提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`
 
 ## 用户症状与影响
 
@@ -21,7 +21,7 @@ Unicode long-s 别名 `pa\u017fsword` 也会映射到 `password`。这不是无�
 2. 独立 Go 测试以真实 SQLite、owner、key 和实际 HTTP handler 复现 ASCII 别名返回 200，预期 400；普通重复字段与转义后的完全相同 key 已被拒绝。
 3. 将嫌疑扩展到 Unicode case folding，long-s 别名同样返回 200，排除只转小写即可补齐语义的假设。
 4. root agent 将协议字段限定为 ASCII snake_case，拒绝大小写及 Unicode 别名。HTTP／CLI 的 `go test -race -count=1` 通过。
-5. 真实隔离部署的同组症状测试和修复 commit 待集成闭环；当前保持「处理中」。
+5. 真实隔离部署的同组症状测试及完整聚合门禁通过，修复已进入首个实现提交。
 
 ## 复现与证据
 
@@ -48,10 +48,9 @@ Unicode long-s 别名 `pa\u017fsword` 也会映射到 `password`。这不是无�
 
 ## 验证结果
 
-- HTTP 与 CLI targeted race suite：通过。
-- ASCII 及 Unicode 歧义请求：原始运行症状已由红转绿。
-- 真实容器／浏览器 endpoint 症状门禁：待集成执行并回填。
-- 修复提交：待确定；不能将当前案例标记为已修复。
+原始 ASCII／Unicode 歧义字段请求在真实 HTTP 测试和实际容器 endpoint 均返回 400／INVALID_REQUEST，未签发 token；正常认证与来源边界回归通过。
+
+上述修复已进入首个实现提交；完整运行证据见[预览验证记录](../../tasks/noonmark-web-self-hosted/verification.md)。
 
 ## 永久门禁
 

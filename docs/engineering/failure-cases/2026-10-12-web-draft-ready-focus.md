@@ -1,13 +1,13 @@
 # FAIL-2026-10-12-06：草稿异步就绪后速记浮窗没有取得输入焦点
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-10-13T03:35:14.619Z（真实 E2E 报告 startTime；本地 2026-10-12 晚间）
 - 影响版本／构建：首轮未提交 Web 实施；source hash 前缀 `4655d435` 的隔离容器镜像。
 - 引入提交：尚未形成提交。基线 `83e9aedd6003632b26b26b80808e132e1187ebc5` 只有 Web 设计文档，不含本次界面代码。
 - Git author／committer：引入代码尚未提交，因此没有对应 Git author／committer；不可把基线文档的 Git identity 当成实施者。
 - 实际修改者：当前 agent 协作记录可确认由 Codex `/root/web_ui` 编写 `apps/web/src/ui.tsx`、`Tasks.tsx` 与 `Notes.tsx` 的初始实现。
-- 修复提交：待回填。
+- 修复提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`
 
 ## 用户症状与影响
 
@@ -18,7 +18,7 @@
 1. 初始实现以 `FormFields` 禁用尚未完成 IndexedDB 草稿读取的表单，同时给标题及记录正文配置 React `autoFocus`。
 2. 隔离真实容器的 Playwright 套件在 `self-hosted.spec.ts` 的标题焦点断言判红。
 3. 读取报告后将“字段未 ready”“dialog 打开顺序”“pending 往返”的假设拆开；增加可控制真实 IndexedDB 成功回调交付时机的 focused gate。
-4. 修复共享表单焦点生命周期；原始套件与 focused gate 的运行结果仍待回填。
+4. 修复共享表单焦点生命周期；原始套件、focused gate 与一年演示随后全部通过。
 
 ## 复现与证据
 
@@ -42,9 +42,9 @@ React `autoFocus` 在首次挂载尝试聚焦，当时其祖先 fieldset 因草�
 
 ## 验证结果
 
-- 原始真实容器症状：已判红。
-- focused gate、原始套件及一年演示：待实际运行回填，尚不宣称已修复。
-- TypeScript：当前改动 `npm run typecheck` 通过；focused spec 的 Playwright discovery 通过。
+focused gate、原始真实浏览器套件及一年长页面速记均通过。测试中预填 textarea 的标签定位歧义已用实际 Chromium 确认，改为准确角色／名称定位；原有 disabled、value、focus 和 pending 后不抢焦点断言保持不变。
+
+上述修复已进入首个实现提交；完整运行证据见[预览验证记录](../../tasks/noonmark-web-self-hosted/verification.md)。
 
 ## 永久门禁
 

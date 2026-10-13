@@ -1,13 +1,13 @@
 # FAIL-2026-10-12-04：已撤销会话仍可通过 Store 读取命令收据
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-10-12，Web 初始实现的独立权限复核。
 - 影响版本／构建：尚未提交、尚未发行的 Web 初始实现，开发基线 `83e9aedd6003632b26b26b80808e132e1187ebc5`。
 - 引入提交：不存在；错误产生于本轮未提交工作区，基线尚无该 Go 实现。
 - Git author／committer：引入故障时尚无对应 Git identity。
 - 实际修改者：Codex `domain_store` agent 编写 `Receipt` 时遗漏事务内复核，可由当前会话和文件创建记录确认；人类操作者身份未知。
-- 修复提交：待回填。
+- 修复提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`
 
 ## 用户症状与影响
 
@@ -40,7 +40,9 @@ HTTP 入口认证完成后，请求可能等待 Store 的 writer mutex。若期�
 
 ## 验证结果
 
-原始测试从接受已撤销 context 转为返回 `AUTH_REQUIRED`；有效会话读取继续通过。目标测试与相关 `-race` 回归通过，修复提交待回填。
+原始用例由接受已撤销 context 转为返回 AUTH_REQUIRED；有效会话仍可读取。真实 SQLite 目标测试、完整 race suite 与正常 HTTP／浏览器认证回归通过。
+
+上述修复已进入首个实现提交；完整运行证据见[预览验证记录](../../tasks/noonmark-web-self-hosted/verification.md)。
 
 ## 永久门禁
 

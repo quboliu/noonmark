@@ -1,7 +1,7 @@
 # 个人自部署 Web 实施记录
 
 - Task-ID：`noonmark-web-self-hosted`
-- 状态：实施中，2026-10-12 开始。
+- 状态：首个个人实例功能预览已实现并通过验证，2026-10-13；UI 还原及完整能力仍待后续迭代。
 - 需求：按已确认的个人实例架构开始实现；服务端唯一事实源、一个 owner、多设备访问、单容器、源码与产物分离。原生 Mac 不变。
 - 现状：基线 `83e9aed`，仓库干净；Linux arm64，Go 1.27、Node 22、Docker 和 Chromium 可用，Swift 不可用。外置根 `.work` 已指向 `/share/broker/noonmark-build`。
 
@@ -47,7 +47,7 @@ make web-package
 
 `make check` 根据平台进入对应聚合入口：macOS 继续原生套件，Linux 进入 Web 套件。平台选择会明确输出，互不冒充验证结果。
 
-领域和运维 API 详见 [HTTP 契约](http-api.md)，一年覆盖见[演示契约](demo-fixture.md)。本版不应被标为完整商业 GA；后续发布必须先补齐能力对等、升级迁移、容量和安全评审门禁。
+领域和运维 API 详见 [HTTP 契约](http-api.md)，一年覆盖见[演示契约](demo-fixture.md)，完整门禁结果与证据索引见[验证记录](verification.md)。本版不应被标为完整商业 GA；后续发布必须先补齐能力对等、升级迁移、容量和安全评审门禁。
 
 2026-10-13 用户要求后续重点验收 UI 还原度。[首轮还原评审](ui-parity-review.md)已对照原生真实历史截图、现行 Swift 源码与 UI Contract：当前 Web 尚未充分还原。下一轮优先实现可收起的工作区栏位、日期 strip、行内新增、Day Todo 右栏复盘与任务行层级；按现行源码处理旧截图冲突，不能把功能门禁通过当作视觉验收通过。
 

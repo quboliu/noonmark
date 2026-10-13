@@ -1,13 +1,13 @@
 # FAIL-2026-10-12-07：可变小数位的时间字符串让飞光顺序倒置
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom
 - 首次发现：2026-10-12，Web mutation clock 修复后的展示排序复核。
 - 影响版本／构建：尚未提交、尚未发行的 Web 初始实现；开发基线 `83e9aedd6003632b26b26b80808e132e1187ebc5`。
 - 引入提交：不存在；基线不含该 Go／Web 实现，问题来自本轮未提交工作区。
 - Git author／committer：故障代码尚无对应 Git identity。
 - 实际修改者：当前会话证明 `domain_store` agent 使用 `RFC3339Nano` 生成并比较可变精度时间字符串，`web_ui` agent 在飞光视图使用相同文本排序假设；无法据此确认人类操作者身份。
-- 修复提交：待回填。
+- 修复提交：`23f80d91daf2ed5dfb6d74afe761c1f7d967d9d7`
 
 ## 用户症状与影响
 
@@ -40,7 +40,9 @@
 
 ## 验证结果
 
-原始纯核心与真实 SQLite 用例由红转绿；JavaScript 用 `Notes.tsx` 相同的比较表达式读取实际 Store 投影，结果与服务端时间顺序一致。相关时钟、日结、延续及重启回归通过，提交待回填。
+原始纯核心与真实 SQLite 顺序用例由红转绿；JavaScript 用 Notes.tsx 相同比较表达式消费实际 Store 时间戳，结果与服务端顺序一致。完整 race、日结、重启和年度演示通过。
+
+上述修复已进入首个实现提交；完整运行证据见[预览验证记录](../../tasks/noonmark-web-self-hosted/verification.md)。
 
 ## 永久门禁
 

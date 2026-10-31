@@ -41,6 +41,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure external build workspace
+        run: echo "NOONMARK_BUILD_ROOT=$RUNNER_TEMP/noonmark-build" >> "$GITHUB_ENV"
+
       - name: Resolve version and assert tag binding
         id: ver
         run: |
@@ -154,7 +157,7 @@ jobs:
         run: scripts/package-dmg release
 
       - name: Verify DMG (static, read-only)
-        run: scripts/verify-dmg dist/Noonmark.dmg
+        run: scripts/verify-dmg "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg"
 
       - name: Remove signing material
         if: always()
@@ -172,15 +175,15 @@ jobs:
 
       - name: Checksum and release notes
         run: |
-          shasum -a 256 dist/Noonmark.dmg > dist/Noonmark.dmg.sha256
-          shasum -a 256 -c dist/Noonmark.dmg.sha256
+          # package-dmg already hashes this portable checksum in its manifest.
+          (cd "$NOONMARK_BUILD_ROOT/dist" && shasum -a 256 -c Noonmark.dmg.sha256)
           scripts/generate-github-release-notes \
             "${{ steps.ver.outputs.tag }}" \
             "$GITHUB_SHA" \
             "${{ steps.ver.outputs.build }}" \
-            RELEASE_NOTES.md
-          scripts/verify-github-release-language --file RELEASE_NOTES.md
-          echo "---- release notes ----"; cat RELEASE_NOTES.md
+            "$NOONMARK_BUILD_ROOT/RELEASE_NOTES.md"
+          scripts/verify-github-release-language --file "$NOONMARK_BUILD_ROOT/RELEASE_NOTES.md"
+          cat "$NOONMARK_BUILD_ROOT/RELEASE_NOTES.md"
 
       - name: Create immutable GitHub Release
         run: |
@@ -198,10 +201,10 @@ jobs:
           rm -f "$RELEASE_VIEW_ERROR"
           scripts/verify-release-candidate-authority "$GITHUB_SHA"
           gh release create "$TAG" \
-            dist/Noonmark.dmg \
-            dist/Noonmark.dmg.sha256 \
+            "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg" \
+            "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg.sha256" \
             --title "$TITLE" \
-            --notes-file RELEASE_NOTES.md \
+            --notes-file "$NOONMARK_BUILD_ROOT/RELEASE_NOTES.md" \
             --verify-tag \
             --latest
           ACTUAL_TAG="$(gh release view "$TAG" --json tagName --jq '.tagName')"

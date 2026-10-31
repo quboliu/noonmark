@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 source scripts/app-icon-common
 
-app_path="${1:-dist/Noonmark.app}"
+app_path="${1:-${NOONMARK_DIST_DIR}/Noonmark.app}"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-app-icon-bundle-test.XXXXXX")"
+reference_app="${work_dir}/CanonicalIconReference.app"
+launch_services="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 cleanup() {
+  if [[ -d "$reference_app" && -x "$launch_services" ]]; then
+    "$launch_services" -u "$reference_app" >/dev/null 2>&1 || true
+  fi
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -41,25 +49,39 @@ fi
 
 codesign --verify --deep --strict "$app_path"
 
-launch_services="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ ! -x "$launch_services" ]]; then
   echo "missing LaunchServices registration tool: $launch_services" >&2
   exit 1
 fi
 "$launch_services" -f "$app_path" >/dev/null
 
+# NSWorkspace 返回系统呈现后的图标，并不保证保留原始 PNG 的像素。
+# 用独立、从标准资源构造的 App 经同一系统路径生成参考；不放宽像素门禁。
+mkdir -p "$reference_app/Contents/MacOS" "$reference_app/Contents/Resources"
+cp /usr/bin/true "$reference_app/Contents/MacOS/IconReference"
+cp "$app_icon_icns_path" "$reference_app/Contents/Resources/AppIcon.icns"
+reference_identifier="app.noonmark.test.icon-reference.$(uuidgen | tr '[:upper:]' '[:lower:]')"
+cat >"$reference_app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>$reference_identifier</string>
+  <key>CFBundleExecutable</key><string>IconReference</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleName</key><string>CanonicalIconReference</string>
+</dict></plist>
+PLIST
+codesign --force --sign - "$reference_app" >/dev/null 2>&1
+codesign --verify --strict "$reference_app"
+"$launch_services" -f "$reference_app" >/dev/null
+
+source scripts/app-icon-presentation-common
+
 workspace_png="${work_dir}/workspace-icon.png"
-NOONMARK_APP_PATH="$app_path" \
-  NOONMARK_APP_ICON_OUTPUT="$workspace_png" \
-  osascript -l JavaScript \
-  -e 'ObjC.import("AppKit")' \
-  -e 'const environment = $.NSProcessInfo.processInfo.environment' \
-  -e 'const appPath = environment.objectForKey("NOONMARK_APP_PATH")' \
-  -e 'const outputPath = environment.objectForKey("NOONMARK_APP_ICON_OUTPUT")' \
-  -e 'const icon = $.NSWorkspace.sharedWorkspace.iconForFile(appPath)' \
-  -e 'const rep = $.NSBitmapImageRep.imageRepWithData(icon.TIFFRepresentation)' \
-  -e 'const data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}))' \
-  -e 'if (!data.writeToFileAtomically(outputPath, true)) throw new Error("failed to render the app icon through NSWorkspace")'
+reference_png="${work_dir}/reference-icon.png"
+render_workspace_icon "$app_path" "$workspace_png"
+render_workspace_icon "$reference_app" "$reference_png"
 
 workspace_width="$(sips -g pixelWidth "$workspace_png" | awk '/pixelWidth/ {print $2}')"
 workspace_height="$(sips -g pixelHeight "$workspace_png" | awk '/pixelHeight/ {print $2}')"
@@ -68,98 +90,6 @@ if [[ "$workspace_width" != "1024" || "$workspace_height" != "1024" ]]; then
   exit 1
 fi
 
-NOONMARK_MASTER_ICON="$app_icon_master_png" \
-  NOONMARK_WORKSPACE_ICON="$workspace_png" \
-  swift - <<'SWIFT'
-import AppKit
-import CoreGraphics
-import Foundation
-
-enum IconCompareError: Error, CustomStringConvertible {
-  case missingEnvironment(String)
-  case unreadableImage(String)
-  case missingCGImage(String)
-  case missingContext
-  case differentPixels(count: Int, maxChannelDelta: UInt8)
-
-  var description: String {
-    switch self {
-    case .missingEnvironment(let name):
-      return "missing environment variable: \(name)"
-    case .unreadableImage(let path):
-      return "unreadable image: \(path)"
-    case .missingCGImage(let path):
-      return "image has no CGImage representation: \(path)"
-    case .missingContext:
-      return "failed to create bitmap context"
-    case .differentPixels(let count, let maxChannelDelta):
-      return "images differ after RGBA normalization: \(count) pixels, max channel delta \(maxChannelDelta)"
-    }
-  }
-}
-
-func pathFromEnvironment(_ name: String) throws -> String {
-  guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
-    throw IconCompareError.missingEnvironment(name)
-  }
-  return value
-}
-
-func normalizedRGBA(path: String, width: Int = 1024, height: Int = 1024) throws -> [UInt8] {
-  guard let image = NSImage(contentsOfFile: path) else {
-    throw IconCompareError.unreadableImage(path)
-  }
-  var proposedRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
-  guard let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
-    throw IconCompareError.missingCGImage(path)
-  }
-  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-  var data = [UInt8](repeating: 0, count: width * height * 4)
-  guard let context = CGContext(
-    data: &data,
-    width: width,
-    height: height,
-    bitsPerComponent: 8,
-    bytesPerRow: width * 4,
-    space: colorSpace,
-    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-  ) else {
-    throw IconCompareError.missingContext
-  }
-  context.interpolationQuality = .none
-  context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-  return data
-}
-
-do {
-  let master = try normalizedRGBA(path: pathFromEnvironment("NOONMARK_MASTER_ICON"))
-  let workspace = try normalizedRGBA(path: pathFromEnvironment("NOONMARK_WORKSPACE_ICON"))
-  var differingPixels = 0
-  var maxChannelDelta: UInt8 = 0
-
-  for offset in stride(from: 0, to: master.count, by: 4) {
-    var pixelDiffers = false
-    for channel in 0..<4 {
-      let lhs = master[offset + channel]
-      let rhs = workspace[offset + channel]
-      if lhs != rhs {
-        pixelDiffers = true
-        let delta = lhs > rhs ? lhs - rhs : rhs - lhs
-        maxChannelDelta = max(maxChannelDelta, delta)
-      }
-    }
-    if pixelDiffers {
-      differingPixels += 1
-    }
-  }
-
-  if differingPixels != 0 {
-    throw IconCompareError.differentPixels(count: differingPixels, maxChannelDelta: maxChannelDelta)
-  }
-} catch {
-  FileHandle.standardError.write("\(error)\n".data(using: .utf8)!)
-  exit(1)
-}
-SWIFT
+compare_workspace_icons "$reference_png" "$workspace_png"
 
 echo "Verified macOS resolved the canonical icon for $app_path"

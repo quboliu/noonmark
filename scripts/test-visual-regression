@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-out_dir="${NOONMARK_VISUAL_OUT_DIR:-artifacts/visual-regression}"
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
+out_dir="${NOONMARK_VISUAL_OUT_DIR:-${NOONMARK_ARTIFACTS_DIR}/visual-regression}"
 reference="${NOONMARK_VISUAL_REFERENCE:-}"
 actual="${NOONMARK_VISUAL_ACTUAL:-}"
 page="${NOONMARK_VISUAL_PAGE:-custom}"
@@ -12,8 +16,11 @@ if [[ -z "$reference" || -z "$actual" ]]; then
   exit 1
 fi
 
-rm -rf "$out_dir"
-mkdir -p "$out_dir"
+# Keep cleanup confined to a validated child of the external build workspace.
+source "$NOONMARK_SOURCE_ROOT/scripts/evidence-common"
+evidence_validate_artifact_basename "$page" "visual page"
+out_dir="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$out_dir")"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$out_dir"
 summary_report="${out_dir}/summary.txt"
 : > "$summary_report"
 

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-app_path="${1:-dist/Noonmark.app}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
+app_path="${1:-${NOONMARK_DIST_DIR}/Noonmark.app}"
 plist_path="${app_path}/Contents/Info.plist"
 expected_drag_type="app.noonmark.task-priority"
 

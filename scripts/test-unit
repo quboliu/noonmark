@@ -2,12 +2,12 @@
 set -euo pipefail
 
 scripts/reset-dev-data audit
-swift test --filter NoonmarkCoreTests
-swift test --filter NoonmarkSyncTests
-swift test --filter IdeaCaptureSessionTests
-swift test --filter NewTaskDraftParserTests
-swift test --filter RevisionMemoTests
-swift test --filter LocalFirstSyncRunControllerTests
-swift test --filter DiagnosticOperationLifecycleTests
-swift test --filter NoonmarkAITests
-swift test --filter NoonmarkMacUIContractTests
+scripts/swiftpm test --filter NoonmarkCoreTests
+scripts/swiftpm test --filter NoonmarkSyncTests
+scripts/swiftpm test --filter IdeaCaptureSessionTests
+scripts/swiftpm test --filter NewTaskDraftParserTests
+scripts/swiftpm test --filter RevisionMemoTests
+scripts/swiftpm test --filter LocalFirstSyncRunControllerTests
+scripts/swiftpm test --filter DiagnosticOperationLifecycleTests
+scripts/swiftpm test --filter NoonmarkAITests
+scripts/swiftpm test --filter NoonmarkMacUIContractTests

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+source scripts/app-icon-common
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-icon-presentation.XXXXXX")"
+fixture="$work_dir/Canonical.app"
+launch_services="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+cleanup() {
+  "$launch_services" -u "$fixture" >/dev/null 2>&1 || true
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+mkdir -p "$fixture/Contents/MacOS" "$fixture/Contents/Resources"
+cp /usr/bin/true "$fixture/Contents/MacOS/IconFixture"
+cp "$app_icon_icns_path" "$fixture/Contents/Resources/AppIcon.icns"
+identifier="app.noonmark.test.icon-fixture.$(uuidgen | tr '[:upper:]' '[:lower:]')"
+cat > "$fixture/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>$identifier</string>
+<key>CFBundleExecutable</key><string>IconFixture</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleName</key><string>Canonical</string>
+</dict></plist>
+PLIST
+codesign --force --sign - "$fixture" >/dev/null 2>&1
+# Never execute the fixture. Exercise real LaunchServices and NSWorkspace.
+scripts/test-app-icon-bundle "$fixture" > "$work_dir/positive.log" 2>&1 || {
+  cat "$work_dir/positive.log" >&2
+  exit 1
+}
+# Exercise the exact production renderer/comparator with a generic folder icon.
+# Its negative must reach RGBA comparison, independently of bundle preflight.
+source scripts/app-icon-presentation-common
+mkdir "$work_dir/GenericFolder"
+render_workspace_icon "$fixture" "$work_dir/canonical.png"
+render_workspace_icon "$work_dir/GenericFolder" "$work_dir/generic.png"
+if compare_workspace_icons "$work_dir/canonical.png" "$work_dir/generic.png" > "$work_dir/negative.log" 2>&1; then
+  echo "icon comparison accepted the generic folder icon" >&2
+  exit 1
+fi
+if ! grep -q 'images differ after RGBA normalization' "$work_dir/negative.log"; then
+  cat "$work_dir/negative.log" >&2
+  echo "negative fixture failed before rendered-icon validation" >&2
+  exit 1
+fi
+printf 'Verified OS-presented canonical icon and rejected generic folder icon\n'

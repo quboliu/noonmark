@@ -96,6 +96,6 @@ if [[ ! "$identity_line" =~ ^[0-9]+$ || ! "$ownership_line" =~ ^[0-9]+$ ||
 fi
 
 scripts/reset-dev-data audit
-swift test --filter TargetForegroundOwnershipTests
+scripts/swiftpm test --filter TargetForegroundOwnershipTests
 
 echo "DMG foreground ownership contract passed"

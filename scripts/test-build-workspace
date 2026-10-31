@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$repo_root/scripts/build-workspace-common"
+noonmark_build_workspace_init
+fixture="$(mktemp -d "$TMPDIR/noonmark-build-paths.XXXXXX")"
+fixture="$(cd "$fixture" && pwd -P)"
+trap 'rm -rf "$fixture"' EXIT
+common="$repo_root/scripts/build-workspace-common"
+reject() {
+  if NOONMARK_BUILD_ROOT="$1" bash -c 'source "$1"; noonmark_build_workspace_init' _ "$common" >"$fixture/rejected.log" 2>&1; then
+    echo "unsafe build root accepted: $1" >&2; exit 1
+  fi
+}
+for path in '' relative / "$repo_root" "$repo_root/generated" "$(dirname "$repo_root")" \
+  "$fixture/new/../escape" "$fixture/new/./escape" "$fixture//new" "$fixture/new/"; do
+  reject "$path"
+done
+[[ ! -e "$fixture/new" ]] || { echo 'invalid paths created directories' >&2; exit 1; }
+mkdir "$fixture/real"
+ln -s "$fixture/real" "$fixture/link"
+reject "$fixture/link/child"
+[[ ! -e "$fixture/real/child" ]] || exit 1
+mkdir "$fixture/unsafe"
+ln -s "$fixture/real" "$fixture/unsafe/dist"
+reject "$fixture/unsafe"
+# Validate argv boundaries with a space-containing external directory.
+mkdir "$fixture/bin"
+cat >"$fixture/bin/swift" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$NOONMARK_TEST_ARGV"
+STUB
+chmod +x "$fixture/bin/swift"
+NOONMARK_BUILD_ROOT="$fixture/build with spaces" \
+NOONMARK_TEST_ARGV="$fixture/argv" PATH="$fixture/bin:$PATH" \
+  "$repo_root/scripts/swiftpm" build -c debug --build-tests
+for argument in "$fixture/build with spaces/swiftpm" "$fixture/build with spaces/cache" \
+  "$fixture/build with spaces/config" "$fixture/build with spaces/security" "$repo_root" --build-tests; do
+  grep -Fxq -- "$argument" "$fixture/argv" || { echo "missing SwiftPM argument: $argument" >&2; exit 1; }
+done
+if NOONMARK_BUILD_ROOT="$fixture/build with spaces" PATH="$fixture/bin:$PATH" \
+  "$repo_root/scripts/swiftpm" build --scratch-path "$repo_root/.build" >/dev/null 2>&1; then
+  echo 'SwiftPM path override escaped the workspace contract' >&2; exit 1
+fi
+for entry in build-mac-app build-dmg-install-harness build-window-probe; do
+  if grep -Eq '\.build/|(^|[[:space:]])swift build' "$repo_root/scripts/$entry"; then
+    echo "builder bypasses the shared workspace: $entry" >&2; exit 1
+  fi
+  grep -Fq 'noonmark_swift build' "$repo_root/scripts/$entry"
+  grep -Fq -- '--show-bin-path' "$repo_root/scripts/$entry"
+done
+printf 'External build workspace guards passed.\n'

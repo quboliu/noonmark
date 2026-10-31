@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 source scripts/runtime-profile-common
 
 noonmark_runtime_profile_load e2e
-app_path="dist/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
+app_path="${NOONMARK_DIST_DIR}/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
 app_process="${NOONMARK_RUNTIME_PROCESS_NAME}"
 provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
 gate_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-watermark-keychain-signed.XXXXXX")"

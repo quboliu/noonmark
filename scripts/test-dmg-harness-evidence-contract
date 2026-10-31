@@ -176,6 +176,6 @@ for ordered_menu_literal in \
 done
 
 scripts/reset-dev-data audit
-swift test --filter HarnessLedgerContractTests
+scripts/swiftpm test --filter HarnessLedgerContractTests
 
 echo "DMG harness evidence contract passed"

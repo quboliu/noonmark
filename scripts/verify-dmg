@@ -5,10 +5,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
+# shellcheck source=scripts/build-workspace-common
+source scripts/build-workspace-common
+noonmark_build_workspace_init
+
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 
-dmg_path="${1:-dist/Noonmark.dmg}"
+dmg_path="${1:-$NOONMARK_DIST_DIR/Noonmark.dmg}"
+dmg_path="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$dmg_path")"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 evidence_validate_artifact_basename "$app_short_name" "App short name"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-dmg.XXXXXX")"
@@ -71,7 +76,7 @@ if [[ ! -f "$package_inventory_path" ]]; then
   exit 1
 fi
 
-shasum -a 256 -c "${dmg_path}.sha256"
+(cd "$(dirname "$dmg_path")" && shasum -a 256 -c "$(basename "$dmg_path").sha256")
 evidence_require_manifest \
   "$package_manifest_path" \
   "evidence_schema_version=1" \
@@ -103,15 +108,15 @@ release_identity_provenance_relative="$(
   evidence_read "$package_manifest_path" release_identity_provenance_path
 )"
 evidence_verify_release_symbols \
-  "$repo_root" \
-  "$repo_root/$release_binary_relative" \
-  "$repo_root/$release_dsym_relative" \
+  "$NOONMARK_BUILD_ROOT" \
+  "$NOONMARK_BUILD_ROOT/$release_binary_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_relative" \
   "$package_manifest_path" \
   "release_symbols" \
-  "$repo_root/$release_dsym_inventory_relative"
+  "$NOONMARK_BUILD_ROOT/$release_dsym_inventory_relative"
 evidence_verify_release_identity_provenance \
-  "$repo_root" \
-  "$repo_root/$release_identity_provenance_relative" \
+  "$NOONMARK_BUILD_ROOT" \
+  "$NOONMARK_BUILD_ROOT/$release_identity_provenance_relative" \
   "$package_manifest_path" \
   release_identity
 
@@ -144,9 +149,9 @@ if [[ -z "$expected_inventory_sha256" ||
   echo "package artifact inventory does not match its manifest" >&2
   exit 1
 fi
-evidence_verify_inventory "$repo_root" "$package_inventory_path"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$package_inventory_path"
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$package_inventory_path" \
   "$release_binary_relative" \
   "$release_dsym_dwarf_relative" \

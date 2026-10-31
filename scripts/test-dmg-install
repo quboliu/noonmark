@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd -P)"
 cd "$repo_root"
@@ -910,18 +914,18 @@ source scripts/dmg-install-observer-common
 # shellcheck source=scripts/runtime-profile-common
 source scripts/runtime-profile-common
 
-dmg_path="${1:-dist/Noonmark.dmg}"
+dmg_path="${1:-${NOONMARK_DIST_DIR}/Noonmark.dmg}"
 package_manifest_path="${dmg_path}.manifest"
 package_inventory_path="${dmg_path}.inventory.sha256"
 app_short_name="${NOONMARK_APP_SHORT_NAME:-Noonmark}"
 evidence_validate_artifact_basename "$app_short_name" "App short name"
-work_dir="${repo_root}/artifacts/dmg-install"
+work_dir="${NOONMARK_ARTIFACTS_DIR}/dmg-install"
 install_dir="${work_dir}/Applications"
-helper_evidence_root="${repo_root}/artifacts/dmg-install-harness"
-helper_app="${repo_root}/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
+helper_evidence_root="${NOONMARK_ARTIFACTS_DIR}/dmg-install-harness"
+helper_app="${NOONMARK_ARTIFACTS_DIR}/dmg-install-harness/NoonmarkDMGInstallHarness.app"
 helper_executable_name="NoonmarkDMGInstallHarness"
 helper_executable="${helper_app}/Contents/MacOS/${helper_executable_name}"
-window_probe_executable="${repo_root}/artifacts/window-probe/NoonmarkWindowProbe"
+window_probe_executable="${NOONMARK_ARTIFACTS_DIR}/window-probe/NoonmarkWindowProbe"
 helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
 production_bundle_identifier="app.noonmark.mac"
 validation_bundle_identifier="app.noonmark.mac.dmg-validation"
@@ -983,7 +987,7 @@ app_diagnostic_diff="${work_dir}/diagnostics/noonmark-diff.txt"
 helper_diagnostic_diff="${work_dir}/diagnostics/harness-diff.txt"
 diagnostic_artifact_dir="${work_dir}/diagnostic-reports"
 runtime_manifest_path="${work_dir}/runtime-manifest.txt"
-artifact_inventory_path="${repo_root}/artifacts/dmg-install-artifact-inventory.sha256"
+artifact_inventory_path="${NOONMARK_ARTIFACTS_DIR}/dmg-install-artifact-inventory.sha256"
 source_fragment="${work_dir}/source.fragment"
 source_end_fragment="${work_dir}/source-end.fragment"
 mounted_app_fragment="${work_dir}/mounted-app.fragment"
@@ -1041,8 +1045,8 @@ if [[ "$NOONMARK_RUNTIME_PROFILE" != "dmg-validation" ||
   exit 1
 fi
 
-evidence_prepare_fresh_directory "$repo_root" "$work_dir"
-evidence_prepare_fresh_directory "$repo_root" "$helper_evidence_root"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$work_dir"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$helper_evidence_root"
 rm -f "$artifact_inventory_path"
 
 required_tools=(
@@ -1756,7 +1760,7 @@ cleanup() {
       "$diagnostic_status"
     release_symbols_unchanged=true
     if ! evidence_verify_release_symbols \
-      "$repo_root" \
+      "$NOONMARK_BUILD_ROOT" \
       "$release_binary_path" \
       "$release_dsym_path" \
       "$package_manifest_path" \
@@ -1771,7 +1775,7 @@ cleanup() {
       "$release_symbols_unchanged"
     release_identity_provenance_unchanged=true
     if ! evidence_verify_release_identity_provenance \
-      "$repo_root" \
+      "$NOONMARK_BUILD_ROOT" \
       "$release_identity_provenance_path" \
       "$package_manifest_path" \
       release_identity; then
@@ -1784,7 +1788,7 @@ cleanup() {
       "$release_identity_provenance_unchanged"
     if [[ "$final_status" -eq 0 ]]; then
       if evidence_inventory \
-        "$repo_root" \
+        "$NOONMARK_BUILD_ROOT" \
         "$artifact_inventory_path" \
         "$dmg_path" \
         "${dmg_path}.sha256" \
@@ -2801,7 +2805,7 @@ record_main_window_failure_evidence() {
     "$response_validated" \
     "$windowserver_verification" \
     live \
-    "$repo_root"
+    "$NOONMARK_BUILD_ROOT"
 }
 
 wait_for_main_window_metadata() {
@@ -3163,8 +3167,8 @@ derive_diagnostic_export_scope() {
 
   diagnostic_scope_helper_binary_sha256="$helper_sha_before"
   window_runtime_evidence_root="${validation_data_root}/RuntimeEvidence"
-  scope_manifest_relative="${diagnostic_scope_manifest#${repo_root}/}"
-  scope_stderr_relative="${diagnostic_scope_stderr#${repo_root}/}"
+  scope_manifest_relative="${diagnostic_scope_manifest#${NOONMARK_BUILD_ROOT}/}"
+  scope_stderr_relative="${diagnostic_scope_stderr#${NOONMARK_BUILD_ROOT}/}"
   if [[ "$scope_manifest_relative" == "$diagnostic_scope_manifest" ||
     "$scope_stderr_relative" == "$diagnostic_scope_stderr" ]]; then
     echo "diagnostic scope evidence was not repository-relative" >&2
@@ -3392,7 +3396,7 @@ validate_diagnostic_export_package() {
     return 1
   fi
 
-  relative_export_path="${diagnostic_export_path#${repo_root}/}"
+  relative_export_path="${diagnostic_export_path#${NOONMARK_BUILD_ROOT}/}"
   if [[ "$relative_export_path" == "$diagnostic_export_path" ]]; then
     echo "diagnostic export path is not repository-relative" >&2
     return 1
@@ -3760,27 +3764,27 @@ if [[ -n "${NOONMARK_EVIDENCE_RUN_ID:-}" &&
 fi
 evidence_run_id="$package_run_id"
 
-release_binary_path="${repo_root}/$(
+release_binary_path="${NOONMARK_BUILD_ROOT}/$(
   evidence_read "$package_manifest_path" release_symbols_binary_path
 )"
-release_dsym_path="${repo_root}/$(
+release_dsym_path="${NOONMARK_BUILD_ROOT}/$(
   evidence_read "$package_manifest_path" release_symbols_dsym_bundle_path
 )"
-release_dsym_inventory_path="${repo_root}/$(
+release_dsym_inventory_path="${NOONMARK_BUILD_ROOT}/$(
   evidence_read "$package_manifest_path" release_symbols_dsym_inventory_path
 )"
-release_identity_provenance_path="${repo_root}/$(
+release_identity_provenance_path="${NOONMARK_BUILD_ROOT}/$(
   evidence_read "$package_manifest_path" release_identity_provenance_path
 )"
 evidence_verify_release_symbols \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$release_binary_path" \
   "$release_dsym_path" \
   "$package_manifest_path" \
   "release_symbols" \
   "$release_dsym_inventory_path"
 evidence_verify_release_identity_provenance \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$release_identity_provenance_path" \
   "$package_manifest_path" \
   release_identity

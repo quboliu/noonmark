@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 repo_parent="$(cd "$repo_root/.." && pwd -P)"
 cd "$repo_root"
@@ -39,7 +42,7 @@ package_script="scripts/package-dmg"
   fail "Tencent IME release evidence verifier is missing or not executable"
 require_order \
   "$package_script" \
-  'evidence_guard_repo_path "$repo_root" "$package_manifest_path"' \
+  'evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$package_manifest_path"' \
   'evidence_begin_manifest'
 require_order \
   "$release_script" \
@@ -71,11 +74,11 @@ require_order \
   "scripts/package-dmg release"
 require_order \
   "$release_script" \
-  "scripts/test-dmg-install dist/Noonmark.dmg" \
+  'scripts/test-dmg-install "$NOONMARK_DIST_DIR/Noonmark.dmg"' \
   "scripts/verify-development-validation-evidence --scope full"
 require_order \
   "$closure_script" \
-  'evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"' \
+  'evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$evidence_relative"' \
   'git status --porcelain --untracked-files=all'
 if rg -n 'NOONMARK_EVIDENCE_RUN_ID=.*-release-diagnostic' \
   "$closure_script" >/dev/null; then
@@ -104,7 +107,7 @@ for required in \
   rg -F -- "$required" "$closure_script" >/dev/null ||
     fail "release closure lacks required boundary: $required"
 done
-rg -F 'closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"' \
+rg -F 'closure_manifest="${5:-$NOONMARK_ARTIFACTS_DIR/release-diagnostic-closure-gate/manifest.txt}"' \
   "$verifier" >/dev/null ||
   fail "full verifier does not require the release closure manifest"
 expected_ime_smoke_contract=$'surface=day-title\ninput_source=com.tencent.inputmethod.wetype.pinyin\nbehavior=composition-commit,immediate-exit,restart-sqlite-readback\nunavailable_input_source=skip-with-auditable-evidence'
@@ -132,6 +135,7 @@ if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
     mktemp -d "$repo_parent/.noonmark-release-contract.XXXXXX"
   )"
   worktree="$worktree_parent/worktree"
+  fixture_build_parent="$(mktemp -d "${TMPDIR%/}/noonmark-release-contract-build.XXXXXX")"
   worktree_added=0
   cleanup_fixture_worktree() {
     local cleanup_status=0
@@ -143,6 +147,7 @@ if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
     fi
     worktree_added=0
     rmdir "$worktree_parent" >/dev/null 2>&1 || cleanup_status=1
+    rm -rf "$fixture_build_parent" || cleanup_status=1
     set -e
     return "$cleanup_status"
   }
@@ -169,26 +174,28 @@ if [[ "${NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE:-0}" != "1" ]]; then
   worktree_added=1
   (
     cd "$worktree"
+    NOONMARK_BUILD_ROOT="$fixture_build_parent/build" \
     NOONMARK_RELEASE_GATE_CONTRACT_FIXTURE=1 \
       scripts/test-release-gate-contract
   )
   git worktree remove --force "$worktree" >/dev/null
   worktree_added=0
   rmdir "$worktree_parent"
+  rm -rf "$fixture_build_parent"
   trap - EXIT INT TERM
   echo "Release gate contract passed"
   exit 0
 fi
 
 fixture_relative="artifacts/release-static-preflight-contract"
-evidence_prepare_fresh_directory "$repo_root" "$fixture_relative"
-fixture_root="$repo_root/$fixture_relative"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$fixture_relative"
+fixture_root="$NOONMARK_BUILD_ROOT/$fixture_relative"
 ime_evidence_relative="artifacts/e2e-tencent-ime-release-smoke"
 ime_result_relative="artifacts/e2e-tencent-ime-termination"
-evidence_prepare_fresh_directory "$repo_root" "$ime_evidence_relative"
-evidence_prepare_fresh_directory "$repo_root" "$ime_result_relative"
-ime_evidence_root="$repo_root/$ime_evidence_relative"
-ime_result_root="$repo_root/$ime_result_relative"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$ime_evidence_relative"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$ime_result_relative"
+ime_evidence_root="$NOONMARK_BUILD_ROOT/$ime_evidence_relative"
+ime_result_root="$NOONMARK_BUILD_ROOT/$ime_result_relative"
 cleanup() {
   if [[ -n "${dirty_marker:-}" ]]; then
     rm -f "$dirty_marker"
@@ -229,7 +236,7 @@ evidence_append "$ime_manifest" result_path \
 evidence_append "$ime_manifest" result_sha256 \
   "$(shasum -a 256 "$ime_result" | awk '{print $1}')"
 evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$ime_inventory" \
   "$ime_result" \
   "$ime_source_start" \
@@ -274,7 +281,7 @@ evidence_append \
   "$fixture_manifest" check_log_sha256 \
   "$(shasum -a 256 "$fixture_log" | awk '{print $1}')"
 evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$fixture_inventory" \
   "$fixture_log" \
   "$fixture_start" \

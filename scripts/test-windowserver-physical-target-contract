@@ -28,5 +28,5 @@ if rg -n '\[DEBUG-window-route-' App Sources Tests >/dev/null; then
   exit 1
 fi
 
-swift test --filter \
+scripts/swiftpm test --filter \
   'WindowServerInputContextContractTests/testPhysicalTargetReadinessRequiresPointerAndExactFrontWindow'

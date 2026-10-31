@@ -981,7 +981,7 @@ fi
 
 for literal in \
   'source scripts/evidence-common' \
-  'evidence_prepare_fresh_directory "$repo_root" "$check_evidence_dir"' \
+  'evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$check_evidence_dir"' \
   'evidence_capture_source "$repo_root" source "$source_start_fragment"' \
   'evidence_begin_manifest' \
   'evidence_capture_source "$repo_root" source_end "$source_end_fragment"' \
@@ -991,6 +991,15 @@ for literal in \
     fail "scripts/check is missing auditable final-check evidence: $literal"
   fi
 done
+# Artifact confinement and source snapshots deliberately use different roots.
+if ! awk '
+  /if evidence_inventory \\/ {
+    if (getline > 0 && $0 ~ /"\$NOONMARK_BUILD_ROOT"/) found = 1
+  }
+  END { exit !found }
+' "$repo_root/scripts/check"; then
+  fail "scripts/check does not inventory artifacts under the external build root"
+fi
 grep -F "artifacts/audit-final/make-check" \
   "$repo_root/.github/workflows/ci.yml" >/dev/null ||
   fail "check evidence is not retained by the hosted CI owner"

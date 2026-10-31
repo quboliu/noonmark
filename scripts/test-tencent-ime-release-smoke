@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -29,13 +33,13 @@ esac
 source scripts/evidence-common
 
 evidence_relative="artifacts/e2e-tencent-ime-release-smoke"
-evidence_root="$repo_root/$evidence_relative"
+evidence_root="$NOONMARK_BUILD_ROOT/$evidence_relative"
 manifest="$evidence_root/manifest.txt"
 inventory="$evidence_root/artifact-inventory.sha256"
 source_start="$evidence_root/source-start.fragment"
 source_end="$evidence_root/source-end.fragment"
 summary_relative="artifacts/e2e-tencent-ime-termination/results.tsv"
-summary_path="$repo_root/$summary_relative"
+summary_path="$NOONMARK_BUILD_ROOT/$summary_relative"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
 suite_status=0
 
@@ -52,7 +56,7 @@ else
   suite_mode=skipped
 fi
 
-evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$evidence_relative"
 evidence_capture_source "$repo_root" source "$source_start"
 evidence_begin_manifest \
   "$manifest" \
@@ -65,7 +69,7 @@ evidence_append "$manifest" input_source_available "$input_source_available"
 
 if [[ "$input_source_available" == "false" ]]; then
   skip_relative="$evidence_relative/result.txt"
-  skip_path="$repo_root/$skip_relative"
+  skip_path="$NOONMARK_BUILD_ROOT/$skip_relative"
   printf 'status=SKIPPED\nreason=tencent_input_source_not_enabled\n' >"$skip_path"
   evidence_append "$manifest" skip_reason tencent_input_source_not_enabled
   evidence_capture_source "$repo_root" source_end "$source_end"
@@ -76,7 +80,7 @@ if [[ "$input_source_available" == "false" ]]; then
     result_sha256 \
     "$(shasum -a 256 "$skip_path" | awk '{print $1}')"
   evidence_inventory \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$inventory" \
     "$skip_path" \
     "$source_start" \
@@ -138,7 +142,7 @@ else
   suite_status=1
 fi
 if evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$inventory" \
   "$summary_path" \
   "$source_start" \

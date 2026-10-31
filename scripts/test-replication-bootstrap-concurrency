@@ -23,5 +23,5 @@ if ! rg -Uq \
 fi
 
 scripts/reset-dev-data audit
-swift test \
+scripts/swiftpm test \
   --filter 'ReplicationRepositoryBootstrapTests|ICloudReplicationRepositoryAuthorityTests|ContentAddressedFileReplicationEndpointTests.testICloud|LocalFirstReplicationTests.testEndpoint|DiagnosticFailureMappingTests.testICloudAuthorityFailuresHaveStableSafeCodes'

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
@@ -25,12 +29,12 @@ case "$NOONMARK_AI_MODEL" in
     ;;
 esac
 
-evidence_dir="artifacts/ai-provider-live"
+evidence_dir="${NOONMARK_ARTIFACTS_DIR}/ai-provider-live"
 database="$evidence_dir/Noonmark.sqlite"
 result="$evidence_dir/result.txt"
 app_log="$evidence_dir/app.log"
 stream_log="$evidence_dir/stream-transport.log"
-app_path="dist/NoonmarkE2E.app"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkE2E.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppE2E"
 app_pid=""
 
@@ -127,7 +131,7 @@ if ! clear_e2e_provider_credentials; then
   exit 1
 fi
 scripts/reset-dev-data e2e
-if ! swift run NoonmarkAIProviderLiveSmoke >"$stream_log" 2>&1; then
+if ! noonmark_swift run NoonmarkAIProviderLiveSmoke >"$stream_log" 2>&1; then
   echo "DeepSeek streaming transport smoke failed" >&2
   sed -n '1,160p' "$stream_log" >&2
   exit 1
@@ -136,10 +140,10 @@ echo "DeepSeek live streaming transport passed: $stream_log"
 scripts/build-mac-app debug e2e >/dev/null
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page day \
   --e2e-automatic-classification-live \
-  --e2e-automatic-classification-result-url "$PWD/$result" \
+  --e2e-automatic-classification-result-url "$result" \
   >"$app_log" 2>&1 &
 app_pid=$!
 

@@ -6,61 +6,61 @@ cd "$repo_root"
 
 scripts/test-replication-incomplete-local-view
 
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testRestartRestoresPendingPublicationAfterObservationCrashAndConvergesOnce
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testPromisedItemMaterializationIsWaitingRatherThanRuntimeFailure
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testRetryCompletesEveryInterruptedImmutablePublicationPrefixWithoutReplacingBytes
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testProducerForkIsAnActionableIncidentRatherThanRuntimeFailure
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testSameSequenceDifferentDigestPreservesForkEvidenceAndFailsClosed
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testForkEvidenceClosureChangesWhenTheForkedProducerAddsDescendants
-swift test \
+scripts/swiftpm test \
   --filter SQLiteReplicationLedgerTests/testValidatedForkEvidencePersistsDeterministicResolutionAcrossRestart
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testForkDescendantCreatesANewDurableResolutionInsteadOfBeingIgnored
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testConflictFreeForkRepairsPublishesBaselineAndStaysClosedAfterRestart
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testForkWithDomainConflictDoesNotApplyAdvanceCursorOrPublishBaseline
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testKeepCurrentForkDecisionAtomicallyClosesAndPublishesRepairBaseline
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testRepairBaselineWithoutALocallyClosedResolutionIsRejected
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testSelfForkRotatesProducerEpochAndRestartNeverPublishesOnRetiredChain
-swift test \
+scripts/swiftpm test \
   --filter SQLiteReplicationLedgerTests/testProducerRotationFenceRollsBackBaselineWhenActiveEpochChanged
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testKeychainAheadOfSQLiteRotatesEpochBeforePublishAndRestartsCleanly
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testSQLiteAheadOfKeychainNeverPublishesOldEpochAndRecoversOnRestart
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testCleanCutBaselineCarriesExistingClassificationStateToASecondStore
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testRuntimeWithoutCleanCutAuthorityFailsClosedInsteadOfReadingV1Journal
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testCleanCutBaselineIgnoresLegacyJournalAndCapturesOnlyLaterMutations
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testDisableJoinsBlockedWorkerAndRestartsAsDurablyDisabled
-swift test \
+scripts/swiftpm test \
   --filter LocalFirstReplicationTests/testFailedShutdownFenceCanBeRetriedAndStillJoinsEndpoint
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testInterruptedStagingWriteNeverExposesAPartialFinalObject
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testExactPublishRetryDoesNotCreateAnotherPermanentStage
-swift test \
+scripts/swiftpm test \
   --filter ContentAddressedFileReplicationEndpointTests/testExactAncestorRetryRemainsIdempotentAfterDescendantPublication
-swift test \
+scripts/swiftpm test \
   --filter CurrentSyncRecordMergerTests/testLargeIncrementalBatchCanonicalizationCompletesWithinBudget
-swift test \
+scripts/swiftpm test \
   --filter SyncRecordMergerTests/testPreferenceRecordPreservesDeviceLocalConfiguration
 scripts/test-replication-bootstrap-concurrency
-swift test --filter SQLiteStoreRuntimeTests
-swift test \
+scripts/swiftpm test --filter SQLiteStoreRuntimeTests
+scripts/swiftpm test \
   --filter KeychainReplicationPublicationWatermarkStoreTests
 scripts/test-replication-watermark-keychain-contract
 scripts/test-replication-v2-app-stress-contract

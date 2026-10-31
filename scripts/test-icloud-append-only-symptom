@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 export NOONMARK_LIVE_ICLOUD_SYNC=1
-swift test --filter \
+scripts/swiftpm test --filter \
   'LocalFirstReplicationTests|SQLiteReplicationLedgerTests|ContentAddressedFileReplicationEndpointTests|ICloudReplicationEvidenceTests|ICloudAppendOnlyTestNamespaceTests'
 
 icloud_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
@@ -19,7 +19,7 @@ echo "Live iCloud append-only V2: starting"
 echo "session_id=$icloud_session_id"
 echo "round_ids=$icloud_round_one_id,$icloud_round_two_id"
 
-swift test --skip-build --filter \
+scripts/swiftpm test --skip-build --filter \
   ICloudDriveLocalFirstSyncLiveTests/testMultipleFreshRoundsConvergeThroughRealICloudWithoutMutation
 
 echo "Live iCloud append-only V2: passed"

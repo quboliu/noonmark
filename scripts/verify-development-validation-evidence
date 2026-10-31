@@ -5,6 +5,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd -P)"
 cd "$repo_root"
 
+# shellcheck source=scripts/build-workspace-common
+source scripts/build-workspace-common
+noonmark_build_workspace_init
+
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 # shellcheck source=scripts/runtime-evidence
@@ -42,11 +46,16 @@ if [[ "$scope" == "runtime" && $# -gt 2 ]] ||
   exit 2
 fi
 
-e2e_manifest="${1:-artifacts/e2e-runtime/manifest.txt}"
-lease_manifest="${2:-artifacts/e2e-data-root-process-lease/manifest.txt}"
-package_manifest="${3:-dist/Noonmark.dmg.manifest}"
-install_manifest="${4:-artifacts/dmg-install/runtime-manifest.txt}"
-closure_manifest="${5:-artifacts/release-diagnostic-closure-gate/manifest.txt}"
+e2e_manifest="${1:-$NOONMARK_ARTIFACTS_DIR/e2e-runtime/manifest.txt}"
+lease_manifest="${2:-$NOONMARK_ARTIFACTS_DIR/e2e-data-root-process-lease/manifest.txt}"
+package_manifest="${3:-$NOONMARK_DIST_DIR/Noonmark.dmg.manifest}"
+install_manifest="${4:-$NOONMARK_ARTIFACTS_DIR/dmg-install/runtime-manifest.txt}"
+closure_manifest="${5:-$NOONMARK_ARTIFACTS_DIR/release-diagnostic-closure-gate/manifest.txt}"
+e2e_manifest="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$e2e_manifest")"
+lease_manifest="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$lease_manifest")"
+package_manifest="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$package_manifest")"
+install_manifest="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$install_manifest")"
+closure_manifest="$(evidence_guard_repo_path "$NOONMARK_BUILD_ROOT" "$closure_manifest")"
 expected_english_scenarios="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
 english_ledger="$(dirname "$e2e_manifest")/english-scenario-ledger.tsv"
 install_evidence_dir="$(dirname "$install_manifest")"
@@ -56,12 +65,12 @@ lease_evidence_dir="$(dirname "$lease_manifest")"
 if [[ "$e2e_evidence_dir" == /* ]]; then
   e2e_evidence_absolute="$e2e_evidence_dir"
 else
-  e2e_evidence_absolute="$repo_root/$e2e_evidence_dir"
+  e2e_evidence_absolute="$NOONMARK_BUILD_ROOT/$e2e_evidence_dir"
 fi
 if [[ "$lease_evidence_dir" == /* ]]; then
   lease_evidence_absolute="$lease_evidence_dir"
 else
-  lease_evidence_absolute="$repo_root/$lease_evidence_dir"
+  lease_evidence_absolute="$NOONMARK_BUILD_ROOT/$lease_evidence_dir"
 fi
 e2e_inventory="${e2e_evidence_dir}/artifact-inventory.sha256"
 lease_inventory="${lease_evidence_dir}/artifact-inventory.sha256"
@@ -374,7 +383,7 @@ require_install_window_metadata() {
       return 1
     fi
   else
-    if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
+    if [[ ! "$arguments_detail" =~ ^mode=${mode}[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
       echo "DMG install $mode ledger cannot be bound to window metadata" >&2
       return 1
     fi
@@ -823,7 +832,7 @@ require_install_ledger_semantics() {
     diagnostic_window_detail="$(
       awk -F $'\t' '$3 == "diagnostic-window" { print $4 }' "$path"
     )"
-    if [[ ! "$diagnostic_window_detail" =~ ^window_number=$expected_window_number[[:space:]]frame=\([-0-9.]+,[[:space:]][-0-9.]+,[[:space:]][1-9][0-9.]*,[[:space:]][1-9][0-9.]*\)[[:space:]]focused=true[[:space:]]exact=true$ ]]; then
+    if [[ ! "$diagnostic_window_detail" =~ ^window_number=${expected_window_number}[[:space:]]frame=\([-0-9.]+,[[:space:]][-0-9.]+,[[:space:]][1-9][0-9.]*,[[:space:]][1-9][0-9.]*\)[[:space:]]focused=true[[:space:]]exact=true$ ]]; then
       echo "DMG install diagnostic-export ledger has an invalid exact-window proof" >&2
       return 1
     fi
@@ -851,7 +860,7 @@ require_install_ledger_semantics() {
     return 0
   fi
 
-  if [[ ! "$arguments_detail" =~ ^mode=$mode[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
+  if [[ ! "$arguments_detail" =~ ^mode=${mode}[[:space:]]pid=([1-9][0-9]*)[[:space:]]app=(/.*/Applications/NoonmarkDMGValidation\.app)$ ]]; then
     echo "DMG install $mode ledger has an invalid installed App arguments proof" >&2
     return 1
   fi
@@ -1385,7 +1394,7 @@ if [[ "$scope" == "full" ]]; then
     echo "release diagnostic closure manifest contains an unsafe inner manifest path" >&2
     exit 1
   fi
-  closure_inner_manifest="$repo_root/$closure_inner_manifest_relative"
+  closure_inner_manifest="$NOONMARK_BUILD_ROOT/$closure_inner_manifest_relative"
   require_file_sha256 \
     "$closure_manifest" \
     closure_e2e_manifest_sha256 \
@@ -1450,8 +1459,8 @@ if [[ "$scope" == "full" ]]; then
     echo "release diagnostic closure manifest contains an unsafe gate artifact path" >&2
     exit 1
   fi
-  closure_gate_log="$repo_root/$closure_gate_log_relative"
-  closure_gate_result="$repo_root/$closure_gate_result_relative"
+  closure_gate_log="$NOONMARK_BUILD_ROOT/$closure_gate_log_relative"
+  closure_gate_result="$NOONMARK_BUILD_ROOT/$closure_gate_result_relative"
   require_file_sha256 \
     "$closure_manifest" \
     gate_log_sha256 \
@@ -1487,15 +1496,15 @@ if [[ "$scope" == "full" ]]; then
     artifact_inventory_sha256 \
     "$closure_inventory" \
     "release diagnostic closure inventory"
-  evidence_verify_inventory "$repo_root" "$closure_inventory"
+  evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$closure_inventory"
   evidence_require_inventory_paths \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$closure_inventory" \
     "$closure_inner_manifest" \
-    "$repo_root/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt" \
+    "$NOONMARK_BUILD_ROOT/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt" \
     "$closure_gate_log" \
     "$closure_gate_result"
-  closure_restart_result_path="$repo_root/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt"
+  closure_restart_result_path="$NOONMARK_BUILD_ROOT/artifacts/release-diagnostic-closure-gate/e2e-diagnostic-closure/restart-result.txt"
   closure_restart_result_expected="$(
     evidence_read "$closure_manifest" closure_restart_result
   )"
@@ -1509,8 +1518,8 @@ if [[ "$scope" == "full" ]]; then
     exit 1
   fi
 
-  production_info_plist="$repo_root/dist/Noonmark.app/Contents/Info.plist"
-  validation_info_plist="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/Info.plist"
+  production_info_plist="$NOONMARK_BUILD_ROOT/dist/Noonmark.app/Contents/Info.plist"
+  validation_info_plist="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/Info.plist"
   for menu_identity_key in CFBundleName CFBundleDisplayName; do
     if ! production_menu_identity="$(
       /usr/libexec/PlistBuddy \
@@ -1582,7 +1591,7 @@ english_screenshot_oracle_args=()
 while IFS=$'\t' read -r \
   scenario scenario_binary recorded_screenshot_sha256 recorded_oracles \
   recorded_external_ax; do
-  screenshot_path="$repo_root/artifacts/e2e/${scenario}.png"
+  screenshot_path="$NOONMARK_BUILD_ROOT/artifacts/e2e/${scenario}.png"
   if [[ "$(evidence_expected_english_oracles "$scenario")" != \
     "$recorded_oracles" ]]; then
     echo "English E2E scenario has an unexpected oracle set: $scenario" >&2
@@ -1670,11 +1679,11 @@ require_file_sha256 \
   artifact_inventory_sha256 \
   "$lease_inventory" \
   "lease artifact inventory"
-evidence_verify_inventory "$repo_root" "$e2e_inventory"
-evidence_verify_inventory "$repo_root" "$lease_inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$e2e_inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$lease_inventory"
 e2e_required_inventory_output="$(
   development_validation_e2e_required_inventory_paths \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$e2e_evidence_absolute" \
     "$expected_english_scenarios"
 )" || {
@@ -1694,11 +1703,11 @@ if (( ${#e2e_required_inventory_paths[@]} == 0 )); then
   exit 1
 fi
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$e2e_inventory" \
   "${e2e_required_inventory_paths[@]}"
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$lease_inventory" \
   "$lease_evidence_absolute/summary.txt" \
   "$lease_evidence_absolute/unified.log" \
@@ -1992,15 +2001,15 @@ release_identity_provenance_relative="$(
   evidence_read "$package_manifest" release_identity_provenance_path
 )"
 evidence_verify_release_symbols \
-  "$repo_root" \
-  "$repo_root/$release_binary_relative" \
-  "$repo_root/$release_dsym_relative" \
+  "$NOONMARK_BUILD_ROOT" \
+  "$NOONMARK_BUILD_ROOT/$release_binary_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_relative" \
   "$package_manifest" \
   "release_symbols" \
-  "$repo_root/$release_dsym_inventory_relative"
+  "$NOONMARK_BUILD_ROOT/$release_dsym_inventory_relative"
 evidence_verify_release_identity_provenance \
-  "$repo_root" \
-  "$repo_root/$release_identity_provenance_relative" \
+  "$NOONMARK_BUILD_ROOT" \
+  "$NOONMARK_BUILD_ROOT/$release_identity_provenance_relative" \
   "$package_manifest" \
   release_identity
 require_equal_manifest_value \
@@ -2071,7 +2080,7 @@ require_file_sha256 \
   artifact_inventory_sha256 \
   "$install_inventory" \
   "install artifact inventory"
-validation_derivation_fragment="$repo_root/artifacts/dmg-install/dmg-validation-derivation.fragment"
+validation_derivation_fragment="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/dmg-validation-derivation.fragment"
 diagnostic_scope_relative="$(
   evidence_read "$install_manifest" diagnostic_scope_manifest_path
 )"
@@ -2085,8 +2094,8 @@ if ! require_safe_repo_relative_path "$diagnostic_scope_relative" ||
   echo "install manifest contains unsafe diagnostic scope evidence paths" >&2
   exit 1
 fi
-diagnostic_scope_manifest="$repo_root/$diagnostic_scope_relative"
-diagnostic_scope_stderr="$repo_root/$diagnostic_scope_stderr_relative"
+diagnostic_scope_manifest="$NOONMARK_BUILD_ROOT/$diagnostic_scope_relative"
+diagnostic_scope_stderr="$NOONMARK_BUILD_ROOT/$diagnostic_scope_stderr_relative"
 require_file_sha256 \
   "$install_manifest" \
   diagnostic_scope_manifest_sha256 \
@@ -2127,7 +2136,7 @@ diagnostic_export_ledger="$(
 diagnostic_export_helper_observer_gate="$(
   diagnostic_scope_manifest_value "$diagnostic_scope_manifest" start_gate
 )"
-diagnostic_work_root="$repo_root/artifacts/dmg-install"
+diagnostic_work_root="$NOONMARK_BUILD_ROOT/artifacts/dmg-install"
 installed_bundle_path="$diagnostic_work_root/Applications/NoonmarkDMGValidation.app"
 diagnostic_control_dir="${diagnostic_export_ledger%/*}"
 diagnostic_data_root="${diagnostic_scope_database%/*}"
@@ -2152,20 +2161,20 @@ for scoped_path in \
   "$diagnostic_export_sentinels" \
   "$diagnostic_export_ledger" \
   "$diagnostic_export_helper_observer_gate"; do
-  scoped_relative="${scoped_path#${repo_root}/}"
+  scoped_relative="${scoped_path#${NOONMARK_BUILD_ROOT}/}"
   if [[ "$scoped_relative" == "$scoped_path" ]] ||
     ! require_safe_repo_relative_path "$scoped_relative"; then
-    echo "diagnostic scope contains a non-repository artifact path" >&2
+    echo "diagnostic scope contains a artifact path outside the build workspace" >&2
     exit 1
   fi
 done
-diagnostic_export_relative="${diagnostic_export_path#${repo_root}/}"
+diagnostic_export_relative="${diagnostic_export_path#${NOONMARK_BUILD_ROOT}/}"
 if [[ "$(evidence_read "$install_manifest" diagnostic_export_path)" != \
   "$diagnostic_export_relative" ]]; then
   echo "diagnostic export manifest path disagrees with canonical scope" >&2
   exit 1
 fi
-diagnostic_helper_executable="$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
+diagnostic_helper_executable="$NOONMARK_BUILD_ROOT/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness"
 diagnostic_scope_helper_sha="$(
   evidence_read "$install_manifest" diagnostic_scope_helper_binary_sha256
 )"
@@ -2176,16 +2185,16 @@ if [[ "$diagnostic_scope_helper_sha" != \
   echo "diagnostic scope was not emitted by the archived helper binary" >&2
   exit 1
 fi
-diagnostic_export_launch="$repo_root/artifacts/dmg-install/diagnostic-export-launch.log"
-diagnostic_export_helper="$repo_root/artifacts/dmg-install/diagnostic-export-helper.log"
-diagnostic_export_helper_stderr="$repo_root/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
-diagnostic_export_helper_launch="$repo_root/artifacts/dmg-install/diagnostic-export-helper-launch.log"
-diagnostic_export_helper_observer="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
-diagnostic_export_helper_exit_status="$repo_root/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt"
-diagnostic_export_console="$repo_root/artifacts/dmg-install/diagnostic-export-console.log"
-diagnostic_export_screenshot="$repo_root/artifacts/dmg-install/installed-diagnostic-export.png"
-diagnostic_export_window_metadata="$repo_root/artifacts/dmg-install/installed-diagnostic-export-window.txt"
-diagnostic_export_package_report="$repo_root/artifacts/dmg-install/diagnostic-export-package.txt"
+diagnostic_export_launch="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-launch.log"
+diagnostic_export_helper="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-helper.log"
+diagnostic_export_helper_stderr="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-helper-stderr.log"
+diagnostic_export_helper_launch="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-helper-launch.log"
+diagnostic_export_helper_observer="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-helper-exit-observer.log"
+diagnostic_export_helper_exit_status="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-helper-exit-status.txt"
+diagnostic_export_console="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-console.log"
+diagnostic_export_screenshot="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-diagnostic-export.png"
+diagnostic_export_window_metadata="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-diagnostic-export-window.txt"
+diagnostic_export_package_report="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostic-export-package.txt"
 require_file_sha256 \
   "$install_manifest" \
   validation_derivation_fragment_sha256 \
@@ -2208,7 +2217,7 @@ for derivation_key in \
     "$derivation_key" \
     "validation derivation fragment $derivation_key"
 done
-evidence_verify_inventory "$repo_root" "$install_inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$install_inventory"
 IFS=$'\t' read -r \
   diagnostic_inventory_count \
   diagnostic_inventory_digest \
@@ -2231,27 +2240,27 @@ if [[ "$diagnostic_inventory_count" != "1" ||
   exit 1
 fi
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$install_inventory" \
-  "$repo_root/dist/Noonmark.dmg" \
-  "$repo_root/dist/Noonmark.dmg.sha256" \
-  "$repo_root/dist/Noonmark.dmg.manifest" \
-  "$repo_root/dist/Noonmark.dmg.inventory.sha256" \
-  "$repo_root/$release_dsym_dwarf_relative" \
-  "$repo_root/$release_dsym_inventory_relative" \
-  "$repo_root/$release_identity_provenance_relative" \
-  "$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg.sha256" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg.manifest" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg.inventory.sha256" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_dwarf_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_inventory_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_identity_provenance_relative" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app/Contents/MacOS/NoonmarkMacAppDMGValidation" \
   "$validation_derivation_fragment" \
-  "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
   "$diagnostic_scope_manifest" \
   "$diagnostic_scope_stderr" \
-  "$repo_root/artifacts/dmg-install/installed-day.png" \
-  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
-  "$repo_root/artifacts/dmg-install/installed-restart.png" \
-  "$repo_root/artifacts/dmg-install/installed-exercise-window.txt" \
-  "$repo_root/artifacts/dmg-install/installed-restart-window.txt" \
-  "$repo_root/artifacts/dmg-install/exercise-console.log" \
-  "$repo_root/artifacts/dmg-install/restart-console.log" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-day.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-restart.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-exercise-window.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-restart-window.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/exercise-console.log" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/restart-console.log" \
   "$diagnostic_export_path" \
   "$diagnostic_export_ledger" \
   "$diagnostic_export_launch" \
@@ -2266,31 +2275,31 @@ evidence_require_inventory_paths \
   "$diagnostic_export_window_metadata" \
   "$diagnostic_export_sentinels" \
   "$diagnostic_export_package_report" \
-  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv" \
-  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
-  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
-  "$repo_root/artifacts/dmg-install/task-identity.tsv" \
-  "$repo_root/artifacts/dmg-install/task-row-before-restart.txt" \
-  "$repo_root/artifacts/dmg-install/task-row-after-restart.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-baseline.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-final.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/noonmark-diff.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/harness-baseline.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/harness-final.txt" \
-  "$repo_root/artifacts/dmg-install/diagnostics/harness-diff.txt"
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/permission-preflight-ledger.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/exercise-ledger.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/restart-ledger.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-identity.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-row-before-restart.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-row-after-restart.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/noonmark-baseline.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/noonmark-final.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/noonmark-diff.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/harness-baseline.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/harness-final.txt" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/diagnostics/harness-diff.txt"
 require_png_evidence \
-  "$repo_root/artifacts/dmg-install/installed-day.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-day.png" \
   "installed App initial screenshot"
 require_png_evidence \
-  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-exercise-before-input.png" \
   "installed App exercise screenshot"
 require_png_evidence \
-  "$repo_root/artifacts/dmg-install/installed-restart.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-restart.png" \
   "installed App restart screenshot"
 require_png_evidence \
   "$diagnostic_export_screenshot" \
   "installed App diagnostic export screenshot"
-installed_bundle_path="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
+installed_bundle_path="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
 installed_executable_path="$(evidence_read "$install_manifest" validation_executable)"
 validation_bundle_identifier="$(
   evidence_read "$install_manifest" validation_bundle_identifier
@@ -2303,28 +2312,28 @@ if [[ "$installed_executable_path" != \
 fi
 require_install_ledger_semantics \
   preflight \
-  "$repo_root/artifacts/dmg-install/permission-preflight-ledger.tsv"
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/permission-preflight-ledger.tsv"
 require_install_ledger_semantics \
   exercise \
-  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv"
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/exercise-ledger.tsv"
 require_install_ledger_semantics \
   restart \
-  "$repo_root/artifacts/dmg-install/restart-ledger.tsv"
-exercise_window_metadata="$repo_root/artifacts/dmg-install/installed-exercise-window.txt"
-restart_window_metadata="$repo_root/artifacts/dmg-install/installed-restart-window.txt"
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/restart-ledger.tsv"
+exercise_window_metadata="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-exercise-window.txt"
+restart_window_metadata="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-restart-window.txt"
 require_install_window_metadata \
   exercise \
   "$exercise_window_metadata" \
-  "$repo_root/artifacts/dmg-install/exercise-ledger.tsv" \
-  "$repo_root/artifacts/dmg-install/installed-exercise-before-input.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/exercise-ledger.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-exercise-before-input.png" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
   "$validation_bundle_identifier"
 require_install_window_metadata \
   restart \
   "$restart_window_metadata" \
-  "$repo_root/artifacts/dmg-install/restart-ledger.tsv" \
-  "$repo_root/artifacts/dmg-install/installed-restart.png" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/restart-ledger.tsv" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/installed-restart.png" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
   "$validation_bundle_identifier"
@@ -2360,7 +2369,7 @@ diagnostic_natural_day="$(
 )"
 require_install_process_log \
   exercise \
-  "$repo_root/artifacts/dmg-install/exercise-console.log" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/exercise-console.log" \
   "$(evidence_read "$exercise_window_metadata" pid)" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
@@ -2370,7 +2379,7 @@ require_install_process_log \
   "$(evidence_read "$install_manifest" finished_at)"
 require_install_process_log \
   restart \
-  "$repo_root/artifacts/dmg-install/restart-console.log" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/restart-console.log" \
   "$(evidence_read "$restart_window_metadata" pid)" \
   "$installed_bundle_path" \
   "$installed_executable_path" \
@@ -2405,7 +2414,7 @@ require_diagnostic_export_package \
   "$diagnostic_export_window_metadata" \
   "$diagnostic_export_console" \
   "$diagnostic_export_relative"
-task_identity="$repo_root/artifacts/dmg-install/task-identity.tsv"
+task_identity="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-identity.tsv"
 require_install_task_identity "$task_identity"
 independent_task_identity="$(tail -n 1 "$task_identity")"
 IFS=$'\t' read -r \
@@ -2415,8 +2424,8 @@ if [[ "$independent_task_day" != "$exercise_natural_day" ]] ||
   echo "installed task natural day disagrees with archived window evidence" >&2
   exit 1
 fi
-task_snapshot_before="$repo_root/artifacts/dmg-install/task-row-before-restart.txt"
-task_snapshot_after="$repo_root/artifacts/dmg-install/task-row-after-restart.txt"
+task_snapshot_before="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-row-before-restart.txt"
+task_snapshot_after="$NOONMARK_BUILD_ROOT/artifacts/dmg-install/task-row-after-restart.txt"
 require_install_task_snapshot \
   "$task_snapshot_before" \
   "installed task snapshot before restart" \
@@ -2432,17 +2441,17 @@ fi
 require_preserved_bundle \
   "$package_manifest" \
   app \
-  "$repo_root/dist/Noonmark.app" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.app" \
   "package App"
 require_preserved_bundle \
   "$install_manifest" \
   installed_app \
-  "$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app" \
   "validation App"
 require_preserved_bundle \
   "$install_manifest" \
   helper \
-  "$repo_root/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app" \
+  "$NOONMARK_BUILD_ROOT/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app" \
   "install helper"
 
 dmg_path="$(evidence_read "$package_manifest" dmg_path)"
@@ -2450,7 +2459,7 @@ if ! require_safe_repo_relative_path "$dmg_path"; then
   echo "package manifest contains an unsafe DMG path" >&2
   exit 1
 fi
-dmg_absolute="${repo_root}/${dmg_path}"
+dmg_absolute="${NOONMARK_BUILD_ROOT}/${dmg_path}"
 checksum_absolute="${dmg_absolute}.sha256"
 package_inventory="${dmg_absolute}.inventory.sha256"
 require_file_sha256 \
@@ -2468,21 +2477,21 @@ require_file_sha256 \
   artifact_inventory_sha256 \
   "$package_inventory" \
   "package artifact inventory"
-evidence_verify_inventory "$repo_root" "$package_inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$package_inventory"
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$package_inventory" \
-  "$repo_root/dist/Noonmark.dmg" \
-  "$repo_root/dist/Noonmark.dmg.sha256" \
-  "$repo_root/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
-  "$repo_root/$release_dsym_dwarf_relative" \
-  "$repo_root/$release_dsym_inventory_relative" \
-  "$repo_root/$release_identity_provenance_relative"
-if ! (cd "$repo_root" && shasum -a 256 -c "${dmg_path}.sha256" >/dev/null); then
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.dmg.sha256" \
+  "$NOONMARK_BUILD_ROOT/dist/Noonmark.app/Contents/MacOS/NoonmarkMacApp" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_dwarf_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_dsym_inventory_relative" \
+  "$NOONMARK_BUILD_ROOT/$release_identity_provenance_relative"
+if ! (cd "$(dirname "$dmg_absolute")" && shasum -a 256 -c "$(basename "$dmg_absolute").sha256" >/dev/null); then
   echo "packaged DMG does not match its checksum file" >&2
   exit 1
 fi
-if ! scripts/verify-dmg "$dmg_path" >/dev/null; then
+if ! scripts/verify-dmg "$dmg_absolute" >/dev/null; then
   echo "packaged DMG failed fresh mounted verification" >&2
   exit 1
 fi

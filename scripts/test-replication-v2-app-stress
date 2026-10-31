@@ -6,11 +6,16 @@ cd "$repo_root"
 
 export NOONMARK_LIVE_ICLOUD_SYNC=1
 scripts/test-icloud-append-only-guard
+
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 source scripts/runtime-profile-common
 
 backup_path="${NOONMARK_REPLICATION_V2_STRESS_BACKUP:-}"
 noonmark_runtime_profile_load e2e
-app_path="dist/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
+app_path="${NOONMARK_DIST_DIR}/${NOONMARK_RUNTIME_APP_BUNDLE_NAME}.app"
 app_process="${NOONMARK_RUNTIME_PROCESS_NAME}"
 provisioning_profile="${NOONMARK_PROVISIONING_PROFILE:-}"
 temporary_base="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
@@ -79,7 +84,7 @@ fi
 
 NOONMARK_REPLICATION_V2_STRESS_BACKUP="$backup_path" \
   NOONMARK_REPLICATION_V2_STRESS_TODAY="$stress_natural_day" \
-  swift test \
+  noonmark_swift test \
     --filter ReplicationV2BackupDomainStressTests/testMixedDomainMutationsRemainValidAfterBackupImportAndV2Cutover
 
 /bin/cp -X "$backup_path" "$backup_fixture"
@@ -251,7 +256,7 @@ NOONMARK_LIVE_ICLOUD_SYNC=1 \
   NOONMARK_REPLICATION_V2_STRESS_SOURCE_DATABASE="$icloud_database_path" \
   NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID="$icloud_session_id" \
   NOONMARK_ICLOUD_APPEND_ONLY_ROUND_ID="$icloud_round_id" \
-  swift test --skip-build --filter \
+  noonmark_swift test --skip-build --filter \
     ICloudDriveLocalFirstSyncLiveTests/testStressRoundConvergesIntoIndependentSQLiteAndRestartsWithoutReplay
 
 echo "Replication V2 signed App import/mutation/restart and secondary SQLite iCloud convergence gate passed"

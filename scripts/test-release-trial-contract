@@ -31,8 +31,8 @@ for required in \
   'scripts/test-release-diagnostic-closure' \
   'scripts/test-tencent-ime-release-smoke release' \
   'scripts/package-dmg release' \
-  'scripts/verify-dmg dist/Noonmark.dmg' \
-  'scripts/test-dmg-install dist/Noonmark.dmg' \
+  'scripts/verify-dmg "$NOONMARK_DIST_DIR/Noonmark.dmg"' \
+  'scripts/test-dmg-install "$NOONMARK_DIST_DIR/Noonmark.dmg"' \
   'scripts/verify-development-validation-evidence --scope full' \
   'scripts/publish-trial-dmg' \
   '"$package_manifest_sha256"'; do
@@ -63,12 +63,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 entry_fixture="$fixture_root/entry"
-mkdir -p "$entry_fixture/scripts" "$entry_fixture/dist"
+entry_build="$fixture_root/build"
+mkdir -p "$entry_fixture/scripts" "$entry_build/dist"
+cp scripts/build-workspace-common "$entry_fixture/scripts/"
+export NOONMARK_BUILD_ROOT="$entry_build"
 cp "$release_script" "$entry_fixture/scripts/"
 : >"$entry_fixture/scripts/evidence-common"
-printf '%s\n' 'suite=package-dmg' >"$entry_fixture/dist/Noonmark.dmg.manifest"
+printf '%s\n' 'suite=package-dmg' >"$entry_build/dist/Noonmark.dmg.manifest"
 package_manifest_sha256="$(
-  shasum -a 256 "$entry_fixture/dist/Noonmark.dmg.manifest" | awk '{print $1}'
+  shasum -a 256 "$entry_build/dist/Noonmark.dmg.manifest" | awk '{print $1}'
 )"
 stub_commands=(
   verify-release-trial-version
@@ -124,11 +127,11 @@ printf '%s\n' \
   'test-tencent-ime-release-smoke release' \
   'verify-tencent-ime-release-smoke-evidence' \
   'package-dmg release' \
-  'verify-dmg dist/Noonmark.dmg' \
-  'test-dmg-install dist/Noonmark.dmg' \
+  "verify-dmg $entry_build/dist/Noonmark.dmg" \
+  "test-dmg-install $entry_build/dist/Noonmark.dmg" \
   'verify-development-validation-evidence --scope full' \
   'verify-release-trial-version' \
-  "publish-trial-dmg $entry_fixture/dist/Noonmark.dmg $entry_fixture/dist/Noonmark.dmg.manifest $package_manifest_sha256 $trial_output" \
+  "publish-trial-dmg $entry_build/dist/Noonmark.dmg $entry_build/dist/Noonmark.dmg.manifest $package_manifest_sha256 $trial_output" \
   >"$expected_trial_trace"
 if ! cmp -s "$expected_trial_trace" "$trial_trace"; then
   diff -u "$expected_trial_trace" "$trial_trace" >&2 || true
@@ -152,8 +155,8 @@ printf '%s\n' \
   'test-tencent-ime-release-smoke release' \
   'verify-tencent-ime-release-smoke-evidence' \
   'package-dmg release' \
-  'verify-dmg dist/Noonmark.dmg' \
-  'test-dmg-install dist/Noonmark.dmg' \
+  "verify-dmg $entry_build/dist/Noonmark.dmg" \
+  "test-dmg-install $entry_build/dist/Noonmark.dmg" \
   'verify-development-validation-evidence --scope full' \
   >"$expected_tagged_trace"
 if ! cmp -s "$expected_tagged_trace" "$tagged_trace"; then
@@ -167,7 +170,7 @@ if (
   NOONMARK_EVIDENCE_RUN_ID=mutated-fixture \
     NOONMARK_TRIAL_TRACE="$mutated_trace" \
     NOONMARK_MUTATE_PACKAGE_MANIFEST=1 \
-    NOONMARK_PACKAGE_MANIFEST="$entry_fixture/dist/Noonmark.dmg.manifest" \
+    NOONMARK_PACKAGE_MANIFEST="$entry_build/dist/Noonmark.dmg.manifest" \
     scripts/release-private-dmg --trial "$trial_output" >/dev/null 2>&1
 ); then
   fail "trial mode accepted a package manifest changed by the full verifier"

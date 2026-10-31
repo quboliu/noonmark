@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
@@ -14,7 +18,7 @@ window_number="${3:-}"
 window_title="${4:-}"
 expectations_path="${5:-}"
 evidence_dir="${6:-}"
-helper_app="${repo_root}/artifacts/dmg-install-harness/NoonmarkDMGInstallHarness.app"
+helper_app="${NOONMARK_ARTIFACTS_DIR}/dmg-install-harness/NoonmarkDMGInstallHarness.app"
 helper_executable="${helper_app}/Contents/MacOS/NoonmarkDMGInstallHarness"
 mode="e2e-inspect"
 helper_pid=""

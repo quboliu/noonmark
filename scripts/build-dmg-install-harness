@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 source scripts/codesign-common
 
 configuration="${1:-debug}"
 product="NoonmarkDMGInstallHarness"
 bundle_identifier="app.noonmark.test.dmg-install-harness"
 executable_name="NoonmarkDMGInstallHarness"
-bundle_dir="artifacts/dmg-install-harness/${executable_name}.app"
+bundle_dir="${NOONMARK_ARTIFACTS_DIR}/dmg-install-harness/${executable_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 codesign_identity="${NOONMARK_CODESIGN_IDENTITY:-}"
@@ -29,15 +32,12 @@ noonmark_resolve_codesign_identity \
 codesign_identity="$NOONMARK_RESOLVED_CODESIGN_IDENTITY"
 stable_codesigning_enabled="$NOONMARK_STABLE_CODESIGNING_ENABLED"
 
-swift build -c "$configuration" --product "$product"
+noonmark_swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir"
 mkdir -p "$macos_dir"
 
-binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
-if [[ ! -x "$binary_path" ]]; then
-  binary_path=".build/${configuration}/${product}"
-fi
+binary_path="$(noonmark_swift build -c "$configuration" --show-bin-path)/${product}"
 if [[ ! -x "$binary_path" ]]; then
   echo "built harness executable was not found: $binary_path" >&2
   exit 1

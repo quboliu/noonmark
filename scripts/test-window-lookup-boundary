@@ -5,10 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 verifier="$repo_root/scripts/verify-window-lookup-boundary"
-debug_root="$repo_root/.build/arm64-apple-macosx/debug"
-if [[ ! -x "$debug_root/NoonmarkMacApp" ]]; then
-  debug_root="$repo_root/.build/debug"
-fi
+debug_root="$(scripts/swiftpm build -c debug --show-bin-path)"
 app_binary="$debug_root/NoonmarkMacApp"
 helper_binary="$debug_root/NoonmarkDMGInstallHarness"
 probe_binary="$debug_root/NoonmarkWindowProbe"

@@ -47,7 +47,7 @@
 ### 原生 macOS 开发
 
 - 基础环境：macOS，完整 Xcode 或能提供 XCTest 的有效 Apple developer toolchain。
-- 本机构建、打包、测试与开发 fixture 的真实内容统一位于 `/home/muxunting/WorkSpace/BUILD/projs/noonmark/`。Aranya 仓库内禁止创建 `.build/`、`.swiftpm/`、`DerivedData/`、`artifacts/`、`dist/` 的真实目录，也禁止用指向 BUILD 的兼容软链接占位；BUILD 内同样禁止放置 Noonmark 源码副本或 Git worktree。SwiftPM 命令必须显式传 `--scratch-path`，其他脚本必须通过统一外置路径变量直接读写 BUILD；尚未完成参数化的旧入口不得运行。任务涉及 BUILD 时同时读取 `/home/muxunting/WorkSpace/BUILD/AGENTS.md`。
+- 原生编译、打包与验证产物统一使用 `NOONMARK_BUILD_ROOT`，默认 `$HOME/BUILD/projs/noonmark`；旧 Aranya 环境显式设置为原有外置 BUILD 目录。配置与迁移契约见 `docs/engineering/native-build-workspace.md`。Aranya 仓库内禁止创建 `.build/`、`.swiftpm/`、`DerivedData/`、`artifacts/`、`dist/` 的真实目录，也禁止用指向 BUILD 的兼容软链接占位；BUILD 内同样禁止放置 Noonmark 源码副本或 Git worktree。SwiftPM 命令必须显式传 `--scratch-path`，其他脚本必须通过统一外置路径变量直接读写 BUILD；尚未完成参数化的旧入口不得运行。任务涉及已有 BUILD 目录时，同时读取该目录实际存在的 `AGENTS.md`。
 - 本机已确认 `xcode-select -p` 指向 `/Applications/Xcode-26.2.0.app/Contents/Developer`。
 - 本机已确认 `xcodebuild -version` 输出 Xcode 26.2，`swift --version` 输出 Apple Swift 6.2.3；项目声明仍以 `Package.swift` 的 Swift tools 6.0 为准。
 - 本机已确认 `xcrun --find xctest` 和 `xcrun --find simctl` 可用。

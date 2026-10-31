@@ -103,11 +103,7 @@ private struct LedgerFixture {
     let ledgerURL: URL
 
     init() throws {
-        root = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(".build/test-fixtures", isDirectory: true)
+        root = HarnessTestWorkspace.fixtureRoot
         .appendingPathComponent(
             "noonmark-bound-ledger-\(UUID().uuidString)",
             isDirectory: true

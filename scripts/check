@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 
-check_evidence_dir="artifacts/audit-final/make-check"
+check_evidence_dir="${NOONMARK_ARTIFACTS_DIR}/audit-final/make-check"
 check_log="${check_evidence_dir}/make-check.log"
 check_manifest="${check_evidence_dir}/manifest.txt"
 check_inventory="${check_evidence_dir}/artifact-inventory.sha256"
@@ -16,7 +19,7 @@ source_end_fragment="${check_evidence_dir}/source-end.fragment"
 evidence_run_id="${NOONMARK_EVIDENCE_RUN_ID:-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
 
 # A failed preflight must replace, not preserve, an older successful report.
-evidence_prepare_fresh_directory "$repo_root" "$check_evidence_dir"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$check_evidence_dir"
 evidence_capture_source "$repo_root" source "$source_start_fragment"
 evidence_begin_manifest \
   "$check_manifest" \
@@ -45,12 +48,18 @@ run_check_suite() {
   echo "==> Pinned SwiftFormat"
   "$(scripts/install-pinned-swiftformat)" --version
 
+  echo "==> External build workspace"
+  scripts/test-build-workspace
+
+  echo "==> App icon presentation"
+  scripts/test-app-icon-presentation
+
   echo "==> App icon"
   scripts/test-app-icon
 
   echo "==> Swift build"
   scripts/reset-dev-data audit
-  swift build
+  scripts/swiftpm build
 
   echo "==> Window lookup binary boundary"
   scripts/test-window-lookup-boundary
@@ -249,13 +258,13 @@ fi
 evidence_append \
   "$check_manifest" \
   "check_log_path" \
-  "$check_log" || suite_status=1
+  "${check_log#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
 evidence_append \
   "$check_manifest" \
   "check_log_sha256" \
   "$(shasum -a 256 "$check_log" | awk '{print $1}')" || suite_status=1
 if evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$check_inventory" \
   "$check_log" \
   "$source_start_fragment" \

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# 所有原生构建产物使用同一个外置根；源码与证据约束根保持分离。
+
+noonmark_build_workspace_init() {
+  NOONMARK_SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" || return 1
+  local requested="${NOONMARK_BUILD_ROOT-${HOME:?}/BUILD/projs/noonmark}"
+  local component current="" path
+  local components=()
+  case "$requested" in
+    /*) ;;
+    *) echo "NOONMARK_BUILD_ROOT must be an absolute external directory" >&2; return 1 ;;
+  esac
+  case "$requested" in
+    / | */ | *//* | *$'\n'* | *$'\r'*)
+      echo "NOONMARK_BUILD_ROOT must be a canonical non-root directory" >&2; return 1 ;;
+  esac
+  case "/${requested#/}/" in
+    */../* | */./*) echo "NOONMARK_BUILD_ROOT must not contain traversal segments" >&2; return 1 ;;
+  esac
+  if [[ "$requested" == "$NOONMARK_SOURCE_ROOT" ||
+        "$requested" == "$NOONMARK_SOURCE_ROOT/"* ||
+        "$NOONMARK_SOURCE_ROOT" == "$requested/"* ]]; then
+    echo "NOONMARK_BUILD_ROOT must not overlap the source checkout" >&2
+    return 1
+  fi
+  # 先检查全部已有祖先，非法路径不应在失败前创建目录。
+  IFS='/' read -r -a components <<<"${requested#/}"
+  for component in "${components[@]}"; do
+    current="$current/$component"
+    if [[ -L "$current" || ( -e "$current" && ! -d "$current" ) ]]; then
+      echo "build workspace ancestor must be a real directory: $current" >&2
+      return 1
+    fi
+  done
+  mkdir -p "$requested" || return 1
+  [[ "$(cd "$requested" && pwd -P)" == "$requested" ]] || return 1
+  NOONMARK_BUILD_ROOT="$requested"
+  NOONMARK_DIST_DIR="$requested/dist"
+  NOONMARK_ARTIFACTS_DIR="$requested/artifacts"
+  NOONMARK_SCRATCH_DIR="$requested/swiftpm"
+  for path in "$NOONMARK_DIST_DIR" "$NOONMARK_ARTIFACTS_DIR" "$NOONMARK_SCRATCH_DIR" \
+    "$requested/cache" "$requested/config" "$requested/security" "$requested/tmp" \
+    "$requested/module-cache" "$requested/tools"; do
+    if [[ -L "$path" || ( -e "$path" && ! -d "$path" ) ]]; then
+      echo "build workspace child must be a real directory: $path" >&2
+      return 1
+    fi
+  done
+  mkdir -p "$NOONMARK_DIST_DIR" "$NOONMARK_ARTIFACTS_DIR" "$NOONMARK_SCRATCH_DIR" \
+    "$requested/cache" "$requested/config" "$requested/security" "$requested/tmp" \
+    "$requested/module-cache" "$requested/tools" || return 1
+  export NOONMARK_BUILD_ROOT NOONMARK_DIST_DIR NOONMARK_ARTIFACTS_DIR NOONMARK_SCRATCH_DIR
+  export TMPDIR="$requested/tmp/"
+  export CLANG_MODULE_CACHE_PATH="$requested/module-cache"
+  export SWIFTPM_MODULECACHE_OVERRIDE="$requested/module-cache"
+}
+
+noonmark_swift() {
+  local operation="${1:?SwiftPM operation is required}"
+  shift
+  case "$operation" in
+    build | test | run | package) ;;
+    *) echo "unsupported SwiftPM operation: $operation" >&2; return 1 ;;
+  esac
+  local argument
+  for argument in "$@"; do
+    case "$argument" in
+      --scratch-path* | --cache-path* | --config-path* | --security-path* | --package-path*)
+        echo "configure paths through NOONMARK_BUILD_ROOT, not SwiftPM overrides" >&2
+        return 1 ;;
+    esac
+  done
+  command swift "$operation" \
+    --package-path "$NOONMARK_SOURCE_ROOT" \
+    --scratch-path "$NOONMARK_SCRATCH_DIR" \
+    --cache-path "$NOONMARK_BUILD_ROOT/cache" \
+    --config-path "$NOONMARK_BUILD_ROOT/config" \
+    --security-path "$NOONMARK_BUILD_ROOT/security" "$@"
+}

@@ -26,6 +26,8 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Configure external build workspace
+        run: echo "NOONMARK_BUILD_ROOT=$RUNNER_TEMP/noonmark-build" >> "$GITHUB_ENV"
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -45,6 +47,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: check-evidence
-          path: artifacts/audit-final/make-check
+          path: ${{ runner.temp }}/noonmark-build/artifacts/audit-final/make-check
           if-no-files-found: error
           retention-days: 14

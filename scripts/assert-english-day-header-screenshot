@@ -19,7 +19,12 @@ if [[ ! "$expected_today_surface_count" =~ ^[0-9]+$ ]]; then
   exit 64
 fi
 
-NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+case "$screenshot" in
+  /*) ;;
+  *) screenshot="$PWD/$screenshot" ;;
+esac
+
+NOONMARK_E2E_OCR_IMAGE="$screenshot" \
   NOONMARK_E2E_EXPECTED_FULL_DATE="$expected_full_date" \
   NOONMARK_E2E_EXPECTED_TODAY_SURFACE_COUNT="$expected_today_surface_count" \
   swift -e '

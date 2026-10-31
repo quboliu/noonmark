@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+scripts/test-build-workspace-build
+
 scripts/test-unit
 scripts/test-integration
 scripts/test-replication-incomplete-local-view

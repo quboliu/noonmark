@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -15,7 +19,7 @@ if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
   exit 1
 fi
 
-manifest="${1:-artifacts/e2e-tencent-ime-release-smoke/manifest.txt}"
+manifest="${1:-${NOONMARK_ARTIFACTS_DIR}/e2e-tencent-ime-release-smoke/manifest.txt}"
 evidence_root="$(dirname "$manifest")"
 inventory="$evidence_root/artifact-inventory.sha256"
 
@@ -59,7 +63,7 @@ case "$input_source_available" in
     exit 1
     ;;
 esac
-result_path="$repo_root/$result_relative"
+result_path="$NOONMARK_BUILD_ROOT/$result_relative"
 
 for suffix in head_commit head_tree_oid worktree_tree_oid tree_dirty; do
   [[ "$(evidence_read "$manifest" "source_${suffix}")" == \
@@ -99,9 +103,9 @@ done
   echo "Tencent IME release inventory digest changed" >&2
   exit 1
 }
-evidence_verify_inventory "$repo_root" "$inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$inventory"
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$inventory" \
   "$result_path" \
   "$evidence_root/source-start.fragment" \

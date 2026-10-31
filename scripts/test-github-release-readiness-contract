@@ -219,7 +219,7 @@ require_order \
   'name: Checksum and release notes'
 rg -F 'scripts/generate-github-release-notes' "$workflow" >/dev/null ||
   fail "release workflow does not use the English notes generator"
-rg -F 'scripts/verify-github-release-language --file RELEASE_NOTES.md' \
+rg -F 'scripts/verify-github-release-language --file "$NOONMARK_BUILD_ROOT/RELEASE_NOTES.md"' \
   "$workflow" >/dev/null ||
   fail "release workflow does not fail closed on non-English notes"
 if rg -F '用户可见变化' "$workflow" >/dev/null; then

@@ -285,3 +285,9 @@ FAIL-2026-08-19-03	fast	scripts/test-live-icloud-reset-sentinel	scripts/check	�
 FAIL-2026-08-19-03	symptom	scripts/test-replication-v2-app-stress	scripts/test-replication-v2-real-validation	真实签名隔离 App 必须以 mode 级独立 data-root 在 live sentinel 保护的全新 append-only iCloud round 对旧随机 final marker 回报 exact divergent verdict、恰好一条 syncProtocol/443 失败诊断且 runtime／clean-cut／outbox／远端 inventory 零副作用，再以另一 round 验证 deterministic authority 收敛
 FAIL-2026-08-19-04	fast	scripts/test-replication-bootstrap-concurrency	scripts/test-replication-v2-recovery-contract	原生 Foundation presenter 的 no-op writer intent 与相同 marker version evidence 必须重新验证为 equivalent；真实不同 bytes 必须单调优先于后续 unavailable，post-snapshot 改写须被捕获，且 source contract 固定 final snapshot 与 presenter removal 位于同一个 coordinated read accessor
 FAIL-2026-08-19-04	symptom	scripts/test-icloud-append-only-symptom	scripts/test-icloud-sync-live	两个全新真实 iCloud round 必须均收敛且重启零重复 apply；正常 file coordination 事件不得误报 divergentMarkerVersion，后轮不得改变前轮 inventory 或 digest
+FAIL-2026-10-31-01	fast	scripts/test-build-workspace	scripts/check	拒绝源码重叠、穿越、符号链接与 builder 裸路径
+FAIL-2026-10-31-01	symptom	scripts/test-build-workspace-build	scripts/test-all	真实 App 和辅助工具构建且源码目录无产物
+FAIL-2026-10-31-01	release	scripts/test-build-workspace	scripts/package-dmg	发布前阻断旧 builder 路径回归
+FAIL-2026-10-31-02	fast	scripts/test-app-icon-presentation	scripts/check	精确比较系统呈现并拒绝错误图标
+FAIL-2026-10-31-02	symptom	scripts/test-app-icon-bundle	scripts/build-mac-app	真实 NSWorkspace 解析 development App 图标
+FAIL-2026-10-31-02	release	scripts/test-app-icon-bundle	scripts/verify-dmg	签名 bundle 保持规范 ICNS 与系统呈现一致

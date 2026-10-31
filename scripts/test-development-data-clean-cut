@@ -38,5 +38,5 @@ for forbidden in \
   fi
 done
 
-swift test --filter \
+scripts/swiftpm test --filter \
   'DataPackageTests/(testJSONDataPackageEncodesCurrentEnvelopeAndRoundTripsSnapshot|testJSONDataPackageRejectsPreviousV6Package)'

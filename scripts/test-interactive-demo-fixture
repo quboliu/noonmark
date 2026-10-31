@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
 source scripts/interactive-demo-screenshot-contract
 source scripts/runtime-evidence
 
 configuration="${1:-debug}"
-app_path="dist/NoonmarkDemo.app"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkDemo.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
 app_executable_name="NoonmarkMacAppDemo"
 
 scripts/reset-dev-data demo
 scripts/build-mac-app "$configuration" demo >/dev/null
-mkdir -p "$PWD/artifacts"
-test_root="$(mktemp -d "$PWD/artifacts/demo-fixture-test.XXXXXX")"
+mkdir -p "${NOONMARK_ARTIFACTS_DIR}"
+test_root="$(mktemp -d "${NOONMARK_ARTIFACTS_DIR}/demo-fixture-test.XXXXXX")"
 database_path="$test_root/Noonmark.sqlite"
 result_path="$test_root/fixture-manifest.json"
 app_log="$test_root/app.log"

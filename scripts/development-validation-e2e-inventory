@@ -7,7 +7,7 @@ development_validation_e2e_required_inventory_paths() {
     return 2
   fi
 
-  local validation_repo_root="${1%/}"
+  local validation_build_root="${1%/}"
   local validation_e2e_evidence_root="${2%/}"
   local validation_english_scenario_set="$3"
   local validation_relative_path
@@ -63,7 +63,7 @@ development_validation_e2e_required_inventory_paths() {
     artifacts/e2e-data-import-integrity/restart-result.txt \
     artifacts/e2e-data-import-integrity/state.json \
     artifacts/e2e-data-import-integrity/integrity-probe.txt; do
-    printf '%s/%s\n' "$validation_repo_root" "$validation_relative_path"
+    printf '%s/%s\n' "$validation_build_root" "$validation_relative_path"
   done
 
   IFS=, read -r -a validation_english_scenarios <<< \
@@ -78,7 +78,7 @@ development_validation_e2e_required_inventory_paths() {
       return 2
     fi
     printf '%s/artifacts/e2e/%s.png\n' \
-      "$validation_repo_root" \
+      "$validation_build_root" \
       "$validation_scenario"
   done
 
@@ -87,14 +87,14 @@ development_validation_e2e_required_inventory_paths() {
       "open-panel-protocol/${validation_interaction}.ready.json" \
       "open-panel-protocol/${validation_interaction}.completion.json"; do
       printf '%s/artifacts/e2e-data-import-ui/%s\n' \
-        "$validation_repo_root" \
+        "$validation_build_root" \
         "$validation_relative_path"
     done
     for validation_helper_file in \
       ledger.tsv stdout.log stderr.log open.log exit-observer-gate.txt \
       exit-observer.log exit-status.txt; do
       printf '%s/artifacts/e2e-data-import-ui/open-panel-helper-evidence/%s/%s\n' \
-        "$validation_repo_root" \
+        "$validation_build_root" \
         "$validation_interaction" \
         "$validation_helper_file"
     done
@@ -109,14 +109,14 @@ development_validation_e2e_required_inventory_paths() {
       "open-panel-protocol/${validation_interaction}.ready.json" \
       "open-panel-protocol/${validation_interaction}.completion.json"; do
       printf '%s/artifacts/e2e-data-import-integrity/%s\n' \
-        "$validation_repo_root" \
+        "$validation_build_root" \
         "$validation_relative_path"
     done
     for validation_helper_file in \
       ledger.tsv stdout.log stderr.log open.log exit-observer-gate.txt \
       exit-observer.log exit-status.txt; do
       printf '%s/artifacts/e2e-data-import-integrity/open-panel-helper-evidence/%s/%s\n' \
-        "$validation_repo_root" \
+        "$validation_build_root" \
         "$validation_interaction" \
         "$validation_helper_file"
     done

@@ -1044,7 +1044,7 @@ require_literal "$repo_root/scripts/test-dmg-install" \
 require_literal "$repo_root/Makefile" \
   $'build-app:\n\tscripts/build-mac-app debug development'
 require_literal "$repo_root/Makefile" \
-  $'build:\n\tscripts/test-app-icon\n\tswift build'
+  $'build:\n\tscripts/build'
 forbid_literal "$repo_root/Makefile" 'RESET_PROFILE ?='
 require_literal "$repo_root/scripts/run-mac-app" \
   'scripts/reset-dev-data development'
@@ -1101,20 +1101,20 @@ scripts/test-e2e|scripts/reset-dev-data e2e
 scripts/test-e2e|app_bundle_name="NoonmarkE2E"
 scripts/test-e2e|app-snapshot/NoonmarkE2E.app
 scripts/test-ai-provider-live|scripts/reset-dev-data e2e
-scripts/test-ai-provider-live|app_path="dist/NoonmarkE2E.app"
+scripts/test-ai-provider-live|app_path="${NOONMARK_DIST_DIR}/NoonmarkE2E.app"
 scripts/test-icloud-sync-live|scripts/test-icloud-append-only-guard
 scripts/test-icloud-sync-live|scripts/test-icloud-append-only-symptom
 scripts/test-icloud-append-only-symptom|NOONMARK_ICLOUD_APPEND_ONLY_SESSION_ID
 scripts/test-tencent-ime-input-latency|scripts/reset-dev-data e2e
-scripts/test-tencent-ime-input-latency|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-input-latency|${NOONMARK_DIST_DIR}/NoonmarkE2E.app
 scripts/test-tencent-ime-input-matrix|scripts/reset-dev-data e2e
-scripts/test-tencent-ime-input-matrix|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-input-matrix|${NOONMARK_DIST_DIR}/NoonmarkE2E.app
 scripts/test-tencent-ime-termination-persistence|scripts/reset-dev-data e2e
-scripts/test-tencent-ime-termination-persistence|dist/NoonmarkE2E.app
+scripts/test-tencent-ime-termination-persistence|${NOONMARK_DIST_DIR}/NoonmarkE2E.app
 scripts/test-data-root-process-lease-e2e|scripts/reset-dev-data e2e
-scripts/test-data-root-process-lease-e2e|dist/NoonmarkE2E.app
+scripts/test-data-root-process-lease-e2e|${NOONMARK_DIST_DIR}/NoonmarkE2E.app
 scripts/test-data-root-process-lease-e2e|app-snapshot/NoonmarkE2E.app
-scripts/test-interactive-app-launch|dist/NoonmarkDevelopment.app
+scripts/test-interactive-app-launch|${NOONMARK_DIST_DIR}/NoonmarkDevelopment.app
 CALLERS
 
 if /usr/bin/grep -Fq \

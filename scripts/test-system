@@ -2,4 +2,4 @@
 set -euo pipefail
 
 scripts/reset-dev-data audit
-swift test
+scripts/swiftpm test

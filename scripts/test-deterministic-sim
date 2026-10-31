@@ -2,4 +2,4 @@
 set -euo pipefail
 
 scripts/reset-dev-data audit
-ST_SIM_RUNS="${ST_SIM_RUNS:-64}" swift test --filter NoonmarkSimulationTests
+ST_SIM_RUNS="${ST_SIM_RUNS:-64}" scripts/swiftpm test --filter NoonmarkSimulationTests

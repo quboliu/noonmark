@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -12,7 +15,8 @@ fi
 # shellcheck source=scripts/evidence-common
 source scripts/evidence-common
 
-fixture_root="$repo_root/artifacts/evidence-contract-fixture-$$"
+fixture_root="$(mktemp -d "$TMPDIR/noonmark-evidence-contract.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
 trap 'rm -rf "$fixture_root"' EXIT
 
 evidence_root="$fixture_root/e2e-runtime"
@@ -24,7 +28,7 @@ printf 'stale\n' >"$evidence_root/stale.txt"
 # Public seam: every run must replace its evidence root and expose an
 # independently inspectable manifest/inventory. This fixture never builds or
 # launches Noonmark.
-evidence_prepare_fresh_directory "$repo_root" "$evidence_root"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$evidence_root"
 
 if [[ -e "$evidence_root/stale.txt" ]]; then
   echo "evidence_begin_run retained an artifact from an older run" >&2
@@ -43,7 +47,7 @@ evidence_begin_manifest \
 evidence_append_snapshot "$manifest" "$source_fragment"
 evidence_append "$manifest" "scenario_set" "english-day"
 evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$evidence_root/artifact-inventory.sha256" \
   "$evidence_root/actual"
 inventory_sha256="$(
@@ -94,12 +98,93 @@ mkdir -p "$evidence_root/multilink"
 printf 'transport-hardlink\n' >"$evidence_root/multilink/staged"
 ln "$evidence_root/multilink/staged" "$evidence_root/multilink/published"
 if evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$evidence_root/unsafe-inventory.sha256" \
   "$evidence_root/multilink" >/dev/null 2>&1; then
   echo "evidence inventory accepted a multi-link transport artifact" >&2
   exit 1
 fi
+
+# Exercise the OCR adapter boundary without image recognition or an App launch.
+# The fake interpreter reports the exact path handed to the real Swift OCR code.
+ocr_fixture="$fixture_root/OCR inputs"
+mkdir -p "$ocr_fixture/bin"
+printf 'fixture image\n' >"$ocr_fixture/header image.png"
+cat >"$ocr_fixture/bin/swift" <<'SWIFT_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$NOONMARK_E2E_OCR_IMAGE"
+SWIFT_STUB
+chmod +x "$ocr_fixture/bin/swift"
+for ocr_input in "$ocr_fixture/header image.png" "OCR inputs/header image.png"; do
+  observed_ocr_path="$(
+    cd "$fixture_root"
+    PATH="$ocr_fixture/bin:$PATH" \
+      bash "$repo_root/scripts/assert-english-day-header-screenshot" \
+      "$ocr_input" "30 September 2025" 1
+  )"
+  if [[ "$observed_ocr_path" != "$ocr_fixture/header image.png" ]]; then
+    echo "English header OCR adapter changed an absolute or relative image path" >&2
+    exit 1
+  fi
+done
+
+# The private temporary sync repository is an E2E runtime protocol, not a
+# build artifact. Exercise its real initializer against the real cleanup guard.
+{
+  grep '^diagnostic_closure_sync_root=' scripts/test-e2e
+  printf 'diagnostic_sync_cleanup_is_owned() {\n'
+  sed -n '/^  if \[\[ "$diagnostic_closure_sync_root" =~ /,+1p' scripts/test-e2e |
+    sed -e '1s/^  if /  /' -e 's/; then$//'
+  printf '}\n'
+} >"$fixture_root/diagnostic-sync-guard"
+(
+  source "$fixture_root/diagnostic-sync-guard"
+  diagnostic_sync_cleanup_is_owned
+  for rejected in \
+    "$NOONMARK_ARTIFACTS_DIR/e2e-diagnostic-closure-sync-$$" \
+    "/private/tmp/noonmark-e2e-diagnostic-closure-sync-invalid" \
+    "/private/tmp/noonmark-e2e-diagnostic-closure-sync-$$/child"; do
+    diagnostic_closure_sync_root="$rejected"
+    if diagnostic_sync_cleanup_is_owned; then
+      echo "diagnostic sync cleanup accepted a path outside its runtime protocol" >&2
+      exit 1
+    fi
+  done
+)
+
+# Execute the producer's actual helper diagnostic emission with a spaced root.
+# A fake append captures manifest values without starting the E2E application.
+awk '
+  /^    evidence_append/ { block = $0 ORS; next }
+  block != "" {
+    block = block $0 ORS
+    if ($0 !~ /\\$/) {
+      if (block ~ /"helper_diagnostic_(baseline|final|diff|result)_path"/) {
+        printf "%s", block
+        count++
+      }
+      block = ""
+    }
+  }
+  END { if (count != 4) exit 1 }
+' scripts/test-e2e >"$fixture_root/helper-diagnostic-emission"
+(
+  NOONMARK_BUILD_ROOT="$fixture_root/build root with spaces"
+  evidence_manifest="$fixture_root/helper-diagnostic-manifest"
+  helper_diagnostic_baseline="$NOONMARK_BUILD_ROOT/artifacts/e2e-runtime/helper-diagnostic-baseline.txt"
+  helper_diagnostic_result="$NOONMARK_BUILD_ROOT/artifacts/e2e-runtime/helper-diagnostic-result.txt"
+  suite_status=0
+  evidence_append() { printf '%s=%s\n' "$2" "$3" >>"$1"; }
+  source "$fixture_root/helper-diagnostic-emission"
+  [[ "$suite_status" == "0" ]]
+)
+cat >"$fixture_root/expected-helper-diagnostic-manifest" <<'EXPECTED_HELPER_PATHS'
+helper_diagnostic_baseline_path=artifacts/e2e-runtime/helper-diagnostic-baseline.txt
+helper_diagnostic_final_path=artifacts/e2e-runtime/helper-diagnostic-baseline.txt.current
+helper_diagnostic_diff_path=artifacts/e2e-runtime/helper-diagnostic-baseline.txt.new
+helper_diagnostic_result_path=artifacts/e2e-runtime/helper-diagnostic-result.txt
+EXPECTED_HELPER_PATHS
+cmp "$fixture_root/expected-helper-diagnostic-manifest" "$fixture_root/helper-diagnostic-manifest"
 
 require_literal() {
   local path="$1"
@@ -144,7 +229,7 @@ require_literal scripts/test-dmg-install 'pgrep -x "$helper_executable_name"'
 require_literal scripts/test-e2e "source scripts/evidence-common"
 require_order \
   scripts/test-e2e \
-  'evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"' \
+  'evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "${NOONMARK_ARTIFACTS_DIR}/e2e-runtime"' \
   'if ! command -v sqlite3'
 require_literal scripts/test-e2e "e2e_owned_artifact_roots=("
 if grep -F "e2e-data-root-process-lease" scripts/test-e2e >/dev/null; then
@@ -925,7 +1010,7 @@ require_literal scripts/test-e2e '--e2e-native-command-help-completion-url'
 require_literal scripts/test-e2e 'NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:english-native-commands'
 require_literal scripts/test-e2e '[[ "$only_mode" == "english-native-commands" ]]'
 require_literal scripts/test-e2e 'NOONMARK_E2E_NATIVE_COMMAND_STRESS_COUNT must be an integer from 1 through 32'
-require_literal scripts/test-e2e 'run_english_menu_probe "$PWD/$english_native_db"'
+require_literal scripts/test-e2e 'run_english_menu_probe "$english_native_db"'
 require_literal scripts/test-e2e 'helper_requested="$english_helper_requested"'
 native_command_exercise_function="$fixture_root/native-command-exercise.sh"
 sed -n \
@@ -1249,12 +1334,12 @@ require_literal scripts/test-e2e '"${helper_diagnostic_baseline}.current"'
 require_literal scripts/test-e2e '"${helper_diagnostic_baseline}.new"'
 require_order \
   scripts/test-dmg-install \
-  'evidence_prepare_fresh_directory "$repo_root" "$work_dir"' \
+  'evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$work_dir"' \
   'required_tools=('
 
 require_literal scripts/test-data-root-process-lease-e2e "source scripts/evidence-common"
 require_literal scripts/test-data-root-process-lease-e2e "source scripts/runtime-evidence"
-require_literal scripts/test-data-root-process-lease-e2e 'evidence_dir="artifacts/e2e-data-root-process-lease"'
+require_literal scripts/test-data-root-process-lease-e2e 'evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-root-process-lease"'
 require_literal scripts/test-data-root-process-lease-e2e "NOONMARK_EVIDENCE_RUN_ID"
 require_literal scripts/test-data-root-process-lease-e2e "intentional-termination-ledger.tsv"
 require_literal scripts/test-data-root-process-lease-e2e "phase=sigkill-holder"

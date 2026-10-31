@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 source scripts/app-icon-common
 source scripts/codesign-common
 source scripts/runtime-profile-common
@@ -56,7 +59,7 @@ bundle_name="$NOONMARK_RUNTIME_APP_BUNDLE_NAME"
 if [[ "$configuration" == "release" && "$profile" == "app" ]]; then
   evidence_require_clean_source "$(git rev-parse --show-toplevel)"
 fi
-bundle_dir="dist/${bundle_name}.app"
+bundle_dir="${NOONMARK_DIST_DIR}/${bundle_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
@@ -244,19 +247,16 @@ if [[ "$data_protection_keychain_signing_enabled" -eq 1 ]]; then
 fi
 
 scripts/test-app-icon
-swift build -c "$configuration" --product "$product"
+noonmark_swift build -c "$configuration" --product "$product"
 
 rm -rf "$bundle_dir" "$release_dsym_path"
 rm -f \
-  "dist/NoonmarkCloudKit.entitlements" \
+  "${NOONMARK_DIST_DIR}/NoonmarkCloudKit.entitlements" \
   "$release_dsym_inventory_path" \
   "$release_build_identity_path"
 mkdir -p "$macos_dir" "$resources_dir"
 
-binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
-if [[ ! -x "$binary_path" ]]; then
-  binary_path=".build/${configuration}/${product}"
-fi
+binary_path="$(noonmark_swift build -c "$configuration" --show-bin-path)/${product}"
 
 cp "$binary_path" "${macos_dir}/${executable_name}"
 chmod +x "${macos_dir}/${executable_name}"
@@ -396,7 +396,7 @@ if [[ "$cloudkit_signing_enabled" -eq 1 ]]; then
   /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string remote-notification" \
     "${contents_dir}/Info.plist"
   cp "$provisioning_profile" "${contents_dir}/embedded.provisionprofile"
-  entitlements_path="dist/NoonmarkCloudKit.entitlements"
+  entitlements_path="${NOONMARK_DIST_DIR}/NoonmarkCloudKit.entitlements"
   cat >"$entitlements_path" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -8,7 +12,7 @@ source scripts/runtime-evidence
 source scripts/evidence-common
 
 configuration="${1:-debug}"
-evidence_dir="artifacts/e2e-data-root-process-lease"
+evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-root-process-lease"
 same_root="${evidence_dir}/same-root"
 other_root="${evidence_dir}/other-root"
 unsafe_root="${evidence_dir}/unsafe-root"
@@ -200,7 +204,7 @@ finish_lease_evidence() {
   evidence_append \
     "$manifest" \
     "intentional_sigkill_report_path" \
-    "$sigkill_report" || suite_status=1
+    "${sigkill_report#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
   if [[ -s "$sigkill_report" ]]; then
     evidence_append \
       "$manifest" \
@@ -228,22 +232,22 @@ finish_lease_evidence() {
   evidence_append \
     "$manifest" \
     "diagnostic_baseline_path" \
-    "$diagnostic_baseline" || suite_status=1
+    "${diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
   evidence_append \
     "$manifest" \
     "diagnostic_final_path" \
-    "${diagnostic_baseline}.current" || suite_status=1
+    "${diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.current" || suite_status=1
   evidence_append \
     "$manifest" \
     "diagnostic_diff_path" \
-    "${diagnostic_baseline}.new" || suite_status=1
+    "${diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.new" || suite_status=1
   evidence_append \
     "$manifest" \
     "diagnostic_result_path" \
-    "$diagnostic_result" || suite_status=1
+    "${diagnostic_result#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
 
   if evidence_inventory \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$inventory" \
     "$same_root" \
     "$other_root" \
@@ -281,7 +285,7 @@ finish_lease_evidence() {
 }
 
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
-evidence_prepare_fresh_directory "$repo_root" "$evidence_dir"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$evidence_dir"
 mkdir -p "$same_root" "$other_root" "$unsafe_root"
 evidence_capture_source "$repo_root" "source" "$source_start_fragment"
 evidence_begin_manifest \
@@ -299,7 +303,7 @@ trap 'cleanup "$?"' EXIT
 
 scripts/reset-dev-data e2e
 scripts/build-mac-app "$configuration" e2e
-app_bundle="$repo_root/dist/NoonmarkE2E.app"
+app_bundle="${NOONMARK_DIST_DIR}/NoonmarkE2E.app"
 app_executable="$app_bundle/Contents/MacOS/NoonmarkMacAppE2E"
 evidence_capture_bundle "$app_bundle" 1 "app" "$app_start_fragment"
 evidence_append_snapshot "$manifest" "$app_start_fragment"
@@ -321,7 +325,7 @@ printf 'phase\tpid\tparent_pid\tsignal\treason\texpected_status\tobserved_status
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-probe-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$ephemeral_result" \
+  --e2e-data-root-process-lease-result-url "$ephemeral_result" \
   >"${evidence_dir}/ephemeral.log" 2>&1
 if [[ ! -f "$ephemeral_result" ]] \
   || [[ "$(<"$ephemeral_result")" != "ok" ]]; then
@@ -333,11 +337,11 @@ fi
 chmod 0777 "$unsafe_root"
 set +e
 "$app_executable" \
-  --data-url "$PWD/${unsafe_root}/Noonmark.sqlite" \
+  --data-url "${unsafe_root}/Noonmark.sqlite" \
   --page day \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
-  --e2e-data-root-process-lease-conflict-result-url "$PWD/$unexpected_result" \
+  --e2e-data-root-process-lease-conflict-result-url "$unexpected_result" \
   >"${unsafe_root}/unexpected.log" 2>&1
 unexpected_status=$?
 set -e
@@ -352,13 +356,13 @@ if [[ "$unexpected_status" -ne 70 ]] \
 fi
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-setup-zhulong-pending-gate \
-  --e2e-zhulong-pending-gate-result-url "$PWD/$setup_result" \
+  --e2e-zhulong-pending-gate-result-url "$setup_result" \
   >"${same_root}/setup.log" 2>&1
 if [[ ! -f "$setup_result" ]] || [[ "$(<"$setup_result")" != "ok" ]]; then
   echo "data-root lease fixture setup failed" >&2
@@ -376,14 +380,14 @@ if [[ -z "$session_file" ]]; then
 fi
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-hold-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$holder_result" \
-  --e2e-data-root-process-lease-release-url "$PWD/$holder_release" \
+  --e2e-data-root-process-lease-result-url "$holder_result" \
+  --e2e-data-root-process-lease-release-url "$holder_release" \
   >"${same_root}/holder.log" 2>&1 &
 holder_pid=$!
 if ! wait_for_value "$holder_result" "ready" "$holder_pid"; then
@@ -400,12 +404,12 @@ before_journal_sha256="$(shasum -a 256 "$journal" | awk '{print $1}')"
 before_session_sha256="$(shasum -a 256 "$session_file" | awk '{print $1}')"
 
 "$app_executable" \
-  --data-url "$PWD/${other_root}/Noonmark.sqlite" \
+  --data-url "${other_root}/Noonmark.sqlite" \
   --page day \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-probe-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$other_result" \
+  --e2e-data-root-process-lease-result-url "$other_result" \
   >"${other_root}/probe.log" 2>&1
 if [[ ! -f "$other_result" ]] || [[ "$(<"$other_result")" != "ok" ]]; then
   echo "different data roots did not run concurrently" >&2
@@ -414,12 +418,12 @@ if [[ ! -f "$other_result" ]] || [[ "$(<"$other_result")" != "ok" ]]; then
 fi
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
-  --e2e-data-root-process-lease-conflict-result-url "$PWD/$conflict_result" \
+  --e2e-data-root-process-lease-conflict-result-url "$conflict_result" \
   >"${same_root}/conflict.log" 2>&1 &
 conflict_pid=$!
 for _ in {1..60}; do
@@ -468,13 +472,13 @@ wait "$holder_pid"
 holder_pid=""
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-probe-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$reacquire_result" \
+  --e2e-data-root-process-lease-result-url "$reacquire_result" \
   >"${same_root}/reacquire.log" 2>&1
 if [[ ! -f "$reacquire_result" ]] || [[ "$(<"$reacquire_result")" != "ok" ]]; then
   echo "same root could not reacquire after the first App exited" >&2
@@ -483,14 +487,14 @@ if [[ ! -f "$reacquire_result" ]] || [[ "$(<"$reacquire_result")" != "ok" ]]; th
 fi
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-hold-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$sigkill_holder_result" \
-  --e2e-data-root-process-lease-release-url "$PWD/$sigkill_holder_release" \
+  --e2e-data-root-process-lease-result-url "$sigkill_holder_result" \
+  --e2e-data-root-process-lease-release-url "$sigkill_holder_release" \
   >"${same_root}/sigkill-holder.log" 2>&1 &
 holder_pid=$!
 if ! wait_for_value "$sigkill_holder_result" "ready" "$holder_pid"; then
@@ -537,13 +541,13 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 cp "$intentional_termination_ledger" "$sigkill_report"
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-probe-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$after_sigkill_result" \
+  --e2e-data-root-process-lease-result-url "$after_sigkill_result" \
   >"${same_root}/after-sigkill.log" 2>&1
 if [[ ! -f "$after_sigkill_result" ]] \
   || [[ "$(<"$after_sigkill_result")" != "ok" ]]; then
@@ -554,13 +558,13 @@ fi
 
 set +e
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-_exit-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$process_exit_result" \
+  --e2e-data-root-process-lease-result-url "$process_exit_result" \
   >"${same_root}/process-exit.log" 2>&1
 process_exit_status=$?
 set -e
@@ -573,13 +577,13 @@ if [[ "$process_exit_status" -ne 0 ]] \
 fi
 
 "$app_executable" \
-  --data-url "$PWD/$database" \
+  --data-url "$database" \
   --page zhulong \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-zhulong-sidecar-key \
   --e2e-probe-data-root-process-lease \
-  --e2e-data-root-process-lease-result-url "$PWD/$after_process_exit_result" \
+  --e2e-data-root-process-lease-result-url "$after_process_exit_result" \
   >"${same_root}/after-process-exit.log" 2>&1
 if [[ ! -f "$after_process_exit_result" ]] \
   || [[ "$(<"$after_process_exit_result")" != "ok" ]]; then

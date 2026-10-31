@@ -232,11 +232,7 @@ private struct DiagnosticFileFixture {
     let fileURL: URL
 
     init() throws {
-        root = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(".build/test-fixtures", isDirectory: true)
+        root = HarnessTestWorkspace.fixtureRoot
         .appendingPathComponent(
             "noonmark-diagnostic-file-\(UUID().uuidString)",
             isDirectory: true

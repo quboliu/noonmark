@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 configuration="${1:-debug}"
-probe_dir="$repo_root/artifacts/e2e-tencent-ime-input-latency"
+probe_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-tencent-ime-input-latency"
 database_path="$probe_dir/Noonmark.sqlite"
 result_path="$probe_dir/result.txt"
 app_log="$probe_dir/app.log"
-app_path="$repo_root/dist/NoonmarkE2E.app"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkE2E.app"
 
 case "$probe_dir" in
-  "$repo_root"/artifacts/e2e-tencent-ime-input-latency) ;;
+  "${NOONMARK_ARTIFACTS_DIR}"/e2e-tencent-ime-input-latency) ;;
   *)
     echo "unsafe Tencent IME probe directory: $probe_dir" >&2
     exit 1

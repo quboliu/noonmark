@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-app_path="$repo_root/dist/NoonmarkDevelopment.app"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkDevelopment.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDevelopment"
 launched_pid=""
 minimum_lifetime_ticks="${NOONMARK_INTERACTIVE_LAUNCH_MINIMUM_TICKS:-20}"
@@ -30,8 +34,8 @@ trap cleanup EXIT
 
 scripts/run-mac-app
 
-if [[ ! -f artifacts/interactive-provider-readiness.txt \
-  || "$(<artifacts/interactive-provider-readiness.txt)" != "ready" ]]; then
+if [[ ! -f "${NOONMARK_ARTIFACTS_DIR}/interactive-provider-readiness.txt" \
+  || "$(<"${NOONMARK_ARTIFACTS_DIR}/interactive-provider-readiness.txt")" != "ready" ]]; then
   echo "interactive launch did not expose a ready Provider configuration to the app" >&2
   exit 1
 fi

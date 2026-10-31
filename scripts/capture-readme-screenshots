@@ -10,6 +10,10 @@
 # any capture that still contains recognized Han text.
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
 source scripts/interactive-demo-screenshot-contract
@@ -35,9 +39,9 @@ case "$language" in
 esac
 
 configuration="debug"
-app_path="dist/NoonmarkDemo.app"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkDemo.app"
 app_executable="$app_path/Contents/MacOS/NoonmarkMacAppDemo"
-capture_root="$PWD/artifacts/readme-screenshots-$language"
+capture_root="${NOONMARK_ARTIFACTS_DIR}/readme-screenshots-$language"
 database_path="$capture_root/Noonmark.sqlite"
 result_path="$capture_root/fixture-manifest.json"
 bootstrap_log="$capture_root/provider-bootstrap.log"
@@ -58,7 +62,7 @@ cleanup_failed_capture() {
 trap cleanup_failed_capture EXIT
 
 case "$capture_root" in
-  "$PWD"/artifacts/readme-screenshots-zh | "$PWD"/artifacts/readme-screenshots-en) ;;
+  "${NOONMARK_ARTIFACTS_DIR}"/readme-screenshots-zh | "${NOONMARK_ARTIFACTS_DIR}"/readme-screenshots-en) ;;
   *)
     echo "unsafe README screenshot capture root: $capture_root" >&2
     exit 1

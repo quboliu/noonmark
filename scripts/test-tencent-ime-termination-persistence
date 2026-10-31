@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 configuration="${1:-debug}"
-artifact_root="$repo_root/artifacts/e2e-tencent-ime-termination"
-app_path="$repo_root/dist/NoonmarkE2E.app"
+artifact_root="${NOONMARK_ARTIFACTS_DIR}/e2e-tencent-ime-termination"
+app_path="${NOONMARK_DIST_DIR}/NoonmarkE2E.app"
 summary_path="$artifact_root/results.tsv"
 console_log="$artifact_root/runtime-console.log"
 surface_catalog="$repo_root/Tests/Fixtures/tencent-ime-input-surfaces.tsv"
 surface_total=0
 
 case "$artifact_root" in
-  "$repo_root"/artifacts/e2e-tencent-ime-termination) ;;
+  "${NOONMARK_ARTIFACTS_DIR}"/e2e-tencent-ime-termination) ;;
   *)
     echo "unsafe Tencent IME termination directory: $artifact_root" >&2
     exit 1

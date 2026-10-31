@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$repo_root/scripts/build-workspace-common"
+noonmark_build_workspace_init
+cd "$repo_root"
+source scripts/evidence-common
+source_snapshot_dir="$(mktemp -d "${TMPDIR}noonmark-build-source.XXXXXX")"
+trap 'rm -rf "$source_snapshot_dir"' EXIT
+evidence_capture_source "$repo_root" source "$source_snapshot_dir/before.fragment"
+source_tree_before="$(evidence_read "$source_snapshot_dir/before.fragment" source_worktree_tree_oid)"
+source_before="$(git status --porcelain --untracked-files=all)"
+for directory in .build .swiftpm DerivedData artifacts dist; do
+  [[ ! -e "$repo_root/$directory" && ! -L "$repo_root/$directory" ]] || {
+    echo "source checkout contains a generated output: $directory" >&2; exit 1;
+  }
+done
+scripts/test-build-workspace
+scripts/build --build-tests
+scripts/build-mac-app debug development
+scripts/build-dmg-install-harness debug
+scripts/build-window-probe debug
+for product in "$NOONMARK_DIST_DIR/NoonmarkDevelopment.app/Contents/MacOS/NoonmarkMacAppDevelopment" \
+  "$NOONMARK_ARTIFACTS_DIR/dmg-install-harness/NoonmarkDMGInstallHarness.app/Contents/MacOS/NoonmarkDMGInstallHarness" \
+  "$NOONMARK_ARTIFACTS_DIR/window-probe/NoonmarkWindowProbe"; do
+  [[ -x "$product" ]] || { echo "missing built executable: $product" >&2; exit 1; }
+done
+codesign --verify --strict "$NOONMARK_DIST_DIR/NoonmarkDevelopment.app"
+for directory in .build .swiftpm DerivedData artifacts dist; do
+  [[ ! -e "$repo_root/$directory" && ! -L "$repo_root/$directory" ]] || {
+    echo "build wrote into source checkout: $directory" >&2; exit 1;
+  }
+done
+evidence_capture_source "$repo_root" source "$source_snapshot_dir/after.fragment"
+source_tree_after="$(evidence_read "$source_snapshot_dir/after.fragment" source_worktree_tree_oid)"
+[[ "$source_tree_after" == "$source_tree_before" ]] || {
+  echo 'build changed source contents (worktree tree OID differs)' >&2; exit 1;
+}
+[[ "$(git status --porcelain --untracked-files=all)" == "$source_before" ]] || {
+  echo 'build changed the source checkout' >&2; exit 1;
+}
+printf 'Real build products are external; source checkout unchanged.\n'

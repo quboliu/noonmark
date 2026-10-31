@@ -8,7 +8,7 @@ cd "$repo_root"
 # merger 各 catch 点吞掉内部 typed 错误，导致无法定位被违反的合并规则。
 # 本契约强制：合并拒绝必须保留隐私安全 reason 并映射到稳定 250-259 子码；
 # 任何吞错点退回到无 reason 的 invalidCurrentRecordMerge 都会判红。
-swift test \
+scripts/swiftpm test \
   --filter DiagnosticFailureMappingTests \
   --filter testTransportBatchRejectsDivergentPreferenceWithSameVersion \
   --filter testTransportBatchRejectsDivergentPreferenceVersionAcrossEveryPermutation \

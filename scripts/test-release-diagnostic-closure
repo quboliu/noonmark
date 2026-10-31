@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 repo_parent="$(cd "$repo_root/.." && pwd -P)"
 cd "$repo_root"
@@ -15,8 +19,8 @@ fi
 evidence_relative="artifacts/release-diagnostic-closure-gate"
 # Delete stale PASS evidence before every precondition, including clean-tree
 # validation. A failed preflight must never leave an uploadable old success.
-evidence_prepare_fresh_directory "$repo_root" "$evidence_relative"
-evidence_root="$repo_root/$evidence_relative"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$evidence_relative"
+evidence_root="$NOONMARK_BUILD_ROOT/$evidence_relative"
 chmod 700 "$evidence_root"
 gate_log="$evidence_root/test-e2e.log"
 gate_result="$evidence_root/result.txt"
@@ -38,6 +42,7 @@ evidence_append_snapshot "$gate_manifest" "$source_start_fragment"
 source_commit="$(evidence_read "$gate_manifest" source_head_commit)"
 gate_parent=""
 gate_worktree=""
+gate_build_root=""
 worktree_added=0
 gate_status=0
 gate_e2e_status=not-run
@@ -60,6 +65,16 @@ cleanup_worktree() {
   worktree_added=0
   if [[ -n "$gate_parent" && -d "$gate_parent" ]]; then
     rmdir "$gate_parent" >/dev/null 2>&1 || cleanup_status=1
+  fi
+  if [[ -n "$gate_build_root" && -e "$gate_build_root" ]]; then
+    if [[ "$gate_build_root" == "$NOONMARK_BUILD_ROOT"/diagnostic-closure-build.* &&
+      -d "$gate_build_root" && ! -L "$gate_build_root" &&
+      "$(cd "$gate_build_root" && pwd -P)" == "$gate_build_root" ]]; then
+      rm -rf -- "$gate_build_root" || cleanup_status=1
+    else
+      echo "refusing unsafe diagnostic closure build cleanup" >&2
+      cleanup_status=1
+    fi
   fi
   set -e
   return "$cleanup_status"
@@ -106,6 +121,7 @@ else
     gate_status=1
   else
     worktree_added=1
+    gate_build_root="$(mktemp -d "$NOONMARK_BUILD_ROOT/diagnostic-closure-build.XXXXXX")"
     if [[ "$(git -C "$gate_worktree" rev-parse --verify HEAD^{commit})" != \
       "$source_commit" ]]; then
       echo "release diagnostic closure worktree changed source identity" |
@@ -115,7 +131,8 @@ else
       set +e
       (
         cd "$gate_worktree"
-        NOONMARK_EVIDENCE_RUN_ID="$evidence_run_id" \
+        NOONMARK_BUILD_ROOT="$gate_build_root" \
+          NOONMARK_EVIDENCE_RUN_ID="$evidence_run_id" \
           NOONMARK_E2E_DIAGNOSTIC_CLOSURE_ONLY=1 \
           scripts/test-e2e release
       ) >>"$gate_log" 2>&1
@@ -131,8 +148,8 @@ fi
 closure_root=""
 runtime_root=""
 if [[ -n "$gate_worktree" ]]; then
-  closure_root="${gate_worktree}/artifacts/e2e-diagnostic-closure"
-  runtime_root="${gate_worktree}/artifacts/e2e-runtime"
+  closure_root="${gate_build_root}/artifacts/e2e-diagnostic-closure"
+  runtime_root="${gate_build_root}/artifacts/e2e-runtime"
 fi
 if [[ "$gate_status" -eq 0 ]]; then
   if [[ -z "$closure_root" || -z "$runtime_root" ]]; then
@@ -173,7 +190,7 @@ for source in "$closure_root" "$runtime_root"; do
 done
 copied_runtime_manifest="$evidence_root/e2e-runtime/manifest.txt"
 if [[ -f "$copied_runtime_manifest" && ! -L "$copied_runtime_manifest" ]]; then
-  closure_e2e_manifest_path="${copied_runtime_manifest#"$repo_root/"}"
+  closure_e2e_manifest_path="${copied_runtime_manifest#"$NOONMARK_BUILD_ROOT/"}"
   closure_e2e_manifest_sha256="$(
     shasum -a 256 "$copied_runtime_manifest" | awk '{print $1}'
   )"
@@ -217,18 +234,18 @@ evidence_append \
 evidence_append \
   "$gate_manifest" closure_e2e_manifest_sha256 "$closure_e2e_manifest_sha256"
 evidence_append \
-  "$gate_manifest" gate_log_path "${gate_log#"$repo_root/"}"
+  "$gate_manifest" gate_log_path "${gate_log#"$NOONMARK_BUILD_ROOT/"}"
 evidence_append \
   "$gate_manifest" gate_log_sha256 \
   "$(shasum -a 256 "$gate_log" | awk '{print $1}')"
 evidence_append \
-  "$gate_manifest" gate_result_path "${gate_result#"$repo_root/"}"
+  "$gate_manifest" gate_result_path "${gate_result#"$NOONMARK_BUILD_ROOT/"}"
 evidence_append \
   "$gate_manifest" gate_result_sha256 \
   "$(shasum -a 256 "$gate_result" | awk '{print $1}')"
 
 evidence_inventory \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$gate_inventory" \
   "${artifact_paths[@]}"
 chmod 600 "$gate_inventory"

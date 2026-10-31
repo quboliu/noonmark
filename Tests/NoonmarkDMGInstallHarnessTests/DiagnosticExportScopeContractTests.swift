@@ -478,8 +478,4 @@ private struct DMGScopeFixture {
     }
 }
 
-private let fixtureBaseURL = URL(
-    fileURLWithPath: FileManager.default.currentDirectoryPath,
-    isDirectory: true
-)
-.appendingPathComponent(".build/test-fixtures", isDirectory: true)
+private let fixtureBaseURL = HarnessTestWorkspace.fixtureRoot

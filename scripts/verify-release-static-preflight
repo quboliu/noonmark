@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -15,7 +18,7 @@ if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
   exit 1
 fi
 
-check_manifest="${1:-artifacts/audit-final/make-check/manifest.txt}"
+check_manifest="${1:-${NOONMARK_ARTIFACTS_DIR}/audit-final/make-check/manifest.txt}"
 check_directory="$(dirname "$check_manifest")"
 check_inventory="$check_directory/artifact-inventory.sha256"
 check_log_relative="$(evidence_read "$check_manifest" check_log_path)"
@@ -30,7 +33,7 @@ case "/$check_log_relative/" in
     exit 1
     ;;
 esac
-check_log="$repo_root/$check_log_relative"
+check_log="$NOONMARK_BUILD_ROOT/$check_log_relative"
 if [[ "$(cd "$(dirname "$check_log")" && pwd -P)" != \
   "$(cd "$check_directory" && pwd -P)" ||
   "$(basename "$check_log")" != "make-check.log" ]]; then
@@ -84,9 +87,9 @@ if [[ "$(shasum -a 256 "$check_log" | awk '{print $1}')" != \
   echo "release static preflight artifact digest disagrees with its manifest" >&2
   exit 1
 fi
-evidence_verify_inventory "$repo_root" "$check_inventory"
+evidence_verify_inventory "$NOONMARK_BUILD_ROOT" "$check_inventory"
 evidence_require_inventory_paths \
-  "$repo_root" \
+  "$NOONMARK_BUILD_ROOT" \
   "$check_inventory" \
   "$check_log" \
   "$check_directory/source-start.fragment" \

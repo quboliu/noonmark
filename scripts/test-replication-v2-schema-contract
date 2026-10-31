@@ -26,5 +26,5 @@ if ! /usr/bin/grep -F \
   exit 1
 fi
 
-swift test --filter \
+scripts/swiftpm test --filter \
   'SQLiteSchemaTests/(testSchemaDeclaresOnlyTheCurrentGenerationStorageContract|testCurrentVersionSchemaDriftIsRejectedBeforeEnablingWAL|testVersion15StoreIsRejectedWithoutMigrationOrMutation|testVersion17StoreIsRejectedWithoutMigrationOrMutation|testVersion18StoreIsRejectedWithoutMigrationOrMutation)'

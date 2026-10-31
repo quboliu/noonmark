@@ -14,10 +14,14 @@
 # scripts/test-interactive-demo-fixture 显式传入本轮隔离报告路径。
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-report_path="${1:-artifacts/interactive-demo/page-switch-latency.tsv}"
+report_path="${1:-${NOONMARK_ARTIFACTS_DIR}/interactive-demo/page-switch-latency.tsv}"
 page_budget_ms=1500
 total_budget_ms=6000
 expected_pages=(

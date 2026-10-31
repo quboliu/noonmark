@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 configuration="${1:-debug}"
 product="NoonmarkWindowProbe"
-artifact_root="artifacts/window-probe"
+artifact_root="${NOONMARK_ARTIFACTS_DIR}/window-probe"
 artifact_path="${artifact_root}/${product}"
 
 case "$configuration" in
@@ -17,12 +20,9 @@ case "$configuration" in
     ;;
 esac
 
-swift build -c "$configuration" --product "$product"
+noonmark_swift build -c "$configuration" --product "$product"
 
-binary_path=".build/arm64-apple-macosx/${configuration}/${product}"
-if [[ ! -x "$binary_path" ]]; then
-  binary_path=".build/${configuration}/${product}"
-fi
+binary_path="$(noonmark_swift build -c "$configuration" --show-bin-path)/${product}"
 if [[ ! -x "$binary_path" ]]; then
   echo "built window probe executable was not found: $binary_path" >&2
   exit 1

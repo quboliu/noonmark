@@ -104,19 +104,20 @@ if rg -n '\beval\b' scripts/test-dmg-install >/dev/null; then
 fi
 
 scripts/reset-dev-data audit
-swift test --filter 'DiagnosticExportScopeContractTests|HarnessLedgerDescriptorTests'
+scripts/swiftpm test --filter 'DiagnosticExportScopeContractTests|HarnessLedgerDescriptorTests'
 xcrun swiftc -typecheck "$observer_source"
 
-harness_binary=".build/debug/NoonmarkDMGInstallHarness"
+harness_binary="$(scripts/swiftpm build -c debug --show-bin-path)/NoonmarkDMGInstallHarness"
 if [[ ! -x "$harness_binary" ]]; then
   fail "focused tests did not build the harness binary"
 fi
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/noonmark-diagnostic-scope.XXXXXX")"
+fixture_root="$(cd "$fixture_root" && pwd -P)"
 cleanup() {
   rm -rf "$fixture_root"
 }
 trap cleanup EXIT
-fixture_app="$repo_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
+fixture_app="$fixture_root/artifacts/dmg-install/Applications/NoonmarkDMGValidation.app"
 scope_output="$fixture_root/scope.tsv"
 scope_stderr="$fixture_root/scope.stderr"
 "$harness_binary" \

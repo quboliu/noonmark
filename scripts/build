@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+cd "$NOONMARK_SOURCE_ROOT"
+scripts/test-app-icon
+noonmark_swift build "$@"

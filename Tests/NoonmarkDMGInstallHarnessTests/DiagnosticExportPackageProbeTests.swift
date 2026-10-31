@@ -87,11 +87,7 @@ private struct PackageProbeFixture {
     let sentinelsURL: URL
 
     init(sentinel: String = "PRIVATE-CANARY-RAW") throws {
-        root = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(".build/test-fixtures", isDirectory: true)
+        root = HarnessTestWorkspace.fixtureRoot
         .appendingPathComponent(
             "noonmark-diagnostic-package-\(UUID().uuidString)",
             isDirectory: true

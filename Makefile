@@ -12,8 +12,7 @@ verify-app-icon:
 	scripts/test-app-icon
 
 build:
-	scripts/test-app-icon
-	swift build
+	scripts/build
 
 build-app:
 	scripts/build-mac-app debug development
@@ -41,7 +40,7 @@ release-private-dmg:
 
 test:
 	scripts/reset-dev-data audit
-	swift test
+	scripts/swiftpm test
 
 test-unit:
 	scripts/test-unit

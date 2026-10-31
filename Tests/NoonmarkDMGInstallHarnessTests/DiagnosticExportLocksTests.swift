@@ -169,11 +169,7 @@ private final class WALFixture {
     private var database: OpaquePointer?
 
     init() throws {
-        root = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(".build/test-fixtures", isDirectory: true)
+        root = HarnessTestWorkspace.fixtureRoot
         .appendingPathComponent(
             "noonmark-descriptor-locks-\(UUID().uuidString)",
             isDirectory: true
@@ -184,15 +180,10 @@ private final class WALFixture {
             isDirectory: true
         )
         databaseURL = dataRoot.appendingPathComponent("Noonmark.sqlite")
-        helperExecutablePath = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(
-            ".build/debug/NoonmarkDMGInstallHarness",
-            isDirectory: false
-        )
-        .path
+        helperExecutablePath = Bundle(for: DiagnosticExportLocksTests.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("NoonmarkDMGInstallHarness", isDirectory: false)
+            .path
         try FileManager.default.createDirectory(
             at: dataRoot,
             withIntermediateDirectories: true

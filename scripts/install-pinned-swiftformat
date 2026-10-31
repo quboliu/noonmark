@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 swiftformat_version="0.62.1"
 swiftformat_sha256="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
 swiftformat_url="https://github.com/nicklockwood/SwiftFormat/releases/download/${swiftformat_version}/swiftformat.zip"
-tool_root="$repo_root/.build/noonmark-tools/swiftformat/$swiftformat_version"
+tool_root="$NOONMARK_BUILD_ROOT/tools/swiftformat/$swiftformat_version"
 swiftformat_binary="$tool_root/swiftformat"
 
 if [[ -x "$swiftformat_binary" ]] &&

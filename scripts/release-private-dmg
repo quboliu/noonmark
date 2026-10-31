@@ -4,6 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
+# shellcheck source=scripts/build-workspace-common
+source scripts/build-workspace-common
+noonmark_build_workspace_init
+
 source scripts/evidence-common
 
 mode="tagged"
@@ -17,8 +21,8 @@ elif [[ "$#" -ne 0 ]]; then
 fi
 
 if [[ -z "${NOONMARK_EVIDENCE_RUN_ID:-}" ]]; then
-  e2e_manifest="artifacts/e2e-runtime/manifest.txt"
-  lease_manifest="artifacts/e2e-data-root-process-lease/manifest.txt"
+  e2e_manifest="$NOONMARK_ARTIFACTS_DIR/e2e-runtime/manifest.txt"
+  lease_manifest="$NOONMARK_ARTIFACTS_DIR/e2e-data-root-process-lease/manifest.txt"
   if ! release_run_id="$(evidence_read "$e2e_manifest" evidence_run_id)" ||
     [[ "$(evidence_read "$lease_manifest" evidence_run_id)" != \
       "$release_run_id" ]]; then
@@ -43,9 +47,9 @@ scripts/test-release-diagnostic-closure
 scripts/test-tencent-ime-release-smoke release
 scripts/verify-tencent-ime-release-smoke-evidence
 scripts/package-dmg release
-scripts/verify-dmg dist/Noonmark.dmg
-scripts/test-dmg-install dist/Noonmark.dmg
-package_manifest="$repo_root/dist/Noonmark.dmg.manifest"
+scripts/verify-dmg "$NOONMARK_DIST_DIR/Noonmark.dmg"
+scripts/test-dmg-install "$NOONMARK_DIST_DIR/Noonmark.dmg"
+package_manifest="$NOONMARK_DIST_DIR/Noonmark.dmg.manifest"
 if [[ ! -f "$package_manifest" || -L "$package_manifest" ]]; then
   echo "release package manifest is missing or not a regular file" >&2
   exit 1
@@ -61,7 +65,7 @@ fi
 if [[ "$mode" == "trial" ]]; then
   scripts/verify-release-trial-version
   scripts/publish-trial-dmg \
-    "$repo_root/dist/Noonmark.dmg" \
+    "$NOONMARK_DIST_DIR/Noonmark.dmg" \
     "$package_manifest" \
     "$package_manifest_sha256" \
     "$trial_output"

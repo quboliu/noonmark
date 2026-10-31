@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 configuration="${1:-debug}"
 bundle_name="NoonmarkDevelopment"
 executable_name="NoonmarkMacAppDevelopment"
-app_path="dist/${bundle_name}.app"
+app_path="${NOONMARK_DIST_DIR}/${bundle_name}.app"
 app_executable="$app_path/Contents/MacOS/$executable_name"
-bootstrap_log="artifacts/interactive-provider-bootstrap.log"
-readiness_result="artifacts/interactive-provider-readiness.txt"
+bootstrap_log="${NOONMARK_ARTIFACTS_DIR}/interactive-provider-bootstrap.log"
+readiness_result="${NOONMARK_ARTIFACTS_DIR}/interactive-provider-readiness.txt"
 source scripts/load-ai-provider-config
 noonmark_load_ai_provider_config
 
@@ -28,7 +32,7 @@ NOONMARK_AI_API_KEY="$NOONMARK_AI_API_KEY" \
 "$app_executable" >"$bootstrap_log" 2>&1
 
 rm -f "$readiness_result"
-NOONMARK_PROVIDER_READINESS_RESULT_PATH="$PWD/$readiness_result" \
+NOONMARK_PROVIDER_READINESS_RESULT_PATH="$readiness_result" \
   "$app_executable" >>"$bootstrap_log" 2>&1
 
 if [[ ! -f "$readiness_result" || "$(<"$readiness_result")" != "ready" ]]; then
@@ -40,7 +44,7 @@ open -n "$app_path"
 
 target_pid=""
 for _ in {1..50}; do
-  candidate_pid="$(pgrep -f -x "$PWD/$app_executable" || true)"
+  candidate_pid="$(pgrep -f -x "$app_executable" || true)"
   if [[ -n "$candidate_pid" ]]; then
     target_pid="$candidate_pid"
     break

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/build-workspace-common
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/build-workspace-common"
+noonmark_build_workspace_init
+
 # Physical WindowServer input is meaningful only when rebuilds preserve the
 # App's designated requirement and the user's one-time TCC authorization.
 export NOONMARK_REQUIRE_STABLE_UI_SIGNING=1
@@ -17,7 +21,7 @@ source scripts/dmg-harness-evidence
 source scripts/development-validation-e2e-inventory
 
 configuration="${1:-debug}"
-evidence_prepare_fresh_directory "$repo_root" "artifacts/e2e-runtime"
+evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "${NOONMARK_ARTIFACTS_DIR}/e2e-runtime"
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "missing required tool: sqlite3" >&2
   exit 1
@@ -44,9 +48,9 @@ app_executable_name="NoonmarkMacAppE2E"
 app_display_name="晷迹 E2E"
 expected_window_width="1200"
 expected_window_height="768"
-app_path="dist/${app_bundle_name}.app"
+app_path="${NOONMARK_DIST_DIR}/${app_bundle_name}.app"
 app_executable_path="${app_path}/Contents/MacOS/${app_executable_name}"
-runtime_evidence_dir="artifacts/e2e-runtime"
+runtime_evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-runtime"
 runtime_console_log="${runtime_evidence_dir}/unified.log"
 runtime_diagnostic_baseline="${runtime_evidence_dir}/diagnostic-baseline.txt"
 runtime_diagnostic_result="${runtime_evidence_dir}/diagnostic-result.txt"
@@ -61,10 +65,10 @@ evidence_app_end="${runtime_evidence_dir}/app-end.fragment"
 evidence_app_snapshot="${runtime_evidence_dir}/app-snapshot/NoonmarkE2E.app"
 english_scenario_ledger="${runtime_evidence_dir}/english-scenario-ledger.tsv"
 helper_process_name="NoonmarkDMGInstallHarness"
-helper_bundle="artifacts/dmg-install-harness/${helper_process_name}.app"
-helper_executable_path="${repo_root}/${helper_bundle}/Contents/MacOS/${helper_process_name}"
+helper_bundle="${NOONMARK_ARTIFACTS_DIR}/dmg-install-harness/${helper_process_name}.app"
+helper_executable_path="${helper_bundle}/Contents/MacOS/${helper_process_name}"
 helper_bundle_identifier="app.noonmark.test.dmg-install-harness"
-window_probe_executable_path="${repo_root}/artifacts/window-probe/NoonmarkWindowProbe"
+window_probe_executable_path="${NOONMARK_ARTIFACTS_DIR}/window-probe/NoonmarkWindowProbe"
 helper_diagnostic_baseline="${runtime_evidence_dir}/helper-diagnostic-baseline.txt"
 helper_diagnostic_result="${runtime_evidence_dir}/helper-diagnostic-result.txt"
 evidence_helper_start="${runtime_evidence_dir}/helper-start.fragment"
@@ -92,69 +96,69 @@ active_ui_entry_start_gate=""
 active_ui_entry_start_gate_token=""
 ui_entry_start_gate_fd_open=0
 e2e_owned_artifact_roots=(
-  artifacts/e2e
-  artifacts/e2e-automatic-classification
-  artifacts/e2e-blank
-  artifacts/e2e-calendar-grid-topology
-  artifacts/e2e-classification
-  artifacts/e2e-completion-control
-  artifacts/e2e-context-menu-actions
-  artifacts/e2e-copy-undo-persistence
-  artifacts/e2e-data-import-integrity
-  artifacts/e2e-data-import-ui
-  artifacts/e2e-data-package
-  artifacts/e2e-data-package-import-failure
-  artifacts/e2e-date-picker
-  artifacts/e2e-date-strip
-  artifacts/e2e-detail-rail
-  artifacts/e2e-diagnostic-closure
-  artifacts/e2e-english
-  artifacts/e2e-english-native-command-surface
-  artifacts/e2e-english-native-command-stress
-  artifacts/e2e-global-quick-entry
-  artifacts/e2e-header-navigation-hit-target
-  artifacts/e2e-idea-capture
-  artifacts/e2e-keyboard-date
-  artifacts/e2e-lifecycle
-  artifacts/e2e-markdown-editor
-  artifacts/e2e-main-window-chrome
-  artifacts/e2e-mutation-clock
-  artifacts/e2e-native-command-surface
-  artifacts/e2e-native-command-stress
-  artifacts/e2e-natural-day
-  artifacts/e2e-persistence
-  artifacts/e2e-pool-context-menu-action
-  artifacts/e2e-pool-list-layout
-  artifacts/e2e-preferences-clock
-  artifacts/e2e-provider
-  artifacts/e2e-quick-add-ui
-  artifacts/e2e-reactivation-atomicity
-  artifacts/e2e-review-zhulong-entry
-  artifacts/e2e-review-detail-ux
-  artifacts/e2e-runtime
-  artifacts/e2e-seed-clock
-  artifacts/e2e-subtask-clock
-  artifacts/e2e-subtask-layout
-  artifacts/e2e-summary-sidebar
-  artifacts/e2e-task-note-atomicity
-  artifacts/e2e-task-notes
-  artifacts/e2e-ui-entry
-  artifacts/e2e-undo
-  artifacts/e2e-unfinished-actions
-  artifacts/e2e-window-close
-  artifacts/e2e-window-resize
-  artifacts/e2e-workflow
-  artifacts/e2e-workspace-productivity
-  artifacts/e2e-workspace-restoration
-  artifacts/e2e-zhulong
-  artifacts/e2e-zhulong-chat
-  artifacts/e2e-zhulong-inline-artifact
-  artifacts/e2e-zhulong-exact-recovery
-  artifacts/e2e-zhulong-navigation
-  artifacts/e2e-zhulong-pending-gate
-  artifacts/e2e-zhulong-provider-settings
-  artifacts/e2e-zhulong-recovery
-  artifacts/e2e-zhulong-todo-diff
+  "${NOONMARK_ARTIFACTS_DIR}/e2e"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-blank"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-calendar-grid-topology"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-classification"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-completion-control"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-context-menu-actions"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-copy-undo-persistence"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-data-import-integrity"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-data-import-ui"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-data-package"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-data-package-import-failure"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-date-picker"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-date-strip"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-detail-rail"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-diagnostic-closure"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-english"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-english-native-command-surface"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-english-native-command-stress"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-global-quick-entry"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-header-navigation-hit-target"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-idea-capture"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-keyboard-date"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-lifecycle"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-markdown-editor"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-main-window-chrome"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-mutation-clock"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-native-command-surface"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-native-command-stress"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-natural-day"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-persistence"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-pool-context-menu-action"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-pool-list-layout"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-preferences-clock"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-provider"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-quick-add-ui"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-reactivation-atomicity"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-review-zhulong-entry"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-review-detail-ux"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-runtime"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-seed-clock"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-subtask-clock"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-subtask-layout"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-summary-sidebar"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-task-note-atomicity"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-task-notes"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-ui-entry"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-undo"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-unfinished-actions"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-window-close"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-window-resize"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-workflow"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-workspace-productivity"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-workspace-restoration"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-chat"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-inline-artifact"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-exact-recovery"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-navigation"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-pending-gate"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-provider-settings"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-recovery"
+  "${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-todo-diff"
 )
 export NOONMARK_E2E_APP_EXECUTABLE_NAME="$app_executable_name"
 export NOONMARK_E2E_APP_DISPLAY_NAME="$app_display_name"
@@ -167,17 +171,17 @@ scenarios=(
   "day-subtasks-expanded|day|--e2e-expand-first-subtask-trace"
   "day-changed-target|day|--select changed"
   "day-detail|day|--select first"
-  "day-pointer-selection|day|--e2e-selection-focus-result-url $PWD/artifacts/e2e/day-pointer-selection-result.txt"
+  "day-pointer-selection|day|--e2e-selection-focus-result-url artifacts/e2e/day-pointer-selection-result.txt"
   "day-manual-detail|day|--select manual"
   "day-review-saved|day|--e2e-update-review --e2e-review-summary E2E自动保存反馈"
   "pool|pool|"
   "pool-context-menu|pool|--e2e-open-pool-context-menu"
-  "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url $PWD/artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open --e2e-classification-overflow-invalidate-first-ready"
-  "pool-classification-manager|pool|--select first --e2e-classification-manager-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-ui.txt --e2e-ui-entry-keep-open"
-  "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url $PWD/artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
+  "pool-classification-overflow|pool|--e2e-classification-overflow-via-ui --e2e-classification-overflow-ui-result-url artifacts/e2e/pool-classification-overflow-ui.txt --e2e-ui-entry-keep-open --e2e-classification-overflow-invalidate-first-ready"
+  "pool-classification-manager|pool|--select first --e2e-classification-manager-via-ui --e2e-classification-manager-ui-result-url artifacts/e2e/pool-classification-manager-ui.txt --e2e-ui-entry-keep-open"
+  "pool-classification-manager-labels|pool|--select first --e2e-classification-manager-labels-via-ui --e2e-classification-manager-ui-result-url artifacts/e2e/pool-classification-manager-labels-ui.txt --e2e-ui-entry-keep-open"
   "pool-detail|pool|--select first"
   "pool-detail-classification-edit|pool|--select first --e2e-open-classification-label-editor"
-  "pool-detail-classification-label-menu|pool|--select first --e2e-classification-label-menu-via-ui --e2e-classification-label-menu-ui-result-url $PWD/artifacts/e2e/pool-classification-label-menu-ui.txt --e2e-ui-entry-keep-open"
+  "pool-detail-classification-label-menu|pool|--select first --e2e-classification-label-menu-via-ui --e2e-classification-label-menu-ui-result-url artifacts/e2e/pool-classification-label-menu-ui.txt --e2e-ui-entry-keep-open"
   "future|future|"
   "future-detail|future|--select first"
   "unfinished|unfinished|"
@@ -186,9 +190,9 @@ scenarios=(
   "completed-detail|completed|--select first"
   "calendar|calendar|"
   "calendar-detail-expanded|calendar|--e2e-expand-detail-rail"
-  "zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-title-geometry.txt"
-  "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-title-geometry.txt"
-  "zhulong-stream-detail-expanded|zhulong|--e2e-expand-detail-rail --e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e/zhulong-stream-detail-expanded-title-geometry.txt"
+  "zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url artifacts/e2e/zhulong-title-geometry.txt"
+  "zhulong-stream|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url artifacts/e2e/zhulong-stream-title-geometry.txt"
+  "zhulong-stream-detail-expanded|zhulong|--e2e-expand-detail-rail --e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url artifacts/e2e/zhulong-stream-detail-expanded-title-geometry.txt"
   "zhulong-stream-dossier|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant dossier"
   "zhulong-stream-chapters|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant chapters"
   "zhulong-stream-weave|zhulong|--e2e-zhulong-sidecar-key --e2e-prepare-zhulong-intent 结束今天并安排明天 --e2e-rich-zhulong-session --e2e-zhulong-stream-variant weave"
@@ -200,16 +204,16 @@ scenarios=(
   "settings-sync|settings|--e2e-settings-sync"
   "day-minimum-window|day|--e2e-window-size 960x720"
   "day-wide-window|day|--e2e-window-size 1440x900"
-  "english-day|day|--select first --e2e-window-size 960x720 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-ui.txt|english"
-  "english-day-wide|day|--select first --e2e-window-size 1440x900 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-wide-ui.txt|english"
-  "english-day-history-header|day|--e2e-window-size 960x720 --e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-history-header --e2e-english-ui-result-url $PWD/artifacts/e2e-english/day-history-header-ui.txt|english"
-  "english-pool|pool|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/pool-ui.txt|english"
-  "english-future|future|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/future-ui.txt|english"
-  "english-unfinished|unfinished|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/unfinished-ui.txt|english"
-  "english-completed|completed|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/completed-ui.txt|english"
-  "english-calendar|calendar|--e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url $PWD/artifacts/e2e-english/calendar-ui.txt|english"
+  "english-day|day|--select first --e2e-window-size 960x720 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/day-ui.txt|english"
+  "english-day-wide|day|--select first --e2e-window-size 1440x900 --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/day-wide-ui.txt|english"
+  "english-day-history-header|day|--e2e-window-size 960x720 --e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-history-header --e2e-english-ui-result-url artifacts/e2e-english/day-history-header-ui.txt|english"
+  "english-pool|pool|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/pool-ui.txt|english"
+  "english-future|future|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/future-ui.txt|english"
+  "english-unfinished|unfinished|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/unfinished-ui.txt|english"
+  "english-completed|completed|--select first --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/completed-ui.txt|english"
+  "english-calendar|calendar|--e2e-expand-detail-rail --e2e-verify-english-populated-screenshot --e2e-english-ui-result-url artifacts/e2e-english/calendar-ui.txt|english"
   "english-settings|settings||english"
-  "english-zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url $PWD/artifacts/e2e-english/zhulong-title-geometry.txt|english"
+  "english-zhulong|zhulong|--e2e-enable-zhulong --e2e-zhulong-title-geometry --e2e-zhulong-title-geometry-result-url artifacts/e2e-english/zhulong-title-geometry.txt|english"
 )
 
 english_full_scenario_set="english-day,english-day-wide,english-day-history-header,english-pool,english-future,english-unfinished,english-completed,english-calendar,english-settings,english-zhulong"
@@ -388,9 +392,9 @@ if [[ "$screenshots_only" != "1" ]] && {
   helper_requested=1
 fi
 
-mkdir -p artifacts
+mkdir -p "$NOONMARK_ARTIFACTS_DIR"
 for artifact_root in "${e2e_owned_artifact_roots[@]}"; do
-  evidence_prepare_fresh_directory "$repo_root" "$artifact_root"
+  evidence_prepare_fresh_directory "$NOONMARK_BUILD_ROOT" "$artifact_root"
 done
 evidence_capture_source "$repo_root" "source" "$evidence_source_start"
 evidence_begin_manifest \
@@ -486,7 +490,7 @@ if [[ "$helper_requested" == "1" ]]; then
     "$helper_binary_sha256_before"
 fi
 
-mkdir -p artifacts/e2e
+mkdir -p "${NOONMARK_ARTIFACTS_DIR}/e2e"
 
 terminate_e2e_app() {
   pkill -x "$app_executable_name" 2>/dev/null || true
@@ -538,7 +542,7 @@ native_command_helper_bundle_matches() {
   local pid="$1"
 
   NOONMARK_E2E_HELPER_PID="$pid" \
-    NOONMARK_E2E_HELPER_BUNDLE="$PWD/$helper_bundle" \
+    NOONMARK_E2E_HELPER_BUNDLE="$helper_bundle" \
     NOONMARK_E2E_HELPER_BUNDLE_ID="$helper_bundle_identifier" \
     swift -e '
 import AppKit
@@ -763,7 +767,7 @@ run_windowserver_input_cleanup() {
       "$app_path" \
       --args \
       --e2e-windowserver-input-cleanup-result-url \
-      "$PWD/$windowserver_input_cleanup_result" \
+      "$windowserver_input_cleanup_result" \
       >>"$windowserver_input_cleanup_log" 2>&1 &
     cleanup_pid=$!
 
@@ -816,7 +820,7 @@ run_windowserver_input_cleanup() {
   evidence_append \
     "$evidence_manifest" \
     "windowserver_input_cleanup_result_path" \
-    "$windowserver_input_cleanup_result" || cleanup_status=1
+    "${windowserver_input_cleanup_result#"$NOONMARK_BUILD_ROOT/"}" || cleanup_status=1
   evidence_append \
     "$evidence_manifest" \
     "windowserver_input_cleanup_result_sha256" \
@@ -826,7 +830,7 @@ run_windowserver_input_cleanup() {
   evidence_append \
     "$evidence_manifest" \
     "windowserver_input_cleanup_log_path" \
-    "$windowserver_input_cleanup_log" || cleanup_status=1
+    "${windowserver_input_cleanup_log#"$NOONMARK_BUILD_ROOT/"}" || cleanup_status=1
 
   return "$cleanup_status"
 }
@@ -906,8 +910,8 @@ validate_full_e2e_release_inventory() {
 
   required_inventory_output="$(
     development_validation_e2e_required_inventory_paths \
-      "$repo_root" \
-      "${repo_root}/${runtime_evidence_dir}" \
+      "$NOONMARK_BUILD_ROOT" \
+      "${runtime_evidence_dir}" \
       "$english_scenario_set"
   )" || {
     echo "full E2E could not resolve its release inventory" >&2
@@ -926,7 +930,7 @@ validate_full_e2e_release_inventory() {
   fi
 
   evidence_require_inventory_paths \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$evidence_inventory_path" \
     "${required_inventory_paths[@]}"
 }
@@ -1085,19 +1089,19 @@ finish_e2e_evidence() {
     evidence_append \
       "$evidence_manifest" \
       "helper_diagnostic_baseline_path" \
-      "$helper_diagnostic_baseline" || suite_status=1
+      "${helper_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
     evidence_append \
       "$evidence_manifest" \
       "helper_diagnostic_final_path" \
-      "${helper_diagnostic_baseline}.current" || suite_status=1
+      "${helper_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.current" || suite_status=1
     evidence_append \
       "$evidence_manifest" \
       "helper_diagnostic_diff_path" \
-      "${helper_diagnostic_baseline}.new" || suite_status=1
+      "${helper_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.new" || suite_status=1
     evidence_append \
       "$evidence_manifest" \
       "helper_diagnostic_result_path" \
-      "$helper_diagnostic_result" || suite_status=1
+      "${helper_diagnostic_result#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
   fi
   if ! evidence_append \
     "$evidence_manifest" \
@@ -1123,19 +1127,19 @@ finish_e2e_evidence() {
   evidence_append \
     "$evidence_manifest" \
     "diagnostic_baseline_path" \
-    "$runtime_diagnostic_baseline" || suite_status=1
+    "${runtime_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
   evidence_append \
     "$evidence_manifest" \
     "diagnostic_final_path" \
-    "${runtime_diagnostic_baseline}.current" || suite_status=1
+    "${runtime_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.current" || suite_status=1
   evidence_append \
     "$evidence_manifest" \
     "diagnostic_diff_path" \
-    "${runtime_diagnostic_baseline}.new" || suite_status=1
+    "${runtime_diagnostic_baseline#"$NOONMARK_BUILD_ROOT/"}.new" || suite_status=1
   evidence_append \
     "$evidence_manifest" \
     "diagnostic_result_path" \
-    "$runtime_diagnostic_result" || suite_status=1
+    "${runtime_diagnostic_result#"$NOONMARK_BUILD_ROOT/"}" || suite_status=1
 
   for artifact_path in "${e2e_owned_artifact_roots[@]}"; do
     if [[ "$artifact_path" != "$runtime_evidence_dir" ]]; then
@@ -1175,7 +1179,7 @@ finish_e2e_evidence() {
     )
   fi
   if evidence_inventory \
-    "$repo_root" \
+    "$NOONMARK_BUILD_ROOT" \
     "$evidence_inventory_path" \
     "${artifact_paths[@]}"; then
     if ! validate_full_e2e_release_inventory; then
@@ -1330,7 +1334,7 @@ resolve_exact_e2e_window_id() {
     NOONMARK_E2E_WINDOW_IDENTITY_PATH="$identity_path" \
     NOONMARK_E2E_WINDOW_LAUNCH_TOKEN="$launch_token" \
     NOONMARK_E2E_EXPECTED_PROCESS_ID="$expected_process_id" \
-    NOONMARK_E2E_EXPECTED_APP_PATH="$PWD/$app_path" swift -e '
+    NOONMARK_E2E_EXPECTED_APP_PATH="$app_path" swift -e '
 import AppKit
 import Darwin
 import Foundation
@@ -1618,7 +1622,7 @@ close_ui_entry_start_gate() {
     ui_entry_start_gate_fd_open=0
   fi
   if [[ -n "$gate_path" ]]; then
-    if [[ "$gate_path" != "$repo_root/artifacts/e2e/"*.fifo ]]; then
+    if [[ "$gate_path" != "${NOONMARK_ARTIFACTS_DIR}/e2e/"*.fifo ]]; then
       echo "refusing to remove an unexpected UI-entry start gate: $gate_path" >&2
       return 1
     fi
@@ -1633,7 +1637,7 @@ prepare_ui_entry_start_gate() {
   local token="$2"
 
   close_ui_entry_start_gate
-  if [[ "$ui_entry_start_gate" != "$repo_root/artifacts/e2e/"*.fifo ||
+  if [[ "$ui_entry_start_gate" != "${NOONMARK_ARTIFACTS_DIR}/e2e/"*.fifo ||
     ! "$token" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
     echo "invalid UI-entry start gate identity" >&2
     return 1
@@ -1897,7 +1901,7 @@ capture_app_screenshot() {
     window_identity_path="${window_identity_directory}/main-window-identity.json"
     mkdir -m 700 -- "$window_identity_directory"
     launch_arguments+=(
-      --e2e-main-window-identity-url "$PWD/$window_identity_path"
+      --e2e-main-window-identity-url "$window_identity_path"
       --e2e-main-window-launch-token "$window_identity_token"
     )
     if [[ "$uses_ui_entry_start_gate" == "1" ]]; then
@@ -1958,7 +1962,7 @@ capture_app_screenshot() {
     for _ in {1..20}; do
       if window_id="$(
         resolve_exact_e2e_window_id \
-          "$PWD/$window_identity_path" \
+          "$window_identity_path" \
           "$window_identity_token" \
           "$app_pid" \
           "$expected_window_title" \
@@ -1991,7 +1995,7 @@ capture_app_screenshot() {
       echo "launch attempt=$launch_attempt pid=$app_pid state=exited exit_code=$app_exit_code window_match=missing" >>"$launch_log"
     fi
     dump_exact_e2e_window_evidence \
-      "$PWD/$window_identity_path" \
+      "$window_identity_path" \
       "$window_identity_token" \
       "$app_pid" \
       "$expected_window_title" \
@@ -2043,11 +2047,11 @@ capture_app_screenshot() {
     if [[ "$screenshot_name" == "english-day" ]]; then
       scripts/run-e2e-ax-inspect \
         "$app_pid" \
-        "$PWD/$app_path" \
+        "$app_path" \
         "$window_id" \
         "$expected_window_title" \
         "$english_ui_result" \
-        "$PWD/artifacts/e2e-english/day-ax"
+        "${NOONMARK_ARTIFACTS_DIR}/e2e-english/day-ax"
     fi
   fi
   if [[ -n "$zhulong_title_geometry_result" ]]; then
@@ -2079,7 +2083,7 @@ capture_app_screenshot() {
       "$expected_overflow_recovery_count"; then
       echo "classification overflow popover was not capture-ready" >&2
       dump_exact_e2e_window_evidence \
-        "$PWD/$window_identity_path" \
+        "$window_identity_path" \
         "$window_identity_token" \
         "$app_pid" \
         "$expected_window_title" \
@@ -2380,7 +2384,7 @@ assert_english_screenshot() {
     *) expected_text="Noonmark" ;;
   esac
 
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+  if ! NOONMARK_E2E_OCR_IMAGE="$screenshot" \
     NOONMARK_E2E_OCR_EXPECTED="$expected_text" swift -e '
 import AppKit
 import Foundation
@@ -2522,7 +2526,7 @@ record_english_scenario_evidence() {
 }
 
 assert_english_history_header_ui_result() {
-  local result="artifacts/e2e-english/day-history-header-ui.txt"
+  local result="${NOONMARK_ARTIFACTS_DIR}/e2e-english/day-history-header-ui.txt"
   local actual_width
 
   if [[ ! -f "$result" || "$(head -n 1 "$result")" != "ok" ]]; then
@@ -2554,8 +2558,8 @@ assert_english_history_header_ui_result() {
 assert_english_populated_ui_result() {
   local page="$1"
   local result_key="${2:-$page}"
-  local result="artifacts/e2e-english/${result_key}-ui.txt"
-  local fixture_manifest="artifacts/e2e-english/fixture-manifest.txt"
+  local result="${NOONMARK_ARTIFACTS_DIR}/e2e-english/${result_key}-ui.txt"
+  local fixture_manifest="${NOONMARK_ARTIFACTS_DIR}/e2e-english/fixture-manifest.txt"
   local fixture_key
   local expected_width="280.0"
   local actual_width
@@ -2621,7 +2625,7 @@ assert_english_populated_ui_result() {
       exit 1
     fi
     if [[ "$result_key" == "day" &&
-      ! -s "artifacts/e2e-english/day-ax/ledger.tsv" ]]; then
+      ! -s "${NOONMARK_ARTIFACTS_DIR}/e2e-english/day-ax/ledger.tsv" ]]; then
       echo "English minimum-window Day external AX evidence is missing" >&2
       exit 1
     fi
@@ -2645,7 +2649,7 @@ assert_settings_sidebar_screenshot() {
   local ocr="${screenshot%.png}-ocr.txt"
   local ocr_log="${screenshot%.png}-ocr.log"
 
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" \
+  if ! NOONMARK_E2E_OCR_IMAGE="$screenshot" \
     NOONMARK_E2E_OCR_LANGUAGE="$language" swift -e '
 import AppKit
 import Foundation
@@ -2702,7 +2706,7 @@ for expectedTitle in expectedTitles {
 
 run_english_menu_probe() {
   local database_path="$1"
-  local menu_dir="artifacts/e2e-english/menu"
+  local menu_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-english/menu"
   local state_file="$menu_dir/state.json"
   local help_shortcut_result="$menu_dir/help-shortcut-result.txt"
   local help_shortcut_log="$menu_dir/help-shortcut.log"
@@ -2731,8 +2735,8 @@ run_english_menu_probe() {
     --e2e-fixed-locale en_SG \
     --e2e-reset-selection \
     --e2e-native-command-help-shortcut \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$help_shortcut_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$help_shortcut_result"
 
   run_native_command_surface_exercise \
     "English native menu exercise" \
@@ -2749,8 +2753,8 @@ run_english_menu_probe() {
     --e2e-fixed-locale en_SG \
     --e2e-reset-selection \
     --e2e-native-command-surface-exercise \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$exercise_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "English native menu restart" \
@@ -2763,8 +2767,8 @@ run_english_menu_probe() {
     --e2e-fixed-locale en_SG \
     --e2e-reset-selection \
     --e2e-native-command-surface-verify \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$verify_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$verify_result"
 
   run_terminating_ui_probe \
     "English task-pool quick-add" \
@@ -2777,7 +2781,7 @@ run_english_menu_probe() {
     --e2e-fixed-locale en_SG \
     --e2e-quick-add-via-ui pool \
     --e2e-quick-add-ui-title "$pool_title" \
-    --e2e-quick-add-ui-result-url "$PWD/$pool_result"
+    --e2e-quick-add-ui-result-url "$pool_result"
 
   if [[ "$(sqlite3 -noheader "$database_path" "SELECT language FROM app_preferences WHERE id = 1;")" != "english" ]]; then
     echo "English native menu probe changed the persisted language" >&2
@@ -2806,9 +2810,9 @@ run_english_menu_probe() {
 }
 
 assert_pool_context_menu_screenshot() {
-  local screenshot="artifacts/e2e/pool-context-menu.png"
-  local ocr="artifacts/e2e/pool-context-menu-ocr.txt"
-  local ocr_log="artifacts/e2e/pool-context-menu-ocr.log"
+  local screenshot="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-context-menu.png"
+  local ocr="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-context-menu-ocr.txt"
+  local ocr_log="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-context-menu-ocr.log"
 
   if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-context-menu "* ]]; then
     return 0
@@ -2817,7 +2821,7 @@ assert_pool_context_menu_screenshot() {
     echo "pool context-menu screenshot is missing: $screenshot" >&2
     exit 1
   fi
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+  if ! NOONMARK_E2E_OCR_IMAGE="$screenshot" swift -e '
 import AppKit
 import Foundation
 import Vision
@@ -2852,9 +2856,9 @@ print((request.results ?? [])
 }
 
 assert_pool_classification_overflow_screenshot() {
-  local screenshot="artifacts/e2e/pool-classification-overflow.png"
-  local ocr="artifacts/e2e/pool-classification-overflow-ocr.txt"
-  local ocr_log="artifacts/e2e/pool-classification-overflow-ocr.log"
+  local screenshot="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-classification-overflow.png"
+  local ocr="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-classification-overflow-ocr.txt"
+  local ocr_log="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-classification-overflow-ocr.log"
 
   if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-classification-overflow "* ]]; then
     return 0
@@ -2863,7 +2867,7 @@ assert_pool_classification_overflow_screenshot() {
     echo "classification overflow screenshot is missing: $screenshot" >&2
     exit 1
   fi
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+  if ! NOONMARK_E2E_OCR_IMAGE="$screenshot" swift -e '
 import AppKit
 import Foundation
 import Vision
@@ -2898,9 +2902,9 @@ print((request.results ?? [])
 }
 
 assert_pool_detail_density_screenshot() {
-  local screenshot="artifacts/e2e/pool-detail.png"
-  local result="artifacts/e2e/pool-detail-density.txt"
-  local result_log="artifacts/e2e/pool-detail-density.log"
+  local screenshot="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-detail.png"
+  local result="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-detail-density.txt"
+  local result_log="${NOONMARK_ARTIFACTS_DIR}/e2e/pool-detail-density.log"
 
   if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" pool-detail "* ]]; then
     return 0
@@ -2909,7 +2913,7 @@ assert_pool_detail_density_screenshot() {
     echo "pool detail screenshot is missing: $screenshot" >&2
     exit 1
   fi
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$screenshot" swift -e '
+  if ! NOONMARK_E2E_OCR_IMAGE="$screenshot" swift -e '
 import AppKit
 import Foundation
 import Vision
@@ -2987,11 +2991,11 @@ assert_task_detail_density_screenshots() {
     if [[ -n "$requested_scenarios" && " $requested_scenarios " != *" $scenario "* ]]; then
       continue
     fi
-    if [[ ! -f "artifacts/e2e/${scenario}.png" ]]; then
+    if [[ ! -f "${NOONMARK_ARTIFACTS_DIR}/e2e/${scenario}.png" ]]; then
       echo "missing task-detail density screenshot: artifacts/e2e/${scenario}.png" >&2
       exit 1
     fi
-    screenshots+=("$PWD/artifacts/e2e/${scenario}.png")
+    screenshots+=("${NOONMARK_ARTIFACTS_DIR}/e2e/${scenario}.png")
   done
   if (( ${#screenshots[@]} == 0 )); then
     return 0
@@ -3000,10 +3004,10 @@ assert_task_detail_density_screenshots() {
 }
 
 assert_sidebar_semantic_icon_colors_screenshot() {
-  local screenshot="artifacts/e2e/day.png"
-  local zhulong_screenshot="artifacts/e2e/zhulong.png"
-  local result="artifacts/e2e/sidebar-semantic-icon-colors.txt"
-  local result_log="artifacts/e2e/sidebar-semantic-icon-colors.log"
+  local screenshot="${NOONMARK_ARTIFACTS_DIR}/e2e/day.png"
+  local zhulong_screenshot="${NOONMARK_ARTIFACTS_DIR}/e2e/zhulong.png"
+  local result="${NOONMARK_ARTIFACTS_DIR}/e2e/sidebar-semantic-icon-colors.txt"
+  local result_log="${NOONMARK_ARTIFACTS_DIR}/e2e/sidebar-semantic-icon-colors.log"
   local verify_day=1
   local verify_zhulong=1
 
@@ -3028,8 +3032,8 @@ assert_sidebar_semantic_icon_colors_screenshot() {
     echo "Zhulong sidebar semantic icon color screenshot is missing: $zhulong_screenshot" >&2
     exit 1
   fi
-  if ! NOONMARK_E2E_DAY_IMAGE="$PWD/$screenshot" \
-    NOONMARK_E2E_ZHULONG_IMAGE="$PWD/$zhulong_screenshot" \
+  if ! NOONMARK_E2E_DAY_IMAGE="$screenshot" \
+    NOONMARK_E2E_ZHULONG_IMAGE="$zhulong_screenshot" \
     NOONMARK_E2E_VERIFY_DAY="$verify_day" \
     NOONMARK_E2E_VERIFY_ZHULONG="$verify_zhulong" swift -e '
 import AppKit
@@ -3133,7 +3137,7 @@ print(results.joined(separator: " "))
 }
 
 run_task_note_persistence_probe() {
-  local note_dir="artifacts/e2e-task-notes"
+  local note_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-task-notes"
   local note_db="${note_dir}/Noonmark.sqlite"
   local note_state="${note_dir}/state.json"
   local mutate_result="${note_dir}/mutate-result.txt"
@@ -3154,11 +3158,11 @@ run_task_note_persistence_probe() {
     "task-note mutation" \
     "$mutate_result" \
     "$mutate_log" \
-    --data-url "$PWD/$note_db" \
+    --data-url "$note_db" \
     --page pool \
     --e2e-task-note-mutate \
-    --e2e-task-note-state-url "$PWD/$note_state" \
-    --e2e-task-note-result-url "$PWD/$mutate_result"
+    --e2e-task-note-state-url "$note_state" \
+    --e2e-task-note-result-url "$mutate_result"
 
   if [[ ! -s "$note_state" ]]; then
     echo "task-note mutation state was not created: $note_state" >&2
@@ -3169,10 +3173,10 @@ run_task_note_persistence_probe() {
     "$note_dir" \
     "task-note-restart" \
     day \
-    --data-url "$PWD/$note_db" \
+    --data-url "$note_db" \
     --e2e-task-note-verify \
-    --e2e-task-note-state-url "$PWD/$note_state" \
-    --e2e-task-note-result-url "$PWD/$restart_result"
+    --e2e-task-note-state-url "$note_state" \
+    --e2e-task-note-result-url "$restart_result"
 
   if [[ ! -f "$restart_result" ]]; then
     echo "task-note restart result was not created: $restart_result" >&2
@@ -3187,7 +3191,7 @@ run_task_note_persistence_probe() {
   terminate_e2e_app
   assert_clean_app_log "task-note restart" "$restart_log"
 
-  if ! NOONMARK_E2E_OCR_IMAGE="$PWD/$restart_screenshot" swift -e '
+  if ! NOONMARK_E2E_OCR_IMAGE="$restart_screenshot" swift -e '
 import AppKit
 import Foundation
 import Vision
@@ -3277,17 +3281,17 @@ print(text)
     "task-note English copy" \
     "$copy_result" \
     "$copy_log" \
-    --data-url "$PWD/$note_db" \
+    --data-url "$note_db" \
     --page day \
     --e2e-task-note-copy-contract \
-    --e2e-task-note-state-url "$PWD/$note_state" \
-    --e2e-task-note-result-url "$PWD/$copy_result"
+    --e2e-task-note-state-url "$note_state" \
+    --e2e-task-note-result-url "$copy_result"
 
   echo "E2E task-note edit/delete restart and English copy: $note_db (probe=$note_sql_probe screenshot=$restart_screenshot)"
 }
 
 run_task_pool_note_persistence_probe() {
-  local note_dir="artifacts/e2e-task-pool-notes"
+  local note_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-task-pool-notes"
   local note_db="${note_dir}/Noonmark.sqlite"
   local note_state="${note_dir}/state.json"
   local mutate_result="${note_dir}/mutate-result.txt"
@@ -3303,11 +3307,11 @@ run_task_pool_note_persistence_probe() {
     "task-pool-note mutation" \
     "$mutate_result" \
     "$mutate_log" \
-    --data-url "$PWD/$note_db" \
+    --data-url "$note_db" \
     --page pool \
     --e2e-task-pool-note-mutate \
-    --e2e-task-pool-note-state-url "$PWD/$note_state" \
-    --e2e-task-pool-note-result-url "$PWD/$mutate_result"
+    --e2e-task-pool-note-state-url "$note_state" \
+    --e2e-task-pool-note-result-url "$mutate_result"
 
   if [[ ! -s "$note_state" ]]; then
     echo "task-pool-note mutation state was not created: $note_state" >&2
@@ -3318,10 +3322,10 @@ run_task_pool_note_persistence_probe() {
     "$note_dir" \
     "task-pool-note-restart" \
     pool \
-    --data-url "$PWD/$note_db" \
+    --data-url "$note_db" \
     --e2e-task-pool-note-verify \
-    --e2e-task-pool-note-state-url "$PWD/$note_state" \
-    --e2e-task-pool-note-result-url "$PWD/$restart_result"
+    --e2e-task-pool-note-state-url "$note_state" \
+    --e2e-task-pool-note-result-url "$restart_result"
 
   if [[ ! -f "$restart_result" ]]; then
     echo "task-pool-note restart result was not created: $restart_result" >&2
@@ -3366,7 +3370,7 @@ run_task_pool_note_persistence_probe() {
 }
 
 run_task_note_mutation_atomicity_probe() {
-  local atomicity_dir="artifacts/e2e-task-note-atomicity"
+  local atomicity_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-task-note-atomicity"
   local atomicity_db="${atomicity_dir}/Noonmark.sqlite"
   local atomicity_state="${atomicity_dir}/state.json"
   local exercise_result="${atomicity_dir}/exercise-result.txt"
@@ -3393,12 +3397,12 @@ run_task_note_mutation_atomicity_probe() {
     "task-note mutation atomicity exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$atomicity_db" \
+    --data-url "$atomicity_db" \
     --page pool \
     --e2e-persistence-failure-automation \
     --e2e-task-note-atomicity-exercise \
-    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
-    --e2e-task-note-atomicity-result-url "$PWD/$exercise_result" \
+    --e2e-task-note-atomicity-state-url "$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$exercise_result" \
     --e2e-quit-after-automation
 
   exercise_rejection_count_after="$(
@@ -3416,12 +3420,12 @@ run_task_note_mutation_atomicity_probe() {
     "task-note mutation atomicity UI" \
     "$ui_result" \
     "$ui_log" \
-    --data-url "$PWD/$atomicity_db" \
+    --data-url "$atomicity_db" \
     --page day \
     --e2e-persistence-failure-automation \
     --e2e-task-note-atomicity-ui-edit \
-    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
-    --e2e-task-note-atomicity-result-url "$PWD/$ui_result"
+    --e2e-task-note-atomicity-state-url "$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$ui_result"
 
   ui_rejection_count_after="$(
     runtime_evidence_count_persistence_mutation_rejections \
@@ -3436,11 +3440,11 @@ run_task_note_mutation_atomicity_probe() {
     "task-note mutation atomicity restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$atomicity_db" \
+    --data-url "$atomicity_db" \
     --page day \
     --e2e-task-note-atomicity-verify \
-    --e2e-task-note-atomicity-state-url "$PWD/$atomicity_state" \
-    --e2e-task-note-atomicity-result-url "$PWD/$restart_result" \
+    --e2e-task-note-atomicity-state-url "$atomicity_state" \
+    --e2e-task-note-atomicity-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   sql_probe="$(sqlite3 -noheader -separator ' ' "$atomicity_db" "
@@ -3470,7 +3474,7 @@ run_task_note_mutation_atomicity_probe() {
 }
 
 run_reactivation_atomicity_probe() {
-  local reactivation_dir="artifacts/e2e-reactivation-atomicity"
+  local reactivation_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-reactivation-atomicity"
   local reactivation_db="${reactivation_dir}/Noonmark.sqlite"
   local reactivation_state="${reactivation_dir}/state.json"
   local exercise_result="${reactivation_dir}/exercise-result.txt"
@@ -3493,14 +3497,14 @@ run_reactivation_atomicity_probe() {
     "reactivation atomicity exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$reactivation_db" \
+    --data-url "$reactivation_db" \
     --page unfinished \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-persistence-failure-automation \
     --e2e-reactivation-atomicity-exercise \
-    --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
-    --e2e-reactivation-atomicity-result-url "$PWD/$exercise_result" \
+    --e2e-reactivation-atomicity-state-url "$reactivation_state" \
+    --e2e-reactivation-atomicity-result-url "$exercise_result" \
     --e2e-quit-after-automation
 
   rejection_count_after="$(
@@ -3516,13 +3520,13 @@ run_reactivation_atomicity_probe() {
     "reactivation atomicity restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$reactivation_db" \
+    --data-url "$reactivation_db" \
     --page unfinished \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-reactivation-atomicity-verify \
-    --e2e-reactivation-atomicity-state-url "$PWD/$reactivation_state" \
-    --e2e-reactivation-atomicity-result-url "$PWD/$restart_result" \
+    --e2e-reactivation-atomicity-state-url "$reactivation_state" \
+    --e2e-reactivation-atomicity-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   sql_probe="$(sqlite3 -noheader -separator ' ' "$reactivation_db" "
@@ -3553,7 +3557,7 @@ run_reactivation_atomicity_probe() {
 }
 
 run_ui_entry_probes() {
-  local entry_dir="artifacts/e2e-ui-entry"
+  local entry_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-ui-entry"
   local classification_db="${entry_dir}/classification-manager.sqlite"
   local classification_result="${entry_dir}/classification-manager-result.txt"
   local classification_restart_result="${entry_dir}/classification-manager-restart-result.txt"
@@ -3575,20 +3579,20 @@ run_ui_entry_probes() {
     "classification manager UI entry" \
     "$classification_result" \
     "$classification_log" \
-    --data-url "$PWD/$classification_db" \
+    --data-url "$classification_db" \
     --page pool \
     --select first \
     --e2e-seed-default-state \
     --e2e-classification-manager-via-ui \
-    --e2e-classification-manager-ui-result-url "$PWD/$classification_result"
+    --e2e-classification-manager-ui-result-url "$classification_result"
 
   run_terminating_ui_probe \
     "classification manager deletion restart" \
     "$classification_restart_result" \
     "$classification_restart_log" \
-    --data-url "$PWD/$classification_db" \
+    --data-url "$classification_db" \
     --page pool \
-    --e2e-classification-deletion-restart-result-url "$PWD/$classification_restart_result"
+    --e2e-classification-deletion-restart-result-url "$classification_restart_result"
 
   read -r archived_categories archived_current_relations historical_category_events < <(
     sqlite3 -noheader -separator " " "$classification_db" "
@@ -3627,7 +3631,7 @@ run_ui_entry_probes() {
     --page pool \
     --select first \
     --e2e-classification-manager-labels-via-ui \
-    --e2e-classification-manager-ui-result-url "$PWD/$classification_labels_result"
+    --e2e-classification-manager-ui-result-url "$classification_labels_result"
 
   run_terminating_ui_probe \
     "classification # label input UI entry" \
@@ -3637,7 +3641,7 @@ run_ui_entry_probes() {
     --page pool \
     --select first \
     --e2e-classification-label-menu-via-ui \
-    --e2e-classification-label-menu-ui-result-url "$PWD/$classification_label_input_result"
+    --e2e-classification-label-menu-ui-result-url "$classification_label_input_result"
 
   run_terminating_ui_probe \
     "classification overflow UI entry" \
@@ -3646,7 +3650,7 @@ run_ui_entry_probes() {
     --ephemeral \
     --page pool \
     --e2e-classification-overflow-via-ui \
-    --e2e-classification-overflow-ui-result-url "$PWD/$classification_overflow_result"
+    --e2e-classification-overflow-ui-result-url "$classification_overflow_result"
 
   run_terminating_ui_probe \
     "zhulong workflow UI entry" \
@@ -3657,13 +3661,13 @@ run_ui_entry_probes() {
     --e2e-enable-zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-workflows-via-ui \
-    --e2e-zhulong-workflows-ui-result-url "$PWD/$zhulong_result"
+    --e2e-zhulong-workflows-ui-result-url "$zhulong_result"
 
   echo "E2E real UI entries and classification restart: $classification_result $classification_restart_result $classification_labels_result $classification_overflow_result $zhulong_result"
 }
 
 run_task_cycle_mutation_probe() {
-  local cycle_dir="artifacts/e2e-task-cycle-mutation"
+  local cycle_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-task-cycle-mutation"
   local cycle_db="${cycle_dir}/Noonmark.sqlite"
   local cycle_result="${cycle_dir}/mutation-result.txt"
   local cycle_restart_result="${cycle_dir}/restart-result.txt"
@@ -3685,13 +3689,13 @@ run_task_cycle_mutation_probe() {
     "task cycle real UI mutation" \
     "$cycle_result" \
     "$cycle_log" \
-    --data-url "$PWD/$cycle_db" \
+    --data-url "$cycle_db" \
     --page pool \
     --e2e-fixed-instant 2026-07-24T22:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-persistence-failure-automation \
-    --e2e-task-cycle-mutation-result-url "$PWD/$cycle_result"
+    --e2e-task-cycle-mutation-result-url "$cycle_result"
 
   cycle_rejection_count_after="$(
     runtime_evidence_count_persistence_mutation_rejections \
@@ -3706,12 +3710,12 @@ run_task_cycle_mutation_probe() {
     "task cycle mutation restart" \
     "$cycle_restart_result" \
     "$cycle_restart_log" \
-    --data-url "$PWD/$cycle_db" \
+    --data-url "$cycle_db" \
     --page pool \
     --e2e-fixed-instant 2026-07-24T22:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
-    --e2e-task-cycle-mutation-restart-result-url "$PWD/$cycle_restart_result"
+    --e2e-task-cycle-mutation-restart-result-url "$cycle_restart_result"
 
   cycle_sql_probe="$(
     sqlite3 -noheader -separator " " "$cycle_db" "
@@ -3789,7 +3793,7 @@ run_task_cycle_mutation_probe() {
 }
 
 run_seed_clock_probe() {
-  local seed_dir="artifacts/e2e-seed-clock"
+  local seed_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-seed-clock"
   local seed_result="${seed_dir}/result.txt"
   local seed_log="${seed_dir}/launch.log"
 
@@ -3804,14 +3808,14 @@ run_seed_clock_probe() {
     --page day \
     --e2e-fixed-instant 2030-07-01T20:00:00Z \
     --e2e-fixed-time-zone America/New_York \
-    --e2e-seed-clock-result-url "$PWD/$seed_result" \
+    --e2e-seed-clock-result-url "$seed_result" \
     --e2e-quit-after-automation
 
   echo "E2E relative seed event clock: $seed_result"
 }
 
 run_window_resize_probe() {
-  local resize_dir="artifacts/e2e-window-resize"
+  local resize_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-window-resize"
   local resize_result="${resize_dir}/result.txt"
   local resize_log="${resize_dir}/launch.log"
 
@@ -3825,14 +3829,14 @@ run_window_resize_probe() {
     --ephemeral \
     --page day \
     --e2e-window-resize-probe \
-    --e2e-window-resize-result-url "$PWD/$resize_result" \
+    --e2e-window-resize-result-url "$resize_result" \
     --e2e-quit-after-automation
 
   echo "E2E compact window resize: $resize_result"
 }
 
 run_workspace_restoration_probe() {
-  local state_dir="artifacts/e2e-workspace-restoration"
+  local state_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-workspace-restoration"
   local state_file="$state_dir/state.json"
   local automatic_prepare_result="$state_dir/automatic-prepare-result.txt"
   local automatic_prepare_log="$state_dir/automatic-prepare.log"
@@ -3855,8 +3859,8 @@ run_workspace_restoration_probe() {
     --e2e-workspace-restoration \
     --e2e-reset-workspace-state \
     --e2e-workspace-restoration-automatic-prepare \
-    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
-    --e2e-workspace-restoration-result-url "$PWD/$automatic_prepare_result"
+    --e2e-workspace-restoration-state-url "$state_file" \
+    --e2e-workspace-restoration-result-url "$automatic_prepare_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "automatic workspace width restart" \
@@ -3866,8 +3870,8 @@ run_workspace_restoration_probe() {
     --page day \
     --e2e-workspace-restoration \
     --e2e-workspace-restoration-automatic-verify \
-    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
-    --e2e-workspace-restoration-result-url "$PWD/$automatic_verify_result"
+    --e2e-workspace-restoration-state-url "$state_file" \
+    --e2e-workspace-restoration-result-url "$automatic_verify_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "workspace restoration exercise" \
@@ -3878,8 +3882,8 @@ run_workspace_restoration_probe() {
     --e2e-workspace-restoration \
     --e2e-reset-workspace-state \
     --e2e-workspace-restoration-exercise \
-    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
-    --e2e-workspace-restoration-result-url "$PWD/$exercise_result"
+    --e2e-workspace-restoration-state-url "$state_file" \
+    --e2e-workspace-restoration-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "workspace restoration restart" \
@@ -3889,14 +3893,14 @@ run_workspace_restoration_probe() {
     --page day \
     --e2e-workspace-restoration \
     --e2e-workspace-restoration-verify \
-    --e2e-workspace-restoration-state-url "$PWD/$state_file" \
-    --e2e-workspace-restoration-result-url "$PWD/$verify_result"
+    --e2e-workspace-restoration-state-url "$state_file" \
+    --e2e-workspace-restoration-result-url "$verify_result"
 
   echo "E2E window frame, divider, and collapse restoration: $state_file"
 }
 
 run_window_close_behavior_probe() {
-  local close_dir="artifacts/e2e-window-close"
+  local close_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-window-close"
   local close_result="$close_dir/result.txt"
   local close_log="$close_dir/launch.log"
 
@@ -3910,13 +3914,13 @@ run_window_close_behavior_probe() {
     --ephemeral \
     --page day \
     --e2e-window-close-behavior-probe \
-    --e2e-window-close-behavior-result-url "$PWD/$close_result"
+    --e2e-window-close-behavior-result-url "$close_result"
 
   echo "E2E close-last-window and dock reopen: $close_result"
 }
 
 run_global_quick_entry_shortcut_probe() {
-  local shortcut_dir="artifacts/e2e-global-quick-entry"
+  local shortcut_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-global-quick-entry"
   local shortcut_result="$shortcut_dir/result.txt"
   local shortcut_log="$shortcut_dir/launch.log"
 
@@ -3930,13 +3934,13 @@ run_global_quick_entry_shortcut_probe() {
     --ephemeral \
     --page day \
     --e2e-global-quick-entry-shortcut \
-    --e2e-global-quick-entry-result-url "$PWD/$shortcut_result"
+    --e2e-global-quick-entry-result-url "$shortcut_result"
 
   echo "E2E global Quick Entry from Finder: $shortcut_result"
 }
 
 run_idea_capture_probe() {
-  local idea_dir="artifacts/e2e-idea-capture"
+  local idea_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-idea-capture"
   local idea_db="$idea_dir/Noonmark.sqlite"
   local exercise_result="$idea_dir/exercise-result.txt"
   local exercise_log="$idea_dir/exercise.log"
@@ -3956,24 +3960,24 @@ run_idea_capture_probe() {
     "idea capture exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$idea_db" \
+    --data-url "$idea_db" \
     --page day \
     --e2e-reset-selection \
     --e2e-seed-default-state \
     --e2e-idea-capture exercise \
-    --e2e-idea-capture-result-url "$PWD/$exercise_result" \
-    --e2e-idea-capture-screenshot-dir "$PWD/$idea_dir"
+    --e2e-idea-capture-result-url "$exercise_result" \
+    --e2e-idea-capture-screenshot-dir "$idea_dir"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "idea capture restart verification" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$idea_db" \
+    --data-url "$idea_db" \
     --page ideas \
     --e2e-reset-selection \
     --e2e-idea-capture verify \
-    --e2e-idea-capture-result-url "$PWD/$verify_result" \
-    --e2e-idea-capture-screenshot-dir "$PWD/$idea_dir"
+    --e2e-idea-capture-result-url "$verify_result" \
+    --e2e-idea-capture-screenshot-dir "$idea_dir"
 
   idea_sql_probe="$(sqlite3 -noheader -separator ' ' "$idea_db" "
     SELECT
@@ -4067,7 +4071,7 @@ run_idea_capture_probe() {
 }
 
 run_native_command_surface_probe() {
-  local command_dir="artifacts/e2e-native-command-surface"
+  local command_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-native-command-surface"
   local command_db="$command_dir/Noonmark.sqlite"
   local state_file="$command_dir/state.json"
   local help_shortcut_result="$command_dir/help-shortcut-result.txt"
@@ -4087,12 +4091,12 @@ run_native_command_surface_probe() {
     "native Help shortcut" \
     "$help_shortcut_result" \
     "$help_shortcut_log" \
-    --data-url "$PWD/$command_db" \
+    --data-url "$command_db" \
     --page day \
     --e2e-reset-selection \
     --e2e-native-command-help-shortcut \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$help_shortcut_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$help_shortcut_result"
 
   run_native_command_surface_exercise \
     "native command surface exercise" \
@@ -4102,23 +4106,23 @@ run_native_command_surface_probe() {
     "$helper_evidence_dir" \
     "帮助" \
     "晷迹使用帮助" \
-    --data-url "$PWD/$command_db" \
+    --data-url "$command_db" \
     --page day \
     --e2e-reset-selection \
     --e2e-native-command-surface-exercise \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$exercise_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "native command surface restart" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$command_db" \
+    --data-url "$command_db" \
     --page day \
     --e2e-reset-selection \
     --e2e-native-command-surface-verify \
-    --e2e-native-command-state-url "$PWD/$state_file" \
-    --e2e-native-command-result-url "$PWD/$verify_result"
+    --e2e-native-command-state-url "$state_file" \
+    --e2e-native-command-result-url "$verify_result"
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$command_db" "
     SELECT
@@ -4151,7 +4155,7 @@ run_native_command_surface_probe() {
 }
 
 run_completion_control_probe() {
-  local completion_dir="artifacts/e2e-completion-control"
+  local completion_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-completion-control"
   local completion_db="$completion_dir/Noonmark.sqlite"
   local state_file="$completion_dir/state.json"
   local exercise_result="$completion_dir/exercise-result.txt"
@@ -4167,29 +4171,29 @@ run_completion_control_probe() {
     "parent completion control exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$completion_db" \
+    --data-url "$completion_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
     --e2e-completion-control-exercise \
-    --e2e-completion-control-state-url "$PWD/$state_file" \
-    --e2e-completion-control-result-url "$PWD/$exercise_result"
+    --e2e-completion-control-state-url "$state_file" \
+    --e2e-completion-control-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "parent completion control restart" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$completion_db" \
+    --data-url "$completion_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
     --e2e-completion-control-verify \
-    --e2e-completion-control-state-url "$PWD/$state_file" \
-    --e2e-completion-control-result-url "$PWD/$verify_result"
+    --e2e-completion-control-state-url "$state_file" \
+    --e2e-completion-control-result-url "$verify_result"
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$completion_db" "
     SELECT
@@ -4216,7 +4220,7 @@ run_completion_control_probe() {
 }
 
 run_workspace_productivity_probe() {
-  local productivity_dir="artifacts/e2e-workspace-productivity"
+  local productivity_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-workspace-productivity"
   local productivity_db="$productivity_dir/Noonmark.sqlite"
   local state_file="$productivity_dir/state.json"
   local exercise_result="$productivity_dir/exercise-result.txt"
@@ -4234,7 +4238,7 @@ run_workspace_productivity_probe() {
     "workspace productivity exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$productivity_db" \
+    --data-url "$productivity_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
@@ -4242,22 +4246,22 @@ run_workspace_productivity_probe() {
     --e2e-reset-selection \
     --e2e-persistence-failure-automation \
     --e2e-workspace-productivity-exercise \
-    --e2e-workspace-productivity-state-url "$PWD/$state_file" \
-    --e2e-workspace-productivity-result-url "$PWD/$exercise_result"
+    --e2e-workspace-productivity-state-url "$state_file" \
+    --e2e-workspace-productivity-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "workspace productivity restart" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$productivity_db" \
+    --data-url "$productivity_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
     --e2e-workspace-productivity-verify \
-    --e2e-workspace-productivity-state-url "$PWD/$state_file" \
-    --e2e-workspace-productivity-result-url "$PWD/$verify_result"
+    --e2e-workspace-productivity-state-url "$state_file" \
+    --e2e-workspace-productivity-result-url "$verify_result"
 
   persisted_order="$(sqlite3 -noheader "$productivity_db" "
     SELECT group_concat(title, '|')
@@ -4375,7 +4379,7 @@ assert_open_panel_trace_ack() {
 }
 
 run_data_import_ui_probe() {
-  local import_dir="artifacts/e2e-data-import-ui"
+  local import_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-import-ui"
   local import_db="${import_dir}/Noonmark.sqlite"
   local fixture_dir="/tmp/noonmark-e2e-import-ui"
   local fixture_json="${fixture_dir}/fixture.json"
@@ -4401,14 +4405,14 @@ run_data_import_ui_probe() {
     "data-import UI fixture setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-ui-setup \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$setup_result"
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$setup_result"
 
   if [[ "$(sqlite3 -noheader "$import_db" "
     SELECT count(*)
@@ -4420,23 +4424,23 @@ run_data_import_ui_probe() {
   fi
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 \
-    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$PWD/$open_panel_protocol_dir" \
-    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$PWD/$open_panel_helper_evidence" \
+    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$open_panel_protocol_dir" \
+    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$open_panel_helper_evidence" \
     NOONMARK_E2E_OPEN_PANEL_INTERACTIONS="cancel confirm" \
     run_terminating_ui_probe \
     "data-import real File menu and NSOpenPanel" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-ui-exercise \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$exercise_result" \
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$exercise_result" \
     --e2e-data-import-open-panel-protocol-directory \
-    "$PWD/$open_panel_protocol_dir"
+    "$open_panel_protocol_dir"
 
   assert_open_panel_trace_ack "$panel_trace" cancel confirm
 
@@ -4444,14 +4448,14 @@ run_data_import_ui_probe() {
     "data-import UI restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-ui-verify \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$restart_result"
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$restart_result"
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$import_db" "
     SELECT
@@ -4542,7 +4546,7 @@ data_import_integrity_journal_digest() {
 }
 
 run_data_import_integrity_probe() {
-  local import_dir="artifacts/e2e-data-import-integrity"
+  local import_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-import-integrity"
   local import_db="${import_dir}/Noonmark.sqlite"
   local fixture_dir="/tmp/noonmark-e2e-import-integrity"
   local fixture_json="${fixture_dir}/duplicate-subtask-identity.json"
@@ -4595,14 +4599,14 @@ run_data_import_integrity_probe() {
     "data-import integrity fixture setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-integrity-setup \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$setup_result"
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$setup_result"
 
   baseline_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
   baseline_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
@@ -4612,23 +4616,23 @@ run_data_import_integrity_probe() {
     "$fixture_json")"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 \
-    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$PWD/$open_panel_protocol_dir" \
-    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$PWD/$open_panel_helper_evidence" \
+    NOONMARK_E2E_OPEN_PANEL_PROTOCOL_DIRECTORY="$open_panel_protocol_dir" \
+    NOONMARK_E2E_OPEN_PANEL_HELPER_EVIDENCE_ROOT="$open_panel_helper_evidence" \
     NOONMARK_E2E_OPEN_PANEL_INTERACTIONS="${scenarios[*]}" \
     run_terminating_ui_probe \
     "data-import malformed Snapshot fail-closed UI" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-integrity-exercise \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$exercise_result" \
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$exercise_result" \
     --e2e-data-import-open-panel-protocol-directory \
-    "$PWD/$open_panel_protocol_dir"
+    "$open_panel_protocol_dir"
 
   exercise_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
   exercise_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
@@ -4648,14 +4652,14 @@ run_data_import_integrity_probe() {
     "data-import malformed Snapshot restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$import_db" \
+    --data-url "$import_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-data-import-integrity-verify \
     --e2e-data-import-ui-fixture-url "$fixture_json" \
-    --e2e-data-import-ui-state-url "$PWD/$state_file" \
-    --e2e-data-import-ui-result-url "$PWD/$restart_result"
+    --e2e-data-import-ui-state-url "$state_file" \
+    --e2e-data-import-ui-result-url "$restart_result"
 
   restart_database_sha256="$(shasum -a 256 "$import_db" | awk '{print $1}')"
   restart_journal_digest="$(data_import_integrity_journal_digest "$import_db")"
@@ -4772,7 +4776,7 @@ run_data_import_integrity_probe() {
 }
 
 run_pool_list_layout_probe() {
-  local layout_dir="artifacts/e2e-pool-list-layout"
+  local layout_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-pool-list-layout"
   local default_result="$layout_dir/default-result.txt"
   local default_log="$layout_dir/default.log"
   local minimum_result="$layout_dir/minimum-result.txt"
@@ -4788,7 +4792,7 @@ run_pool_list_layout_probe() {
     --ephemeral \
     --page pool \
     --e2e-pool-list-layout-probe \
-    --e2e-pool-list-layout-result-url "$PWD/$default_result"
+    --e2e-pool-list-layout-result-url "$default_result"
 
   run_terminating_ui_probe \
     "pool list layout at minimum window" \
@@ -4799,13 +4803,13 @@ run_pool_list_layout_probe() {
     --e2e-enable-zhulong \
     --e2e-pool-list-layout-probe \
     --e2e-pool-list-layout-minimum-window \
-    --e2e-pool-list-layout-result-url "$PWD/$minimum_result"
+    --e2e-pool-list-layout-result-url "$minimum_result"
 
   echo "E2E pool list layout: $default_result $minimum_result"
 }
 
 run_subtask_layout_probe() {
-  local layout_dir="artifacts/e2e-subtask-layout"
+  local layout_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-subtask-layout"
   local layout_db="$layout_dir/Noonmark.sqlite"
   local exercise_result="$layout_dir/exercise-result.txt"
   local restart_result="$layout_dir/restart-result.txt"
@@ -4817,24 +4821,24 @@ run_subtask_layout_probe() {
   local ime_input_mode="${NOONMARK_E2E_SUBTASK_IME_INPUT_MODE:-}"
   local expected_title="测试主列表展开子任务可编辑"
   local exercise_args=(
-    --data-url "$PWD/$layout_db"
+    --data-url "$layout_db"
     --page pool
     --e2e-fixed-instant 2026-07-28T16:00:00Z
     --e2e-fixed-time-zone America/New_York
     --e2e-fixed-locale zh_Hans_SG
-    --e2e-subtask-layout-result-url "$PWD/$exercise_result"
-    --e2e-subtask-ascii-latency-report-url "$PWD/$ascii_latency_report"
-    --e2e-subtask-layout-screenshot-url "$PWD/$pool_screenshot"
-    --e2e-subtask-inline-edit-screenshot-url "$PWD/$inline_edit_screenshot"
+    --e2e-subtask-layout-result-url "$exercise_result"
+    --e2e-subtask-ascii-latency-report-url "$ascii_latency_report"
+    --e2e-subtask-layout-screenshot-url "$pool_screenshot"
+    --e2e-subtask-inline-edit-screenshot-url "$inline_edit_screenshot"
   )
   local restart_args=(
-    --data-url "$PWD/$layout_db"
+    --data-url "$layout_db"
     --page day
     --e2e-fixed-instant 2026-07-28T16:00:00Z
     --e2e-fixed-time-zone America/New_York
     --e2e-fixed-locale zh_Hans_SG
     --e2e-subtask-layout-restart-verify
-    --e2e-subtask-layout-result-url "$PWD/$restart_result"
+    --e2e-subtask-layout-result-url "$restart_result"
   )
   local persisted
 
@@ -4898,7 +4902,7 @@ run_subtask_layout_probe() {
 }
 
 run_pool_context_menu_action_probe() {
-  local action_dir="artifacts/e2e-pool-context-menu-action"
+  local action_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-pool-context-menu-action"
   local action_db="$action_dir/Noonmark.sqlite"
   local action_result="$action_dir/result.txt"
   local action_chain="$action_dir/chain.txt"
@@ -4912,10 +4916,10 @@ run_pool_context_menu_action_probe() {
     "pool context-menu schedule action" \
     "$action_result" \
     "$action_log" \
-    --data-url "$PWD/$action_db" \
+    --data-url "$action_db" \
     --page pool \
-    --e2e-pool-context-menu-action-result-url "$PWD/$action_result" \
-    --e2e-pool-context-menu-action-chain-url "$PWD/$action_chain"
+    --e2e-pool-context-menu-action-result-url "$action_result" \
+    --e2e-pool-context-menu-action-chain-url "$action_chain"
 
   chain_id="$(<"$action_chain")"
   persisted="$(sqlite3 -noheader "$action_db" "
@@ -4932,7 +4936,7 @@ run_pool_context_menu_action_probe() {
 }
 
 run_context_menu_action_matrix_probe() {
-  local context_menu_dir="artifacts/e2e-context-menu-actions"
+  local context_menu_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-context-menu-actions"
   local context_menu_result="$context_menu_dir/context-menu-result.txt"
   local context_menu_log="$context_menu_dir/app.log"
 
@@ -4946,14 +4950,14 @@ run_context_menu_action_matrix_probe() {
     --ephemeral \
     --page day \
     --e2e-context-menu-actions \
-    --e2e-context-menu-result-url "$PWD/$context_menu_result" \
+    --e2e-context-menu-result-url "$context_menu_result" \
     --e2e-quit-after-automation
 
   echo "E2E context menu action matrix: $context_menu_result"
 }
 
 run_unfinished_action_probe() {
-  local action_dir="artifacts/e2e-unfinished-actions"
+  local action_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-unfinished-actions"
   local action_db="$action_dir/Noonmark.sqlite"
   local exercise_result="$action_dir/exercise-result.txt"
   local exercise_log="$action_dir/exercise.log"
@@ -4968,25 +4972,25 @@ run_unfinished_action_probe() {
     "unfinished row/detail abandon actions" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$action_db" \
+    --data-url "$action_db" \
     --page unfinished \
     --e2e-reset-selection \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-unfinished-action-exercise \
-    --e2e-unfinished-action-result-url "$PWD/$exercise_result"
+    --e2e-unfinished-action-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "unfinished action restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$action_db" \
+    --data-url "$action_db" \
     --page unfinished \
     --e2e-reset-selection \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-unfinished-action-restart \
-    --e2e-unfinished-action-result-url "$PWD/$restart_result"
+    --e2e-unfinished-action-result-url "$restart_result"
 
   persisted="$(sqlite3 -noheader -separator ' ' "$action_db" "
     WITH targets AS (
@@ -5027,7 +5031,7 @@ run_unfinished_action_probe() {
 }
 
 run_summary_sidebar_probe() {
-  local summary_dir="artifacts/e2e-summary-sidebar"
+  local summary_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-summary-sidebar"
   local summary_result="${summary_dir}/summary-sidebar-result.txt"
   local summary_log="${summary_dir}/summary-sidebar.log"
 
@@ -5043,13 +5047,13 @@ run_summary_sidebar_probe() {
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-summary-sidebar-probe \
-    --e2e-summary-sidebar-result-url "$PWD/$summary_result"
+    --e2e-summary-sidebar-result-url "$summary_result"
 
   echo "E2E local summary sidebar, calendar heat/status dots, and timeline style: $summary_result"
 }
 
 run_quick_add_ui_probe() {
-  local quick_add_dir="artifacts/e2e-quick-add-ui"
+  local quick_add_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-quick-add-ui"
   local day_db="$quick_add_dir/day.sqlite"
   local future_db="$quick_add_dir/future.sqlite"
   local pool_db="$quick_add_dir/pool.sqlite"
@@ -5073,11 +5077,11 @@ run_quick_add_ui_probe() {
     "Day Todo quick-add real Return" \
     "$day_result" \
     "$day_log" \
-    --data-url "$PWD/$day_db" \
+    --data-url "$day_db" \
     --page day \
     --e2e-quick-add-via-ui day \
     --e2e-quick-add-ui-title "$day_title" \
-    --e2e-quick-add-ui-result-url "$PWD/$day_result"
+    --e2e-quick-add-ui-result-url "$day_result"
 
   day_persisted="$(sqlite3 -noheader -separator '|' "$day_db" "
     SELECT count(*), count(DISTINCT job.id)
@@ -5100,11 +5104,11 @@ run_quick_add_ui_probe() {
     "future Day Todo quick-add real Return" \
     "$future_result" \
     "$future_log" \
-    --data-url "$PWD/$future_db" \
+    --data-url "$future_db" \
     --page day \
     --e2e-quick-add-via-ui future \
     --e2e-quick-add-ui-title "$future_title" \
-    --e2e-quick-add-ui-result-url "$PWD/$future_result"
+    --e2e-quick-add-ui-result-url "$future_result"
 
   future_persisted="$(sqlite3 -noheader -separator '|' "$future_db" "
     SELECT count(*), count(DISTINCT job.id)
@@ -5127,11 +5131,11 @@ run_quick_add_ui_probe() {
     "task-pool quick-add real Return" \
     "$pool_result" \
     "$pool_log" \
-    --data-url "$PWD/$pool_db" \
+    --data-url "$pool_db" \
     --page pool \
     --e2e-quick-add-via-ui pool \
     --e2e-quick-add-ui-title "$pool_title" \
-    --e2e-quick-add-ui-result-url "$PWD/$pool_result"
+    --e2e-quick-add-ui-result-url "$pool_result"
 
   pool_persisted="$(sqlite3 -noheader -separator '|' "$pool_db" "
     SELECT
@@ -5160,7 +5164,7 @@ run_quick_add_ui_probe() {
 }
 
 run_markdown_editor_ui_probe() {
-  local markdown_dir="artifacts/e2e-markdown-editor"
+  local markdown_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-markdown-editor"
   local markdown_db="$markdown_dir/Noonmark.sqlite"
   local markdown_result="$markdown_dir/result.txt"
   local markdown_log="$markdown_dir/app.log"
@@ -5172,10 +5176,10 @@ run_markdown_editor_ui_probe() {
     "Markdown editor native commands" \
     "$markdown_result" \
     "$markdown_log" \
-    --data-url "$PWD/$markdown_db" \
+    --data-url "$markdown_db" \
     --page pool \
     --e2e-markdown-editor-via-ui \
-    --e2e-markdown-editor-ui-result-url "$PWD/$markdown_result"
+    --e2e-markdown-editor-ui-result-url "$markdown_result"
 
   persisted="$(sqlite3 -noheader "$markdown_db" "
     SELECT description_text
@@ -5191,12 +5195,12 @@ run_markdown_editor_ui_probe() {
 }
 
 run_immediate_task_mutation_probe() {
-  local mutation_dir="artifacts/e2e-immediate-task-mutation"
+  local mutation_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-immediate-task-mutation"
   local mutation_db="$mutation_dir/Noonmark.sqlite"
   local mutation_result="$mutation_dir/result.txt"
   local mutation_log="$mutation_dir/app.log"
   local mutation_screenshot="$mutation_dir/immediate-edit-delete.png"
-  local return_dir="artifacts/e2e-return-reschedule"
+  local return_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-return-reschedule"
   local return_db="$return_dir/Noonmark.sqlite"
   local return_result="$return_dir/result.txt"
   local return_log="$return_dir/app.log"
@@ -5208,10 +5212,10 @@ run_immediate_task_mutation_probe() {
     "immediate task title, description, and current-day deletion" \
     "$mutation_result" \
     "$mutation_log" \
-    --data-url "$PWD/$mutation_db" \
+    --data-url "$mutation_db" \
     --page day \
-    --e2e-immediate-task-mutation-result-url "$PWD/$mutation_result" \
-    --e2e-immediate-task-mutation-screenshot-url "$PWD/$mutation_screenshot"
+    --e2e-immediate-task-mutation-result-url "$mutation_result" \
+    --e2e-immediate-task-mutation-screenshot-url "$mutation_screenshot"
 
   if [[ ! -s "$mutation_screenshot" ]]; then
     echo "immediate task mutation screenshot was not created" >&2
@@ -5224,11 +5228,11 @@ run_immediate_task_mutation_probe() {
     "task defer, return-to-pool, reschedule, and completion" \
     "$return_result" \
     "$return_log" \
-    --data-url "$PWD/$return_db" \
+    --data-url "$return_db" \
     --page day \
     --e2e-immediate-task-return-lifecycle \
-    --e2e-immediate-task-mutation-result-url "$PWD/$return_result" \
-    --e2e-immediate-task-mutation-screenshot-url "$PWD/$return_screenshot"
+    --e2e-immediate-task-mutation-result-url "$return_result" \
+    --e2e-immediate-task-mutation-screenshot-url "$return_screenshot"
 
   if [[ ! -s "$return_screenshot" ]]; then
     echo "return and reschedule screenshot was not created" >&2
@@ -5239,7 +5243,7 @@ run_immediate_task_mutation_probe() {
 }
 
 run_review_detail_ux_probe() {
-  local review_dir="artifacts/e2e-review-detail-ux"
+  local review_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-review-detail-ux"
   local review_db="$review_dir/Noonmark.sqlite"
   local review_result="$review_dir/result.txt"
   local review_log="$review_dir/app.log"
@@ -5250,15 +5254,15 @@ run_review_detail_ux_probe() {
     "review editor first-line layout" \
     "$review_result" \
     "$review_log" \
-    --data-url "$PWD/$review_db" \
+    --data-url "$review_db" \
     --page day \
-    --e2e-review-editor-layout-result-url "$PWD/$review_result"
+    --e2e-review-editor-layout-result-url "$review_result"
 
   echo "E2E review editor first-line layout: $review_result"
 }
 
 run_copy_undo_persistence_probe() {
-  local copy_undo_dir="artifacts/e2e-copy-undo-persistence"
+  local copy_undo_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-copy-undo-persistence"
   local copy_undo_db="${copy_undo_dir}/Noonmark.sqlite"
   local copy_undo_state="${copy_undo_dir}/state.json"
   local setup_result="${copy_undo_dir}/setup-result.txt"
@@ -5274,31 +5278,31 @@ run_copy_undo_persistence_probe() {
     "snapshot undo evidence-matrix setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$copy_undo_db" \
+    --data-url "$copy_undo_db" \
     --page day \
     --e2e-fixed-instant 2026-07-16T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-copy-undo-persistence-setup \
-    --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
-    --e2e-copy-undo-persistence-result-url "$PWD/$setup_result" \
+    --e2e-copy-undo-persistence-state-url "$copy_undo_state" \
+    --e2e-copy-undo-persistence-result-url "$setup_result" \
     --e2e-quit-after-automation
 
   run_terminating_ui_probe \
     "snapshot undo evidence-matrix restart" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$copy_undo_db" \
+    --data-url "$copy_undo_db" \
     --page pool \
     --e2e-fixed-instant 2026-07-16T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-copy-undo-persistence-verify \
-    --e2e-copy-undo-persistence-state-url "$PWD/$copy_undo_state" \
-    --e2e-copy-undo-persistence-result-url "$PWD/$verify_result" \
+    --e2e-copy-undo-persistence-state-url "$copy_undo_state" \
+    --e2e-copy-undo-persistence-result-url "$verify_result" \
     --e2e-quit-after-automation
 
   sql_probe="$(sqlite3 -noheader -separator ' ' "$copy_undo_db" "
     WITH state(payload) AS (
-      SELECT CAST(readfile('$PWD/$copy_undo_state') AS TEXT)
+      SELECT CAST(readfile('$copy_undo_state') AS TEXT)
     ), source AS (
       SELECT json_extract(payload, '$.sourceChainID') AS chain_id
       FROM state
@@ -5817,7 +5821,7 @@ run_copy_undo_persistence_probe() {
 }
 
 run_lifecycle_persistence_probe() {
-  local lifecycle_dir="artifacts/e2e-lifecycle"
+  local lifecycle_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-lifecycle"
   local lifecycle_db="${lifecycle_dir}/Noonmark.sqlite"
   local setup_result="${lifecycle_dir}/setup-result.txt"
   local restart_result="${lifecycle_dir}/restart-result.txt"
@@ -5832,24 +5836,24 @@ run_lifecycle_persistence_probe() {
     "lifecycle persistence setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$lifecycle_db" \
+    --data-url "$lifecycle_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-lifecycle-workflow \
-    --e2e-lifecycle-result-url "$PWD/$setup_result" \
+    --e2e-lifecycle-result-url "$setup_result" \
     --e2e-quit-after-automation
 
   run_terminating_ui_probe \
     "lifecycle persistence restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$lifecycle_db" \
+    --data-url "$lifecycle_db" \
     --page unfinished \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-lifecycle-restart-verify \
-    --e2e-lifecycle-result-url "$PWD/$restart_result" \
+    --e2e-lifecycle-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   lifecycle_probe="$(sqlite3 -noheader -separator ' ' "$lifecycle_db" "
@@ -5935,7 +5939,7 @@ run_lifecycle_persistence_probe() {
 }
 
 run_natural_day_rollover_probe() {
-  local rollover_dir="artifacts/e2e-natural-day"
+  local rollover_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-natural-day"
   local rollover_db="${rollover_dir}/Noonmark.sqlite"
   local rollover_state="${rollover_dir}/state.json"
   local exercise_result="${rollover_dir}/exercise-result.txt"
@@ -5952,15 +5956,15 @@ run_natural_day_rollover_probe() {
     "natural-day live rollover" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$rollover_db" \
+    --data-url "$rollover_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-persistence-failure-automation \
     --e2e-natural-day-rollover-exercise \
-    --e2e-natural-day-rollover-state-url "$PWD/$rollover_state" \
-    --e2e-natural-day-rollover-result-url "$PWD/$exercise_result" \
+    --e2e-natural-day-rollover-state-url "$rollover_state" \
+    --e2e-natural-day-rollover-result-url "$exercise_result" \
     --e2e-quit-after-automation
 
   natural_day_rejection_count="$(
@@ -5978,14 +5982,14 @@ run_natural_day_rollover_probe() {
     "natural-day restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$rollover_db" \
+    --data-url "$rollover_db" \
     --page day \
     --e2e-fixed-instant 2026-07-06T04:30:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-natural-day-rollover-restart-verify \
-    --e2e-natural-day-rollover-state-url "$PWD/$rollover_state" \
-    --e2e-natural-day-rollover-result-url "$PWD/$restart_result" \
+    --e2e-natural-day-rollover-state-url "$rollover_state" \
+    --e2e-natural-day-rollover-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$rollover_db" "
@@ -6014,7 +6018,7 @@ run_natural_day_rollover_probe() {
 }
 
 run_preferences_clock_probe() {
-  local preferences_dir="artifacts/e2e-preferences-clock"
+  local preferences_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-preferences-clock"
   local preferences_db="${preferences_dir}/Noonmark.sqlite"
   local state_file="${preferences_dir}/state.json"
   local setup_result="${preferences_dir}/setup-result.txt"
@@ -6040,7 +6044,7 @@ run_preferences_clock_probe() {
     "preference V2 baseline setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$preferences_db" \
+    --data-url "$preferences_db" \
     --sync-folder-url "$sync_root" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -6048,14 +6052,14 @@ run_preferences_clock_probe() {
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-setup \
-    --e2e-preferences-clock-state-url "$PWD/$state_file" \
-    --e2e-preferences-clock-result-url "$PWD/$setup_result"
+    --e2e-preferences-clock-state-url "$state_file" \
+    --e2e-preferences-clock-result-url "$setup_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "preference V2 native Settings and lifecycle exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$preferences_db" \
+    --data-url "$preferences_db" \
     --sync-folder-url "$sync_root" \
     --page settings \
     --e2e-expand-settings-poem \
@@ -6064,14 +6068,14 @@ run_preferences_clock_probe() {
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-exercise \
-    --e2e-preferences-clock-state-url "$PWD/$state_file" \
-    --e2e-preferences-clock-result-url "$PWD/$exercise_result"
+    --e2e-preferences-clock-state-url "$state_file" \
+    --e2e-preferences-clock-result-url "$exercise_result"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "preference V2 disabled restart and recovery" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$preferences_db" \
+    --data-url "$preferences_db" \
     --sync-folder-url "$sync_root" \
     --page settings \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -6079,8 +6083,8 @@ run_preferences_clock_probe() {
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-replication-v2-lifecycle-endpoint \
     --e2e-preferences-clock-verify \
-    --e2e-preferences-clock-state-url "$PWD/$state_file" \
-    --e2e-preferences-clock-result-url "$PWD/$restart_result"
+    --e2e-preferences-clock-state-url "$state_file" \
+    --e2e-preferences-clock-result-url "$restart_result"
 
   initial_bits="$(/usr/bin/plutil -extract initialClockBits raw -o - \
     "$state_file")"
@@ -6187,7 +6191,7 @@ run_preferences_clock_probe() {
   echo "E2E native Settings, V2 disable/join, restart suppression, and recovery: $preferences_db (probe=$sqlite_probe)"
 }
 run_mutation_clock_probe() {
-  local clock_dir="artifacts/e2e-mutation-clock"
+  local clock_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-mutation-clock"
   local clock_db="${clock_dir}/Noonmark.sqlite"
   local clock_state="${clock_dir}/state.json"
   local exercise_result="${clock_dir}/exercise-result.txt"
@@ -6203,28 +6207,28 @@ run_mutation_clock_probe() {
     "mutation-clock future-frontier exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$clock_db" \
+    --data-url "$clock_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-mutation-clock-exercise \
-    --e2e-mutation-clock-state-url "$PWD/$clock_state" \
-    --e2e-mutation-clock-result-url "$PWD/$exercise_result" \
+    --e2e-mutation-clock-state-url "$clock_state" \
+    --e2e-mutation-clock-result-url "$exercise_result" \
     --e2e-quit-after-automation
 
   run_terminating_ui_probe \
     "mutation-clock restart follow-up" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$clock_db" \
+    --data-url "$clock_db" \
     --page day \
     --e2e-fixed-instant 2026-07-06T04:30:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-mutation-clock-restart-verify \
-    --e2e-mutation-clock-state-url "$PWD/$clock_state" \
-    --e2e-mutation-clock-result-url "$PWD/$restart_result" \
+    --e2e-mutation-clock-state-url "$clock_state" \
+    --e2e-mutation-clock-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$clock_db" "
@@ -6408,7 +6412,7 @@ run_mutation_clock_probe() {
 }
 
 run_subtask_clock_probe() {
-  local subtask_dir="artifacts/e2e-subtask-clock"
+  local subtask_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-subtask-clock"
   local subtask_db="${subtask_dir}/Noonmark.sqlite"
   local subtask_state="${subtask_dir}/state.json"
   local exercise_result="${subtask_dir}/exercise-result.txt"
@@ -6424,33 +6428,33 @@ run_subtask_clock_probe() {
     "subtask updatedAt exercise" \
     "$exercise_result" \
     "$exercise_log" \
-    --data-url "$PWD/$subtask_db" \
+    --data-url "$subtask_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-subtask-clock-exercise \
-    --e2e-subtask-clock-state-url "$PWD/$subtask_state" \
-    --e2e-subtask-clock-result-url "$PWD/$exercise_result" \
+    --e2e-subtask-clock-state-url "$subtask_state" \
+    --e2e-subtask-clock-result-url "$exercise_result" \
     --e2e-quit-after-automation
 
   run_terminating_ui_probe \
     "subtask updatedAt restart" \
     "$restart_result" \
     "$restart_log" \
-    --data-url "$PWD/$subtask_db" \
+    --data-url "$subtask_db" \
     --page day \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-subtask-clock-restart-verify \
-    --e2e-subtask-clock-state-url "$PWD/$subtask_state" \
-    --e2e-subtask-clock-result-url "$PWD/$restart_result" \
+    --e2e-subtask-clock-state-url "$subtask_state" \
+    --e2e-subtask-clock-result-url "$restart_result" \
     --e2e-quit-after-automation
 
   sqlite_probe="$(sqlite3 -noheader -separator ' ' "$subtask_db" "
     WITH state(payload) AS (
-      SELECT CAST(readfile('$PWD/$subtask_state') AS TEXT)
+      SELECT CAST(readfile('$subtask_state') AS TEXT)
     ), target AS (
       SELECT
         subtask.id,
@@ -6537,7 +6541,7 @@ run_subtask_clock_probe() {
 }
 
 run_zhulong_navigation_probe() {
-  local navigation_dir="artifacts/e2e-zhulong-navigation"
+  local navigation_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-navigation"
   local navigation_result="${navigation_dir}/zhulong-navigation-result.txt"
   local navigation_log="${navigation_dir}/zhulong-navigation.log"
   local navigation_screenshot="${navigation_dir}/zhulong-home-after-return.png"
@@ -6553,14 +6557,14 @@ run_zhulong_navigation_probe() {
     --page zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-navigation \
-    --e2e-zhulong-navigation-result-url "$PWD/$navigation_result" \
-    --e2e-zhulong-navigation-screenshot-url "$PWD/$navigation_screenshot"
+    --e2e-zhulong-navigation-result-url "$navigation_result" \
+    --e2e-zhulong-navigation-screenshot-url "$navigation_screenshot"
 
   echo "E2E zhulong navigation visibility: $navigation_result, $navigation_screenshot"
 }
 
 run_zhulong_chat_conversation_probe() {
-  local chat_dir="artifacts/e2e-zhulong-chat"
+  local chat_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-chat"
   local chat_database="${chat_dir}/Noonmark.sqlite"
   local interaction_result="${chat_dir}/interaction-result.txt"
   local interaction_log="${chat_dir}/interaction.log"
@@ -6573,22 +6577,22 @@ run_zhulong_chat_conversation_probe() {
     "zhulong chat keyboard, reauthorization, and workflow context" \
     "$interaction_result" \
     "$interaction_log" \
-    --data-url "$PWD/$chat_database" \
+    --data-url "$chat_database" \
     --page zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-chat-provider \
     --e2e-zhulong-chat-ui \
-    --e2e-zhulong-chat-result-url "$PWD/$interaction_result"
+    --e2e-zhulong-chat-result-url "$interaction_result"
 
   capture_app_screenshot \
     "$chat_dir" \
     "zhulong-chat-restart" \
     zhulong \
-    --data-url "$PWD/$chat_database" \
+    --data-url "$chat_database" \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-chat-provider \
     --e2e-zhulong-chat-restart \
-    --e2e-zhulong-chat-result-url "$PWD/$restart_result"
+    --e2e-zhulong-chat-result-url "$restart_result"
 
   if [[ ! -f "$restart_result" || "$(<"$restart_result")" != "ok" ]]; then
     echo "zhulong chat restart persistence failed: $(cat "$restart_result" 2>/dev/null || echo missing)" >&2
@@ -6600,7 +6604,7 @@ run_zhulong_chat_conversation_probe() {
 }
 
 run_zhulong_inline_artifact_probe() {
-  local artifact_dir="artifacts/e2e-zhulong-inline-artifact"
+  local artifact_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-inline-artifact"
   local artifact_database="${artifact_dir}/Noonmark.sqlite"
   local artifact_result="${artifact_dir}/result.txt"
   local artifact_log="${artifact_dir}/run.log"
@@ -6612,19 +6616,19 @@ run_zhulong_inline_artifact_probe() {
     "zhulong inline artifact commit and retained history" \
     "$artifact_result" \
     "$artifact_log" \
-    --data-url "$PWD/$artifact_database" \
+    --data-url "$artifact_database" \
     --page zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-zhulong-chat-provider \
     --e2e-zhulong-inline-artifact \
-    --e2e-zhulong-inline-artifact-result-url "$PWD/$artifact_result"
+    --e2e-zhulong-inline-artifact-result-url "$artifact_result"
 
   echo "E2E zhulong inline artifact commit and retained history: $artifact_result"
 }
 
 run_zhulong_provider_settings_ui_probe() (
   set -euo pipefail
-  local settings_dir="artifacts/e2e-zhulong-provider-settings"
+  local settings_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-provider-settings"
   local settings_result="${settings_dir}/settings-result.txt"
   local settings_log="${settings_dir}/settings.log"
   local provider_ready="${settings_dir}/provider-ready.txt"
@@ -6646,10 +6650,10 @@ run_zhulong_provider_settings_ui_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$provider_health_count" \
-    "$PWD/$provider_log"
+    "$provider_ready" \
+    "$provider_count" \
+    "$provider_health_count" \
+    "$provider_log"
 
   NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
     "zhulong Provider settings feedback and API Key mask" \
@@ -6661,7 +6665,7 @@ run_zhulong_provider_settings_ui_probe() (
     --e2e-zhulong-provider-settings-ui \
     --e2e-zhulong-provider-settings-base-url \
     "http://127.0.0.1:${provider_port}/v1" \
-    --e2e-zhulong-provider-settings-result-url "$PWD/$settings_result"
+    --e2e-zhulong-provider-settings-result-url "$settings_result"
 
   assert_automatic_classification_provider_count \
     "zhulong Provider settings health check" \
@@ -6671,7 +6675,7 @@ run_zhulong_provider_settings_ui_probe() (
 )
 
 run_zhulong_daily_recovery_clock_probe() {
-  local recovery_dir="artifacts/e2e-zhulong-recovery"
+  local recovery_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-recovery"
   local recovery_db="${recovery_dir}/Noonmark.sqlite"
   local recovery_result="${recovery_dir}/recovery-result.txt"
   local interruption_result="${recovery_dir}/interruption-result.txt"
@@ -6685,7 +6689,7 @@ run_zhulong_daily_recovery_clock_probe() {
   mkdir -p "$recovery_dir"
 
   /usr/bin/open -W -n "$app_path" --args \
-    --data-url "$PWD/$recovery_db" \
+    --data-url "$recovery_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
@@ -6694,7 +6698,7 @@ run_zhulong_daily_recovery_clock_probe() {
     --e2e-start-zhulong-workflow dailyReview \
     --e2e-rich-zhulong-session \
     --e2e-interrupt-zhulong-daily-review \
-    --e2e-zhulong-interruption-result-url "$PWD/$interruption_result" \
+    --e2e-zhulong-interruption-result-url "$interruption_result" \
     --e2e-quit-after-automation
 
   if [[ "$(cat "$interruption_result" 2>/dev/null || true)" != \
@@ -6712,14 +6716,14 @@ run_zhulong_daily_recovery_clock_probe() {
     "zhulong interrupted application recovery" \
     "$recovery_result" \
     "$recovery_log" \
-    --data-url "$PWD/$recovery_db" \
+    --data-url "$recovery_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-enable-zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-expect-zhulong-recovery \
-    --e2e-verify-zhulong-persistence-result-url "$PWD/$recovery_result"
+    --e2e-verify-zhulong-persistence-result-url "$recovery_result"
 
   after_recovery_hash="$(shasum -a 256 "$recovery_db" | awk '{print $1}')"
   if [[ "$after_recovery_hash" != "$before_recovery_hash" ]]; then
@@ -6758,7 +6762,7 @@ run_zhulong_daily_recovery_clock_probe() {
 }
 
 run_zhulong_exact_recovery_identity_probe() {
-  local evidence_dir="artifacts/e2e-zhulong-exact-recovery"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-exact-recovery"
   local exact_dir="${evidence_dir}/exact-after"
   local exact_db="${exact_dir}/Noonmark.sqlite"
   local exact_state="${exact_dir}/state.json"
@@ -6803,14 +6807,14 @@ run_zhulong_exact_recovery_identity_probe() {
     "zhulong exact-after recovery setup" \
     "$exact_setup_result" \
     "$exact_setup_log" \
-    --data-url "$PWD/$exact_db" \
+    --data-url "$exact_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-setup-zhulong-exact-recovery exact-after \
-    --e2e-zhulong-exact-recovery-state-url "$PWD/$exact_state" \
-    --e2e-zhulong-exact-recovery-result-url "$PWD/$exact_setup_result"
+    --e2e-zhulong-exact-recovery-state-url "$exact_state" \
+    --e2e-zhulong-exact-recovery-result-url "$exact_setup_result"
 
   if [[ ! -f "$exact_journal" ]]; then
     echo "zhulong exact-after setup did not persist its encrypted journal" >&2
@@ -6909,14 +6913,14 @@ run_zhulong_exact_recovery_identity_probe() {
     "zhulong exact-after no-rewrite recovery" \
     "$exact_verify_result" \
     "$exact_verify_log" \
-    --data-url "$PWD/$exact_db" \
+    --data-url "$exact_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-verify-zhulong-exact-recovery exact-after \
-    --e2e-zhulong-exact-recovery-state-url "$PWD/$exact_state" \
-    --e2e-zhulong-exact-recovery-result-url "$PWD/$exact_verify_result"
+    --e2e-zhulong-exact-recovery-state-url "$exact_state" \
+    --e2e-zhulong-exact-recovery-result-url "$exact_verify_result"
 
   exact_after_database_sha256="$(
     shasum -a 256 "$exact_db" | awk '{print $1}'
@@ -6983,14 +6987,14 @@ run_zhulong_exact_recovery_identity_probe() {
     "zhulong local-only preference conflict setup" \
     "$conflict_setup_result" \
     "$conflict_setup_log" \
-    --data-url "$PWD/$conflict_db" \
+    --data-url "$conflict_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-setup-zhulong-exact-recovery preference-conflict \
-    --e2e-zhulong-exact-recovery-state-url "$PWD/$conflict_state" \
-    --e2e-zhulong-exact-recovery-result-url "$PWD/$conflict_setup_result"
+    --e2e-zhulong-exact-recovery-state-url "$conflict_state" \
+    --e2e-zhulong-exact-recovery-result-url "$conflict_setup_result"
 
   if [[ ! -f "$conflict_journal" ]]; then
     echo "zhulong preference-conflict setup did not persist its encrypted journal" >&2
@@ -7074,14 +7078,14 @@ run_zhulong_exact_recovery_identity_probe() {
     "zhulong local-only preference recovery conflict" \
     "$conflict_verify_result" \
     "$conflict_verify_log" \
-    --data-url "$PWD/$conflict_db" \
+    --data-url "$conflict_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-verify-zhulong-exact-recovery preference-conflict \
-    --e2e-zhulong-exact-recovery-state-url "$PWD/$conflict_state" \
-    --e2e-zhulong-exact-recovery-result-url "$PWD/$conflict_verify_result"
+    --e2e-zhulong-exact-recovery-state-url "$conflict_state" \
+    --e2e-zhulong-exact-recovery-result-url "$conflict_verify_result"
 
   conflict_after_database_sha256="$(
     shasum -a 256 "$conflict_db" | awk '{print $1}'
@@ -7147,7 +7151,7 @@ run_zhulong_exact_recovery_identity_probe() {
 }
 
 run_zhulong_pending_gate_probe() (
-  local evidence_dir="artifacts/e2e-zhulong-pending-gate"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-pending-gate"
   local database="${evidence_dir}/Noonmark.sqlite"
   local sidecar_dir="${evidence_dir}/ZhulongSidecar"
   local journal="${sidecar_dir}/pending-application.zhj"
@@ -7176,13 +7180,13 @@ run_zhulong_pending_gate_probe() (
     "zhulong pending-gate bootstrap setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$database" \
+    --data-url "$database" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-setup-zhulong-pending-gate \
-    --e2e-zhulong-pending-gate-result-url "$PWD/$setup_result"
+    --e2e-zhulong-pending-gate-result-url "$setup_result"
 
   if [[ ! -f "$journal" ]]; then
     echo "zhulong pending-gate setup did not retain its journal" >&2
@@ -7258,13 +7262,13 @@ run_zhulong_pending_gate_probe() (
     "zhulong bootstrap and Engine writer pending gate" \
     "$verify_result" \
     "$verify_log" \
-    --data-url "$PWD/$database" \
+    --data-url "$database" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-zhulong-sidecar-key \
     --e2e-verify-zhulong-pending-gate \
-    --e2e-zhulong-pending-gate-result-url "$PWD/$verify_result"
+    --e2e-zhulong-pending-gate-result-url "$verify_result"
 
   if ! stop_sqlite_write_lock_holder; then
     echo "pending-gate SQLite lock holder failed" >&2
@@ -7430,7 +7434,7 @@ assert_automatic_classification_diagnostic() {
 
 run_automatic_classification_operational_clock_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/operational-clock"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/operational-clock"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local app_log="${evidence_dir}/app.log"
@@ -7453,8 +7457,8 @@ run_automatic_classification_operational_clock_probe() (
   ' EXIT
 
   scripts/automatic-classification-provider-stub.py \
-    --ready-file "$PWD/$provider_ready" \
-    --count-file "$PWD/$provider_count" \
+    --ready-file "$provider_ready" \
+    --count-file "$provider_count" \
     >"$provider_log" 2>&1 &
   provider_pid=$!
   for _ in {1..100}; do
@@ -7481,10 +7485,10 @@ run_automatic_classification_operational_clock_probe() (
       "automatic classification future domain frontier" \
       "$result" \
       "$app_log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page day \
       --e2e-automatic-classification-operational-clock \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if [[ "$(<"$provider_count")" != "1" ]]; then
     echo "future-frontier classification did not make exactly one Provider request" >&2
@@ -7550,7 +7554,7 @@ run_automatic_classification_operational_clock_probe() (
 
 run_automatic_classification_checkpoint_restart_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/checkpoint-restart"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/checkpoint-restart"
   local database="${evidence_dir}/Noonmark.sqlite"
   local state="${evidence_dir}/state.json"
   local setup_result="${evidence_dir}/setup-result.txt"
@@ -7575,8 +7579,8 @@ run_automatic_classification_checkpoint_restart_probe() (
   ' EXIT
 
   scripts/automatic-classification-provider-stub.py \
-    --ready-file "$PWD/$provider_ready" \
-    --count-file "$PWD/$provider_count" \
+    --ready-file "$provider_ready" \
+    --count-file "$provider_count" \
     >"$provider_log" 2>&1 &
   provider_pid=$!
   for _ in {1..100}; do
@@ -7603,11 +7607,11 @@ run_automatic_classification_checkpoint_restart_probe() (
       "automatic classification checkpoint setup" \
       "$setup_result" \
       "${evidence_dir}/setup.log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page day \
       --e2e-automatic-classification-checkpoint-setup \
-      --e2e-automatic-classification-state-url "$PWD/$state" \
-      --e2e-automatic-classification-result-url "$PWD/$setup_result"
+      --e2e-automatic-classification-state-url "$state" \
+      --e2e-automatic-classification-result-url "$setup_result"
 
   checkpoint_probe="$(sqlite3 -noheader -separator ' ' "$database" "
     SELECT state, attempt, proposal_checkpoint IS NOT NULL
@@ -7634,11 +7638,11 @@ run_automatic_classification_checkpoint_restart_probe() (
     "automatic classification checkpoint restart" \
     "$verify_result" \
     "${evidence_dir}/verify.log" \
-    --data-url "$PWD/$database" \
+    --data-url "$database" \
     --page day \
     --e2e-automatic-classification-checkpoint-verify \
-    --e2e-automatic-classification-state-url "$PWD/$state" \
-    --e2e-automatic-classification-result-url "$PWD/$verify_result"
+    --e2e-automatic-classification-state-url "$state" \
+    --e2e-automatic-classification-result-url "$verify_result"
 
   completion_probe="$(sqlite3 -noheader -separator ' ' "$database" "
     SELECT
@@ -7676,7 +7680,7 @@ run_automatic_classification_checkpoint_restart_probe() (
 
 run_automatic_classification_backlog_start_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/backlog-start"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/backlog-start"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local provider_ready="${evidence_dir}/provider-ready.txt"
@@ -7701,12 +7705,12 @@ run_automatic_classification_backlog_start_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
-    --request-received-file "$PWD/$request_received" \
-    --response-gate-file "$PWD/$response_release"
+    --request-received-file "$request_received" \
+    --response-gate-file "$response_release"
 
   NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
     NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
@@ -7715,12 +7719,12 @@ run_automatic_classification_backlog_start_probe() (
       "automatic classification exact backlog authorization" \
       "$result" \
       "${evidence_dir}/app.log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-backlog-start \
-      --e2e-provider-request-received-url "$PWD/$request_received" \
-      --e2e-provider-response-release-url "$PWD/$response_release" \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-provider-request-received-url "$request_received" \
+      --e2e-provider-response-release-url "$response_release" \
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "backlog-start Provider exited before evidence collection" >&2
@@ -7788,7 +7792,7 @@ run_automatic_classification_backlog_start_probe() (
 
 run_automatic_classification_backlog_later_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/backlog-later"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/backlog-later"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local provider_ready="${evidence_dir}/provider-ready.txt"
@@ -7811,9 +7815,9 @@ run_automatic_classification_backlog_later_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log"
 
   NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
@@ -7823,10 +7827,10 @@ run_automatic_classification_backlog_later_probe() (
       "automatic classification later backlog decision" \
       "$result" \
       "${evidence_dir}/app.log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-backlog-later \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "backlog-later Provider exited before evidence collection" >&2
@@ -7887,7 +7891,7 @@ run_automatic_classification_backlog_later_probe() (
 
 run_automatic_classification_future_only_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/future-only"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/future-only"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local provider_ready="${evidence_dir}/provider-ready.txt"
@@ -7910,9 +7914,9 @@ run_automatic_classification_future_only_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log"
 
   NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
@@ -7922,10 +7926,10 @@ run_automatic_classification_future_only_probe() (
       "automatic classification future-only backlog decision" \
       "$result" \
       "${evidence_dir}/app.log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-future-only \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "future-only Provider exited before evidence collection" >&2
@@ -8001,7 +8005,7 @@ run_automatic_classification_future_only_probe() (
 
 run_automatic_classification_failed_edit_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/failed-edit"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/failed-edit"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local app_log="${evidence_dir}/app.log"
@@ -8025,9 +8029,9 @@ run_automatic_classification_failed_edit_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
     --post-outcomes 200,200 \
     --post-content-outcomes malformed,valid
@@ -8039,10 +8043,10 @@ run_automatic_classification_failed_edit_probe() (
       "automatic classification failed job user edit replacement" \
       "$result" \
       "$app_log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page pool \
       --e2e-automatic-classification-failed-edit \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "failed-edit Provider exited before evidence collection" >&2
@@ -8134,7 +8138,7 @@ run_automatic_classification_failed_edit_probe() (
 
 run_automatic_classification_status_surfaces_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/status-surfaces"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/status-surfaces"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local screenshot="${evidence_dir}/status-surfaces.png"
@@ -8158,9 +8162,9 @@ run_automatic_classification_status_surfaces_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
     --post-outcomes 200,200 \
     --post-content-outcomes malformed,valid
@@ -8173,14 +8177,14 @@ run_automatic_classification_status_surfaces_probe() (
       "automatic classification cross-page status AX" \
       "$result" \
       "${evidence_dir}/app.log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page day \
       --e2e-fixed-instant 2026-07-05T16:00:00Z \
       --e2e-fixed-time-zone America/New_York \
       --e2e-fixed-locale zh_Hans_SG \
       --e2e-automatic-classification-status-surfaces \
-      --e2e-automatic-classification-status-screenshot-url "$PWD/$screenshot" \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-status-screenshot-url "$screenshot" \
+      --e2e-automatic-classification-result-url "$result"
 
   if [[ ! -s "$screenshot" ]]; then
     echo "automatic classification status-surfaces screenshot was not created" >&2
@@ -8320,7 +8324,7 @@ run_automatic_classification_status_surfaces_probe() (
 
 run_automatic_classification_provider_block_retry_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/provider-block-retry"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/provider-block-retry"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local app_log="${evidence_dir}/app.log"
@@ -8344,9 +8348,9 @@ run_automatic_classification_provider_block_retry_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
     --post-outcomes 401,200,200,200 \
     --health-outcomes 200
@@ -8358,10 +8362,10 @@ run_automatic_classification_provider_block_retry_probe() (
       "automatic classification blocked Provider health retry" \
       "$result" \
       "$app_log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-provider-block-retry \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "provider-block-retry Provider exited before evidence collection" >&2
@@ -8433,7 +8437,7 @@ run_automatic_classification_provider_block_retry_probe() (
 
 run_automatic_classification_provider_transient_circuit_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/provider-transient-circuit"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/provider-transient-circuit"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local app_log="${evidence_dir}/app.log"
@@ -8458,12 +8462,12 @@ run_automatic_classification_provider_transient_circuit_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
     --post-outcomes 429,503,503 \
-    --response-gate-directory "$PWD/$gate_directory"
+    --response-gate-directory "$gate_directory"
 
   NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
     NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
@@ -8472,12 +8476,12 @@ run_automatic_classification_provider_transient_circuit_probe() (
       "automatic classification transient Provider circuit" \
       "$result" \
       "$app_log" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-provider-transient-circuit \
-      --e2e-provider-gate-directory "$PWD/$gate_directory" \
+      --e2e-provider-gate-directory "$gate_directory" \
       --e2e-automatic-classification-retry-delays-ms 100,100,100 \
-      --e2e-automatic-classification-result-url "$PWD/$result"
+      --e2e-automatic-classification-result-url "$result"
 
   if ! kill -0 "$provider_pid" 2>/dev/null; then
     echo "provider-transient-circuit Provider exited before evidence collection" >&2
@@ -8534,7 +8538,7 @@ run_automatic_classification_provider_transient_circuit_probe() (
 
 run_automatic_classification_contention_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/contention"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/contention"
   local database="${evidence_dir}/Noonmark.sqlite"
   local state="${evidence_dir}/state.json"
   local setup_result="${evidence_dir}/setup-result.txt"
@@ -8575,17 +8579,17 @@ run_automatic_classification_contention_probe() (
     "automatic classification contention setup" \
     "$setup_result" \
     "$setup_log" \
-    --data-url "$PWD/$database" \
+    --data-url "$database" \
     --page settings \
     --e2e-automatic-classification-contention-setup \
-    --e2e-automatic-classification-state-url "$PWD/$state" \
-    --e2e-automatic-classification-result-url "$PWD/$setup_result" \
+    --e2e-automatic-classification-state-url "$state" \
+    --e2e-automatic-classification-result-url "$setup_result" \
     --e2e-quit-after-automation
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log"
 
   rm -f "$contention_marker" "$verify_result"
@@ -8603,13 +8607,13 @@ run_automatic_classification_contention_probe() (
     NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
     NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
     "$app_executable_path" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-contention \
       --e2e-automatic-classification-contention-verify \
-      --e2e-automatic-classification-state-url "$PWD/$state" \
-      --e2e-automatic-classification-contention-marker-url "$PWD/$contention_marker" \
-      --e2e-automatic-classification-result-url "$PWD/$verify_result" \
+      --e2e-automatic-classification-state-url "$state" \
+      --e2e-automatic-classification-contention-marker-url "$contention_marker" \
+      --e2e-automatic-classification-result-url "$verify_result" \
       >"$verify_log" 2>&1 &
   app_pid=$!
 
@@ -8735,7 +8739,7 @@ run_automatic_classification_contention_probe() (
 
 run_automatic_classification_provider_race_probe() (
   set -euo pipefail
-  local evidence_dir="artifacts/e2e-automatic-classification/provider-race"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification/provider-race"
   local database="${evidence_dir}/Noonmark.sqlite"
   local result="${evidence_dir}/result.txt"
   local app_log="${evidence_dir}/app.log"
@@ -8768,23 +8772,23 @@ run_automatic_classification_provider_race_probe() (
   ' EXIT
 
   start_automatic_classification_e2e_provider \
-    "$PWD/$provider_ready" \
-    "$PWD/$provider_count" \
-    "$PWD/$health_count" \
+    "$provider_ready" \
+    "$provider_count" \
+    "$health_count" \
     "$provider_log" \
-    --request-received-file "$PWD/$request_received" \
-    --response-gate-file "$PWD/$response_release"
+    --request-received-file "$request_received" \
+    --response-gate-file "$response_release"
 
   NOONMARK_E2E_AI_BASE_URL="http://127.0.0.1:${provider_port}/v1" \
     NOONMARK_E2E_AI_MODEL="noonmark-e2e-automatic-classification" \
     NOONMARK_E2E_AI_API_KEY="noonmark-e2e-local-provider-key" \
     "$app_executable_path" \
-      --data-url "$PWD/$database" \
+      --data-url "$database" \
       --page settings \
       --e2e-automatic-classification-provider-race \
-      --e2e-automatic-classification-provider-save-trigger-url "$PWD/$save_trigger" \
-      --e2e-automatic-classification-provider-save-completed-url "$PWD/$save_completed" \
-      --e2e-automatic-classification-result-url "$PWD/$result" \
+      --e2e-automatic-classification-provider-save-trigger-url "$save_trigger" \
+      --e2e-automatic-classification-provider-save-completed-url "$save_completed" \
+      --e2e-automatic-classification-result-url "$result" \
       >"$app_log" 2>&1 &
   app_pid=$!
 
@@ -8891,7 +8895,7 @@ run_automatic_classification_provider_race_probe() (
 )
 
 run_automatic_classification_probe() {
-  local evidence_dir="artifacts/e2e-automatic-classification"
+  local evidence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-automatic-classification"
   local enqueue_dir="${evidence_dir}/enqueue"
   local enqueue_database="${enqueue_dir}/Noonmark.sqlite"
   local enqueue_result="${enqueue_dir}/result.txt"
@@ -8909,10 +8913,10 @@ run_automatic_classification_probe() {
     "automatic classification atomic enqueue" \
     "$enqueue_result" \
     "${enqueue_dir}/app.log" \
-    --data-url "$PWD/$enqueue_database" \
+    --data-url "$enqueue_database" \
     --page day \
     --e2e-automatic-classification-enqueue \
-    --e2e-automatic-classification-result-url "$PWD/$enqueue_result" \
+    --e2e-automatic-classification-result-url "$enqueue_result" \
     --e2e-quit-after-automation
 
   assert_automatic_classification_diagnostic \
@@ -8947,10 +8951,10 @@ run_automatic_classification_probe() {
     "automatic classification lifecycle" \
     "$lifecycle_result" \
     "${lifecycle_dir}/app.log" \
-    --data-url "$PWD/$lifecycle_database" \
+    --data-url "$lifecycle_database" \
     --page day \
     --e2e-automatic-classification-lifecycle \
-    --e2e-automatic-classification-result-url "$PWD/$lifecycle_result" \
+    --e2e-automatic-classification-result-url "$lifecycle_result" \
     --e2e-quit-after-automation
 
   assert_automatic_classification_diagnostic \
@@ -9000,7 +9004,7 @@ run_automatic_classification_probe() {
 }
 
 run_zhulong_todo_diff_clock_probe() {
-  local todo_dir="artifacts/e2e-zhulong-todo-diff"
+  local todo_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong-todo-diff"
   local todo_db="${todo_dir}/Noonmark.sqlite"
   local todo_result="${todo_dir}/result.txt"
   local todo_log="${todo_dir}/app.log"
@@ -9013,14 +9017,14 @@ run_zhulong_todo_diff_clock_probe() {
     "zhulong preauthorized Todo diff joint clock" \
     "$todo_result" \
     "$todo_log" \
-    --data-url "$PWD/$todo_db" \
+    --data-url "$todo_db" \
     --page zhulong \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
     --e2e-fixed-time-zone America/New_York \
     --e2e-enable-zhulong \
     --e2e-zhulong-sidecar-key \
     --e2e-prepare-zhulong-todo-diff \
-    --e2e-zhulong-todo-diff-result-url "$PWD/$todo_result"
+    --e2e-zhulong-todo-diff-result-url "$todo_result"
 
   clock_probe="$(sqlite3 -noheader -separator ' ' "$todo_db" "
     WITH ai_definitions AS (
@@ -9085,7 +9089,7 @@ run_zhulong_todo_diff_clock_probe() {
 }
 
 run_date_picker_probe() {
-  local picker_dir="artifacts/e2e-date-picker"
+  local picker_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-date-picker"
   local picker_result="${picker_dir}/result.txt"
   local picker_log="${picker_dir}/app.log"
   local picker_screenshot="${picker_dir}/sheet.png"
@@ -9104,8 +9108,8 @@ run_date_picker_probe() {
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
     --e2e-date-picker-sheet \
-    --e2e-date-picker-result-url "$PWD/$picker_result" \
-    --e2e-date-picker-screenshot-url "$PWD/$picker_screenshot"
+    --e2e-date-picker-result-url "$picker_result" \
+    --e2e-date-picker-screenshot-url "$picker_screenshot"
 
   if [[ ! -s "$picker_screenshot" ]]; then
     echo "custom date picker screenshot was not created: $picker_screenshot" >&2
@@ -9116,7 +9120,7 @@ run_date_picker_probe() {
 }
 
 run_horizontal_page_navigation_probe() {
-  local navigation_dir="artifacts/e2e-horizontal-page-navigation"
+  local navigation_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-horizontal-page-navigation"
   local navigation_result="${navigation_dir}/result.txt"
   local navigation_log="${navigation_dir}/app.log"
   local navigation_screenshot="${navigation_dir}/settings.png"
@@ -9134,8 +9138,8 @@ run_horizontal_page_navigation_probe() {
     --e2e-fixed-time-zone America/New_York \
     --e2e-fixed-locale zh_Hans_SG \
     --e2e-reset-selection \
-    --e2e-horizontal-page-navigation-result-url "$PWD/$navigation_result" \
-    --e2e-horizontal-page-navigation-screenshot-url "$PWD/$navigation_screenshot"
+    --e2e-horizontal-page-navigation-result-url "$navigation_result" \
+    --e2e-horizontal-page-navigation-screenshot-url "$navigation_screenshot"
 
   if [[ ! -s "$navigation_screenshot" ]]; then
     echo "horizontal page navigation settings screenshot missing: $navigation_screenshot" >&2
@@ -9190,7 +9194,7 @@ parse_native_command_help_ready() {
   if [[ "$status_line" != "status=ready" ||
     "$token_line" != "launch_token=$expected_token" ||
     ! "$pid_line" =~ ^pid=([1-9][0-9]*)$ ||
-    "$app_path_line" != "app_path=$PWD/$app_path" ||
+    "$app_path_line" != "app_path=$app_path" ||
     ! "$window_number_line" =~ ^window_number=([1-9][0-9]*)$ ||
     "$window_title_line" != window_title=* ||
     "$menu_title_line" != "menu_title=$expected_menu_title" ||
@@ -9421,7 +9425,7 @@ run_native_command_menu_helper() {
   local helper_pid live_pids
 
   if [[ "$evidence_dir" != /* ]]; then
-    evidence_dir="$PWD/$evidence_dir"
+    evidence_dir="$evidence_dir"
     ledger_path="$evidence_dir/ledger.tsv"
     stdout_path="$evidence_dir/stdout.log"
     stderr_path="$evidence_dir/stderr.log"
@@ -9470,7 +9474,7 @@ run_native_command_menu_helper() {
     -g \
     --stdout "$stdout_path" \
     --stderr "$stderr_path" \
-    "$PWD/$helper_bundle" \
+    "$helper_bundle" \
     --args \
     --mode e2e-menu-command \
     --ledger "$ledger_path" \
@@ -9589,7 +9593,7 @@ parse_open_panel_ready() {
     [[ "$(stat -f '%u' "$ready_path" 2>/dev/null || printf 'missing')" != "$(id -u)" ]] ||
     [[ ! -d "$parent_path" || -L "$parent_path" ]] ||
     [[ "$(stat -f '%Lp' "$parent_path" 2>/dev/null || printf '0')" != "700" ]] ||
-    ! jq -e --arg label "$expected_label" --arg app "$PWD/$app_path" '
+    ! jq -e --arg label "$expected_label" --arg app "$app_path" '
       keys == [
         "appPath", "interactionLabel", "launchToken", "panelLayer",
         "panelTitle", "panelWindowNumber", "schemaVersion", "selectedPath",
@@ -9719,7 +9723,7 @@ run_open_panel_helper() {
     -g \
     --stdout "$stdout_path" \
     --stderr "$stderr_path" \
-    "$PWD/$helper_bundle" \
+    "$helper_bundle" \
     --args \
     --mode e2e-open-panel \
     --ledger "$ledger_path" \
@@ -9945,7 +9949,7 @@ run_diagnostic_export_helper() {
     -g \
     --stdout "$stdout_path" \
     --stderr "$stderr_path" \
-    "$PWD/$helper_bundle" \
+    "$helper_bundle" \
     --args \
     --mode diagnostic-export \
     --ledger "$ledger_path" \
@@ -10104,8 +10108,8 @@ run_native_command_surface_exercise() {
   fi
   /usr/bin/open -W -n "$app_path" --args \
     "$@" \
-    --e2e-native-command-help-ready-url "$PWD/$ready_path" \
-    --e2e-native-command-help-completion-url "$PWD/$completion_path" \
+    --e2e-native-command-help-ready-url "$ready_path" \
+    --e2e-native-command-help-completion-url "$completion_path" \
     --e2e-native-command-help-token "$token" \
     >"$log" 2>&1 &
   launcher_pid=$!
@@ -10140,7 +10144,7 @@ run_native_command_surface_exercise() {
     "$NATIVE_COMMAND_READY_MENU_TITLE" \
     "$NATIVE_COMMAND_READY_MENU_ITEM_TITLE" \
     "$token" \
-    "$PWD/$completion_path" \
+    "$completion_path" \
     "$helper_evidence_dir"; then
     cleanup_native_command_helper >/dev/null 2>&1 || true
     terminate_e2e_app >/dev/null 2>&1 || true
@@ -10210,7 +10214,7 @@ diagnostic_closure_app_process_matches() {
   if ! command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null)"; then
     return 1
   fi
-  [[ "$command_line" == "$PWD/$app_executable_path "* ]] &&
+  [[ "$command_line" == "$app_executable_path "* ]] &&
     [[ " $command_line " == *" --e2e-diagnostic-evidence-$mode "* ]] &&
     [[ " $command_line " == *" --e2e-diagnostic-evidence-launch-token $token "* ]] &&
     [[ " $command_line " == *" --data-url $database_path "* ]] &&
@@ -10253,8 +10257,8 @@ wait_for_diagnostic_closure_app_process_identity() {
 }
 
 run_diagnostic_evidence_closure_probe() {
-  local closure_dir="artifacts/e2e-diagnostic-closure"
-  local closure_root="$PWD/$closure_dir"
+  local closure_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-diagnostic-closure"
+  local closure_root="$closure_dir"
   local scope_manifest="$closure_root/diagnostic-export-scope.tsv"
   local scope_stderr="$closure_root/diagnostic-export-scope.stderr.log"
   local scope_application=""
@@ -10265,10 +10269,10 @@ run_diagnostic_evidence_closure_probe() {
   local sentinels=""
   local diagnostic_ledger=""
   local diagnostic_start_gate=""
-  local state="$PWD/$closure_dir/state.json"
-  local seed_result="$PWD/$closure_dir/seed-result.txt"
-  local stall_result="$PWD/$closure_dir/stall-result.txt"
-  local restart_result="$PWD/$closure_dir/restart-result.txt"
+  local state="$closure_dir/state.json"
+  local seed_result="$closure_dir/seed-result.txt"
+  local stall_result="$closure_dir/stall-result.txt"
+  local restart_result="$closure_dir/restart-result.txt"
   local window_title="晷迹 · Day Todo — 7月5日"
   local restart_window_identity_directory=""
   local restart_window_identity_path=""
@@ -10287,7 +10291,7 @@ run_diagnostic_evidence_closure_probe() {
   set +e
   "$helper_executable_path" \
     --mode diagnostic-export-scope \
-    --app-path "$PWD/$app_path" \
+    --app-path "$app_path" \
     --target-profile e2e \
     >"$scope_temp" \
     2>"$scope_stderr"
@@ -10325,7 +10329,7 @@ run_diagnostic_evidence_closure_probe() {
     echo "diagnostic closure could not read its canonical scope" >&2
     return 1
   fi
-  if [[ "$scope_application" != "$PWD/$app_path" ||
+  if [[ "$scope_application" != "$app_path" ||
     "${database%/*}" != "$closure_root" ||
     "${repository_lock%/*/*}" != "$closure_root" ||
     "${export_path%/*}" != "$closure_root" ||
@@ -10346,7 +10350,7 @@ run_diagnostic_evidence_closure_probe() {
   mkdir -m 700 -- "$sync_root"
 
   seed_token="$(uuidgen)"
-  "$PWD/$app_executable_path" \
+  "$app_executable_path" \
     --data-url "$database" \
     --sync-folder-url "$sync_root" \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -10386,7 +10390,7 @@ run_diagnostic_evidence_closure_probe() {
   fi
 
   stall_token="$(uuidgen)"
-  "$PWD/$app_executable_path" \
+  "$app_executable_path" \
     --data-url "$database" \
     --sync-folder-url "$sync_root" \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -10464,10 +10468,10 @@ run_diagnostic_evidence_closure_probe() {
     echo "diagnostic restart could not create a canonical window identity token" >&2
     return 1
   fi
-  restart_window_identity_directory="$PWD/$closure_dir/.main-window-identity-$restart_token"
+  restart_window_identity_directory="$closure_dir/.main-window-identity-$restart_token"
   restart_window_identity_path="$restart_window_identity_directory/main-window-identity.json"
   mkdir -m 700 -- "$restart_window_identity_directory"
-  "$PWD/$app_executable_path" \
+  "$app_executable_path" \
     --data-url "$database" \
     --sync-folder-url "$sync_root" \
     --e2e-fixed-instant 2026-07-05T16:00:00Z \
@@ -10830,14 +10834,14 @@ if [[ "${NOONMARK_E2E_IDEA_CAPTURE_ONLY:-0}" == "1" ]]; then
 fi
 
 if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
-  native_stress_dir="artifacts/e2e-native-command-stress"
+  native_stress_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-native-command-stress"
   rm -rf "$native_stress_dir"
   mkdir -p "$native_stress_dir"
   for (( iteration = 1; iteration <= native_command_stress_count; iteration++ )); do
     run_native_command_surface_probe
     printf -v iteration_label '%02d' "$iteration"
     cp -R \
-      artifacts/e2e-native-command-surface \
+      "${NOONMARK_ARTIFACTS_DIR}/e2e-native-command-surface" \
       "$native_stress_dir/$iteration_label"
     echo "E2E native command stress iteration: $iteration_label/$native_command_stress_count"
   done
@@ -10847,22 +10851,22 @@ if [[ "${NOONMARK_E2E_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
 fi
 
 if [[ "${NOONMARK_E2E_ENGLISH_NATIVE_COMMANDS_ONLY:-0}" == "1" ]]; then
-  english_native_stress_dir="artifacts/e2e-english-native-command-stress"
+  english_native_stress_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-english-native-command-stress"
   rm -rf "$english_native_stress_dir"
   mkdir -p "$english_native_stress_dir"
   for (( iteration = 1; iteration <= native_command_stress_count; iteration++ )); do
     printf -v iteration_label '%02d' "$iteration"
-    english_native_dir="artifacts/e2e-english-native-command-surface"
+    english_native_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-english-native-command-surface"
     english_native_db="$english_native_dir/Noonmark.sqlite"
     rm -rf "$english_native_dir"
     mkdir -p "$english_native_dir"
     prepare_english_screenshot_database \
-      "$PWD/$english_native_db" \
+      "$english_native_db" \
       "$english_native_dir/bootstrap.log"
-    run_english_menu_probe "$PWD/$english_native_db"
+    run_english_menu_probe "$english_native_db"
     cp -R "$english_native_dir" "$english_native_stress_dir/$iteration_label"
     cp -R \
-      artifacts/e2e-english/menu \
+      "${NOONMARK_ARTIFACTS_DIR}/e2e-english/menu" \
       "$english_native_stress_dir/$iteration_label/menu"
     echo "E2E English native command stress iteration: $iteration_label/$native_command_stress_count"
   done
@@ -10977,45 +10981,57 @@ if [[ "${NOONMARK_E2E_ZHULONG_APPLICATION_CLOCK_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-english_screenshot_dir="artifacts/e2e-english"
+english_screenshot_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-english"
 english_screenshot_db="$english_screenshot_dir/Noonmark.sqlite"
 english_scenarios_enabled="$english_scenarios_requested"
 if [[ "$english_scenarios_enabled" == "1" ]]; then
   rm -rf "$english_screenshot_dir"
   mkdir -p "$english_screenshot_dir"
   prepare_english_screenshot_database \
-    "$PWD/$english_screenshot_db" \
+    "$english_screenshot_db" \
     "$english_screenshot_dir/bootstrap.log"
 fi
 
 for scenario in "${scenarios[@]}"; do
   IFS="|" read -r screenshot_name page extra_args scenario_language <<< "$scenario"
+  # Scenario specifications contain fixed tokens. Expand artifact paths only
+  # after tokenization so a BUILD directory containing spaces remains one arg.
+  scenario_args=()
+  if [[ -n "$extra_args" ]]; then
+    read -r -a scenario_args <<< "$extra_args"
+    for argument_index in "${!scenario_args[@]}"; do
+      case "${scenario_args[$argument_index]}" in
+        artifacts/*)
+          scenario_args[$argument_index]="$NOONMARK_ARTIFACTS_DIR/${scenario_args[$argument_index]#artifacts/}"
+          ;;
+      esac
+    done
+  fi
   if [[ "$scenario_language" == "english" ]]; then
     if [[ -n "$extra_args" ]]; then
-      # shellcheck disable=SC2086
       NOONMARK_E2E_EXPECTED_LANGUAGE=english capture_app_screenshot \
-        artifacts/e2e \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e" \
         "$screenshot_name" \
         "$page" \
-        --data-url "$PWD/$english_screenshot_db" \
+        --data-url "$english_screenshot_db" \
         --e2e-fixed-instant 2026-07-05T16:00:00Z \
         --e2e-fixed-time-zone America/New_York \
         --e2e-fixed-locale en_SG \
         --e2e-reset-selection \
-        $extra_args
+        "${scenario_args[@]}"
     else
       NOONMARK_E2E_EXPECTED_LANGUAGE=english capture_app_screenshot \
-        artifacts/e2e \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e" \
         "$screenshot_name" \
         "$page" \
-        --data-url "$PWD/$english_screenshot_db" \
+        --data-url "$english_screenshot_db" \
         --e2e-fixed-instant 2026-07-05T16:00:00Z \
         --e2e-fixed-time-zone America/New_York \
         --e2e-fixed-locale en_SG \
         --e2e-reset-selection
     fi
     assert_english_screenshot \
-      "artifacts/e2e/${screenshot_name}.png" \
+      "${NOONMARK_ARTIFACTS_DIR}/e2e/${screenshot_name}.png" \
       "$page" \
       "$screenshot_name"
     if [[ "$screenshot_name" == "english-day-history-header" ]]; then
@@ -11024,45 +11040,44 @@ for scenario in "${scenarios[@]}"; do
       assert_english_populated_ui_result "$page" "${screenshot_name#english-}"
     fi
   elif [[ -n "$extra_args" ]]; then
-    # shellcheck disable=SC2086
-    capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection $extra_args
+    capture_app_screenshot "${NOONMARK_ARTIFACTS_DIR}/e2e" "$screenshot_name" "$page" --ephemeral --e2e-reset-selection "${scenario_args[@]}"
   else
-    capture_app_screenshot artifacts/e2e "$screenshot_name" "$page" --ephemeral --e2e-reset-selection
+    capture_app_screenshot "${NOONMARK_ARTIFACTS_DIR}/e2e" "$screenshot_name" "$page" --ephemeral --e2e-reset-selection
   fi
   if [[ "$screenshot_name" == "settings" ]]; then
     assert_settings_sidebar_screenshot \
-      "artifacts/e2e/${screenshot_name}.png" \
+      "${NOONMARK_ARTIFACTS_DIR}/e2e/${screenshot_name}.png" \
       chinese
   elif [[ "$screenshot_name" == "english-settings" ]]; then
     assert_settings_sidebar_screenshot \
-      "artifacts/e2e/${screenshot_name}.png" \
+      "${NOONMARK_ARTIFACTS_DIR}/e2e/${screenshot_name}.png" \
       english
   fi
   case "$screenshot_name" in
     zhulong)
       assert_zhulong_title_geometry_result \
-        "artifacts/e2e/zhulong-title-geometry.txt" \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e/zhulong-title-geometry.txt" \
         home \
         zhulong.home.title \
         烛龙
       ;;
     zhulong-stream)
       assert_zhulong_title_geometry_result \
-        "artifacts/e2e/zhulong-stream-title-geometry.txt" \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e/zhulong-stream-title-geometry.txt" \
         session \
         zhulong.session.title \
         烛龙
       ;;
     zhulong-stream-detail-expanded)
       assert_zhulong_title_geometry_result \
-        "artifacts/e2e/zhulong-stream-detail-expanded-title-geometry.txt" \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e/zhulong-stream-detail-expanded-title-geometry.txt" \
         session \
         zhulong.session.title \
         烛龙
       ;;
     english-zhulong)
       assert_zhulong_title_geometry_result \
-        "artifacts/e2e-english/zhulong-title-geometry.txt" \
+        "${NOONMARK_ARTIFACTS_DIR}/e2e-english/zhulong-title-geometry.txt" \
         home \
         zhulong.home.title \
         Zhulong
@@ -11071,11 +11086,11 @@ for scenario in "${scenarios[@]}"; do
   if [[ "$scenario_language" == "english" ]]; then
     record_english_scenario_evidence \
       "$screenshot_name" \
-      "artifacts/e2e/${screenshot_name}.png"
+      "${NOONMARK_ARTIFACTS_DIR}/e2e/${screenshot_name}.png"
   fi
   if [[ "$screenshot_name" == "day-pointer-selection" ]]; then
     xcrun swift scripts/assert-selection-focus-screenshot.swift \
-      "artifacts/e2e/${screenshot_name}.png"
+      "${NOONMARK_ARTIFACTS_DIR}/e2e/${screenshot_name}.png"
   fi
 done
 
@@ -11086,7 +11101,7 @@ assert_task_detail_density_screenshots
 assert_sidebar_semantic_icon_colors_screenshot
 
 if [[ "$english_scenarios_enabled" == "1" && "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" != "1" ]]; then
-  run_english_menu_probe "$PWD/$english_screenshot_db"
+  run_english_menu_probe "$english_screenshot_db"
 fi
 
 if [[ "${NOONMARK_E2E_SCREENSHOTS_ONLY:-0}" == "1" ]]; then
@@ -11157,7 +11172,7 @@ run_data_import_integrity_probe
 
 run_summary_sidebar_probe
 
-blank_dir="artifacts/e2e-blank"
+blank_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-blank"
 blank_db="${blank_dir}/Noonmark.sqlite"
 blank_pages=(day pool future unfinished completed calendar zhulong)
 rm -rf "$blank_dir"
@@ -11165,9 +11180,9 @@ mkdir -p "$blank_dir"
 
 for page in "${blank_pages[@]}"; do
   if [[ "$page" == "zhulong" ]]; then
-    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db" --e2e-reset-selection --e2e-enable-zhulong
+    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$blank_db" --e2e-reset-selection --e2e-enable-zhulong
   else
-    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$PWD/$blank_db" --e2e-reset-selection
+    capture_app_screenshot "$blank_dir" "$page" "$page" --data-url "$blank_db" --e2e-reset-selection
   fi
 done
 
@@ -11192,12 +11207,12 @@ fi
 
 echo "E2E blank user screenshots: $blank_dir (days=$blank_days chains=$blank_chains definitions=$blank_definitions traces=$blank_traces subtasks=$blank_subtasks preferences=$blank_preferences)"
 
-persistence_dir="artifacts/e2e-persistence"
+persistence_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-persistence"
 persistence_db="${persistence_dir}/Noonmark.sqlite"
 rm -rf "$persistence_dir"
 mkdir -p "$persistence_dir"
 
-"$app_executable_path" --data-url "$PWD/$persistence_db" --e2e-reset-selection --page day >/dev/null 2>&1 &
+"$app_executable_path" --data-url "$persistence_db" --e2e-reset-selection --page day >/dev/null 2>&1 &
 disown "$!" 2>/dev/null || true
 sleep "${NOONMARK_E2E_STARTUP_WAIT:-3}"
 terminate_e2e_app
@@ -11226,7 +11241,7 @@ fi
 
 echo "E2E blank persistence database: $persistence_db (days=$days chains=$chains definitions=$definitions traces=$traces subtasks=$subtasks preferences=$preferences)"
 
-classification_dir="artifacts/e2e-classification"
+classification_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-classification"
 classification_db="${classification_dir}/Noonmark.sqlite"
 classification_edit_result="${classification_dir}/edit-result.txt"
 classification_restart_result="${classification_dir}/restart-result.txt"
@@ -11235,11 +11250,11 @@ rm -rf "$classification_dir"
 mkdir -p "$classification_dir"
 
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$classification_db" \
+  --data-url "$classification_db" \
   --page pool \
   --e2e-classification-edit \
   --e2e-classification-title "$classification_title" \
-  --e2e-classification-result-url "$PWD/$classification_edit_result" \
+  --e2e-classification-result-url "$classification_edit_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$classification_edit_result" ]]; then
@@ -11255,10 +11270,10 @@ capture_app_screenshot \
   "$classification_dir" \
   "classification-restart" \
   pool \
-  --data-url "$PWD/$classification_db" \
+  --data-url "$classification_db" \
   --e2e-classification-verify \
   --e2e-classification-title "$classification_title" \
-  --e2e-classification-result-url "$PWD/$classification_restart_result"
+  --e2e-classification-result-url "$classification_restart_result"
 
 if [[ ! -f "$classification_restart_result" ]]; then
   echo "classification restart automation failed: missing result" >&2
@@ -11419,13 +11434,13 @@ fi
 
 echo "E2E classification edit and restart: $classification_db (category=$classification_category_count labels=$classification_label_count revision=$classification_revision records=$classification_record_count crosscheck=$classification_crosscheck_count)"
 
-zhulong_dir="artifacts/e2e-zhulong"
+zhulong_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-zhulong"
 zhulong_db="${zhulong_dir}/Noonmark.sqlite"
 rm -rf "$zhulong_dir"
 mkdir -p "$zhulong_dir"
 
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_db" \
+  --data-url "$zhulong_db" \
   --page zhulong \
   --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
@@ -11452,11 +11467,11 @@ fi
 
 zhulong_persistence_result="${zhulong_dir}/persistence-result.txt"
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_db" \
+  --data-url "$zhulong_db" \
   --page zhulong \
   --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
-  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_persistence_result" \
+  --e2e-verify-zhulong-persistence-result-url "$zhulong_persistence_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$zhulong_persistence_result" || "$(cat "$zhulong_persistence_result")" != "ok" ]]; then
@@ -11467,11 +11482,11 @@ fi
 printf 'invalid encrypted sidecar' > "$zhulong_sidecar_dir/invalid.zhs"
 zhulong_corruption_result="${zhulong_dir}/corruption-result.txt"
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$zhulong_db" \
+  --data-url "$zhulong_db" \
   --page zhulong \
   --e2e-enable-zhulong \
   --e2e-zhulong-sidecar-key \
-  --e2e-verify-zhulong-persistence-result-url "$PWD/$zhulong_corruption_result" \
+  --e2e-verify-zhulong-persistence-result-url "$zhulong_corruption_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$zhulong_corruption_result" || "$(cat "$zhulong_corruption_result")" != "corruption-detected" ]]; then
@@ -11487,7 +11502,7 @@ run_zhulong_pending_gate_probe
 run_zhulong_todo_diff_clock_probe
 run_automatic_classification_probe
 
-review_zhulong_dir="artifacts/e2e-review-zhulong-entry"
+review_zhulong_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-review-zhulong-entry"
 review_zhulong_result="${review_zhulong_dir}/review-zhulong-result.txt"
 rm -rf "$review_zhulong_dir"
 mkdir -p "$review_zhulong_dir"
@@ -11497,7 +11512,7 @@ open -W -n "$app_path" --args \
   --page day \
   --e2e-zhulong-sidecar-key \
   --e2e-review-zhulong-entry \
-  --e2e-review-zhulong-result-url "$PWD/$review_zhulong_result" \
+  --e2e-review-zhulong-result-url "$review_zhulong_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$review_zhulong_result" ]]; then
@@ -11514,7 +11529,7 @@ echo "E2E review zhulong entry: $review_zhulong_result"
 
 run_context_menu_action_matrix_probe
 
-undo_dir="artifacts/e2e-undo"
+undo_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-undo"
 undo_result="${undo_dir}/undo-result.txt"
 rm -rf "$undo_dir"
 mkdir -p "$undo_dir"
@@ -11523,7 +11538,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-undo-workflow \
-  --e2e-undo-result-url "$PWD/$undo_result" \
+  --e2e-undo-result-url "$undo_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$undo_result" ]]; then
@@ -11538,7 +11553,7 @@ fi
 
 echo "E2E undo workflow: $undo_result"
 
-date_strip_dir="artifacts/e2e-date-strip"
+date_strip_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-date-strip"
 date_strip_result="${date_strip_dir}/date-strip-result.txt"
 rm -rf "$date_strip_dir"
 mkdir -p "$date_strip_dir"
@@ -11547,7 +11562,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-date-strip-selection \
-  --e2e-date-strip-result-url "$PWD/$date_strip_result" \
+  --e2e-date-strip-result-url "$date_strip_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$date_strip_result" ]]; then
@@ -11562,7 +11577,7 @@ fi
 
 echo "E2E date strip selection: $date_strip_result"
 
-keyboard_date_dir="artifacts/e2e-keyboard-date"
+keyboard_date_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-keyboard-date"
 keyboard_date_result="${keyboard_date_dir}/keyboard-date-result.txt"
 rm -rf "$keyboard_date_dir"
 mkdir -p "$keyboard_date_dir"
@@ -11571,7 +11586,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-keyboard-date-navigation \
-  --e2e-keyboard-date-result-url "$PWD/$keyboard_date_result"
+  --e2e-keyboard-date-result-url "$keyboard_date_result"
 
 if [[ ! -f "$keyboard_date_result" ]]; then
   echo "keyboard date navigation result was not created: $keyboard_date_result" >&2
@@ -11585,7 +11600,7 @@ fi
 
 echo "E2E keyboard date navigation: $keyboard_date_result"
 
-detail_rail_dir="artifacts/e2e-detail-rail"
+detail_rail_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-detail-rail"
 detail_rail_result="${detail_rail_dir}/detail-rail-result.txt"
 rm -rf "$detail_rail_dir"
 mkdir -p "$detail_rail_dir"
@@ -11594,7 +11609,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-detail-rail-layout \
-  --e2e-detail-rail-result-url "$PWD/$detail_rail_result"
+  --e2e-detail-rail-result-url "$detail_rail_result"
 
 if [[ ! -f "$detail_rail_result" ]]; then
   echo "detail rail layout result was not created: $detail_rail_result" >&2
@@ -11608,7 +11623,7 @@ fi
 
 echo "E2E collapsible navigation and detail rails: $detail_rail_result"
 
-main_window_chrome_dir="artifacts/e2e-main-window-chrome"
+main_window_chrome_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-main-window-chrome"
 main_window_chrome_result="${main_window_chrome_dir}/main-window-chrome-result.txt"
 rm -rf "$main_window_chrome_dir"
 mkdir -p "$main_window_chrome_dir"
@@ -11617,7 +11632,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-main-window-chrome \
-  --e2e-main-window-chrome-result-url "$PWD/$main_window_chrome_result"
+  --e2e-main-window-chrome-result-url "$main_window_chrome_result"
 
 if [[ ! -f "$main_window_chrome_result" ]]; then
   echo "main window chrome result was not created: $main_window_chrome_result" >&2
@@ -11631,7 +11646,7 @@ fi
 
 echo "E2E integrated main window chrome: $main_window_chrome_result"
 
-header_navigation_dir="artifacts/e2e-header-navigation-hit-target"
+header_navigation_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-header-navigation-hit-target"
 header_navigation_result="${header_navigation_dir}/header-navigation-result.txt"
 rm -rf "$header_navigation_dir"
 mkdir -p "$header_navigation_dir"
@@ -11640,7 +11655,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page day \
   --e2e-header-navigation-hit-target \
-  --e2e-header-navigation-hit-target-result-url "$PWD/$header_navigation_result"
+  --e2e-header-navigation-hit-target-result-url "$header_navigation_result"
 
 if [[ ! -f "$header_navigation_result" ]]; then
   echo "header navigation hit-target result was not created: $header_navigation_result" >&2
@@ -11654,7 +11669,7 @@ fi
 
 echo "E2E complete header navigation hit targets: $header_navigation_result"
 
-calendar_grid_dir="artifacts/e2e-calendar-grid-topology"
+calendar_grid_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-calendar-grid-topology"
 calendar_grid_result="${calendar_grid_dir}/calendar-grid-result.txt"
 rm -rf "$calendar_grid_dir"
 mkdir -p "$calendar_grid_dir"
@@ -11663,7 +11678,7 @@ open -W -n "$app_path" --args \
   --ephemeral \
   --page calendar \
   --e2e-calendar-grid-topology \
-  --e2e-calendar-grid-topology-result-url "$PWD/$calendar_grid_result"
+  --e2e-calendar-grid-topology-result-url "$calendar_grid_result"
 
 if [[ ! -f "$calendar_grid_result" ]]; then
   echo "calendar grid topology result was not created: $calendar_grid_result" >&2
@@ -11684,7 +11699,7 @@ run_zhulong_chat_conversation_probe
 run_zhulong_inline_artifact_probe
 run_zhulong_provider_settings_ui_probe
 
-provider_dir="artifacts/e2e-provider"
+provider_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-provider"
 provider_result="${provider_dir}/provider-result.txt"
 provider_configure_result="${provider_dir}/provider-configure-result.txt"
 provider_credential_state="${provider_dir}/provider-credential-state.json"
@@ -11709,8 +11724,8 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-credential-state-url "$PWD/$provider_credential_state" \
-  --e2e-provider-result-url "$PWD/$provider_credential_setup_result" \
+  --e2e-provider-credential-state-url "$provider_credential_state" \
+  --e2e-provider-result-url "$provider_credential_setup_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_credential_setup_result" ]]; then
@@ -11732,8 +11747,8 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-credential-state-url "$PWD/$provider_credential_state" \
-  --e2e-provider-result-url "$PWD/$provider_credential_old_result" \
+  --e2e-provider-credential-state-url "$provider_credential_state" \
+  --e2e-provider-result-url "$provider_credential_old_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_credential_old_result" \
@@ -11751,8 +11766,8 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-credential-state-url "$PWD/$provider_credential_state" \
-  --e2e-provider-result-url "$PWD/$provider_credential_new_result" \
+  --e2e-provider-credential-state-url "$provider_credential_state" \
+  --e2e-provider-result-url "$provider_credential_new_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_credential_new_result" \
@@ -11770,8 +11785,8 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-credential-state-url "$PWD/$provider_credential_state" \
-  --e2e-provider-result-url "$PWD/$provider_credential_clear_result" \
+  --e2e-provider-credential-state-url "$provider_credential_state" \
+  --e2e-provider-result-url "$provider_credential_clear_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_credential_clear_result" \
@@ -11792,7 +11807,7 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-result-url "$PWD/$provider_configure_result" \
+  --e2e-provider-result-url "$provider_configure_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_configure_result" ]]; then
@@ -11814,7 +11829,7 @@ open -W -n "$app_path" --args \
   --e2e-provider-base-url "$provider_base_url" \
   --e2e-provider-model "$provider_model" \
   --e2e-provider-api-key "$provider_api_key" \
-  --e2e-provider-result-url "$PWD/$provider_result" \
+  --e2e-provider-result-url "$provider_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$provider_result" ]]; then
@@ -11830,7 +11845,7 @@ fi
 assert_automatic_classification_e2e_credentials_cleared
 echo "E2E provider config round-trip: $provider_result (name=$provider_name model=$provider_model)"
 
-workflow_dir="artifacts/e2e-workflow"
+workflow_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-workflow"
 workflow_db="${workflow_dir}/Noonmark.sqlite"
 workflow_result="${workflow_dir}/workflow-result.txt"
 workflow_title="E2E 排期延期复盘"
@@ -11838,13 +11853,13 @@ rm -rf "$workflow_dir"
 mkdir -p "$workflow_dir"
 
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$workflow_db" \
+  --data-url "$workflow_db" \
   --page pool \
   --e2e-fixed-instant 2026-07-05T16:00:00Z \
   --e2e-fixed-time-zone America/New_York \
   --e2e-domain-workflow \
   --e2e-workflow-title "$workflow_title" \
-  --e2e-workflow-result-url "$PWD/$workflow_result" \
+  --e2e-workflow-result-url "$workflow_result" \
   --e2e-quit-after-automation
 
 if [[ ! -f "$workflow_result" ]]; then
@@ -11903,7 +11918,7 @@ run_mutation_clock_probe
 run_preferences_clock_probe
 run_natural_day_rollover_probe
 
-data_package_dir="artifacts/e2e-data-package"
+data_package_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-package"
 data_package_db="${data_package_dir}/Noonmark.sqlite"
 data_package_json="${data_package_dir}/noonmark-e2e-export.json"
 data_package_result="${data_package_dir}/data-package-result.txt"
@@ -11911,11 +11926,11 @@ rm -rf "$data_package_dir"
 mkdir -p "$data_package_dir"
 
 open -W -n "$app_path" --args \
-  --data-url "$PWD/$data_package_db" \
+  --data-url "$data_package_db" \
   --page settings \
   --e2e-data-package-workflow \
-  --e2e-data-package-url "$PWD/$data_package_json" \
-  --e2e-data-package-result-url "$PWD/$data_package_result"
+  --e2e-data-package-url "$data_package_json" \
+  --e2e-data-package-result-url "$data_package_result"
 
 if [[ ! -f "$data_package_result" ]]; then
   echo "data package e2e result was not created: $data_package_result" >&2
@@ -11963,7 +11978,7 @@ fi
 
 echo "E2E data package round-trip: $data_package_json -> $data_package_db (task=$data_package_task review=$data_package_review replaced=$replaced_task sync_enabled=$sync_enabled)"
 
-data_package_failure_dir="artifacts/e2e-data-package-import-failure"
+data_package_failure_dir="${NOONMARK_ARTIFACTS_DIR}/e2e-data-package-import-failure"
 data_package_failure_db="${data_package_failure_dir}/Noonmark.sqlite"
 data_package_failure_json="${data_package_failure_dir}/rejected-import.json"
 data_package_failure_result="${data_package_failure_dir}/result.txt"
@@ -11975,12 +11990,12 @@ NOONMARK_E2E_LAUNCH_WITH_OPEN=1 run_terminating_ui_probe \
   "data package import-failure rollback" \
   "$data_package_failure_result" \
   "$data_package_failure_log" \
-  --data-url "$PWD/$data_package_failure_db" \
+  --data-url "$data_package_failure_db" \
   --page settings \
   --e2e-persistence-failure-automation \
   --e2e-data-package-import-failure \
-  --e2e-data-package-url "$PWD/$data_package_failure_json" \
-  --e2e-data-package-result-url "$PWD/$data_package_failure_result"
+  --e2e-data-package-url "$data_package_failure_json" \
+  --e2e-data-package-result-url "$data_package_failure_result"
 
 read -r retained_task rejected_task < <(
   sqlite3 -separator " " "$data_package_failure_db" "

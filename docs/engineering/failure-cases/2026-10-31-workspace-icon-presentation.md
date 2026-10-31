@@ -1,13 +1,13 @@
 # FAIL-2026-10-31-02：把系统呈现图标与原始 PNG 直接比较
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-10-31
 - 影响版本／构建：源码提交 `83e9aedd6003632b26b26b80808e132e1187ebc5`，macOS 26.6.2（25G83），Xcode 27.1
 - 引入提交：`74d7ea357388339760e2ec01afa46437c3a5b417`，`feat(brand): Use the final 01 logo as the app icon`
 - Git author／committer：quboliu <38942505+quboliu@users.noreply.github.com>；Git identity 不证明实际操作者。
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`e5004272c213ede01616403c3036e1b43cfef2e0`
 
 ## 用户症状与影响
 
@@ -36,6 +36,8 @@ Debug／Release 编译成功，development App 完成严格签名后，`scripts/
 ## 验证结果
 
 修复后真实 development App 的 `scripts/test-app-icon-bundle` 通过。回归脚本创建独立签名 App，正例执行完整 bundle 门禁；反例通过与正式门禁共享的真实 NSWorkspace 渲染和精确 RGBA 比较函数，对比标准签名 App 与普通文件夹图标，要求在像素比较时被拒绝。反例不能因读取图像或其它步骤失败而误通过。无 production App 执行、无真实 iCloud 写入。
+
+固定修复提交 `e5004272c213ede01616403c3036e1b43cfef2e0` 的完整 `scripts/check` 通过，源码前后快照一致。
 
 ## 永久门禁
 

@@ -1,13 +1,13 @@
 # FAIL-2026-10-31-01：原生构建入口没有落实外置产物边界
 
-- 状态：处理中
+- 状态：已修复
 - 必需门禁：fast,symptom,release
 - 首次发现：2026-10-31
 - 影响版本／构建：源码提交 `83e9aedd6003632b26b26b80808e132e1187ebc5`
 - 引入提交：`48624929578bf67a9478f160680bc2845c1fb2a5`，`chore(workspace): align generated-state boundaries`；该提交确立外置规则，但既有原生脚本未同步迁移。裸 SwiftPM 构建语句可追溯至 `72d22c770e637888d43ebd2e0393eee0bb6c71a5`。
 - Git author／committer：上述提交记录均为 quboliu；Git identity 不证明实际操作者。
 - 实际修改者：未知
-- 修复提交：待回填
+- 修复提交：`e5004272c213ede01616403c3036e1b43cfef2e0`
 
 ## 用户症状与影响
 
@@ -39,7 +39,11 @@
 
 ## 验证结果
 
-实际外置 Debug 构建（含测试目标）、开发版 App、安装测试程序及窗口探针全部通过，源码目录没有新增产物；严格签名与系统图标校验通过。原始 Release 编译通过。38 项诊断 fixture／锁测试、路径守卫、OCR 绝对／相对含空格路径、runtime isolation、完整 DMG 证据矩阵与 3 个 workflow 语法验证通过。完整检查复验中；修复提交待确定后回填。无 production App 执行、无真实 iCloud 写入。
+- 修复后 Debug（含测试目标）及 Release 编译通过。实际开发版 App、安装测试程序及窗口探针均在外置目录生成；构建前后真实源码树 OID 完全相同，源码内没有新增产物。
+- 完整 Swift 测试共 1,328 项通过、0 失败；涵盖原先因 `.build` 辅助程序路径失败的诊断锁测试。
+- 固定修复提交 `e5004272c213ede01616403c3036e1b43cfef2e0` 上完整 `scripts/check` 退出 0，前后源码 commit／worktree tree 一致且均为干净状态。此前在执行期间修复旧路径断言的运行，被源码快照门禁按预期拒绝；未用那些记录冒充最终成功证据。
+- 路径守卫、含空格 OCR 路径、清单相对引用、runtime isolation、完整 DMG 证据矩阵、3 个 workflow 语法、SwiftLint 与 SwiftFormat 检查通过。
+- 无 production App 执行、无真实 iCloud 写入。VM 缺少 Apple Development 证书，未执行需要稳定签名的真实 UI／发行全集，不声明分发可用。
 
 ## 永久门禁
 
